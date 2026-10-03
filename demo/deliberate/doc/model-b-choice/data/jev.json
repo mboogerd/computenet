@@ -1,0 +1,3798 @@
+{
+  "mapping": "NEITHER if both scores <2/4; else the higher score; ties route to DISPUTES_CLAIM",
+  "items": [
+    {
+      "id": 0,
+      "choice": "DENIES_BEARING",
+      "premise_score": 2.19,
+      "bearing_score": 2.35,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 1,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.98,
+      "bearing_score": 2.09,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 2,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.66,
+      "bearing_score": 1.6,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 3,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.27,
+      "bearing_score": 2.44,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 4,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.26,
+      "bearing_score": 2.35,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 5,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.05,
+      "bearing_score": 1.81,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 6,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.48,
+      "bearing_score": 2.07,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 7,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.25,
+      "bearing_score": 1.08,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 8,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.97,
+      "bearing_score": 1.93,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 9,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.54,
+      "bearing_score": 2.23,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 10,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.95,
+      "bearing_score": 1.94,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 11,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.99,
+      "bearing_score": 2.03,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 12,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.56,
+      "bearing_score": 2.08,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 13,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.21,
+      "bearing_score": 1.6,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 14,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.12,
+      "bearing_score": 1.78,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 15,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.43,
+      "bearing_score": 1.53,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 16,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.37,
+      "bearing_score": 1.76,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 17,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.77,
+      "bearing_score": 1.88,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 18,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.03,
+      "bearing_score": 1.74,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 19,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.8,
+      "bearing_score": 1.74,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 20,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.04,
+      "bearing_score": 1.42,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 21,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.42,
+      "bearing_score": 1.39,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 22,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.11,
+      "bearing_score": 2.18,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 23,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.39,
+      "bearing_score": 1.23,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 24,
+      "choice": "DENIES_BEARING",
+      "premise_score": 2.0,
+      "bearing_score": 2.29,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 25,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.24,
+      "bearing_score": 1.86,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 26,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.26,
+      "bearing_score": 1.76,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 27,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.25,
+      "bearing_score": 2.53,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 28,
+      "choice": "DENIES_BEARING",
+      "premise_score": 2.05,
+      "bearing_score": 2.77,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 29,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.21,
+      "bearing_score": 3.2,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 30,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.75,
+      "bearing_score": 2.23,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 31,
+      "choice": "DENIES_BEARING",
+      "premise_score": 0.64,
+      "bearing_score": 1.62,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 32,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.58,
+      "bearing_score": 2.69,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 33,
+      "choice": "DENIES_BEARING",
+      "premise_score": 0.7,
+      "bearing_score": 2.01,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 34,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.84,
+      "bearing_score": 2.07,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 35,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.54,
+      "bearing_score": 1.76,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 36,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.46,
+      "bearing_score": 1.88,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 37,
+      "choice": "DENIES_BEARING",
+      "premise_score": 0.99,
+      "bearing_score": 1.83,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 38,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.13,
+      "bearing_score": 2.02,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 39,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.08,
+      "bearing_score": 2.11,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 40,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.58,
+      "bearing_score": 1.35,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 41,
+      "choice": "DENIES_BEARING",
+      "premise_score": 0.39,
+      "bearing_score": 2.14,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 42,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.85,
+      "bearing_score": 2.42,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 43,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.94,
+      "bearing_score": 2.03,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 44,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.31,
+      "bearing_score": 2.18,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 45,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.18,
+      "bearing_score": 1.74,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 46,
+      "choice": "DENIES_BEARING",
+      "premise_score": 0.88,
+      "bearing_score": 2.14,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 47,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.33,
+      "bearing_score": 2.15,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 48,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.94,
+      "bearing_score": 2.53,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 49,
+      "choice": "DENIES_BEARING",
+      "premise_score": 0.63,
+      "bearing_score": 1.71,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 50,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.1,
+      "bearing_score": 1.99,
+      "graded": "DISPUTES_CLAIM"
+    },
+    {
+      "id": 51,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.86,
+      "bearing_score": 2.15,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 52,
+      "choice": "DENIES_BEARING",
+      "premise_score": 2.38,
+      "bearing_score": 2.52,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 53,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.89,
+      "bearing_score": 1.86,
+      "graded": "NEITHER"
+    },
+    {
+      "id": 54,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.76,
+      "bearing_score": 2.38,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 55,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.75,
+      "bearing_score": 2.12,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 56,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 2.4,
+      "bearing_score": 2.49,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 57,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.75,
+      "bearing_score": 2.03,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 58,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.48,
+      "bearing_score": 2.35,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 59,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.73,
+      "bearing_score": 2.16,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 60,
+      "choice": "DENIES_BEARING",
+      "premise_score": 1.73,
+      "bearing_score": 2.39,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 61,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.92,
+      "bearing_score": 2.0,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 62,
+      "choice": "DENIES_BEARING",
+      "premise_score": 0.24,
+      "bearing_score": 2.66,
+      "graded": "DENIES_BEARING"
+    },
+    {
+      "id": 63,
+      "choice": "DISPUTES_CLAIM",
+      "premise_score": 1.89,
+      "bearing_score": 1.87,
+      "graded": "NEITHER"
+    }
+  ],
+  "batches": [
+    {
+      "context_id": "q0-d1",
+      "item_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c0": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.67,
+            "probabilities": {
+              "DENIES_BEARING": 0.78,
+              "DISPUTES_CLAIM": 0.22,
+              "NEITHER": 0.0
+            }
+          },
+          "c1": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.42,
+            "probabilities": {
+              "DENIES_BEARING": 0.61,
+              "DISPUTES_CLAIM": 0.39,
+              "NEITHER": 0.0
+            }
+          },
+          "c2": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.31,
+            "probabilities": {
+              "DENIES_BEARING": 0.46,
+              "DISPUTES_CLAIM": 0.54,
+              "NEITHER": 0.0
+            }
+          },
+          "c3": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.27,
+            "probabilities": {
+              "DENIES_BEARING": 0.48,
+              "DISPUTES_CLAIM": 0.52,
+              "NEITHER": 0.0
+            }
+          },
+          "c4": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.83,
+            "probabilities": {
+              "DENIES_BEARING": 0.11,
+              "DISPUTES_CLAIM": 0.89,
+              "NEITHER": 0.0
+            }
+          },
+          "c5": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.34,
+            "probabilities": {
+              "DENIES_BEARING": 0.44,
+              "DISPUTES_CLAIM": 0.56,
+              "NEITHER": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1964,
+          "output_tokens": 313
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p0": {
+            "type": "score",
+            "score": 2.19,
+            "confidence": 0.55,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.09,
+              "2": 0.52,
+              "3": 0.34,
+              "4": 0.01
+            }
+          },
+          "b0": {
+            "type": "score",
+            "score": 2.35,
+            "confidence": 0.54,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.05,
+              "2": 0.53,
+              "3": 0.32,
+              "4": 0.07
+            }
+          },
+          "p1": {
+            "type": "score",
+            "score": 1.98,
+            "confidence": 0.6,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.17,
+              "2": 0.57,
+              "3": 0.21,
+              "4": 0.01
+            }
+          },
+          "b1": {
+            "type": "score",
+            "score": 2.09,
+            "confidence": 0.69,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.1,
+              "2": 0.67,
+              "3": 0.19,
+              "4": 0.02
+            }
+          },
+          "p2": {
+            "type": "score",
+            "score": 1.66,
+            "confidence": 0.46,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.09,
+              "1": 0.31,
+              "2": 0.46,
+              "3": 0.13,
+              "4": 0.01
+            }
+          },
+          "b2": {
+            "type": "score",
+            "score": 1.6,
+            "confidence": 0.45,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.13,
+              "1": 0.27,
+              "2": 0.49,
+              "3": 0.09,
+              "4": 0.02
+            }
+          },
+          "p3": {
+            "type": "score",
+            "score": 2.27,
+            "confidence": 0.5,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.11,
+              "2": 0.44,
+              "3": 0.41,
+              "4": 0.01
+            }
+          },
+          "b3": {
+            "type": "score",
+            "score": 2.44,
+            "confidence": 0.45,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.06,
+              "2": 0.49,
+              "3": 0.29,
+              "4": 0.13
+            }
+          },
+          "p4": {
+            "type": "score",
+            "score": 2.26,
+            "confidence": 0.64,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.08,
+              "2": 0.58,
+              "3": 0.33,
+              "4": 0.01
+            }
+          },
+          "b4": {
+            "type": "score",
+            "score": 2.35,
+            "confidence": 0.47,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.05,
+              "2": 0.52,
+              "3": 0.29,
+              "4": 0.1
+            }
+          },
+          "p5": {
+            "type": "score",
+            "score": 2.05,
+            "confidence": 0.69,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.14,
+              "2": 0.64,
+              "3": 0.2,
+              "4": 0.01
+            }
+          },
+          "b5": {
+            "type": "score",
+            "score": 1.81,
+            "confidence": 0.71,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.19,
+              "2": 0.7,
+              "3": 0.06,
+              "4": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 3116,
+          "output_tokens": 172
+        }
+      }
+    },
+    {
+      "context_id": "q0-d2",
+      "item_ids": [
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c6": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.9,
+            "probabilities": {
+              "DENIES_BEARING": 0.06,
+              "DISPUTES_CLAIM": 0.94,
+              "NEITHER": 0.0
+            }
+          },
+          "c7": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.18,
+            "probabilities": {
+              "DENIES_BEARING": 0.41,
+              "DISPUTES_CLAIM": 0.45,
+              "NEITHER": 0.14
+            }
+          },
+          "c8": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.83,
+            "probabilities": {
+              "DENIES_BEARING": 0.11,
+              "DISPUTES_CLAIM": 0.89,
+              "NEITHER": 0.0
+            }
+          },
+          "c9": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.67,
+            "probabilities": {
+              "DENIES_BEARING": 0.21,
+              "DISPUTES_CLAIM": 0.79,
+              "NEITHER": 0.0
+            }
+          },
+          "c10": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.99,
+            "probabilities": {
+              "DENIES_BEARING": 0.99,
+              "DISPUTES_CLAIM": 0.01,
+              "NEITHER": 0.0
+            }
+          },
+          "c11": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.47,
+            "probabilities": {
+              "DENIES_BEARING": 0.35,
+              "DISPUTES_CLAIM": 0.65,
+              "NEITHER": 0.0
+            }
+          },
+          "c12": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.42,
+            "probabilities": {
+              "DENIES_BEARING": 0.62,
+              "DISPUTES_CLAIM": 0.38,
+              "NEITHER": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2291,
+          "output_tokens": 368
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p6": {
+            "type": "score",
+            "score": 2.48,
+            "confidence": 0.56,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.02,
+              "2": 0.47,
+              "3": 0.5,
+              "4": 0.01
+            }
+          },
+          "b6": {
+            "type": "score",
+            "score": 2.07,
+            "confidence": 0.54,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.06,
+              "1": 0.11,
+              "2": 0.54,
+              "3": 0.27,
+              "4": 0.02
+            }
+          },
+          "p7": {
+            "type": "score",
+            "score": 1.25,
+            "confidence": 0.17,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.3,
+              "1": 0.27,
+              "2": 0.31,
+              "3": 0.11,
+              "4": 0.01
+            }
+          },
+          "b7": {
+            "type": "score",
+            "score": 1.08,
+            "confidence": 0.1,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.39,
+              "1": 0.27,
+              "2": 0.22,
+              "3": 0.1,
+              "4": 0.02
+            }
+          },
+          "p8": {
+            "type": "score",
+            "score": 1.97,
+            "confidence": 0.66,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.17,
+              "2": 0.62,
+              "3": 0.18,
+              "4": 0.0
+            }
+          },
+          "b8": {
+            "type": "score",
+            "score": 1.93,
+            "confidence": 0.6,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.07,
+              "1": 0.13,
+              "2": 0.62,
+              "3": 0.16,
+              "4": 0.02
+            }
+          },
+          "p9": {
+            "type": "score",
+            "score": 2.54,
+            "confidence": 0.59,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.05,
+              "2": 0.35,
+              "3": 0.57,
+              "4": 0.02
+            }
+          },
+          "b9": {
+            "type": "score",
+            "score": 2.23,
+            "confidence": 0.31,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.14,
+              "2": 0.36,
+              "3": 0.31,
+              "4": 0.11
+            }
+          },
+          "p10": {
+            "type": "score",
+            "score": 1.95,
+            "confidence": 0.5,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.07,
+              "1": 0.18,
+              "2": 0.5,
+              "3": 0.23,
+              "4": 0.02
+            }
+          },
+          "b10": {
+            "type": "score",
+            "score": 1.94,
+            "confidence": 0.63,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.07,
+              "1": 0.11,
+              "2": 0.64,
+              "3": 0.16,
+              "4": 0.02
+            }
+          },
+          "p11": {
+            "type": "score",
+            "score": 1.99,
+            "confidence": 0.72,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.14,
+              "2": 0.68,
+              "3": 0.16,
+              "4": 0.0
+            }
+          },
+          "b11": {
+            "type": "score",
+            "score": 2.03,
+            "confidence": 0.62,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.13,
+              "2": 0.59,
+              "3": 0.22,
+              "4": 0.02
+            }
+          },
+          "p12": {
+            "type": "score",
+            "score": 1.56,
+            "confidence": 0.49,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.11,
+              "1": 0.31,
+              "2": 0.5,
+              "3": 0.08,
+              "4": 0.0
+            }
+          },
+          "b12": {
+            "type": "score",
+            "score": 2.08,
+            "confidence": 0.68,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.09,
+              "2": 0.66,
+              "3": 0.21,
+              "4": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 3634,
+          "output_tokens": 206
+        }
+      }
+    },
+    {
+      "context_id": "q0-d3",
+      "item_ids": [
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c13": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.55,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.7,
+              "DENIES_BEARING": 0.3
+            }
+          },
+          "c14": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.41,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.61,
+              "DENIES_BEARING": 0.39
+            }
+          },
+          "c15": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.87,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.08,
+              "DENIES_BEARING": 0.92
+            }
+          },
+          "c16": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 1.0,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 1.0,
+              "DENIES_BEARING": 0.0
+            }
+          },
+          "c17": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.36,
+            "probabilities": {
+              "NEITHER": 0.01,
+              "DISPUTES_CLAIM": 0.57,
+              "DENIES_BEARING": 0.42
+            }
+          },
+          "c18": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.75,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.84,
+              "DENIES_BEARING": 0.16
+            }
+          },
+          "c19": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.31,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.46,
+              "DENIES_BEARING": 0.54
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2373,
+          "output_tokens": 372
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p13": {
+            "type": "score",
+            "score": 2.21,
+            "confidence": 0.57,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.11,
+              "2": 0.54,
+              "3": 0.3,
+              "4": 0.03
+            }
+          },
+          "b13": {
+            "type": "score",
+            "score": 1.6,
+            "confidence": 0.4,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.19,
+              "1": 0.19,
+              "2": 0.48,
+              "3": 0.13,
+              "4": 0.01
+            }
+          },
+          "p14": {
+            "type": "score",
+            "score": 2.12,
+            "confidence": 0.74,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.07,
+              "2": 0.72,
+              "3": 0.19,
+              "4": 0.01
+            }
+          },
+          "b14": {
+            "type": "score",
+            "score": 1.78,
+            "confidence": 0.32,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.17,
+              "1": 0.17,
+              "2": 0.43,
+              "3": 0.17,
+              "4": 0.06
+            }
+          },
+          "p15": {
+            "type": "score",
+            "score": 1.43,
+            "confidence": 0.42,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.14,
+              "1": 0.34,
+              "2": 0.46,
+              "3": 0.06,
+              "4": 0.0
+            }
+          },
+          "b15": {
+            "type": "score",
+            "score": 1.53,
+            "confidence": 0.45,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.16,
+              "1": 0.25,
+              "2": 0.51,
+              "3": 0.07,
+              "4": 0.01
+            }
+          },
+          "p16": {
+            "type": "score",
+            "score": 2.37,
+            "confidence": 0.6,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.05,
+              "2": 0.55,
+              "3": 0.37,
+              "4": 0.03
+            }
+          },
+          "b16": {
+            "type": "score",
+            "score": 1.76,
+            "confidence": 0.0,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.26,
+              "1": 0.19,
+              "2": 0.23,
+              "3": 0.16,
+              "4": 0.16
+            }
+          },
+          "p17": {
+            "type": "score",
+            "score": 1.77,
+            "confidence": 0.57,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.06,
+              "1": 0.25,
+              "2": 0.56,
+              "3": 0.12,
+              "4": 0.01
+            }
+          },
+          "b17": {
+            "type": "score",
+            "score": 1.88,
+            "confidence": 0.45,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.12,
+              "1": 0.15,
+              "2": 0.5,
+              "3": 0.19,
+              "4": 0.04
+            }
+          },
+          "p18": {
+            "type": "score",
+            "score": 2.03,
+            "confidence": 0.69,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.13,
+              "2": 0.65,
+              "3": 0.19,
+              "4": 0.01
+            }
+          },
+          "b18": {
+            "type": "score",
+            "score": 1.74,
+            "confidence": 0.34,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.18,
+              "1": 0.17,
+              "2": 0.43,
+              "3": 0.18,
+              "4": 0.04
+            }
+          },
+          "p19": {
+            "type": "score",
+            "score": 1.8,
+            "confidence": 0.68,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.22,
+              "2": 0.66,
+              "3": 0.08,
+              "4": 0.0
+            }
+          },
+          "b19": {
+            "type": "score",
+            "score": 1.74,
+            "confidence": 0.6,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.09,
+              "1": 0.19,
+              "2": 0.61,
+              "3": 0.1,
+              "4": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 3737,
+          "output_tokens": 214
+        }
+      }
+    },
+    {
+      "context_id": "q1-d1",
+      "item_ids": [
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c20": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.97,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.98,
+              "DENIES_BEARING": 0.02,
+              "NEITHER": 0.0
+            }
+          },
+          "c21": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.91,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.94,
+              "DENIES_BEARING": 0.06,
+              "NEITHER": 0.0
+            }
+          },
+          "c22": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.74,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.83,
+              "DENIES_BEARING": 0.17,
+              "NEITHER": 0.0
+            }
+          },
+          "c23": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.74,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.83,
+              "DENIES_BEARING": 0.17,
+              "NEITHER": 0.0
+            }
+          },
+          "c24": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.42,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.38,
+              "DENIES_BEARING": 0.62,
+              "NEITHER": 0.0
+            }
+          },
+          "c25": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.94,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.96,
+              "DENIES_BEARING": 0.04,
+              "NEITHER": 0.0
+            }
+          },
+          "c26": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.98,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.99,
+              "DENIES_BEARING": 0.01,
+              "NEITHER": 0.0
+            }
+          },
+          "c27": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.8,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.87,
+              "DENIES_BEARING": 0.13,
+              "NEITHER": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2549,
+          "output_tokens": 426
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p20": {
+            "type": "score",
+            "score": 2.04,
+            "confidence": 0.87,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.05,
+              "2": 0.85,
+              "3": 0.1,
+              "4": 0.0
+            }
+          },
+          "b20": {
+            "type": "score",
+            "score": 1.42,
+            "confidence": 0.38,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.15,
+              "1": 0.35,
+              "2": 0.43,
+              "3": 0.06,
+              "4": 0.01
+            }
+          },
+          "p21": {
+            "type": "score",
+            "score": 2.42,
+            "confidence": 0.51,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.07,
+              "2": 0.51,
+              "3": 0.32,
+              "4": 0.09
+            }
+          },
+          "b21": {
+            "type": "score",
+            "score": 1.39,
+            "confidence": 0.44,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.14,
+              "1": 0.43,
+              "2": 0.35,
+              "3": 0.06,
+              "4": 0.02
+            }
+          },
+          "p22": {
+            "type": "score",
+            "score": 2.11,
+            "confidence": 0.77,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.07,
+              "2": 0.73,
+              "3": 0.18,
+              "4": 0.01
+            }
+          },
+          "b22": {
+            "type": "score",
+            "score": 2.18,
+            "confidence": 0.51,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.05,
+              "1": 0.1,
+              "2": 0.5,
+              "3": 0.31,
+              "4": 0.04
+            }
+          },
+          "p23": {
+            "type": "score",
+            "score": 2.39,
+            "confidence": 0.58,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.05,
+              "2": 0.56,
+              "3": 0.32,
+              "4": 0.06
+            }
+          },
+          "b23": {
+            "type": "score",
+            "score": 1.23,
+            "confidence": 0.6,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.12,
+              "1": 0.56,
+              "2": 0.3,
+              "3": 0.02,
+              "4": 0.0
+            }
+          },
+          "p24": {
+            "type": "score",
+            "score": 2.0,
+            "confidence": 0.8,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.09,
+              "2": 0.79,
+              "3": 0.1,
+              "4": 0.01
+            }
+          },
+          "b24": {
+            "type": "score",
+            "score": 2.29,
+            "confidence": 0.6,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.06,
+              "2": 0.55,
+              "3": 0.35,
+              "4": 0.02
+            }
+          },
+          "p25": {
+            "type": "score",
+            "score": 2.24,
+            "confidence": 0.75,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.03,
+              "2": 0.71,
+              "3": 0.26,
+              "4": 0.0
+            }
+          },
+          "b25": {
+            "type": "score",
+            "score": 1.86,
+            "confidence": 0.56,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.07,
+              "1": 0.2,
+              "2": 0.55,
+              "3": 0.16,
+              "4": 0.02
+            }
+          },
+          "p26": {
+            "type": "score",
+            "score": 2.26,
+            "confidence": 0.7,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.04,
+              "2": 0.66,
+              "3": 0.29,
+              "4": 0.01
+            }
+          },
+          "b26": {
+            "type": "score",
+            "score": 1.76,
+            "confidence": 0.53,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.24,
+              "2": 0.53,
+              "3": 0.13,
+              "4": 0.02
+            }
+          },
+          "p27": {
+            "type": "score",
+            "score": 2.25,
+            "confidence": 0.72,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.03,
+              "2": 0.71,
+              "3": 0.23,
+              "4": 0.03
+            }
+          },
+          "b27": {
+            "type": "score",
+            "score": 2.53,
+            "confidence": 0.43,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.05,
+              "1": 0.07,
+              "2": 0.31,
+              "3": 0.45999999999999996,
+              "4": 0.11
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 4107,
+          "output_tokens": 244
+        }
+      }
+    },
+    {
+      "context_id": "q1-d2",
+      "item_ids": [
+        28,
+        29,
+        30,
+        31,
+        32,
+        33
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c28": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.28,
+            "probabilities": {
+              "DENIES_BEARING": 0.52,
+              "DISPUTES_CLAIM": 0.48,
+              "NEITHER": 0.0
+            }
+          },
+          "c29": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.84,
+            "probabilities": {
+              "DENIES_BEARING": 0.89,
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.11
+            }
+          },
+          "c30": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.27,
+            "probabilities": {
+              "DENIES_BEARING": 0.52,
+              "DISPUTES_CLAIM": 0.48,
+              "NEITHER": 0.0
+            }
+          },
+          "c31": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.52,
+            "probabilities": {
+              "DENIES_BEARING": 0.68,
+              "DISPUTES_CLAIM": 0.32,
+              "NEITHER": 0.0
+            }
+          },
+          "c32": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.96,
+            "probabilities": {
+              "DENIES_BEARING": 0.97,
+              "DISPUTES_CLAIM": 0.03,
+              "NEITHER": 0.0
+            }
+          },
+          "c33": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.96,
+            "probabilities": {
+              "DENIES_BEARING": 0.98,
+              "DISPUTES_CLAIM": 0.02,
+              "NEITHER": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2071,
+          "output_tokens": 315
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p28": {
+            "type": "score",
+            "score": 2.05,
+            "confidence": 0.06,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.22,
+              "1": 0.17,
+              "2": 0.05,
+              "3": 0.47,
+              "4": 0.09
+            }
+          },
+          "b28": {
+            "type": "score",
+            "score": 2.77,
+            "confidence": 0.7,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.04,
+              "2": 0.21,
+              "3": 0.67,
+              "4": 0.07
+            }
+          },
+          "p29": {
+            "type": "score",
+            "score": 1.21,
+            "confidence": 0.32,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.3,
+              "1": 0.37,
+              "2": 0.18,
+              "3": 0.13,
+              "4": 0.02
+            }
+          },
+          "b29": {
+            "type": "score",
+            "score": 3.2,
+            "confidence": 0.66,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.02,
+              "2": 0.05,
+              "3": 0.62,
+              "4": 0.31
+            }
+          },
+          "p30": {
+            "type": "score",
+            "score": 1.75,
+            "confidence": 0.25,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.33999999999999997,
+              "2": 0.34,
+              "3": 0.23,
+              "4": 0.01
+            }
+          },
+          "b30": {
+            "type": "score",
+            "score": 2.23,
+            "confidence": 0.59,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.12,
+              "2": 0.52,
+              "3": 0.34,
+              "4": 0.01
+            }
+          },
+          "p31": {
+            "type": "score",
+            "score": 0.64,
+            "confidence": 0.47,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.54,
+              "1": 0.32,
+              "2": 0.08,
+              "3": 0.05,
+              "4": 0.01
+            }
+          },
+          "b31": {
+            "type": "score",
+            "score": 1.62,
+            "confidence": 0.34,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.09,
+              "1": 0.39,
+              "2": 0.33,
+              "3": 0.18,
+              "4": 0.01
+            }
+          },
+          "p32": {
+            "type": "score",
+            "score": 1.58,
+            "confidence": 0.16,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.21,
+              "1": 0.33,
+              "2": 0.14,
+              "3": 0.31,
+              "4": 0.01
+            }
+          },
+          "b32": {
+            "type": "score",
+            "score": 2.69,
+            "confidence": 0.69,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.03,
+              "2": 0.27,
+              "3": 0.66,
+              "4": 0.03
+            }
+          },
+          "p33": {
+            "type": "score",
+            "score": 0.7,
+            "confidence": 0.42,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.48,
+              "1": 0.38,
+              "2": 0.11,
+              "3": 0.03,
+              "4": 0.0
+            }
+          },
+          "b33": {
+            "type": "score",
+            "score": 2.01,
+            "confidence": 0.5,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.22,
+              "2": 0.45,
+              "3": 0.28,
+              "4": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 3258,
+          "output_tokens": 184
+        }
+      }
+    },
+    {
+      "context_id": "q1-d3",
+      "item_ids": [
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c34": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.74,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.17,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.83
+            }
+          },
+          "c35": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.68,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.21,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.79
+            }
+          },
+          "c36": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.58,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.27,
+              "DENIES_BEARING": 0.73
+            }
+          },
+          "c37": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.91,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.06,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.94
+            }
+          },
+          "c38": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.99,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.99,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.01
+            }
+          },
+          "c39": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.89,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.07,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.93
+            }
+          },
+          "c40": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.74,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.83,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.17
+            }
+          },
+          "c41": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.95,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.03,
+              "DENIES_BEARING": 0.97
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2667,
+          "output_tokens": 421
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p34": {
+            "type": "score",
+            "score": 1.84,
+            "confidence": 0.55,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.19,
+              "2": 0.54,
+              "3": 0.18,
+              "4": 0.01
+            }
+          },
+          "b34": {
+            "type": "score",
+            "score": 2.07,
+            "confidence": 0.41,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.15,
+              "2": 0.44,
+              "3": 0.27,
+              "4": 0.06
+            }
+          },
+          "p35": {
+            "type": "score",
+            "score": 1.54,
+            "confidence": 0.49,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.11,
+              "1": 0.32,
+              "2": 0.5,
+              "3": 0.07,
+              "4": 0.0
+            }
+          },
+          "b35": {
+            "type": "score",
+            "score": 1.76,
+            "confidence": 0.48,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.09,
+              "1": 0.25,
+              "2": 0.48,
+              "3": 0.16,
+              "4": 0.02
+            }
+          },
+          "p36": {
+            "type": "score",
+            "score": 1.46,
+            "confidence": 0.42,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.16,
+              "1": 0.3,
+              "2": 0.45999999999999996,
+              "3": 0.07,
+              "4": 0.01
+            }
+          },
+          "b36": {
+            "type": "score",
+            "score": 1.88,
+            "confidence": 0.41,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.11,
+              "1": 0.19,
+              "2": 0.44,
+              "3": 0.21,
+              "4": 0.05
+            }
+          },
+          "p37": {
+            "type": "score",
+            "score": 0.99,
+            "confidence": 0.59,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.25,
+              "1": 0.51,
+              "2": 0.23,
+              "3": 0.01,
+              "4": 0.0
+            }
+          },
+          "b37": {
+            "type": "score",
+            "score": 1.83,
+            "confidence": 0.63,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.05,
+              "1": 0.2,
+              "2": 0.62,
+              "3": 0.13,
+              "4": 0.0
+            }
+          },
+          "p38": {
+            "type": "score",
+            "score": 2.13,
+            "confidence": 0.55,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.06,
+              "1": 0.08,
+              "2": 0.54,
+              "3": 0.3,
+              "4": 0.02
+            }
+          },
+          "b38": {
+            "type": "score",
+            "score": 2.02,
+            "confidence": 0.31,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.15,
+              "1": 0.11,
+              "2": 0.4,
+              "3": 0.25,
+              "4": 0.09
+            }
+          },
+          "p39": {
+            "type": "score",
+            "score": 1.08,
+            "confidence": 0.49,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.26,
+              "1": 0.45,
+              "2": 0.24,
+              "3": 0.05,
+              "4": 0.0
+            }
+          },
+          "b39": {
+            "type": "score",
+            "score": 2.11,
+            "confidence": 0.41,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.14,
+              "2": 0.39,
+              "3": 0.36,
+              "4": 0.03
+            }
+          },
+          "p40": {
+            "type": "score",
+            "score": 1.58,
+            "confidence": 0.51,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.1,
+              "1": 0.3,
+              "2": 0.52,
+              "3": 0.07,
+              "4": 0.01
+            }
+          },
+          "b40": {
+            "type": "score",
+            "score": 1.35,
+            "confidence": 0.0,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.33,
+              "1": 0.21,
+              "2": 0.26,
+              "3": 0.16,
+              "4": 0.04
+            }
+          },
+          "p41": {
+            "type": "score",
+            "score": 0.39,
+            "confidence": 0.67,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.71,
+              "1": 0.21,
+              "2": 0.06,
+              "3": 0.02,
+              "4": 0.0
+            }
+          },
+          "b41": {
+            "type": "score",
+            "score": 2.14,
+            "confidence": 0.34,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.07,
+              "1": 0.18,
+              "2": 0.37,
+              "3": 0.3,
+              "4": 0.08
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 4248,
+          "output_tokens": 244
+        }
+      }
+    },
+    {
+      "context_id": "q2-d1",
+      "item_ids": [
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c42": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 1.0,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.0,
+              "DISPUTES_CLAIM": 1.0
+            }
+          },
+          "c43": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 1.0,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.0,
+              "DISPUTES_CLAIM": 1.0
+            }
+          },
+          "c44": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.98,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.01,
+              "DISPUTES_CLAIM": 0.99
+            }
+          },
+          "c45": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.79,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.14,
+              "DISPUTES_CLAIM": 0.86
+            }
+          },
+          "c46": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.99,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.99,
+              "DISPUTES_CLAIM": 0.01
+            }
+          },
+          "c47": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.92,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.05,
+              "DISPUTES_CLAIM": 0.95
+            }
+          },
+          "c48": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.87,
+            "probabilities": {
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.09,
+              "DISPUTES_CLAIM": 0.91
+            }
+          },
+          "c49": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.88,
+            "probabilities": {
+              "DENIES_BEARING": 0.92,
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.08
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2545,
+          "output_tokens": 425
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p42": {
+            "type": "score",
+            "score": 2.85,
+            "confidence": 0.71,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.01,
+              "2": 0.23,
+              "3": 0.66,
+              "4": 0.1
+            }
+          },
+          "b42": {
+            "type": "score",
+            "score": 2.42,
+            "confidence": 0.15,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.11,
+              "1": 0.09,
+              "2": 0.3,
+              "3": 0.28,
+              "4": 0.22
+            }
+          },
+          "p43": {
+            "type": "score",
+            "score": 2.94,
+            "confidence": 0.59,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.01,
+              "2": 0.25,
+              "3": 0.52,
+              "4": 0.22
+            }
+          },
+          "b43": {
+            "type": "score",
+            "score": 2.03,
+            "confidence": 0.33,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.12,
+              "1": 0.15,
+              "2": 0.39,
+              "3": 0.25,
+              "4": 0.09
+            }
+          },
+          "p44": {
+            "type": "score",
+            "score": 2.31,
+            "confidence": 0.66,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.04,
+              "2": 0.6,
+              "3": 0.35,
+              "4": 0.01
+            }
+          },
+          "b44": {
+            "type": "score",
+            "score": 2.18,
+            "confidence": 0.66,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.09,
+              "2": 0.63,
+              "3": 0.26,
+              "4": 0.01
+            }
+          },
+          "p45": {
+            "type": "score",
+            "score": 2.18,
+            "confidence": 0.55,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.13,
+              "2": 0.51,
+              "3": 0.32,
+              "4": 0.02
+            }
+          },
+          "b45": {
+            "type": "score",
+            "score": 1.74,
+            "confidence": 0.62,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.04,
+              "1": 0.28,
+              "2": 0.59,
+              "3": 0.08,
+              "4": 0.01
+            }
+          },
+          "p46": {
+            "type": "score",
+            "score": 0.88,
+            "confidence": 0.26,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.5,
+              "1": 0.21,
+              "2": 0.21,
+              "3": 0.07,
+              "4": 0.01
+            }
+          },
+          "b46": {
+            "type": "score",
+            "score": 2.14,
+            "confidence": 0.67,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.09,
+              "2": 0.64,
+              "3": 0.23,
+              "4": 0.02
+            }
+          },
+          "p47": {
+            "type": "score",
+            "score": 2.33,
+            "confidence": 0.64,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.0,
+              "1": 0.04,
+              "2": 0.59,
+              "3": 0.36,
+              "4": 0.01
+            }
+          },
+          "b47": {
+            "type": "score",
+            "score": 2.15,
+            "confidence": 0.7,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.08,
+              "2": 0.67,
+              "3": 0.22,
+              "4": 0.02
+            }
+          },
+          "p48": {
+            "type": "score",
+            "score": 2.94,
+            "confidence": 0.62,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.03,
+              "2": 0.19,
+              "3": 0.57,
+              "4": 0.2
+            }
+          },
+          "b48": {
+            "type": "score",
+            "score": 2.53,
+            "confidence": 0.51,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.05,
+              "2": 0.37,
+              "3": 0.5,
+              "4": 0.06
+            }
+          },
+          "p49": {
+            "type": "score",
+            "score": 0.63,
+            "confidence": 0.48,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.59,
+              "1": 0.25,
+              "2": 0.13,
+              "3": 0.03,
+              "4": 0.0
+            }
+          },
+          "b49": {
+            "type": "score",
+            "score": 1.71,
+            "confidence": 0.55,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.26,
+              "2": 0.54,
+              "3": 0.11,
+              "4": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 4082,
+          "output_tokens": 244
+        }
+      }
+    },
+    {
+      "context_id": "q2-d2",
+      "item_ids": [
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c50": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.65,
+            "probabilities": {
+              "DENIES_BEARING": 0.23,
+              "DISPUTES_CLAIM": 0.77,
+              "NEITHER": 0.0
+            }
+          },
+          "c51": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.91,
+            "probabilities": {
+              "DENIES_BEARING": 0.06,
+              "DISPUTES_CLAIM": 0.94,
+              "NEITHER": 0.0
+            }
+          },
+          "c52": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.39,
+            "probabilities": {
+              "DENIES_BEARING": 0.59,
+              "DISPUTES_CLAIM": 0.41,
+              "NEITHER": 0.0
+            }
+          },
+          "c53": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.41,
+            "probabilities": {
+              "DENIES_BEARING": 0.39,
+              "DISPUTES_CLAIM": 0.61,
+              "NEITHER": 0.0
+            }
+          },
+          "c54": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.56,
+            "probabilities": {
+              "DENIES_BEARING": 0.71,
+              "DISPUTES_CLAIM": 0.29,
+              "NEITHER": 0.0
+            }
+          },
+          "c55": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.48,
+            "probabilities": {
+              "DENIES_BEARING": 0.65,
+              "DISPUTES_CLAIM": 0.34,
+              "NEITHER": 0.01
+            }
+          },
+          "c56": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.72,
+            "probabilities": {
+              "DENIES_BEARING": 0.19,
+              "DISPUTES_CLAIM": 0.81,
+              "NEITHER": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2363,
+          "output_tokens": 371
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p50": {
+            "type": "score",
+            "score": 2.1,
+            "confidence": 0.66,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.14,
+              "2": 0.6,
+              "3": 0.24,
+              "4": 0.01
+            }
+          },
+          "b50": {
+            "type": "score",
+            "score": 1.99,
+            "confidence": 0.38,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.09,
+              "1": 0.19,
+              "2": 0.39,
+              "3": 0.3,
+              "4": 0.03
+            }
+          },
+          "p51": {
+            "type": "score",
+            "score": 1.86,
+            "confidence": 0.56,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.06,
+              "1": 0.22,
+              "2": 0.53,
+              "3": 0.18,
+              "4": 0.01
+            }
+          },
+          "b51": {
+            "type": "score",
+            "score": 2.15,
+            "confidence": 0.37,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.07,
+              "1": 0.16,
+              "2": 0.42,
+              "3": 0.24,
+              "4": 0.11
+            }
+          },
+          "p52": {
+            "type": "score",
+            "score": 2.38,
+            "confidence": 0.48,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.07,
+              "2": 0.45,
+              "3": 0.46,
+              "4": 0.01
+            }
+          },
+          "b52": {
+            "type": "score",
+            "score": 2.52,
+            "confidence": 0.53,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.07,
+              "2": 0.35,
+              "3": 0.53,
+              "4": 0.04
+            }
+          },
+          "p53": {
+            "type": "score",
+            "score": 1.89,
+            "confidence": 0.73,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.19,
+              "2": 0.7,
+              "3": 0.1,
+              "4": 0.0
+            }
+          },
+          "b53": {
+            "type": "score",
+            "score": 1.86,
+            "confidence": 0.63,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.05,
+              "1": 0.19,
+              "2": 0.62,
+              "3": 0.13,
+              "4": 0.01
+            }
+          },
+          "p54": {
+            "type": "score",
+            "score": 1.76,
+            "confidence": 0.68,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.26,
+              "2": 0.64,
+              "3": 0.07,
+              "4": 0.0
+            }
+          },
+          "b54": {
+            "type": "score",
+            "score": 2.38,
+            "confidence": 0.5,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.08,
+              "2": 0.45,
+              "3": 0.43,
+              "4": 0.03
+            }
+          },
+          "p55": {
+            "type": "score",
+            "score": 1.75,
+            "confidence": 0.46,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.12,
+              "1": 0.22,
+              "2": 0.48,
+              "3": 0.17,
+              "4": 0.01
+            }
+          },
+          "b55": {
+            "type": "score",
+            "score": 2.12,
+            "confidence": 0.54,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.06,
+              "1": 0.1,
+              "2": 0.55,
+              "3": 0.24,
+              "4": 0.05
+            }
+          },
+          "p56": {
+            "type": "score",
+            "score": 2.4,
+            "confidence": 0.49,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.07,
+              "2": 0.45,
+              "3": 0.45999999999999996,
+              "4": 0.01
+            }
+          },
+          "b56": {
+            "type": "score",
+            "score": 2.49,
+            "confidence": 0.45,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.02,
+              "1": 0.09,
+              "2": 0.33,
+              "3": 0.49,
+              "4": 0.07
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 3746,
+          "output_tokens": 214
+        }
+      }
+    },
+    {
+      "context_id": "q2-d3",
+      "item_ids": [
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "choice_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "c57": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.28,
+            "probabilities": {
+              "DENIES_BEARING": 0.52,
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.48
+            }
+          },
+          "c58": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.89,
+            "probabilities": {
+              "DENIES_BEARING": 0.93,
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.07
+            }
+          },
+          "c59": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.83,
+            "probabilities": {
+              "DENIES_BEARING": 0.89,
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.11
+            }
+          },
+          "c60": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 0.86,
+            "probabilities": {
+              "DENIES_BEARING": 0.91,
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.09
+            }
+          },
+          "c61": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.44,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.63,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 0.37
+            }
+          },
+          "c62": {
+            "type": "choice",
+            "choice": "DENIES_BEARING",
+            "confidence": 1.0,
+            "probabilities": {
+              "DISPUTES_CLAIM": 0.0,
+              "NEITHER": 0.0,
+              "DENIES_BEARING": 1.0
+            }
+          },
+          "c63": {
+            "type": "choice",
+            "choice": "DISPUTES_CLAIM",
+            "confidence": 0.52,
+            "probabilities": {
+              "DENIES_BEARING": 0.32,
+              "NEITHER": 0.0,
+              "DISPUTES_CLAIM": 0.68
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 2403,
+          "output_tokens": 369
+        }
+      },
+      "graded_response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "p57": {
+            "type": "score",
+            "score": 1.75,
+            "confidence": 0.53,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.07,
+              "1": 0.26,
+              "2": 0.51,
+              "3": 0.15,
+              "4": 0.01
+            }
+          },
+          "b57": {
+            "type": "score",
+            "score": 2.03,
+            "confidence": 0.42,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.08,
+              "1": 0.17,
+              "2": 0.41,
+              "3": 0.32,
+              "4": 0.02
+            }
+          },
+          "p58": {
+            "type": "score",
+            "score": 1.48,
+            "confidence": 0.3,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.21,
+              "1": 0.25,
+              "2": 0.38,
+              "3": 0.15,
+              "4": 0.01
+            }
+          },
+          "b58": {
+            "type": "score",
+            "score": 2.35,
+            "confidence": 0.58,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.06,
+              "2": 0.55,
+              "3": 0.34,
+              "4": 0.04
+            }
+          },
+          "p59": {
+            "type": "score",
+            "score": 1.73,
+            "confidence": 0.61,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.06,
+              "1": 0.24,
+              "2": 0.61,
+              "3": 0.09,
+              "4": 0.0
+            }
+          },
+          "b59": {
+            "type": "score",
+            "score": 2.16,
+            "confidence": 0.68,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.09,
+              "2": 0.64,
+              "3": 0.25,
+              "4": 0.01
+            }
+          },
+          "p60": {
+            "type": "score",
+            "score": 1.73,
+            "confidence": 0.51,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.11,
+              "1": 0.21,
+              "2": 0.52,
+              "3": 0.15,
+              "4": 0.01
+            }
+          },
+          "b60": {
+            "type": "score",
+            "score": 2.39,
+            "confidence": 0.52,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.06,
+              "2": 0.48,
+              "3": 0.41,
+              "4": 0.04
+            }
+          },
+          "p61": {
+            "type": "score",
+            "score": 1.92,
+            "confidence": 0.76,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.16,
+              "2": 0.73,
+              "3": 0.1,
+              "4": 0.0
+            }
+          },
+          "b61": {
+            "type": "score",
+            "score": 2.0,
+            "confidence": 0.74,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.14,
+              "2": 0.7,
+              "3": 0.14,
+              "4": 0.01
+            }
+          },
+          "p62": {
+            "type": "score",
+            "score": 0.24,
+            "confidence": 0.8,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.84,
+              "1": 0.1,
+              "2": 0.04,
+              "3": 0.02,
+              "4": 0.0
+            }
+          },
+          "b62": {
+            "type": "score",
+            "score": 2.66,
+            "confidence": 0.58,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.04,
+              "2": 0.25,
+              "3": 0.6,
+              "4": 0.08
+            }
+          },
+          "p63": {
+            "type": "score",
+            "score": 1.89,
+            "confidence": 0.71,
+            "legend": {
+              "0": "Not at all: it leaves whether `claim` is true entirely untouched.",
+              "1": "Weakly: it is at most an indirect or minor reason to qualify `claim`.",
+              "2": "Materially: it gives a real but ambiguous or limited reason to doubt `claim` as worded.",
+              "3": "Strongly: it directly shows that `claim` is probably false or materially overstated.",
+              "4": "Decisively: if the candidate is right, `claim` as worded cannot be true."
+            },
+            "probabilities": {
+              "0": 0.03,
+              "1": 0.17,
+              "2": 0.68,
+              "3": 0.11,
+              "4": 0.0
+            }
+          },
+          "b63": {
+            "type": "score",
+            "score": 1.87,
+            "confidence": 0.6,
+            "legend": {
+              "0": "Not at all: granting `claim`, it leaves the specified connection to `parent_claim` untouched.",
+              "1": "Weakly: granting `claim`, it raises at most a minor or indirect concern about the connection.",
+              "2": "Materially: granting `claim`, it gives a real but ambiguous or limited reason the connection fails.",
+              "3": "Strongly: granting `claim`, it directly shows the claim bears little on `parent_claim` in that direction.",
+              "4": "Decisively: granting `claim`, the specified support or attack on `parent_claim` cannot hold."
+            },
+            "probabilities": {
+              "0": 0.05,
+              "1": 0.19,
+              "2": 0.61,
+              "3": 0.13,
+              "4": 0.02
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 3775,
+          "output_tokens": 214
+        }
+      }
+    }
+  ]
+}

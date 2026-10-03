@@ -1,0 +1,379 @@
+{
+  "rater": "opus-adjudicator",
+  "metadata": {
+    "modelUsage": {
+      "claude-opus-5-5": {
+        "inputTokens": 2,
+        "outputTokens": 8048,
+        "cacheReadInputTokens": 2049,
+        "cacheCreationInputTokens": 21145,
+        "webSearchRequests": 0,
+        "costUSD": 0.3305378,
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "thinkingTokens": 5272,
+        "canonicalModel": "claude-opus-5-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "total_cost_usd": 0.3305378,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 21145,
+      "cache_read_input_tokens": 2049,
+      "output_tokens": 8048,
+      "output_tokens_details": {
+        "thinking_tokens": 5272
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 21145,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 8048,
+          "cache_read_input_tokens": 2049,
+          "cache_creation_input_tokens": 21145,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 21145
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard",
+      "fallback_credit": null
+    },
+    "duration_api_ms": 70967
+  },
+  "labels": [
+    {
+      "id": 0,
+      "label": "NEITHER",
+      "reason": "Countervailing cost of service cuts; does not deny the barrier is removed."
+    },
+    {
+      "id": 1,
+      "label": "NEITHER",
+      "reason": "Countervailing cost from regressive funding."
+    },
+    {
+      "id": 2,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Says no barrier is removed for residents who already ride free."
+    },
+    {
+      "id": 3,
+      "label": "NEITHER",
+      "reason": "Countervailing cost from overcrowding."
+    },
+    {
+      "id": 4,
+      "label": "DISPUTES_CLAIM",
+      "reason": "For these residents the fare was not the barrier, so the claim is overstated."
+    },
+    {
+      "id": 5,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Other costs remain, so the claim that fare removal enables access is overstated."
+    },
+    {
+      "id": 6,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Denies that revenue loss forces cuts where subsidies fill the gap."
+    },
+    {
+      "id": 7,
+      "label": "NEITHER",
+      "reason": "Gives a separate reason access worsens, not a challenge to the claim."
+    },
+    {
+      "id": 8,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Lower collection costs shrink the revenue gap said to force cuts."
+    },
+    {
+      "id": 9,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Denies that cuts fall on low-income routes."
+    },
+    {
+      "id": 10,
+      "label": "DENIES_BEARING",
+      "reason": "Grants some cuts but says the net access gain from removing the barrier still holds."
+    },
+    {
+      "id": 11,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Says equity reviews protect low-income routes from cuts."
+    },
+    {
+      "id": 12,
+      "label": "NEITHER",
+      "reason": "Proposes a different policy design."
+    },
+    {
+      "id": 13,
+      "label": "DENIES_BEARING",
+      "reason": "Grants the cases but denies they generalize to cuts happening 'often'."
+    },
+    {
+      "id": 14,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Disputes that the surge caused the cuts."
+    },
+    {
+      "id": 15,
+      "label": "DENIES_BEARING",
+      "reason": "Grants the shift but denies it necessarily worsens access."
+    },
+    {
+      "id": 16,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Counterexample where no cuts followed."
+    },
+    {
+      "id": 17,
+      "label": "NEITHER",
+      "reason": "Independent efficiency benefit."
+    },
+    {
+      "id": 18,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Disputes that the surge meant overcrowding."
+    },
+    {
+      "id": 19,
+      "label": "NEITHER",
+      "reason": "Independent cost-saving reason about the parent."
+    },
+    {
+      "id": 20,
+      "label": "DENIES_BEARING",
+      "reason": "Measurement error weakens the causal inference, not the reported association."
+    },
+    {
+      "id": 21,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Disputes consistency across cohorts."
+    },
+    {
+      "id": 22,
+      "label": "DENIES_BEARING",
+      "reason": "Confounding breaks the link from association to causation."
+    },
+    {
+      "id": 23,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Disputes 'across diverse populations'."
+    },
+    {
+      "id": 24,
+      "label": "DENIES_BEARING",
+      "reason": "Reverse causation undermines the causal link."
+    },
+    {
+      "id": 25,
+      "label": "DENIES_BEARING",
+      "reason": "Analytic artifact undermines the inference."
+    },
+    {
+      "id": 26,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Says the consistency is overstated."
+    },
+    {
+      "id": 27,
+      "label": "DENIES_BEARING",
+      "reason": "Detection bias explains the association without causation."
+    },
+    {
+      "id": 28,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Says intake measurement is reasonably accurate."
+    },
+    {
+      "id": 29,
+      "label": "DENIES_BEARING",
+      "reason": "Grants imprecision but denies it creates the inverse trend."
+    },
+    {
+      "id": 30,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Repeated assessments reduce the imprecision."
+    },
+    {
+      "id": 31,
+      "label": "DENIES_BEARING",
+      "reason": "Prospective design limits the distortion that matters for the parent."
+    },
+    {
+      "id": 32,
+      "label": "DENIES_BEARING",
+      "reason": "Independent evidence shows the signal is not a questionnaire artifact."
+    },
+    {
+      "id": 33,
+      "label": "DENIES_BEARING",
+      "reason": "Imprecision about dose does not invalidate a cups-based analysis."
+    },
+    {
+      "id": 34,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Biomarker mismatch does not show questionnaire error."
+    },
+    {
+      "id": 35,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Biomarker variability, not the questionnaire, may drive the mismatch."
+    },
+    {
+      "id": 36,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Biomarkers are invalid reference measures, so the error they reveal is doubtful."
+    },
+    {
+      "id": 37,
+      "label": "DENIES_BEARING",
+      "reason": "Grants the error but denies it generalizes to the cohorts."
+    },
+    {
+      "id": 38,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Good agreement contradicts frequent misclassification."
+    },
+    {
+      "id": 39,
+      "label": "DENIES_BEARING",
+      "reason": "Calibration corrects the error before analysis."
+    },
+    {
+      "id": 40,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Modest correlation does not show substantial misclassification."
+    },
+    {
+      "id": 41,
+      "label": "DENIES_BEARING",
+      "reason": "Random error would not produce a spurious inverse trend."
+    },
+    {
+      "id": 42,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Says break-even often comes well under five years."
+    },
+    {
+      "id": 43,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Denies there is a typical five-year period."
+    },
+    {
+      "id": 44,
+      "label": "DENIES_BEARING",
+      "reason": "An individual buyer can avoid the typical costs."
+    },
+    {
+      "id": 45,
+      "label": "DENIES_BEARING",
+      "reason": "Moving costs also apply to renting, so they don't favor renting."
+    },
+    {
+      "id": 46,
+      "label": "NEITHER",
+      "reason": "Countervailing equity benefit of buying."
+    },
+    {
+      "id": 47,
+      "label": "NEITHER",
+      "reason": "Separate tax benefit offsetting costs."
+    },
+    {
+      "id": 48,
+      "label": "NEITHER",
+      "reason": "Separate rent-savings benefit."
+    },
+    {
+      "id": 49,
+      "label": "NEITHER",
+      "reason": "Separate cost of renting."
+    },
+    {
+      "id": 50,
+      "label": "DENIES_BEARING",
+      "reason": "Possible fast appreciation is too unreliable to undercut the typical claim."
+    },
+    {
+      "id": 51,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Early principal paydown is too small to help."
+    },
+    {
+      "id": 52,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Paydown should not count as an offset."
+    },
+    {
+      "id": 53,
+      "label": "NEITHER",
+      "reason": "Countervailing ongoing costs."
+    },
+    {
+      "id": 54,
+      "label": "DENIES_BEARING",
+      "reason": "Gains may not be realizable when the move date is fixed."
+    },
+    {
+      "id": 55,
+      "label": "NEITHER",
+      "reason": "Countervailing tax cost."
+    },
+    {
+      "id": 56,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Appreciation is already priced in, so the gains are overstated."
+    },
+    {
+      "id": 57,
+      "label": "DENIES_BEARING",
+      "reason": "Outlier booms don't support claims about many markets."
+    },
+    {
+      "id": 58,
+      "label": "NEITHER",
+      "reason": "Countervailing tax cost."
+    },
+    {
+      "id": 59,
+      "label": "DENIES_BEARING",
+      "reason": "Metro-wide figures don't carry over to individual homes."
+    },
+    {
+      "id": 60,
+      "label": "DENIES_BEARING",
+      "reason": "Temporary gains may not be there at sale."
+    },
+    {
+      "id": 61,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Boom-period transaction costs exceed the cited baseline."
+    },
+    {
+      "id": 62,
+      "label": "NEITHER",
+      "reason": "Addresses buy vs rent, not the parent's break-even claim."
+    },
+    {
+      "id": 63,
+      "label": "DISPUTES_CLAIM",
+      "reason": "Renovation spending inflates the measured equity gains."
+    }
+  ]
+}
