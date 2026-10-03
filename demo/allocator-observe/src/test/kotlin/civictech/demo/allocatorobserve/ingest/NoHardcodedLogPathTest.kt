@@ -80,9 +80,9 @@ class NoHardcodedLogPathTest {
     fun `no source on the log path's route names a concrete log path`() {
         val sources = mainSources()
         // Guard against the scan silently passing because it found nothing to
-        // scan — the three ingest files plus the app, and if it ever finds
+        // scan — the two ingest files plus the app, and if it ever finds
         // fewer, that is the bug rather than a pass.
-        (sources.size >= 4) shouldBe true
+        (sources.size >= 3) shouldBe true
 
         val offenders =
             sources.flatMap { file ->
