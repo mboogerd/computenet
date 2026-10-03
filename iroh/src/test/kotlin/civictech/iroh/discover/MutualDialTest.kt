@@ -296,6 +296,42 @@ class MutualDialTest {
     }
 
     /**
+     * The other edge of computenet-axifn's window: once A's own dial has been
+     * reported done, it is no longer in flight, so a losing-direction accepted
+     * link that drops with no opposite link up is a plain drop, not a
+     * tie-break close.
+     *
+     * Mutation: never remove a key from `inFlightDials` in `onDialDone` — the
+     * finished dial still reads as in flight and the drop is counted.
+     */
+    @Test
+    fun `a losing-direction drop after this node's own dial finished is not a tie-break close`() {
+        TwoNodeFakeRig.startSorted().use { rig ->
+            val a = rig.a
+            val b = rig.b
+            a.discover(b.own)
+            val dialFromA = rig.dialFrom(a)
+            a.fake.send(SidecarMessage.Failure(dialFromA.link, "unreachable"))
+            await("A's dial to be reported done") { a.peering.counters.dialsFailed.count == 1L }
+
+            b.discover(a.own)
+            val dialFromB = rig.dialFrom(b)
+            rig.reportInboundLinkUp(dialFromB, from = b, to = a)
+            await("B's dial to be up at A") { a.links(b.own).singleOrNull()?.direction == LinkDirection.INBOUND }
+            // A's retry is armed on a clock that never moves: no second dial
+            // is in flight when the drop is classified. (The drop itself
+            // re-dials, [DSC2-DIAL-06] — but only after it has been counted.)
+            assertEquals(1L, rig.dialsFrom(a), "A has no second dial in flight before the drop")
+            rig.deliverDown(a, a.links(b.own).single().linkId, "dropped before its hello")
+            await("A's only link to B to go down") { a.links(b.own).isEmpty() }
+
+            a.discover(a.own)
+            await("A's policy to process the drop") { a.peering.counters.selfDropped.count == 1L }
+            assertEquals(0L, a.peering.counters.tieBreakClosed.count, "a drop after A's dial finished is not a tie-break close")
+        }
+    }
+
+    /**
      * computenet-311xs, the interleaving CI hit in the A-first order: A's
      * reader has settled A's own dial — its OUTBOUND link is up — but the dial
      * thread has not yet returned to register it with the node when B's hello
