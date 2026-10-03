@@ -1292,6 +1292,11 @@ def _commit_match(tid, feature):
     SUPPRESSED from no match at all — the two are indistinguishable in the
     flag, and one of them is the cross-machine twin arriving through the door
     the gate left open (computenet-ipp94).
+
+    A `review:` commit CITES an id — a reviewer documenting the follow-up bead
+    it just filed — and never implements it, so it is no witness: computenet-
+    k2cif read as merged on a KDoc-only "review: ... (computenet-k2cif)" commit
+    (computenet-e9gsm).
     """
     for ref in (f"refs/heads/feature/{feature}", f"refs/remotes/origin/feature/{feature}"):
         try:
@@ -1299,10 +1304,11 @@ def _commit_match(tid, feature):
                 # Anchored: `--grep` is an unanchored substring regex, so a bare
                 # id for task .5.1 would match a sibling's `.5.10` commit and
                 # route fresh work to review (the inverse failure).
-                ["git", "log", "--oneline", "-1", "-E",
+                ["git", "log", "--format=%s", "-E",
                  f"--grep={re.escape(tid)}([^0-9.]|$)", ref],
                 capture_output=True, text=True, timeout=10)
-            if out.returncode == 0 and out.stdout.strip():
+            if out.returncode == 0 and any(
+                    s and not s.startswith("review:") for s in out.stdout.splitlines()):
                 return True
         except (OSError, subprocess.SubprocessError):
             return False

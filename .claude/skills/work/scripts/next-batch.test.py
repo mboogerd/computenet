@@ -435,7 +435,7 @@ if "branch_has_commits" not in nb._entry({"id": "t"}, False, []):
 
 # kklt: the task's work can sit on the FEATURE branch with no local task
 # branch at all (a dead session on another machine merged and pushed it).
-merged_cases = 7
+merged_cases = 8
 # the grep is anchored: a sibling's `.10` commit must not read as `.1` merged
 import subprocess as _sp, tempfile as _tf, os as _os
 _d = _tf.mkdtemp(); _sp.run(["git", "init", "-q", _d], check=True)
@@ -451,6 +451,9 @@ _sp.run(["git", "-C", _d, "branch", "feature/computenet-f"], check=True)
 # comments, and no branch anywhere.
 _sp.run(["git", "-C", _d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
          "--allow-empty", "-m", "computenet-f.11 groundwork landed with .10"], check=True)
+# computenet-e9gsm: a reviewer's commit that only CITES a follow-up bead.
+_sp.run(["git", "-C", _d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+         "--allow-empty", "-m", "review: KDoc states the gap (computenet-f.12)"], check=True)
 _sp.run(["git", "-C", _d, "branch", "-f", "feature/computenet-f", "HEAD"], check=True)
 _untouched = {"status": "open", "assignee": None, "comment_count": 0}
 # The kklt twin: same absent branch (merge-task.sh keeps task refs LOCAL, so a
@@ -477,6 +480,10 @@ try:
     if nb.merged_into_feature("computenet-f.11", "computenet-f") is not True:
         failed += 1
         print("FAIL: with no bead dict the flag must stand (pre-g0hg reading)")
+    if nb.merged_into_feature("computenet-f.12", "computenet-f", _twin) is not False:
+        failed += 1
+        print("FAIL: a `review:` commit citing .12 is not .12's implementation,"
+              " even on a bead with comments (computenet-e9gsm)")
     if nb._never_worked("computenet-f.11", {"status": "open", "assignee": None},
                         None) is not False:
         failed += 1
