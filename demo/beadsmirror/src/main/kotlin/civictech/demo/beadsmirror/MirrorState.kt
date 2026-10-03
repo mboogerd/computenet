@@ -18,7 +18,7 @@ import civictech.demo.beadsmirror.projector.MirrorProjector
  * [civictech.demo.beadsmirror.http.MirrorRoutes] takes a [MirrorState] rather
  * than a [MirrorProjector].
  *
- * **Threading: one writer, no lock.** [current] is written only by the
+ * **Threading: one writer; fold reads stay lock-free.** [current] is written only by the
  * re-baseline operation, which runs synchronously on the poll thread — either
  * inside `DoltFeedPoller.pollOnce`'s condition path or, on first start, before
  * the poller thread exists at all. The poll thread is also the only thread that
@@ -26,13 +26,17 @@ import civictech.demo.beadsmirror.projector.MirrorProjector
  * projector concurrently. HTTP handler threads only read [current], and they
  * read it through `@Volatile`, so each request sees either the whole old
  * projector or the whole new one — never a half-swapped mixture, and never a
- * stale reference indefinitely.
+ * stale reference indefinitely. The narrower [withPublicationLock] boundary
+ * only couples replacement publication to an externally visible durable
+ * cursor; ordinary fold readers do not acquire it.
  *
  * The fresh cells are now materialized by one journaled topology delta under
  * the same refs, so replication follows the respawn through the registry and
  * no application-level swap hook is needed.
  */
 class MirrorState(initial: MirrorProjector) {
+
+    private val publicationLock = Any()
 
     /** The projector every read and every applied batch goes through, right now. */
     @Volatile
@@ -61,4 +65,11 @@ class MirrorState(initial: MirrorProjector) {
         current = next
         rebaselineCount++
     }
+
+    /**
+     * Serializes replacement publication with reads of the durable cursor that describes it.
+     * Fold readers remain lock-free through [current]; only callers that pair cursor progress with
+     * the published projector use this boundary.
+     */
+    internal fun <T> withPublicationLock(block: () -> T): T = synchronized(publicationLock, block)
 }

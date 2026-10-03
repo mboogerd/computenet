@@ -172,8 +172,10 @@ class EmptyExportRefused(
  * thread is the sole writer of [MirrorState.current] and sole caller of
  * `applyAll`; first-start initialization applies its baseline before the
  * poller starts. HTTP readers access the projector through the volatile
- * [MirrorState.current] reference and observe the old or new projector. No
- * lock is needed for this handoff.
+ * [MirrorState.current] reference and observe the old or new projector.
+ * Replacement commit, quiescence and publication share [MirrorState.withPublicationLock]
+ * with `WorkspaceMirror.committedCheckpoint`, so the new durable cursor cannot be exposed
+ * while [MirrorState.current] still names the incumbent. Fold-only readers remain lock-free.
  */
 class Rebaseline(
     private val export: () -> List<ExportRow>,
@@ -215,12 +217,14 @@ class Rebaseline(
             )
             graph.projector(DotMinter(workspaceIdentity), applied)
         }
-        input().commit {
-            target.applyAll(records)
-            headCommit
+        state.withPublicationLock {
+            input().commit {
+                target.applyAll(records)
+                headCommit
+            }
+            graph.host.quiescence().await(30_000, "beadsmirror $workspaceIdentity rebaseline")
+            if (target !== state.current) state.swap(target)
         }
-        graph.host.quiescence().await(30_000, "beadsmirror $workspaceIdentity rebaseline")
-        if (target !== state.current) state.swap(target)
         onEvent(MirrorEvent.Rebaselined(reason, headCommit, rows.size, workspaceIdentity))
     }
 }

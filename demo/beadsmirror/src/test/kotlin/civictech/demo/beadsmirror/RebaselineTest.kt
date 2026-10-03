@@ -26,6 +26,7 @@ import civictech.demo.beadsmirror.feed.FieldDiff
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorProjector
+import civictech.testkit.awaitUntil
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -39,9 +40,14 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.io.Serializable
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 
 /** a3v8u-D4/D6: baselines are durable-input commits into a real solo [MirrorGraph]. */
 class RebaselineTest {
@@ -139,6 +145,76 @@ class RebaselineTest {
         seenAtCommit shouldBe preGap
         rig.state.current.view() shouldBe mapOf(
             "B" to mapOf("id" to "\"B\"", "status" to "\"closed\""),
+        )
+    }
+
+    @Test
+    fun `a settled replacement cursor cannot outrun publication of its fold`() {
+        val rig = rig()
+        rig.initial.apply(createRecord(11, "B", "status", "open"))
+        rig.graph.host.quiescence().await(30_000, "pre-gap records")
+        val rawInput = rig.graph.input()
+        val cursor = DurableFeedCursor(rawInput, rig.graph.host, "publication race")
+        val commitLanded = CountDownLatch(1)
+        val allowCommitReturn = CountDownLatch(1)
+        val readCommitted: () -> Serializable? = rawInput::committed
+        val commitBatch: (() -> Serializable) -> Serializable = { drive ->
+            rawInput.commit(drive).also {
+                commitLanded.countDown()
+                check(allowCommitReturn.await(30, TimeUnit.SECONDS)) {
+                    "test did not release the committed rebaseline"
+                }
+            }
+        }
+        val gatedInput = DurableInput::class.java.declaredConstructors.single().let { constructor ->
+            constructor.isAccessible = true
+            constructor.newInstance(readCommitted, commitBatch) as DurableInput
+        }
+        val rebuildFailure = AtomicReference<Throwable?>()
+        val rebuild = thread(name = "rebaseline-publication") {
+            runCatching {
+                Rebaseline(
+                    export = { listOf(row("B", "status" to "closed")) },
+                    feed = DoltCommitFeed(fakeLog(listOf("flat0", "flat1"))),
+                    graph = rig.graph,
+                    state = rig.state,
+                    input = { gatedInput },
+                    workspaceIdentity = IDENTITY,
+                    onEvent = events::add,
+                ).run(RebaselineReason.CheckpointGone("pre-gap"))
+            }.onFailure(rebuildFailure::set)
+        }
+        check(commitLanded.await(30, TimeUnit.SECONDS)) { "rebaseline commit did not land" }
+
+        val readResult = AtomicReference<Pair<String?, Map<String, Map<String, String>>>>()
+        val readerStarted = CountDownLatch(1)
+        val readerDone = CountDownLatch(1)
+        val reader = thread(name = "checkpoint-reader") {
+            readerStarted.countDown()
+            readResult.set(
+                rig.state.withPublicationLock(cursor::committed) to rig.state.current.view(),
+            )
+            readerDone.countDown()
+        }
+        check(readerStarted.await(30, TimeUnit.SECONDS)) { "checkpoint reader did not start" }
+
+        try {
+            awaitUntil("checkpoint reader waits for replacement publication") {
+                reader.state == Thread.State.BLOCKED || readerDone.count == 0L
+            }
+        } finally {
+            allowCommitReturn.countDown()
+        }
+        rebuild.join(30_000)
+        reader.join(30_000)
+
+        rebuild.isAlive shouldBe false
+        reader.isAlive shouldBe false
+        rebuildFailure.get() shouldBe null
+        readResult.get() shouldBe (
+            "flat1" to mapOf(
+                "B" to mapOf("id" to "\"B\"", "status" to "\"closed\""),
+            )
         )
     }
 
