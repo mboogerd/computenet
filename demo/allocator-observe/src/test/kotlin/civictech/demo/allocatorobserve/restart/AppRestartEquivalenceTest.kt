@@ -274,17 +274,16 @@ class AppRestartEquivalenceTest {
      * makes a restart diverge in the fold. A log this process has read and that
      * is now gone counts as the log replaced by an empty one, so the process
      * that never stopped and the restarted process both empty their recovered
-     * folds. Removing records is a fold change outside the spend durable-input
-     * commit, so it deliberately leaves the last source cursor in place.
+     * folds. Removing records and resetting the source cursor happen in one
+     * spend durable-input commit, so a restored log is read again from offset 0.
      *
      * Two phases, each discriminating one half of `convergeOnDeletedLog`:
      *
      * - **Deleted.** Without the fold being emptied, the uninterrupted app keeps
      *   r1..r6 (recordCount 6) while the restarted one serves 0 — the
      *   divergence the bead measured (`uninterrupted=3 restarted=0`).
-     * - **Restored with its old content.** Both processes resume from the
-     *   unchanged cursor and therefore remain empty; no cursor is fabricated
-     *   for the filesystem disappearance.
+     * - **Restored with its old content.** Both processes re-read the whole log
+     *   from the reset cursor and converge back on r1..r6.
      *
      * Since kernel durability restores the record fold before the first poll,
      * both processes observe the records go and count the deletion once as a
@@ -300,7 +299,6 @@ class AppRestartEquivalenceTest {
         // Premise: the fold holds records before the log is deleted, so an empty
         // answer afterwards is the deletion's doing and not an empty fixture.
         ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 6
-        val committedOffset = ingest(uninterrupted).getValue("checkpointOffset").jsonPrimitive.long
         uninterruptedRig.deleteLog()
         // Two ticks observe the absence, so the count below also pins that a
         // deletion is counted once rather than once per tick that sees it.
@@ -321,7 +319,7 @@ class AppRestartEquivalenceTest {
             for (app in listOf(uninterrupted, restarted)) {
                 val ingest = ingest(app)
                 ingest.getValue("recordCount").jsonPrimitive.int shouldBe 0
-                ingest.getValue("checkpointOffset").jsonPrimitive.long shouldBe committedOffset
+                ingest.getValue("checkpointOffset").jsonPrimitive.long shouldBe 0L
             }
             ingest(uninterrupted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
             ingest(restarted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
@@ -334,8 +332,8 @@ class AppRestartEquivalenceTest {
 
         withClue("log restored with its old content") {
             probe(restarted).state(REPORT_PATH) shouldBe probe(uninterrupted).state(REPORT_PATH)
-            ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 0
-            ingest(restarted).getValue("recordCount").jsonPrimitive.int shouldBe 0
+            ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 6
+            ingest(restarted).getValue("recordCount").jsonPrimitive.int shouldBe 6
             ingest(uninterrupted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
         }
     }

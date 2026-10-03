@@ -28,6 +28,7 @@ import civictech.demo.allocatorobserve.http.toJson
 import civictech.demo.allocatorobserve.ingest.CheckpointState
 import civictech.demo.allocatorobserve.ingest.SpendLogIngester
 import civictech.demo.allocatorobserve.ingest.TailReason
+import civictech.demo.allocatorobserve.ingest.fingerprintHead
 import civictech.demo.allocatorobserve.view.AllocatorReportViews
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
@@ -206,7 +207,9 @@ private data class AllocatorRuntime(
  *   empty one. Kernel recovery restores the non-empty fold before the first
  *   poll, so both an uninterrupted process and one restarted during the gap
  *   observe the records go, count one re-baseline, and serve the same empty
- *   report until the log comes back with a changed head (computenet-k2cif).
+ *   report. The deletion also resets the durable cursor, so when the log comes
+ *   back both processes re-read it whole, including when its content is
+ *   byte-identical (computenet-k2cif).
  *   A log that has not arrived yet in this
  *   process is still left alone, as `SpendLogIngester` does for
  *   `TailReason.LogAbsent`.
@@ -391,17 +394,11 @@ class AllocatorObserveApp(
      * present and is now absent": an empty membership needs no action; a
      * non-empty one is reconciled to the absent log.
      *
-     * The removals deliberately run outside a durable-input commit: disappearance
-     * changes the fold but does not invent a new source cursor. The deletion is
-     * counted once in `reBaselineCount`.
-     *
-     * The cost, stated where it is paid: because the committed cursor is left
-     * in place, a log that is only transiently absent and comes back with its
-     * old content (a sync that unlinks and recreates the file) still matches
-     * that cursor's length and head fingerprint, so it is NOT re-read: the
-     * served report stays empty (or holds only lines appended after the old
-     * cursor) until the log's head changes. A recreated log with a different
-     * head is re-baselined as usual. Tracked as computenet-k2cif.
+     * The removals and a zero-offset cursor commit atomically through the spend
+     * durable input. A transiently absent log that comes back with its old
+     * content (the common unlink-then-recreate sync shape) is therefore re-read
+     * whole instead of resuming at its former end. The deletion is counted once
+     * in `reBaselineCount`.
      *
      * This makes the app a second writer of the records cell besides the
      * ingester, in this one case only; it writes through the same `SetOps`
@@ -411,7 +408,10 @@ class AllocatorObserveApp(
     private fun convergeOnDeletedLog() {
         val live = records.membership()
         if (live.isEmpty()) return
-        live.forEach(runtime.recordOps::remove)
+        spendInput.commit {
+            live.forEach(runtime.recordOps::remove)
+            CheckpointState(0L, fingerprintHead(config.logPath, 0L))
+        }
         reBaselineCount++
     }
 
