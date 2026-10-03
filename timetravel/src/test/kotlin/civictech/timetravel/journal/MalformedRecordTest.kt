@@ -54,6 +54,7 @@ class MalformedRecordTest {
         is OutletWaveRecord -> "OutletWave"
         is BaselineDischargeRecord -> "BaselineDischarge"
         is TopologyRecord -> "Topology"
+        is InputRecord -> "Input"
     }
 
     @Test
