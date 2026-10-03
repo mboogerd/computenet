@@ -346,10 +346,9 @@ class DivergenceControlTest {
 
         private val identity = sanitizedDoltDatabaseName(workspace.root)
         private val graph = MirrorGraph.solo(runDir, identity)
-        private val applied = graph.apply(graph.spec())
-        val projector = graph.projector(DotMinter(identity), applied, defects)
+        val projector = graph.projector(DotMinter(identity), defects = defects)
         private val feed = DoltCommitFeed(workspace.doltRoot)
-        private val cursor = DurableFeedCursor(graph.input(applied), graph.host, "divergence control")
+        private val cursor = DurableFeedCursor(graph.input(), graph.host, "divergence control")
         private val poller = DoltFeedPoller(
             feed = feed,
             cursor = cursor,

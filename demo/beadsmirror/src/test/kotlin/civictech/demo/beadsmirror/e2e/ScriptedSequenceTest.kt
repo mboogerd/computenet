@@ -244,8 +244,8 @@ class ScriptedSequenceTest {
      * The feature's compaction case: `bd flatten --force` squashes the
      * mirror's checkpoint out of `dolt_log` mid-run, the mirror re-baselines
      * ([MirrorEvent.Rebaselined] with [RebaselineReason.CheckpointGone], and
-     * [civictech.demo.beadsmirror.MirrorState.rebaselineCount] advancing past
-     * the start-time rebuild), and one further mutation afterwards leaves the
+     * [civictech.demo.beadsmirror.MirrorState.rebaselineCount] recording the
+     * history-gap swap), and one further mutation afterwards leaves the
      * fold equal to `bd export` again.
      *
      * Cheap here because the whole pipeline is already standing; the unit
@@ -265,7 +265,7 @@ class ScriptedSequenceTest {
             mirror.stateFold().edges,
             exportNow(),
         ) shouldBe emptyList()
-        mirror.app.state.rebaselineCount shouldBe 1
+        mirror.app.state.rebaselineCount shouldBe 0
 
         workspace.flatten()
         // computenet-3vng: this await has timed out ~12 times in CI's
@@ -275,7 +275,7 @@ class ScriptedSequenceTest {
         // (a) stops early on a dead poll loop — a loop that died cannot
         // re-baseline, so waiting out the budget only hid the cause — and
         // (b) accepts `>= 2`, so an over-count reaches the exact
-        // `rebaselineCount shouldBe 2` assertion below instead of presenting
+        // `rebaselineCount shouldBe 1` assertion below instead of presenting
         // as a timeout; and (c) on timeout reports the poller failure, every
         // Rebaselined event, the persisted checkpoint and `dolt_log`'s head.
         // That is instrumentation, not a fix: the next occurrence names its
@@ -306,7 +306,7 @@ class ScriptedSequenceTest {
 
         val rebuild = mirror.events.filterIsInstance<MirrorEvent.Rebaselined>().last()
         (rebuild.reason is RebaselineReason.CheckpointGone) shouldBe true
-        mirror.app.state.rebaselineCount shouldBe 2
+        mirror.app.state.rebaselineCount shouldBe 1
 
         val export = exportNow()
         val fold = mirror.stateFold()
