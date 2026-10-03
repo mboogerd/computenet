@@ -16,12 +16,12 @@ import java.util.concurrent.ConcurrentHashMap
  * **Bump this whenever a change alters what a journal's bytes MEAN** — the
  * persisted shape of any cell's [civictech.cell.Stateful] snapshot, the wire
  * encoding of a journaled invocation frame, the layout of a checkpoint /
- * frontier / outlet-wave / baseline record, or the meaning of a record type
+ * frontier / outlet-wave / baseline / durable-input record, or the meaning of a record type
  * byte. Do **not** bump for a purely additive change that an older reader
  * tolerates and a newer reader can read — a new record type an older journal
  * simply lacks is the worked example
  * ([JournalCompatibilityTest][civictech.cell.durability.JournalCompatibilityTest]'s
- * `RECORD_OUTLET_WAVE` arms), and AGENTS.md's *"prefer additive encoding"* is
+ * `RECORD_OUTLET_WAVE` and `RECORD_INPUT` arms), and AGENTS.md's *"prefer additive encoding"* is
  * why that is the preferred kind of change in the first place.
  *
  * Version `1` is both the current generation and the generation an *unversioned*

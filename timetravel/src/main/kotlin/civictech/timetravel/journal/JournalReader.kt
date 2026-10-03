@@ -166,6 +166,14 @@ object JournalReader {
                 decoded.events.map { it.javaClass.simpleName },
                 emptySet(),
             )
+            is DecodedJournalRecord.Input -> InputRecord(
+                index,
+                journalId,
+                decoded.cellRef,
+                decoded.name,
+                decoded.frames.size,
+                emptySet(),
+            )
             is DecodedJournalRecord.Unknown -> UnknownRecord(index, journalId, decoded.typeByte)
         }
     }
@@ -179,6 +187,7 @@ object JournalReader {
             is OutletWaveRecord -> copy(reasons = widened)
             is BaselineDischargeRecord -> copy(reasons = widened)
             is TopologyRecord -> copy(reasons = widened)
+            is InputRecord -> copy(reasons = widened)
             is UnknownRecord -> copy(reasons = widened)
             is MalformedRecord -> copy(reasons = widened)
         }

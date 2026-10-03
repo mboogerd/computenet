@@ -67,6 +67,25 @@ class JournalRecordsTest {
     }
 
     @Test
+    fun `an input record decodes to Input carrying its cursor and complete frame records`() {
+        val invocation = HostedPortInvocation(
+            ref, "deltaInlet", HostedPortInvocation.Type.PORT_API,
+            Invocation.of(SetOps::class.java.getMethod("add", Any::class.java), arrayOf("x"), null),
+        )
+
+        durability.journalInput(journal, ref, "source", 17, listOf(invocation))
+
+        val decoded = JournalRecords.decode(journal.replay().single())
+            .shouldBeInstanceOf<DecodedJournalRecord.Input>()
+        decoded.cellRef shouldBe ref
+        decoded.name shouldBe "source"
+        decoded.cursor shouldBe 17
+        val frame = JournalRecords.decode(decoded.frames.single())
+            .shouldBeInstanceOf<DecodedJournalRecord.Frame>()
+        WireCodec.decode(frame.payload).invocation.args shouldBe listOf("x")
+    }
+
+    @Test
     fun `a checkpoint decodes to Checkpoint then one OutletWave per outlet`() {
         durability.advanceAndJournalFrontier(ref, "deltaInlet", Timestamp(src, 3))
         durability.checkpoint(journal)
