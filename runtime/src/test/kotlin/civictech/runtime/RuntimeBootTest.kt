@@ -187,6 +187,38 @@ class RuntimeBootTest {
     }
 
     @Test
+    fun `boot exposes declared durable inputs on the runtime node`() {
+        val manifest = Manifest(
+            mapOf(
+                "inputs" to NodeSpec(
+                    journalDir = tempDir.resolve("inputs-journal").toString(),
+                ),
+            ),
+        )
+        val node = Runtime.boot(
+            manifest,
+            "inputs",
+            GraphSpec(
+                listOf(
+                    SpawnStep(
+                        handle = "records",
+                        factory = CellFactory { ref -> SetCell<String>(ref) },
+                        journalId = "main",
+                        inputs = setOf("spend"),
+                    ),
+                ),
+            ),
+        )
+
+        try {
+            assertNotNull(node.inputs["records"]?.get("spend"))
+            assertEquals(null, node.inputs.getValue("records").getValue("spend").committed())
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
     fun `boot binds a journalId naming another host's journal to a main-host spawn`() {
         // A journalId equal to the spawning host's own name cannot tell the
         // per-ref binding from the host default; "worker" on mainHost can.
