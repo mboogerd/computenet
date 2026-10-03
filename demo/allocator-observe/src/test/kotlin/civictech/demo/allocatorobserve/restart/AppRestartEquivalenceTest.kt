@@ -16,11 +16,12 @@ import civictech.demo.allocatorobserve.oracle.R7
 import civictech.demo.allocatorobserve.oracle.R8
 import civictech.demo.allocatorobserve.oracle.R9
 import civictech.demo.allocatorobserve.oracle.WINDOW
+import civictech.demo.allocatorobserve.ingest.TailReason
 import civictech.testkit.HttpProbe
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.long
@@ -89,9 +90,9 @@ import java.util.concurrent.atomic.AtomicReference
  *   so it isolates the spend half at a boundary where the declaration half is
  *   settled.
  *
- * Both mutations were run before this test was reported (see the task's bead
- * comment): commenting out `journal.replayInto(declarations)` fails s = 0, and
- * making `ColdStartOffsetStore.read()` delegate unconditionally fails s = 1.
+ * The current discriminator is direct: every replacement process's first poll
+ * must report [TailReason.Resumed], so rebuilding either fold by a cold whole-file
+ * read fails before report equality can mask the mechanism.
  */
 class AppRestartEquivalenceTest {
 
@@ -218,10 +219,11 @@ class AppRestartEquivalenceTest {
         // A second process over the SAME run directory and log. Its `start()`
         // tick is step `boundary + 1`'s poll — a restart takes wall-clock time,
         // so the app comes back with the clock already moved on rather than
-        // frozen at the instant it died. That tick is the cold-start whole-file
-        // read; the journal replay happened in the constructor before it.
+        // frozen at the instant it died. Kernel recovery happened in the
+        // constructor, so this tick resumes at the recovered cursor.
         rig.inputs(boundary + 1)
         val second = rig.app().start()
+        second.lastSpendReason.shouldBeInstanceOf<TailReason.Resumed>()
         second.declarationReplayFailures shouldBe 0L
         for (step in boundary + 2..LAST_STEP) {
             rig.inputs(step)
@@ -271,31 +273,22 @@ class AppRestartEquivalenceTest {
      * Design entry 6jbep-D1: a spend log DELETED while the app is down no longer
      * makes a restart diverge in the fold. A log this process has read and that
      * is now gone counts as the log replaced by an empty one, so the process
-     * that never stopped empties its fold exactly as the restarted one starts
-     * empty — and when the log comes back, both re-read it whole.
+     * that never stopped and the restarted process both empty their recovered
+     * folds. Removing records is a fold change outside the spend durable-input
+     * commit, so it deliberately leaves the last source cursor in place.
      *
      * Two phases, each discriminating one half of `convergeOnDeletedLog`:
      *
      * - **Deleted.** Without the fold being emptied, the uninterrupted app keeps
      *   r1..r6 (recordCount 6) while the restarted one serves 0 — the
      *   divergence the bead measured (`uninterrupted=3 restarted=0`).
-     * - **Restored with its old content.** Without the offset store going back
-     *   to its cold state, the uninterrupted app resumes from its checkpoint,
-     *   which the byte-identical file still matches (same length, same head
-     *   fingerprint), so it reads nothing new and stays at 0 while the
-     *   restarted app's first read of the restored file finds all six.
+     * - **Restored with its old content.** Both processes resume from the
+     *   unchanged cursor and therefore remain empty; no cursor is fabricated
+     *   for the filesystem disappearance.
      *
-     * Measured when this test was written (bead comment on computenet-6jbep):
-     * removing the fold emptying fails the deleted phase on the report bytes;
-     * making `forget()` leave `read()` resuming fails the restored phase on the
-     * report bytes; deleting the `forget()` call outright fails earlier, on
-     * `reBaselineCount` 2 instead of 1, because the store never leaves the
-     * seen state and every absent tick then re-counts the deletion.
-     *
-     * The per-process account is pinned separately rather than compared: only
-     * the uninterrupted app saw the records go, so only it counts the deletion
-     * as a re-baseline; both serve `checkpointOffset: null` while the log is
-     * absent.
+     * Since kernel durability restores the record fold before the first poll,
+     * both processes observe the records go and count the deletion once as a
+     * re-baseline.
      */
     @Test
     fun `a log deleted while the app is down converges both processes on its absence`() {
@@ -307,6 +300,7 @@ class AppRestartEquivalenceTest {
         // Premise: the fold holds records before the log is deleted, so an empty
         // answer afterwards is the deletion's doing and not an empty fixture.
         ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 6
+        val committedOffset = ingest(uninterrupted).getValue("checkpointOffset").jsonPrimitive.long
         uninterruptedRig.deleteLog()
         // Two ticks observe the absence, so the count below also pins that a
         // deletion is counted once rather than once per tick that sees it.
@@ -327,10 +321,10 @@ class AppRestartEquivalenceTest {
             for (app in listOf(uninterrupted, restarted)) {
                 val ingest = ingest(app)
                 ingest.getValue("recordCount").jsonPrimitive.int shouldBe 0
-                ingest.getValue("checkpointOffset") shouldBe JsonNull
+                ingest.getValue("checkpointOffset").jsonPrimitive.long shouldBe committedOffset
             }
             ingest(uninterrupted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
-            ingest(restarted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 0L
+            ingest(restarted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
         }
 
         uninterruptedRig.restoreLog()
@@ -340,9 +334,8 @@ class AppRestartEquivalenceTest {
 
         withClue("log restored with its old content") {
             probe(restarted).state(REPORT_PATH) shouldBe probe(uninterrupted).state(REPORT_PATH)
-            ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 6
-            ingest(restarted).getValue("recordCount").jsonPrimitive.int shouldBe 6
-            // The reappearance is a cold whole-file read, not a second re-baseline.
+            ingest(uninterrupted).getValue("recordCount").jsonPrimitive.int shouldBe 0
+            ingest(restarted).getValue("recordCount").jsonPrimitive.int shouldBe 0
             ingest(uninterrupted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
         }
     }
