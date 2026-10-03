@@ -1118,6 +1118,13 @@ if epic_closed_vs_jev != "HANDOFF":
     failed += 1
     print("FAIL: epic_closed must win over a supplied jev_verdict, not just over relatedness")
 
+# --- compacted: a compaction resets headroom, so it must force HANDOFF
+for headroom, relatedness in [(99.0, "same-feature"), (25.0, "same-epic")]:
+    decision, reason = nb.continuation_advice(headroom, relatedness, compacted=True)
+    if decision != "HANDOFF" or "compacted" not in reason:
+        failed += 1
+        print(f"FAIL: compacted at {headroom}%/{relatedness} must HANDOFF — got {decision!r}")
+
 # --- relatedness_for_route(): mechanical mapping, not self-report
 route_cases = [
     ("1", "same-epic", "route 1 (a sibling feature under the held epic) is same-epic"),
