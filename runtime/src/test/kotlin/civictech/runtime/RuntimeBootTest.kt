@@ -443,6 +443,38 @@ class RuntimeBootTest {
     }
 
     @Test
+    fun `topology recovery exposes recovered keyed families on the runtime node`() {
+        val manifest = Manifest(
+            mapOf(
+                "families" to NodeSpec(
+                    journalDir = tempDir.resolve("recovered-families").toString(),
+                    journalTopology = true,
+                ),
+            ),
+        )
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "writers",
+                    factory = KeyedCellFactory { _, ref -> SetCell<String>(ref) },
+                    family = KeyedFamily("runtime-writers", journalId = "main"),
+                ),
+            ),
+        )
+
+        Runtime.boot(manifest, "families", spec).use { first ->
+            assertEquals(false, first.recovered)
+            assertEquals(setOf("writers"), first.families.keys)
+        }
+
+        Runtime.boot(manifest, "families", spec).use { second ->
+            assertTrue(second.recovered)
+            assertEquals(setOf("writers"), second.families.keys)
+            assertNotNull(second.families["writers"])
+        }
+    }
+
+    @Test
     fun `a budget policy file yields one node-scoped token bucket ledger`() {
         val policyFile = tempDir.resolve("policy.json")
         Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.placeholder()))

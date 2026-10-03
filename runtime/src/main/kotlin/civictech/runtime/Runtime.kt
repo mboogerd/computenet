@@ -109,10 +109,11 @@ object Runtime {
                     val ref = applyContext.handles.getValue(step.handle)
                     step.handle to step.inputs.associateWith { input -> mainHost.durableInput(ref, input) }
                 }
-            // Recovery recreates keyed families inside ApplyContext, but :kernel currently exposes
-            // only their declarations to this module. Reconstructing wrappers here would register
-            // a second family for the same namespace, so the existing instances cannot be surfaced.
-            families = emptyMap()
+            families = applyContext.live().families.keys.associateWith { handle ->
+                checkNotNull(applyContext.familyFor(handle)) {
+                    "recovered topology family '$handle' was not materialized"
+                }
+            }
         } else {
             val applied = spec.apply(applyContext)
             families = applied.families
