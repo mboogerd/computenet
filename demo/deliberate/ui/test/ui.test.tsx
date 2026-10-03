@@ -129,6 +129,20 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('not worth exploring');
   });
 
+  it('CTL-03 on the root: a question the human stopped reads "stopped by you", once, and its Stop says it stops the question', () => {
+    const running = renderToString(() => <TreeView graph={graph} root="q" />);
+    expect(running).not.toContain('stopped by you');
+    expect(running).toContain('Stop the whole question');
+    const stopped: GraphDto = {
+      ...graph,
+      questions: [{ ...graph.questions[0], active: false, stoppedBy: 'human' }],
+      nodes: graph.nodes.map((n) => (n.ref === 'q' ? { ...n, status: 'STOPPED', override: 'STOP' } : n)),
+    };
+    const html = renderToString(() => <TreeView graph={stopped} root="q" />).replace(/<!--[^>]*-->/g, '');
+    expect(html.match(/stopped by you/g)).toHaveLength(1);
+    expect(html).not.toContain('question stopped');
+  });
+
   it('model C lists the question\'s cruxes under "what would change the answer", best first', () => {
     expect(renderToString(() => <CruxesPanel graph={graph} root="q" />)).not.toContain('What would change the answer');
     const withCruxes: GraphDto = {

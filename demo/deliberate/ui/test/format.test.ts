@@ -121,6 +121,12 @@ describe('strength and status wording', () => {
     expect(stoppedHint({ ...q, stoppedBy: 'voi' })).toContain('value of information');
     expect(stoppedHint(q)).toBeUndefined();
   });
+
+  it('words the human stop of a whole question (CTL-03 on the root)', () => {
+    const q = { root: 'q', text: 'Q?', claims: 12, active: false, stoppedBy: 'human' as const };
+    expect(stoppedText(q)).toBe('stopped by you');
+    expect(stoppedHint(q)).toContain('Auto on the question restarts it');
+  });
 });
 
 describe('questionProgress', () => {

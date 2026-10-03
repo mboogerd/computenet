@@ -499,9 +499,27 @@ open question, each explored as a root of its own.
 - **CTL-03** `STOP` cancels queued work for that claim and prevents future
   rounds; an in-flight round finishes but its results are still attached
   (arguments are never silently dropped once produced). Status becomes
-  `STOPPED`. Descendants are not affected.
+  `STOPPED`. Descendants are not affected — except on a **question root**,
+  where `STOP` ends the whole question: every claim and link of it that waits
+  for a round (`QUEUED`, or `EXPLORING` with rounds left) ends `STOPPED` at
+  once and no pending forced round survives; a round in flight anywhere in
+  the question finishes, its arguments are attached and assessed, and they —
+  like its claim, at the round boundary — end `STOPPED` instead of being
+  queued. The question is no longer `active` once its rounds in flight end,
+  and reports `stoppedBy = "human"` (the hero reads "stopped by you", and the
+  hero's Stop control says it stops the whole question). `EXPAND` on a claim of a stopped question
+  is still CTL-02 (on the root: the root's round only); what it attaches ends
+  `STOPPED` too. The stop is durable: it is part of the question's record
+  (DUR-02), and a restart restores the question stopped — whatever the
+  restart interrupted ends `STOPPED`, nothing is re-queued. It is independent
+  of the pause (CTL-05). A framed root (§3 "Framing") follows the same rule
+  over its readings/positions, though the UI offers it no control (UI-09).
 - **CTL-04** `AUTO` returns the decision to Jev; setting it on a `STOPPED`
-  claim re-queues it through the normal gates.
+  claim re-queues it through the normal gates. On the root of a stopped
+  question it restarts the question: every claim and link the stop ended
+  `STOPPED` (any whose own override is not `STOP`) is re-queued through the
+  normal gates, exactly as a restart would (DUR-03) — an argument never
+  assessed is assessed first — and `stoppedBy` clears.
 - **CTL-05** The human can **pause** and **resume** a whole question
   (`POST /question/pause`). A paused question starts no new round: a round
   in flight finishes and its results are attached and assessed (as CTL-03);
@@ -549,7 +567,8 @@ Every status change is broadcast.
   claim and link carries `activity` while it is being explored, judged or
   assessed; the graph carries `consensusMembers`; every question
   carries `yieldRounds`, `yieldRecent`, `yieldEarlier` (EXP-10, informational)
-  and `stoppedBy` (`"budget"`, `"voi"` or null; model C, §3), `paused`
+  and `stoppedBy` (`"human"` — STOP on its root, CTL-03 —, `"budget"`,
+  `"voi"` or null; model C, §3), `paused`
   (CTL-05), `cruxes` (model C, up to 3 refs for "what would change the
   answer"), `costUsd`, `projectedUsd` and `cost` (§12), and — model D —
   `firstImpression` (Jev's plausibility of the question itself, judged before

@@ -25,8 +25,9 @@ export interface QuestionDto {
   /** Mean yield of every recorded round before those; absent until there are more than `yieldWindow`. */
   yieldEarlier?: number;
   /**
-   * Why the tree stopped growing early: the claim budget (the hard cap), or — no
-   * work left — model C's value-of-information stop, when it left a node DIMINISHING.
+   * Why the tree stopped growing early: the human stopped the question (STOP on
+   * its root, CTL-03), the claim budget (the hard cap), or — no work left — model
+   * C's value-of-information stop, when it left a node DIMINISHING.
    */
   stoppedBy?: StoppedBy;
   /**
@@ -135,7 +136,7 @@ export interface BackendCostDto {
   note?: string;
 }
 
-export type StoppedBy = 'budget' | 'voi';
+export type StoppedBy = 'human' | 'budget' | 'voi';
 
 export type Status =
   | 'QUEUED'

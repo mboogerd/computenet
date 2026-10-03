@@ -245,7 +245,8 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
                     </span>
                   )}
                 </Show>
-                <Show when={claim().status && (claim().status === 'STOPPED' || claim().status === 'FAILED')}>
+                {/* CTL-03: a question the human stopped already reads "stopped by you" above. */}
+                <Show when={claim().status && ((claim().status === 'STOPPED' && question()?.stoppedBy !== 'human') || claim().status === 'FAILED')}>
                   <span class="status status--halted" title={STATUS_HINT[claim().status!]}>
                     question {STATUS_LABEL[claim().status!]}
                   </span>
@@ -256,7 +257,7 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
                 {/* UI-09: a framed root's EXPAND/STOP would run no round (FRA-02) — no question-level override for it. */}
                 <Show when={!framing()}>
                   <span class="reveal" classList={{ 'is-pinned': override() !== 'AUTO' }}>
-                    <OverrideControl id={claim().ref} value={override()} />
+                    <OverrideControl id={claim().ref} value={override()} what="question" />
                   </span>
                 </Show>
               </p>

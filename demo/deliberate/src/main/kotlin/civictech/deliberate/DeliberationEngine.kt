@@ -155,6 +155,7 @@ class DeliberationEngine(
     private val questions = state.questions
     private val treeSize = state.treeSize
     private val paused = state.paused
+    private val stopped = state.stopped
 
     private val pending = AtomicInteger()
     private val idle = Object()
@@ -236,13 +237,25 @@ class DeliberationEngine(
         return ref
     }
 
-    /** CTL-01..04. */
+    /**
+     * CTL-01..04. On a question root, STOP ends the whole question and AUTO
+     * restarts it ([stopQuestion], [restartQuestion]); EXPAND stays CTL-02 for the root only.
+     */
     fun setOverride(ref: CellRef, mode: Override) {
         var enqueueAgain: Claim? = null
         var assessBeforeSchedule: Claim? = null
+        var restarted: List<Claim> = emptyList()
         val toSchedule: List<Claim> = synchronized(lock) {
             val c = requireNotNull(claims[ref]) { "unknown claim ${ref.id}" }
+            val questionRoot = c.ref == c.root
             c.override = mode
+            if (questionRoot && mode == Override.STOP) stopQuestion(c.root)
+            if (questionRoot && mode == Override.AUTO && stopped.remove(c.root)) {
+                c.forceRound = false
+                restarted = claims.values.filter { it.root == c.root && it.status == Status.STOPPED && it.override != Override.STOP }
+                restarted.forEach { it.status = Status.QUEUED }
+                return@synchronized emptyList()
+            }
             // STOP cancels queued work; AUTO returns to ordinary gates. Neither keeps an earlier forced round.
             if (mode != Override.EXPAND) c.forceRound = false
             val scheduled = when (mode) {
@@ -304,7 +317,51 @@ class DeliberationEngine(
             toSchedule.forEach(::schedule)
             enqueueAgain?.let(::enqueue)
         }
+        if (restarted.isNotEmpty()) restartQuestion(restarted)
     }
+
+    /**
+     * Caller holds [lock]. CTL-03 on a question root: the human stopped question
+     * [root]. Every claim and link of it that waits for a round — QUEUED, or
+     * EXPLORING between rounds — ends STOPPED at once, and no pending forced round
+     * survives; a round in flight finishes, attaches and assesses what it found,
+     * and its claim ends STOPPED at the round boundary ([cancelled]). Durable (the
+     * question record).
+     */
+    private fun stopQuestion(root: CellRef) {
+        stopped += root
+        claims.values.filter { it.root == root }.forEach { x ->
+            x.forceRound = false
+            if (x.status == Status.QUEUED || (x.status == Status.EXPLORING && x.waiting)) cancel(x)
+        }
+    }
+
+    /** Caller holds [lock]. Ends [c]'s withheld or queued work as STOPPED; a task already queued goes stale. */
+    private fun cancel(c: Claim) {
+        c.status = Status.STOPPED
+        c.waiting = false
+        c.parked = false
+        c.needsAssessment = false
+        c.queueGeneration++
+    }
+
+    /**
+     * CTL-04 on a stopped question's root: re-schedules everything the stop
+     * cancelled (now QUEUED again) through the normal gates, exactly as a restart
+     * would ([restore]): an argument never assessed is assessed first, and a link
+     * is queued with its argument.
+     */
+    private fun restartQuestion(requeued: List<Claim>) {
+        val (unassessed, ready) = synchronized(lock) { requeued.filter { !it.isLink }.partition(::unassessed) }
+        ready.flatMap { listOfNotNull(it, it.link) }.forEach(::schedule)
+        synchronized(lock) {
+            requeued.filter { it.isLink && it.status == Status.QUEUED && it.argument!!.status != Status.QUEUED }
+        }.forEach(::schedule)
+        assessThenSchedule(unassessed)
+    }
+
+    /** Caller holds [lock]. An argument whose attach-time assessment never completed (DUR-03). */
+    private fun unassessed(c: Claim) = c.parent != null && !c.isLink && c.plausibility == null && c.edge?.strength == null
 
     /**
      * CTL-05: pauses or resumes question [root]. A paused question starts no new
@@ -354,10 +411,15 @@ class DeliberationEngine(
                     // task that is about to start the Jev calls, not only where
                     // the task was submitted.
                     val ready = synchronized(lock) {
-                        if (held(group.first())) {
-                            group.forEach { it.needsAssessment = true; it.parked = true }
+                        // CTL-03 on the root: a stopped question assesses nothing more; AUTO assesses first.
+                        val (cancelledNow, live) = group.partition(::cancelled)
+                        cancelledNow.filter { it.status == Status.QUEUED }.forEach(::cancel)
+                        if (live.isEmpty()) {
                             emptyList()
-                        } else group
+                        } else if (held(live.first())) {
+                            live.forEach { it.needsAssessment = true; it.parked = true }
+                            emptyList()
+                        } else live
                     }
                     if (ready.isNotEmpty()) {
                         rounds.assess(ready)
@@ -471,6 +533,19 @@ class DeliberationEngine(
     /** Caller holds [lock]. CTL-05: [c]'s question is paused and its next round is not a forced one (CTL-02). */
     private fun held(c: Claim) = policy.held(c.view(), questionView(c))
 
+    /** Caller holds [lock]. CTL-03 on the root: [c]'s question was stopped and its next round is not a forced one. */
+    private fun cancelled(c: Claim) = policy.cancelled(c.view(), questionView(c))
+
+    /**
+     * Ends work dequeued (or about to start) just before its question was stopped
+     * (CTL-03 on the root): the claim ends STOPPED without starting a round.
+     */
+    private fun stopIfCancelled(c: Claim): Boolean {
+        val stoppedNow = synchronized(lock) { cancelled(c).also { if (it) cancel(c) } }
+        if (stoppedNow) onChange()
+        return stoppedNow
+    }
+
     /**
      * Stops work that was dequeued just before its question paused. The task
      * has not started a round yet, so a judging claim returns to QUEUED; a
@@ -489,14 +564,25 @@ class DeliberationEngine(
 
     private fun enqueue(c: Claim) {
         if (closed) return
+        var stoppedNow = false
         val generation = synchronized(lock) {
             c.queueGeneration++
+            if (cancelled(c)) {
+                // CTL-03 on the root: the question was stopped; its next round never starts.
+                cancel(c)
+                stoppedNow = true
+                return@synchronized null
+            }
             if (held(c)) {
                 // CTL-05: withheld until the question resumes; a task already queued goes stale.
                 c.parked = true
                 return
             }
             c.queueGeneration
+        }
+        if (generation == null) {
+            if (stoppedNow) onChange()
+            return
         }
         pending.incrementAndGet()
         synchronized(queue) {
@@ -513,11 +599,15 @@ class DeliberationEngine(
     private fun schedule(c: Claim) {
         val gate = synchronized(lock) {
             if (c.status != Status.QUEUED) return
-            if (held(c)) {
-                c.parked = true
-                return
+            when {
+                // CTL-03 on the root: a stopped question queues nothing (finish records the STOPPED).
+                cancelled(c) -> Status.STOPPED
+                held(c) -> {
+                    c.parked = true
+                    return
+                }
+                else -> policy.scheduleGate(viewOf(c), questionView(c))
             }
-            policy.scheduleGate(viewOf(c), questionView(c))
         }
         if (gate == null) enqueue(c) else finish(c, gate)
     }
@@ -534,11 +624,18 @@ class DeliberationEngine(
 
     private fun process(task: Task) {
         val c = task.claim
+        var stoppedNow = false
         // Claim ownership: a QUEUED claim is started; a waiting EXPLORING claim continues with
         // its next round. Stale/cancelled tasks (e.g. a STOP while waiting) fall through.
         val continuing = synchronized(lock) {
             when {
                 task.generation != c.queueGeneration || c.rewriteInFlight -> null
+                // CTL-03 on the root: queued before its question was stopped; it ends unstarted.
+                (c.status == Status.QUEUED || (c.status == Status.EXPLORING && c.waiting)) && cancelled(c) -> {
+                    cancel(c)
+                    stoppedNow = true
+                    null
+                }
                 // CTL-05: queued before its question paused; it waits, unstarted, for the resume.
                 (c.status == Status.QUEUED || (c.status == Status.EXPLORING && c.waiting)) && held(c) -> {
                     c.parked = true
@@ -548,7 +645,11 @@ class DeliberationEngine(
                 c.status == Status.EXPLORING && c.waiting -> true.also { c.waiting = false }
                 else -> null
             }
-        } ?: return
+        }
+        if (continuing == null) {
+            if (stoppedNow) onChange()
+            return
+        }
         if (!continuing) onChange()
         val finished = try {
             if (continuing) step(c) else start(c)
@@ -582,6 +683,7 @@ class DeliberationEngine(
      * finished, false when it has rounds left.
      */
     private fun start(c: Claim): Boolean {
+        if (stopIfCancelled(c)) return true
         if (parkIfHeld(c)) {
             onChange()
             return false
@@ -603,8 +705,9 @@ class DeliberationEngine(
                 update { c.plausibility = p }
             }
         }
-        // A pause may have arrived while the plausibility call was in flight.
+        // A pause or a question stop may have arrived while the plausibility call was in flight.
         // It may finish, but it must not lead into a new round.
+        if (stopIfCancelled(c)) return true
         if (parkIfHeld(c)) {
             onChange()
             return false
@@ -632,6 +735,8 @@ class DeliberationEngine(
      */
     private fun step(c: Claim): Boolean {
         val (sides, forcedRound, terminal) = synchronized(lock) {
+            // CTL-03 on the root: the question was stopped while this claim waited for its next round.
+            if (cancelled(c)) return@synchronized Triple(emptyList<Side>(), false, Status.STOPPED)
             if (held(c)) {
                 c.parked = true
                 c.waiting = true
@@ -746,7 +851,12 @@ class DeliberationEngine(
      */
     private fun restore(meta: Map<String, Map<String, String>>) {
         val graph = service.graph()
-        synchronized(lock) { EngineRecords.rebuild(graph, meta, state, ledger, config.maxRounds, config.startPaused) }
+        synchronized(lock) {
+            EngineRecords.rebuild(graph, meta, state, ledger, config.maxRounds, config.startPaused)
+            // CTL-03 on the root: a stopped question restores stopped — whatever was still active
+            // (a round the restart interrupted included) ends STOPPED, nothing is re-queued.
+            claims.values.filter { it.root in stopped && it.status == Status.QUEUED }.forEach(::cancel)
+        }
         val stances = synchronized(lock) {
             claims.values.mapNotNull { c -> c.plausibility?.let { c.ref to it } } +
                 edges.values.mapNotNull { e -> e.strength?.let { e.ref to it } }
@@ -755,7 +865,7 @@ class DeliberationEngine(
         synchronized(serviceLock) { stances.forEach { (ref, v) -> service.setStance(ref, JEV, v) } }
         val (unassessed, queued) = synchronized(lock) {
             claims.values.filter { it.status == Status.QUEUED && !it.isLink }
-                .partition { it.parent != null && it.plausibility == null && it.edge?.strength == null }
+                .partition(::unassessed)
         }
         // CTL-05: in a paused question even the assessment waits for the resume (it is spend too).
         val (deferred, assessNow) = synchronized(lock) { unassessed.partition { it.root in paused } }
