@@ -96,4 +96,16 @@ class GraphDslTest {
 
         counts.sumOf { it.amount } shouldBe 1 // z only — replayed graph is live
     }
+
+    @Test
+    fun `GraphBuilder records placement and defaults it to null`() {
+        val controller = SimulationController(seed = 3)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val spec = graph(host.managementInlet) {
+            spawn("placed", placement = "sink") { ref -> SetCell<String>(ref = ref) }
+            spawn("default") { ref -> SetCell<String>(ref = ref) }
+        }
+
+        spec.steps.filterIsInstance<SpawnStep>().map { it.placement } shouldBe listOf("sink", null)
+    }
 }
