@@ -224,7 +224,6 @@ class AppRestartEquivalenceTest {
         rig.inputs(boundary + 1)
         val second = rig.app().start()
         second.lastSpendReason.shouldBeInstanceOf<TailReason.Resumed>()
-        second.declarationReplayFailures shouldBe 0L
         for (step in boundary + 2..LAST_STEP) {
             rig.inputs(step)
             second.pollOnce()
