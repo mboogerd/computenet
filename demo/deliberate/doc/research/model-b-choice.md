@@ -14,8 +14,13 @@ the graded-minus-Choice accuracy difference was [-0.281, 0.000] (point estimate
 
 This is a recommendation against **this wording and mapping**, not evidence
 that relation Choices are generally sound. The current Choice never emitted
-`NEITHER` and its macro-F1 was only 0.463. It should remain provisional and its
-upstream triage gate remains important. Because the recommendation is not to
+`NEITHER` and its macro-F1 was only 0.463 — but the gold rubric defines
+`NEITHER` more broadly than the shipped Choice's own criterion does (see
+"`NEITHER` is defined differently in gold and in production" below), so that
+zero row measures a definitional mismatch as much as a judging failure. On the
+54 items whose gold is `DISPUTES_CLAIM` or `DENIES_BEARING`, where both
+definitions agree, Choice was correct on 41 and graded on 28. It should remain
+provisional and its upstream triage gate remains important. Because the recommendation is not to
 switch, no implementation task was filed and no production code changed.
 
 ## Question and methods
@@ -79,7 +84,8 @@ The alternative asks two independent five-level Scores:
 - assuming the claim true, how strongly it defeats the specified connection
   to the parent.
 
-The mapping was fixed before calls: both scores below level 2/4 means
+Jev returns each Score as an expected level on the 0–4 scale (a real number,
+not an integer). The mapping was fixed before calls: both scores below 2.0 means
 `NEITHER`; otherwise the higher score wins; a tie remains `DISPUTES_CLAIM`
 (the existing `ADD` path). No threshold was fitted to gold. Choice and graded
 questions ran in separate requests so one answer could not cue the other.
@@ -125,6 +131,23 @@ for that with 11 false `NEITHER` predictions and substantially lower recall on
 both substantive routes. Its small macro-F1 edge (0.470 versus 0.463) comes
 entirely from giving the third class non-zero recall; it is not a routing win.
 
+### `NEITHER` is defined differently in gold and in production
+
+The shipped Choice's `NEITHER` criterion (copied verbatim into `run_jev.py`)
+names only "off-topic, incoherent, a question, or a restatement". The gold
+rubric in `label_prompt.py` adds "an independent reason about parent_claim, a
+countervailing cost or benefit". All 10 gold `NEITHER` items fall in the added
+categories — per the raters' recorded reasons in `data/gold.json`: countervailing
+costs (ids 0, 1, 3, 53), a separate harm or benefit (7, 17, 19, 47), an
+alternative policy design (12), and a point about the root rather than the
+parent (62). None is off-topic, incoherent, a question or a restatement. The
+Choice was therefore scored against a `NEITHER` it was never offered, and its
+0/10 recall says nothing about the cases its criterion names; this sample
+contains none of those. The graded mapping's `NEITHER` ("both scores low") is
+closer to the gold's broader reading, which favours the graded arm on that row.
+Whether such candidates *should* route to `DROP` (production's consequence of
+`NEITHER`) is a design question this study does not settle.
+
 ## Limits
 
 - Sixty-four items satisfy the requested sample size but come from only three
@@ -134,6 +157,8 @@ entirely from giving the third class non-zero recall; it is not a routing win.
   class support and aggregate accuracy are not production-rate estimates.
 - Gold is model-rated. Primary agreement is respectable rather than decisive,
   Sol could not be isolated, and two items produced a three-way split.
+- The gold rubric's `NEITHER` is broader than the shipped criterion's (section
+  above); the `NEITHER` row and both macro-F1 figures inherit that mismatch.
 - Each Jev arm ran once. This study does not estimate response variance.
 - Only one graded wording and one fixed mapping were tested. Its failure does
   not contradict the earlier implication result, which measured a different
