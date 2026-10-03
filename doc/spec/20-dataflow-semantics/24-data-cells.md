@@ -1313,6 +1313,20 @@ Topology recovery uses preserve-refs mode, so links bind to the instances the
 journal already names, and checkpoint compaction carries the live topology fold
 alongside the `Stateful` snapshots.
 
+An external input can participate in the same recovery boundary through a
+durable-input record (computenet-12qyp). `ManagedHost.durableInput(cellRef,
+name)` exposes a named input, and a graph's `GraphSpec` `inputs` parameter
+declares those names alongside the journaled cell. Each input commit journals
+the source's opaque cursor together with the wire frames of the batch it
+covers as one record on the journal selected for the cell it feeds.
+`recoverFrom` restores the cursor and replays those frames; `checkpoint`
+carries the cursor in a record with no frames. The record is the atomicity
+unit: a crash anywhere in the commit leaves either the whole batch and its
+cursor or neither, so the source can resume from the committed cursor without
+loss or duplication into the fed cell. This is a guarantee about input into
+the graph, not effects out of it; the external-sink at-least-once window in
+`[24-DUR-09]` is unchanged.
+
 **Boundary of the landed mechanism** (decided in 93 I-7): un-suppressed
 replay through the ordinary decode path is safe exactly for the
 replay-stable idempotent vocabulary above — ref-derived identities,

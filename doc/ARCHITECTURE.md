@@ -149,7 +149,8 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   `CoroutineScheduler` 🟣, `SimulationController` deterministic),
   `LocationRegistry` (`Local`/`Remote`, park-and-replay),
   `TopologyIndex`/`TopologyWalks`, `IntakeControl`/`IntakeSaturation`,
-  `HostDurability`, `KeyedCells` (durable per-key families), supervision, dead
+  `HostDurability`, `DurableInput` (durable external-input cursors),
+  `KeyedCells` (durable per-key families), supervision, dead
   letters (sanitized — no live `Owned`/`Leased` escapes), `CellError`,
   remoting proxies (`HostProxy`, `HostedCellProxy`, `RoutedInlet`), `TypedLink`.
 - `.observe` — app-facing reads: `ObservationSink` (`current()`, `onChange`
@@ -428,19 +429,18 @@ else `$PORT`, else 8080. See the README for run commands.
   started, ended}` records, one per worker session) via a total per-line
   classifier (`Valid`/`Malformed`/`UnknownVersion`) into the v1 `SpendRecord`
   model. Feature `computenet-fpml.1` lands the whole ingest half:
-  `SpendLogTailReader` reads only new complete lines from a persisted
-  byte-offset checkpoint (`OffsetCheckpoint`, atomic-move writes, persisted
-  only *after* the batch reaches its consumer) and re-baselines from offset 0
-  when length or head fingerprint says the log was truncated or replaced;
+  `SpendLogTailReader` reads only new complete lines from a cursor committed
+  through the kernel durable input (`ManagedHost.durableInput`, the
+  `GraphSpec` `inputs` parameter) and re-baselines from offset 0 when length
+  or head fingerprint says the log was truncated or replaced;
   `SpendLogIngester` folds the classified records into a kernel `SetCell`
   keyed by the full record tuple, reconciling rather than appending on a
   re-baseline, and exposes monotonic per-reason failure counts
-  (`SpendIngestFailures`) so no bad line is silently dropped. The checkpoint
-  and re-baseline idioms are copied from `:demo:beadsmirror` by example, not
-  imported — the epic defers a shared connector SPI to CON2
-  (`computenet-rrf`). Feature `computenet-fpml.2` adds the declaration half:
-  `DeclarationIngester` polls a hand-edited `allocation.yaml` and appends one
-  timestamped `DeclarationEvent` per *parsed-content* change (a reformat is
+  (`SpendIngestFailures`) so no bad line is silently dropped. The epic defers
+  a shared connector SPI to CON2 (`computenet-rrf`). Feature
+  `computenet-fpml.2` adds the declaration half: `DeclarationIngester` polls a
+  hand-edited `allocation.yaml` and writes one timestamped `DeclarationEvent`
+  per *parsed-content* change through the journaled kernel cell (a reformat is
   not a change), counting read/parse failures rather than throwing. Feature
   `computenet-fpml.3` derives the R5/R6 report: `AllocatorReportViews` folds
   both cells' deltas privately and publishes one immutable `AllocatorReport`
@@ -456,29 +456,27 @@ else `$PORT`, else 8080. See the README for run commands.
   `/state/report` response and no `/events` frame ever mixes pre- and
   post-batch state; the routes are read-only (405 on any non-GET) and answer
   503 with the last good document under `stale` once the poll loop has died.
-  **A restart serves the report an uninterrupted run would**, without either
-  cell being durable (`computenet-fpml.5.2`): the app's first spend-log poll of
-  each process ignores the persisted byte offset and re-reads the log whole —
-  the log IS the durable fold — while later polls in that process resume from
-  the checkpoint as before; and the declaration history, which `allocation.yaml`
-  cannot reconstruct because it holds only the current declaration, is
-  journalled line by line under the run directory and replayed into the cell
-  before the first poll. What still does not cross a restart is mostly the
-  *account* of how the process got there rather than the fold: ingest health
-  (`polls`, `reBaselineCount`, `lastPollAt`, the failure counters,
-  `checkpointOffset`) is per-process by construction, and a log truncation or
-  replacement that happened while the app was down is absorbed uncounted by the
-  cold-start whole read. A log **deleted** — while the app is down or while it
+  **A restart serves the report an uninterrupted run would**
+  (`computenet-fpml.5.2`): `AllocatorObserveApp` opens a `FileJournal` under
+  the run directory and applies the graph with a named durable input. Recovery
+  restores the topology and both journaled cells; each durable-input record
+  restores the spend cursor and replays the hosted frames it covers, while the
+  declarations cell restores its journaled history before polling resumes.
+  The app checkpoints the journal after recovery, and the spend reader then
+  resumes from the committed cursor rather than re-reading the log whole. What
+  still does not cross a restart is mostly the *account* of how the process got
+  there rather than the fold: ingest health (`polls`, `reBaselineCount`,
+  `lastPollAt`, the failure counters, `checkpointOffset`) is per-process by
+  construction. A log truncation or replacement that happened while the app
+  was down is detected from the restored cursor's fingerprint on the first
+  poll and re-baselined. A log **deleted** — while the app is down or while it
   runs — converges both processes on its absence (`computenet-6jbep`, design
   entry 6jbep-D1): a log the process has read and that is now gone is treated
   as the log replaced by an empty one, the same convergence a truncation to
-  zero bytes already gets, so an uninterrupted process empties its fold as a
-  restarted one starts empty, both serve the same empty report, and both
-  re-read the log whole when it returns. A log the process has never read is
-  still left alone, since one that has not arrived yet is not an empty log.
-  The alternative — a restarted process keeping the old records — would need a
-  second durable copy of the fold beside the log, which the cold-start design
-  declined.
+  zero bytes already gets, so an uninterrupted process and a restarted one
+  serve the same empty report until the log returns. A log the process has
+  never read is still left alone, since one that has not arrived yet is not an
+  empty log.
   Feature `computenet-fpml.5` lands both halves of the differential oracle
   against socaity's replay script in `oracle/`: an in-repo differential suite
   that runs in CI, comparing the served report against `ReferenceReport` — a
