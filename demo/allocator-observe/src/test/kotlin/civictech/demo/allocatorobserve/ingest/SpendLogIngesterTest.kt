@@ -164,6 +164,24 @@ class SpendLogIngesterTest {
         inputs.single().frames.size shouldBe 1
     }
 
+    @Test
+    fun `idle polls append no durable input records while changed polls append one`() {
+        append(line("a"))
+        val rig = Rig()
+        fun inputRecords(): Int =
+            rig.journal.replay().map(JournalRecords::decode).count { it is DecodedJournalRecord.Input }
+
+        rig.poll()
+        inputRecords() shouldBe 1
+
+        repeat(3) { rig.poll() }
+        inputRecords() shouldBe 1
+
+        append(line("b"))
+        rig.poll()
+        inputRecords() shouldBe 2
+    }
+
     /**
      * A separate frame record is not an atomic commit with the cursor. Simulate
      * the crash boundary by retaining the durable-input record while dropping

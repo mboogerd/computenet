@@ -254,17 +254,22 @@ class SpendLogIngester(
     /**
      * Reads whatever the log has for us and folds it in.
      *
-     * The fold happens inside the reader's consumer callback — which the reader
-     * invokes once per bounded batch, one or more times per poll — i.e. *before*
-     * the reader persists its new offset, the crash-ordering rule the reader
-     * documents. A crash anywhere in that sequence, including between two
-     * hand-offs, re-delivers the whole range, which the fold absorbs
-     * idempotently because it is keyed by record identity.
+     * The reader first classifies its bounded hand-offs into pending fold
+     * mutations. When neither those mutations nor its cursor changed, there is
+     * nothing durable to record. Otherwise the mutations are driven inside one
+     * [DurableInput.commit] with the new cursor, preserving their atomic recovery
+     * boundary. A crash before that commit retries the range; a crash during it
+     * leaves either the cursor and all frames or neither.
      */
     fun poll(): SpendPollOutcome {
+        val committed = input.committed() as? CheckpointState
         val fold = PollFold()
-        input.commit {
-            reader.poll(fold::absorb).next
+        val next = reader.poll(fold::absorb).next
+        if (next != committed || fold.hasMutations) {
+            input.commit {
+                fold.applyMutations()
+                next
+            }
         }
         // The reader always delivers at least one batch per poll, on every
         // branch including LogAbsent, and exactly one of them carries `last`.
@@ -281,15 +286,17 @@ class SpendLogIngester(
      * is not. So the two branches accumulate differently, and only the
      * re-baseline branch waits for [TailBatch.last]:
      *
-     * - **Append**: each batch is folded in as it arrives and its lines are
-     *   dropped. Nothing accumulates but counts.
+     * - **Append**: each batch is classified as it arrives and its lines are
+     *   dropped. The resulting mutations stay pending until the poll's cursor
+     *   is known, then enter the durable-input commit together.
      * - **Re-baseline**: the *records* accumulate (they are what the `SetCell`
      *   is about to hold anyway, so this adds no asymptotic residency the fold
      *   did not already have) while the *lines* are dropped batch by batch. Raw
      *   line content is what the bead was about, and none of it is retained.
      *
-     * Either way the fold is complete before the final hand-off RETURNS, so the
-     * reader's checkpoint write still happens strictly after it.
+     * Either way the intended fold is complete before the final hand-off
+     * returns, so it can be committed atomically with the cursor or skipped as
+     * a true no-op.
      */
     private inner class PollFold {
 
@@ -325,6 +332,17 @@ class SpendLogIngester(
         /** Append-only records seen across all hand-offs in this poll. */
         private val appended = mutableSetOf<SpendRecord>()
 
+        /** Hosted operations to capture if this poll needs a durable-input commit. */
+        private val pendingAdds = mutableListOf<SpendRecord>()
+        private val pendingRemoves = mutableListOf<SpendRecord>()
+
+        val hasMutations: Boolean get() = pendingAdds.isNotEmpty() || pendingRemoves.isNotEmpty()
+
+        fun applyMutations() {
+            pendingAdds.forEach(records::add)
+            pendingRemoves.forEach(records::remove)
+        }
+
         fun absorb(batch: TailBatch) {
             val valid = mutableListOf<SpendRecord>()
             for (line in batch.lines) {
@@ -345,23 +363,22 @@ class SpendLogIngester(
                     val live = view()
                     val toAdd = desired - live
                     val toRemove = live - desired
-                    toAdd.forEach(records::add)
-                    toRemove.forEach(records::remove)
+                    pendingAdds += toAdd
+                    pendingRemoves += toRemove
                     added = toAdd.size
                     removed = toRemove.size
                 }
             } else {
-                // Append (or first start, or an absent log's empty batch):
-                // add-only, so each batch can be applied on arrival. Re-adding an
-                // element already present is a no-op for membership, which is
-                // what makes re-delivery safe. The baseline is read once, before
-                // the first hand-off's adds land, so a record repeated within a
-                // batch, across batches, or already present is counted added
-                // exactly once either way — the delta is size-based, not a set
-                // difference per batch.
+                // Append (or first start, or an absent log's empty batch) is
+                // add-only. Re-adding an element already present is a no-op for
+                // membership, which is what makes re-delivery safe. The baseline
+                // is read once before collecting the first hand-off, so a record
+                // repeated within a batch, across batches, or already present is
+                // counted added exactly once either way — the delta is
+                // size-based, not a set difference per batch.
                 if (appendBaseline == null) appendBaseline = view()
                 appended += valid
-                valid.forEach(records::add)
+                pendingAdds += valid
                 if (batch.last) added = (appended - checkNotNull(appendBaseline)).size
             }
 

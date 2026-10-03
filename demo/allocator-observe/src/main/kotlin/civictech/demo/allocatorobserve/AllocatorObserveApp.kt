@@ -304,10 +304,6 @@ class AllocatorObserveApp(
     /** The port the shell actually bound; meaningful only after [start]. */
     val boundPort: Int get() = shell.boundPort
 
-    /** Compatibility accessor: kernel recovery is fail-loud, so no replay failures are suppressed. */
-    @Deprecated("kernel recovery fails loudly instead of counting skipped declaration events")
-    val declarationReplayFailures: Long get() = 0L
-
     /** Non-null once the background poll loop has exited on a throwable (fpml.4-D6). */
     val pollLoopStopped: PollLoopStopped? get() = holder.stopped
 
