@@ -266,12 +266,46 @@ class SemanticsTest {
         assertFailsWith<IllegalArgumentException> { SemanticsCatalog.of("nope") }
     }
 
+    private fun legacyTemperatureShares(credences: List<Double>, temperature: Double): List<Double> {
+        val scores = credences.map { ln(it / (1 - it)) / temperature }
+        val top = scores.max()
+        val weights = scores.map { exp(it - top) }
+        return weights.map { it / weights.sum() }
+    }
+
     @Test
-    fun `model A - softmax shares at temperature 1 are the normalised odds`() {
-        val shares = Softmax.shares(listOf(0.8, 0.6, 0.2))
-        listOf(4.0, 1.5, 0.25).map { it / 5.75 }.zip(shares).forEach { (want, got) -> assertEquals(want, got, 1e-9) }
-        assertEquals(1.0, shares.sum(), 1e-12)
-        assertEquals(listOf(0.695652173913, 0.260869565217, 0.043478260870), shares.map { Math.round(it * 1e12) / 1e12 })
+    fun `model A - complementary positions reproduce the temperature defect and now match the binary verdict`() {
+        val probabilities = (1..99).map { it / 100.0 }
+        val t1MaxDiff = probabilities.maxOf { p -> abs(legacyTemperatureShares(listOf(p, 1 - p), 1.0)[0] - p) }
+        val t2MaxDiff = probabilities.maxOf { p -> abs(legacyTemperatureShares(listOf(p, 1 - p), 2.0)[0] - p) }
+        assertEquals(0.150, t1MaxDiff, 1e-3)
+        assertEquals(0.0, t2MaxDiff, 1e-12)
+
+        probabilities.forEach { p ->
+            val shares = Softmax.shares(listOf(p, 1 - p))
+            assertEquals(p, shares[0], 1e-12, "yes share at p=$p")
+            assertEquals(1 - p, shares[1], 1e-12, "no share at p=$p")
+        }
+    }
+
+    @Test
+    fun `model A - implausible positions leave a none-of-the-listed residual`() {
+        val shares = Softmax.shares(listOf(0.1, 0.1, 0.1))
+        assertEquals(listOf(0.1, 0.1, 0.1), shares)
+        assertEquals(0.7, 1 - shares.sum(), 1e-12)
+    }
+
+    @Test
+    fun `model A - first impressions are simply normalised instead of sharpened`() {
+        val credences = listOf(0.15, 0.2, 0.7)
+        assertEquals(
+            listOf(0.064, 0.091, 0.845),
+            legacyTemperatureShares(credences, 1.0).map { Math.round(it * 1_000) / 1_000.0 },
+        )
+
+        val shares = Softmax.shares(credences)
+        assertEquals(credences.map { it / credences.sum() }, shares)
+        assertTrue(shares.last() < credences.last(), "$shares")
     }
 
     @Test
@@ -283,9 +317,9 @@ class SemanticsTest {
     }
 
     @Test
-    fun `model A - softmax clamps certain credences and maps empty to empty`() {
+    fun `model A - shares admit certain credences and map empty to empty`() {
         val shares = Softmax.shares(listOf(0.0, 1.0, 1.0, 0.5))
-        assertTrue(shares.all { it.isFinite() && it > 0 }, "$shares")
+        assertTrue(shares.all { it.isFinite() && it >= 0 }, "$shares")
         assertEquals(1.0, shares.sum(), 1e-12)
         assertEquals(emptyList(), Softmax.shares(emptyList()))
         assertEquals(listOf(0.5, 0.5), Softmax.shares(listOf(0.5, 0.5)))

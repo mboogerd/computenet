@@ -454,12 +454,17 @@ open question, each explored as a root of its own.
   `Shares` (per layer, and the consensus) to a `sharesHub` — derived and
   volatile like credence (DUR-01), never journaled, and wired **one-way**:
   nothing flows from it back into any credence cell (CRED-03).
-  `Softmax.shares` computes it: `score = logit(clamped credence) / T`,
-  `Softmax.TEMPERATURE` (`T`) 1 → normalised odds — monotone in every
-  credence, sums to 1; e.g. credences (0.8, 0.6, 0.2) → odds (4, 1.5, 0.25) →
-  shares (0.696, 0.261, 0.043). Before any position has emitted, every share
-  is 1/n. `READINGS` spawns no `IssueNode`: each reading's verdict is its own
-  credence, with no shares to fold.
+  `Softmax.shares` (the object keeps its original name, but is no longer a
+  softmax) treats each clamped credence as an absolute weight and divides by
+  `max(1, sum(weights))`. The listed shares therefore sum to at most 1; the
+  residual `1 - sum(shares)` is the share that none of the listed answers
+  holds. Two complementary positions `(p, 1-p)` retain shares `(p, 1-p)`;
+  first impressions (0.15, 0.2, 0.7) simply normalise to (0.143, 0.190,
+  0.667); and jointly implausible positions (0.1, 0.1, 0.1) leave 0.7 for
+  none of the listed answers. Before any position has emitted, its weight is
+  0.5; the listed shares are therefore 1/n when `n > 2` and (0.5, 0.5) when
+  `n = 2`, with no residual. `READINGS` spawns no `IssueNode`: each reading's
+  verdict is its own credence, with no shares to fold.
 - **FRA-04 Durability.** `CredenceGraph` applies one `GraphSpec` delta for an
   issue framing — the position claims, the `IssueNode` when present and every
   wire — as one write-ahead topology record, with the
@@ -577,7 +582,9 @@ Every status change is broadcast.
   the model D fields above are the question's own; when set they are null/false
   on the question and each `PositionDto { ref, text, credence, firstImpression?,
   neutralCredence?, verdictsDisagree?, share? }` carries its own — `share`
-  only for `POSITIONS`, absent for `READINGS`). A node's `positionOf` (set
+  only for `POSITIONS`, absent for `READINGS`; listed shares may sum below 1,
+  and the remainder is the derived none-of-the-listed share). A node's
+  `positionOf` (set
   only on a reading/position, to its question's root ref) marks it as one.
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
@@ -638,8 +645,10 @@ Every status change is broadcast.
   "depends on the reading" (`READINGS`, no term) or "several possible
   answers" (`POSITIONS`); `POSITIONS` additionally shows a distribution, one
   row per position in `framing.positions` order with its share as a
-  percentage and a bar proportional to it. Below the hero, one reading/
-  position section follows per position, in the same order: its text as a
+  percentage and a bar proportional to it; when the listed shares sum below
+  1 it appends a "None of the listed answers" row for the residual. Below the
+  hero, one reading/position section follows per position, in the same order:
+  its text as a
   heading, its own credence gauge (the same markup and research-view band as
   the question's, driven by its own node), its own model D caption built from
   its `PositionDto` (and, when its verdicts disagree, the same disagreement

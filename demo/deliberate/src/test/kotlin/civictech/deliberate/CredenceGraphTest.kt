@@ -511,7 +511,7 @@ class CredenceGraphTest {
 
     private fun near(a: List<Double>, b: List<Double>, eps: Double = 1e-9) = a.size == b.size && a.indices.all { abs(a[it] - b[it]) < eps }
 
-    /** The shares the fold should hold for [positions]' current credences: a softmax per layer and over the consensus. */
+    /** The shares the fold should hold for [positions]' current credences: absolute weights per layer and consensus. */
     private fun CredenceGraph.expectedShares(positions: List<CellRef>): Pair<List<List<Double>>, List<Double>>? {
         val cs = positions.map { credenceOf(it) ?: return null }
         val perLayer = layers.ids.indices.map { l -> Softmax.shares(cs.map { it.values[l] }) }
@@ -552,10 +552,10 @@ class CredenceGraphTest {
             assertTrue(positions.all { first.nodeInfo(it)!!.question })
 
             positions.zip(stances3).forEach { (p, v) -> first.setStance(p, "jev", v) }
-            awaitUntil("the positions' shares settle on the softmax of their stances") {
+            awaitUntil("the positions' shares settle on the normalised stances") {
                 first.sharesMatch(root, positions) && positions.zip(stances3).all { (p, v) -> first.near(p, List(first.layers.ids.size) { v }) }
             }
-            val want = listOf(4.0, 1.5, 0.25).map { it / 5.75 }
+            val want = stances3.map { it / stances3.sum() }
             val shares = first.sharesOf(root)!!
             first.layers.ids.indices.forEach { l -> assertTrue(near(shares.values.map { it[l] }, want), "layer $l: $shares") }
             assertTrue(near(shares.consensus, want), "consensus: ${shares.consensus}")
@@ -638,7 +638,7 @@ class CredenceGraphTest {
 
         // In the graph every position is heard at once (its catch-up baseline), so the
         // "unheard counts 1/2" default is observable only on a cell that has heard some
-        // positions but not others: one position at 0.8, two never heard -> odds 4 : 1 : 1.
+        // positions but not others: one position at 0.8, two never heard -> weights 0.8 : 0.5 : 0.5.
         val scheduler = VirtualThreadScheduler("issue-node-test").also { schedulers += it }
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = scheduler, registry = registry, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
@@ -647,8 +647,8 @@ class CredenceGraphTest {
         host.managementInlet.call.spawn(partial)
         registry.inlet(partial.ref, IssueNodePorts.positionInlet)
             .propagate(Credence(three[0], listOf(0.8, 0.8), 0.8, 0.8, 0.8, 0.8))
-        val want = listOf(4.0 / 6, 1.0 / 6, 1.0 / 6)
-        awaitUntil("the heard position holds odds 4 against two unheard halves") {
+        val want = listOf(0.8 / 1.8, 0.5 / 1.8, 0.5 / 1.8)
+        awaitUntil("the heard position is normalised against two unheard halves") {
             near(partial.shares.consensus, want) && layers.ids.indices.all { l -> near(partial.shares.values.map { it[l] }, want) }
         }
     }

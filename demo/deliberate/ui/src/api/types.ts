@@ -93,7 +93,10 @@ export interface PositionDto {
   neutralCredence?: number;
   /** Model D: its credence and neutralCredence fall on different sides of ½. */
   verdictsDisagree?: boolean;
-  /** POSITIONS: its share of the consensus shares (they sum to 1); absent for READINGS. */
+  /**
+   * POSITIONS: its absolute consensus share; absent for READINGS. Listed shares
+   * may sum below 1, whose remainder means none of the listed answers.
+   */
   share?: number;
 }
 

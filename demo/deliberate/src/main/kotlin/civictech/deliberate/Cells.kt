@@ -221,11 +221,12 @@ class EdgeNode(
 
 /**
  * Model A: the shares of the competing positions of one issue ([source] = the
- * issue's root): [values] per position (in [positions] order) per layer, each
- * layer a [Softmax] over the positions' credences in that layer, and
- * [consensus] per position, a softmax over each position's consensus. Derived
- * and volatile like a credence (SPEC DUR-01). [size] is the largest
- * per-position-per-layer change against the previous emission.
+ * issue's root): [values] per position (in [positions] order) per layer, and
+ * [consensus] per position. [Softmax.shares] treats the credences as absolute
+ * weights: listed shares may sum below one, with the remainder meaning none of
+ * the listed positions. Derived and volatile like a credence (SPEC DUR-01).
+ * [size] is the largest per-position-per-layer change against the previous
+ * emission.
  */
 @Serializable
 @SerialName("deliberate.Shares")
@@ -240,7 +241,7 @@ data class Shares(
 }
 
 /**
- * Model A: the "softmax cell" of a POSITIONS issue. Hears every position's
+ * Model A: the distribution cell of a POSITIONS issue. Hears every position's
  * [Credence] (keyed by [Credence.source]) and emits their [Shares]; a
  * position not heard from yet counts ½ in every layer and in the consensus.
  * Nothing it emits is wired into a credence cell (CRED-03): shares are a read

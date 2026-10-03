@@ -3059,6 +3059,22 @@ class DeliberationEngineTest {
     }
 
     @Test
+    fun `model A - jointly implausible POSITIONS leave a none-of-the-listed residual`() {
+        val judge = FakeJudge(plausibility = { if (it in setOf("P1", "P2", "P3")) 0.1 else 0.5 })
+        val e = engine(
+            judge = judge,
+            proposers = listOf(FakeProposer("claude") { _, _, _ -> emptyList() }),
+            framer = FakeFramer({ positions("P1", "P2", "P3") }),
+        )
+        e.ask("Which P?")
+        e.idle()
+        awaitUntil("the listed shares leave 70 percent for none of the answers") {
+            val shares = e.snapshot().questions.single().framing!!.positions.mapNotNull { it.share }
+            shares.size == 3 && shares.all { abs(it - 0.1) < 1e-9 } && abs(1 - shares.sum() - 0.7) < 1e-9
+        }
+    }
+
+    @Test
     fun `model A - EXPAND on a framed root runs no round and it stays FRAMED`() {
         val claude = FakeProposer("claude")
         val framer = FakeFramer({ readings("R1", "R2") })
