@@ -164,6 +164,35 @@ class SpendLogIngesterTest {
         inputs.single().frames.size shouldBe 1
     }
 
+    /**
+     * A separate frame record is not an atomic commit with the cursor. Simulate
+     * the crash boundary by retaining the durable-input record while dropping
+     * ordinary frame records: the input record must still recover both pieces.
+     */
+    @Test
+    fun `a committed cursor never recovers without the fold it covers`() {
+        append(line("a"))
+        val live = Rig()
+        live.poll()
+
+        val crashJournal = InMemoryJournal()
+        crashJournal.reset(
+            live.journal.replay().filterNot { JournalRecords.decode(it) is DecodedJournalRecord.Frame },
+        )
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = crashJournal)
+        val recovered = SetCell<SpendRecord>(live.cell.ref)
+        host.managementInlet.call.spawn(recovered)
+        val input = host.durableInput(recovered.ref, "spend")
+
+        val recovery = host.recoverFrom(crashJournal)
+        controller.runToIdle()
+        recovery.awaitApplied()
+
+        (input.committed() as CheckpointState).offset shouldBe Files.size(log)
+        recovered.membership() shouldBe setOf(record("a"))
+    }
+
     @Test
     fun `multi-hand-off re-baseline converges on the whole replacement`() {
         append(*(0 until 40).map { line("old-$it") }.toTypedArray())
