@@ -24,6 +24,12 @@ data class Manifest(val nodes: Map<String, NodeSpec>) {
                     "unknown transport scheme '${node.transport}' (available: ${schemes.sorted()})",
                 )
             }
+            if (node.journalTopology && node.journalDir == null) {
+                violations += ManifestViolation(
+                    "nodes[$name].journalTopology",
+                    "journalTopology requires journalDir",
+                )
+            }
             node.dial.forEachIndexed { index, targetName ->
                 val target = nodes[targetName]
                 when {
@@ -80,6 +86,7 @@ data class NodeSpec(
     val replica: Long? = null,
     val peerName: String? = null,
     val budget: String? = null,
+    val journalTopology: Boolean = false,
 )
 
 /** One reason a [Manifest] is unsafe to launch, naming the offending field. */
