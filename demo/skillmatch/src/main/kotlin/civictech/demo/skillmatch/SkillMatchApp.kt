@@ -12,9 +12,11 @@ import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
+import civictech.cell.observe.observeAligned
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
@@ -241,24 +243,23 @@ class SkillMatchApp(port: Int = 8080) {
     private val candOps = host.lookup(refs.candSkills)!!.inlet.call
     private val jobOps = host.lookup(refs.jobSkills)!!.inlet.call
 
-    // Observation sinks: each folds one pipeline outlet's delta stream into a
-    // thread-safe, immutable materialized snapshot (the host observation sink).
-    // `observe(...)` spawns+connects the sink cell immediately; `current()` is a
-    // consistent snapshot readable from any thread, so `stateJson()` needs no
-    // external monitor. The `broadcast()` onChange listener is wired in `init`,
-    // once `clients`/`server` exist (see below).
+    // The raw inputs have different root sets, so they stay point-consistent.
     private val candSkills: ObservationSink<Set<CandidateSkill>> =
         host.observe(refs.candSkills.ref, View.set<CandidateSkill>())
     private val jobSkills: ObservationSink<Set<JobSkill>> =
         host.observe(refs.jobSkills.ref, View.set<JobSkill>())
-    private val matches: ObservationSink<Set<Match>> =
-        host.observe(refs.matches.ref, View.set<Match>())
-    private val gap: ObservationSink<Set<JobSkill>> =
-        host.observe(refs.gap.ref, View.set<JobSkill>())
-    private val qualification: ObservationSink<Map<CandidateJob, QualEntry>> =
-        host.observe(refs.qualification.ref, View.map<CandidateJob, QualEntry>())
-    private val market: ObservationSink<Map<String, MarketEntry>> =
-        host.observe(refs.market.ref, View.map<String, MarketEntry>())
+
+    // These four derived views all have exactly the candidate+job root set.
+    // One aligned sink therefore publishes their settled state in one frame.
+    private val aligned: AlignedCompositeCell = host.observeAligned {
+        set("matches", refs.matches.ref)
+        set("gap", refs.gap.ref)
+        map("qualification", refs.qualification.ref)
+        map("market", refs.market.ref)
+    }
+
+    /** Diagnostic for the frame-level contract: no same-root wave remains held at idle. */
+    internal val alignedBufferedWaves: Int get() = aligned.bufferedWaves
 
     private val shell = DemoShell(port)
     private var inspector: InspectorServer? = null
@@ -332,12 +333,11 @@ class SkillMatchApp(port: Int = 8080) {
         shell.route("/op") { handleOp(it) }
         shell.sse("/events") { stateJson() }
 
-        // Wire broadcast now that the SSE machinery exists. onChange fires once
-        // immediately (late-join catch-up with current state) then on every
-        // settled effective change; no SSE clients are connected yet during
-        // construction, so the catch-up broadcast is a no-op.
-        listOf(candSkills, jobSkills, matches, gap, qualification, market)
-            .forEach { sink -> sink.onChange { broadcast() } }
+        // The raw roots broadcast independently. The derived group broadcasts
+        // once after all four named arms settle the same frontier.
+        candSkills.onChange { broadcast() }
+        jobSkills.onChange { broadcast() }
+        aligned.onChange { broadcast() }
     }
 
     private fun handleOp(exchange: HttpExchange) {
@@ -383,13 +383,21 @@ class SkillMatchApp(port: Int = 8080) {
         // (candidate,job) fact enriched with its job's required-skill count,
         // folded into `qualification`. Replaces the former edge computation
         // (kernel gap F-1 — now closed by the join cell).
-        val qualNow = qualification.current()
+        val snapshot = aligned.current()
+        @Suppress("UNCHECKED_CAST")
+        val matches = snapshot["matches"] as Set<Match>
+        @Suppress("UNCHECKED_CAST")
+        val gap = snapshot["gap"] as Set<JobSkill>
+        @Suppress("UNCHECKED_CAST")
+        val qualNow = snapshot["qualification"] as Map<CandidateJob, QualEntry>
+        @Suppress("UNCHECKED_CAST")
+        val marketNow = snapshot["market"] as Map<String, MarketEntry>
         val progress = qualNow.entries.sortedBy { it.key }.joinToString(",", "[", "]") { (cj, e) ->
             """{"candidate":${esc(cj.candidate)},"job":${esc(cj.job)},"matched":${e.matched},"required":${e.required},"qualified":${e.qualified}}"""
         }
-        val gaps = gap.current().sortedWith(compareBy({ it.job }, { it.skill }))
+        val gaps = gap.sortedWith(compareBy({ it.job }, { it.skill }))
             .joinToString(",", "[", "]") { """{"job":${esc(it.job)},"skill":${esc(it.skill)}}""" }
-        val matchList = matches.current().sortedWith(compareBy({ it.candidate }, { it.job }, { it.skill }))
+        val matchList = matches.sortedWith(compareBy({ it.candidate }, { it.job }, { it.skill }))
             .joinToString(",", "[", "]") {
                 """{"candidate":${esc(it.candidate)},"job":${esc(it.job)},"skill":${esc(it.skill)}}"""
             }
@@ -398,7 +406,6 @@ class SkillMatchApp(port: Int = 8080) {
         // `market`. A skill demanded by more jobs than candidates supply it is
         // under-supplied; demand with zero supply is exactly the gap, generalized
         // to counts.
-        val marketNow = market.current()
         val marketJson = marketNow.keys.sorted().joinToString(",", "[", "]") { skill ->
             val e = marketNow.getValue(skill)
             """{"skill":${esc(skill)},"supply":${e.supply},"demand":${e.demand},"scarce":${e.scarce}}"""
