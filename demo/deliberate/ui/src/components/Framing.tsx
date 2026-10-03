@@ -1,13 +1,13 @@
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createMemo, createSignal, For, Index, Show } from 'solid-js';
 import type { FramingDto, PositionDto } from '../api/types';
 import type { TreeNode } from '../tree/buildTree';
 import {
   bandCaption,
-  framingText,
   pct,
   phaseOf,
   priorDecidesText,
   priorText,
+  readingsLine,
   shown,
   STATUS_LABEL,
   statusHint,
@@ -23,9 +23,44 @@ import { OverrideControl } from './OverrideControl';
  * proportional bar. Replaces the question's yes/no gauge.
  */
 export function FramingSummary(props: { framing: FramingDto }) {
+  const readings = () => (props.framing.mode === 'READINGS' ? props.framing.positions : []);
+  const credences = () => readings().map((p) => p.credence ?? 0.5);
+  const lo = () => Math.min(...credences());
+  const hi = () => Math.max(...credences());
   return (
     <div class="framing" aria-label="Framing">
-      <p class="framing__line">{framingText(props.framing)}</p>
+      <p class="framing__line">{readingsLine(props.framing)}</p>
+      {/* computenet-3z7w5: every reading on one no–yes track — a neutral band
+          over their spread and a numbered marker each; the legend carries the
+          full text. <Index> keeps each marker and row in place across frames. */}
+      <Show when={readings().length > 0}>
+        <div class="gauge spread" aria-hidden="true">
+          <span class="gauge__con">no</span>
+          <span class="spread__track">
+            <span class="spread__band" style={{ left: `${lo() * 100}%`, width: `${(hi() - lo()) * 100}%` }} />
+            <span class="gauge__mid" />
+            <Index each={readings()}>
+              {(p, i) => (
+                <span class="spread__mark" style={{ left: `${(p().credence ?? 0.5) * 100}%` }} title={`${p().text} · ${pct(p().credence)}`}>
+                  {i + 1}
+                </span>
+              )}
+            </Index>
+          </span>
+          <span class="gauge__pro">yes</span>
+        </div>
+        <ol class="spread__legend">
+          <Index each={readings()}>
+            {(p, i) => (
+              <li class="spread__row">
+                <span class="spread__n" aria-hidden="true">{i + 1}</span>
+                <span class="spread__text">{p().text}</span>
+                <span class="spread__pct">{pct(p().credence)}</span>
+              </li>
+            )}
+          </Index>
+        </ol>
+      </Show>
       <Show when={props.framing.mode === 'POSITIONS'}>
         <ul class="framing__list">
           <For each={props.framing.positions}>
