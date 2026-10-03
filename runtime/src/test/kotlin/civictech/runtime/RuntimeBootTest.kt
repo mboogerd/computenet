@@ -316,8 +316,10 @@ class RuntimeBootTest {
                 ),
             ),
         )
+        Runtime.boot(manifest, "durable", GraphSpec(emptyList())).close()
         val node = Runtime.boot(manifest, "durable", GraphSpec(emptyList()))
         try {
+            assertTrue(node.recovered)
             val journal = node.journals.getValue("main")
             val before = journal.replay().count { JournalRecords.decode(it) is DecodedJournalRecord.Topology }
 
