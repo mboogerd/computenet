@@ -101,6 +101,33 @@ class SidecarBackpressureTest {
     }
 
     /**
+     * The refusal's own `CLOSE_LINK` can race a `LINK_DOWN` and draw a
+     * "no such link" `ERROR`. That reply follows this host's close, so it is
+     * absorbed: the refusal is reported once and the close is not repeated
+     * (computenet-amf8l).
+     */
+    @Test
+    fun `an ERROR answering the refusal's own CLOSE_LINK is absorbed`() {
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                val listener = RecordingLinkListener("refused twice")
+                val link = fake.dialAndAnswer(client, listener)
+
+                val reason = "link ${link.id}'s send queue is full (256 frames outstanding); the frame was not sent"
+                fake.send(SidecarMessage.Failure(link.id, reason))
+                assertEquals(HostMessage.CloseLink(link.id), fake.nextHostMessage())
+
+                fake.send(SidecarMessage.Failure(link.id, "no such link: ${link.id}"))
+                fake.send(SidecarMessage.LinkDown(link.id, "link closed"))
+                assertEquals("link closed", listener.nextDown())
+
+                assertEquals(listOf(reason), listener.errors.toList(), "only the refusal is a link error")
+                assertEquals(null, fake.pollHostMessage(500), "the absorbed ERROR must not provoke a second CLOSE_LINK")
+            }
+        }
+    }
+
+    /**
      * The rule is scoped to *established* links. An `ERROR` answering a `DIAL`
      * settles that dial and establishes nothing, so there is no link to close —
      * a client that closed on it would name a link the sidecar never had.
