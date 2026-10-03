@@ -28,6 +28,7 @@ class ManifestTest {
                     replica = 7,
                     peerName = "peer-a",
                     budget = "policy.json",
+                    journalTopology = true,
                 ),
             ),
         )
@@ -69,6 +70,14 @@ class ManifestTest {
         val failure = invalid("""{"nodes":{"a":{"hosts":[]}}}""")
 
         assertViolation(failure, "nodes[a].hosts", "at least one host")
+    }
+
+    @Test
+    fun `topology journalling requires a journal directory and defaults off`() {
+        val failure = invalid("""{"nodes":{"a":{"journalTopology":true}}}""")
+
+        assertViolation(failure, "nodes[a].journalTopology", "requires journalDir")
+        assertEquals(false, Manifest.parse("""{"nodes":{"a":{}}}""").nodes.getValue("a").journalTopology)
     }
 
     @Test
