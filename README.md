@@ -109,8 +109,8 @@ so only the manual map survives a `kill -9` restart. See computenet-3san.
 graph. It's opt-in via the shared `--inspect-port <p>` flag (`InspectorFlag`
 in `:inspect`) on ten demos — agora, alignment, backlog-triage, deliberate,
 dialogue, exchange, shopping, skillmatch, slotfinder, tiering. Not wired:
-`allocator-observe` (no hosted graph yet), `beadsmirror` (hosts only in its
-two-node `--rig` mode) and `social` (excluded by its own module gate,
+`allocator-observe` (no hosted graph yet), `beadsmirror` (not wired to
+`--inspect`) and `social` (excluded by its own module gate,
 `[SOC1-MOD-01]`):
 
 ```bash
