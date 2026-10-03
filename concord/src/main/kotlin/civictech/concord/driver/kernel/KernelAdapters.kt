@@ -259,6 +259,20 @@ internal class RecordedComposite(
      */
     fun drain(timeout: Duration) {
         check(!closed) { "aligned view ${cell.ref} was closed; its observation log can no longer be drained" }
+        // The binding can outlive the kernel cell's lifecycle (for example a
+        // direct onDeactivate/close leaves the Bound entry in KernelDriver).
+        // AlignedCompositeCell deliberately drops listener registrations once
+        // closed, so waiting for this barrier would otherwise consume the full
+        // compositeDrainTimeout while blaming a listener that cannot run.
+        val frontier = cell.composite().frontier.entries.firstOrNull()
+        if (frontier != null) {
+            val probe = cell.visibilityOf(Timestamp(frontier.key, frontier.value))
+            if (probe.isCompletedExceptionally) {
+                throw IllegalStateException(
+                    "aligned view ${cell.ref} was closed or deactivated; its observation log cannot be drained",
+                )
+            }
+        }
         val barrier = CountDownLatch(1)
         // A listener is never removed (the sink has no unregister), so later
         // publishes call this again; counting down a released latch is a no-op.

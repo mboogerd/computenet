@@ -166,6 +166,20 @@ class AlignedViewBindingTest {
         }
     }
 
+    @Test
+    fun `a closed bound sink makes quiesce fail promptly instead of waiting for the drain timeout`() {
+        withDriver(0) {
+            compositeDrainTimeout = 1.seconds
+            graphA()
+            scriptA()
+            val sink = cells.getValue("c").cell as AlignedCompositeCell
+            sink.close()
+
+            val failure = assertThrows<IllegalStateException> { quiesce(BUDGET) }
+            failure.message!! shouldContain "closed or deactivated"
+        }
+    }
+
     // ---- refusals ----------------------------------------------------------------
 
     @Test
