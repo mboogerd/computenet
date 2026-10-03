@@ -203,13 +203,12 @@ private data class AllocatorRuntime(
  * - A log that is DELETED — while the app is down or while it runs — no longer
  *   diverges in the fold (6jbep-D1, [convergeOnDeletedLog]): a log this process
  *   has read and that then disappears is treated as the log replaced by an
- *   empty one, so an uninterrupted process empties its fold just as a restarted
- *   one starts empty, and both serve the same empty report until the log comes
- *   back and is re-read whole. What differs is again only the account: the
- *   uninterrupted process counts the deletion in `reBaselineCount` (it saw the
- *   records go), the restarted one does not (it never saw them). A log that has
- *   not arrived yet in this process is still left alone, as
- *   `SpendLogIngester` does for `TailReason.LogAbsent`.
+ *   empty one. Kernel recovery restores the non-empty fold before the first
+ *   poll, so both an uninterrupted process and one restarted during the gap
+ *   observe the records go, count one re-baseline, and serve the same empty
+ *   report until the log comes back. A log that has not arrived yet in this
+ *   process is still left alone, as `SpendLogIngester` does for
+ *   `TailReason.LogAbsent`.
  *
  * ## Threading
  *

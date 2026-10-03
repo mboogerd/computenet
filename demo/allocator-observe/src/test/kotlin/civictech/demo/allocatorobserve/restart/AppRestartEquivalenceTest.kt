@@ -273,8 +273,8 @@ class AppRestartEquivalenceTest {
      * Design entry 6jbep-D1: a spend log DELETED while the app is down no longer
      * makes a restart diverge in the fold. A log this process has read and that
      * is now gone counts as the log replaced by an empty one, so the process
-     * that never stopped empties its fold exactly as the restarted one starts
-     * empty. Removing records is a fold change outside the spend durable-input
+     * that never stopped and the restarted process both empty their recovered
+     * folds. Removing records is a fold change outside the spend durable-input
      * commit, so it deliberately leaves the last source cursor in place.
      *
      * Two phases, each discriminating one half of `convergeOnDeletedLog`:
@@ -286,10 +286,9 @@ class AppRestartEquivalenceTest {
      *   unchanged cursor and therefore remain empty; no cursor is fabricated
      *   for the filesystem disappearance.
      *
-     * Measured when this test was written (bead comment on computenet-6jbep):
-     * The per-process account is pinned separately rather than compared: only
-     * the uninterrupted app saw the records go, so only it counts the deletion
-     * as a re-baseline.
+     * Since kernel durability restores the record fold before the first poll,
+     * both processes observe the records go and count the deletion once as a
+     * re-baseline.
      */
     @Test
     fun `a log deleted while the app is down converges both processes on its absence`() {
@@ -325,7 +324,7 @@ class AppRestartEquivalenceTest {
                 ingest.getValue("checkpointOffset").jsonPrimitive.long shouldBe committedOffset
             }
             ingest(uninterrupted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
-            ingest(restarted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 0L
+            ingest(restarted).getValue("reBaselineCount").jsonPrimitive.long shouldBe 1L
         }
 
         uninterruptedRig.restoreLog()
