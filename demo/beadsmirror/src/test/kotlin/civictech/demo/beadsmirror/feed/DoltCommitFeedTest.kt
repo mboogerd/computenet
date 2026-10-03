@@ -603,8 +603,7 @@ class DoltCommitFeedTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
-                checkpoint.write("c1")
+                val checkpoint = MemoryFeedCursor("c1")
                 val conditions = mutableListOf<FeedCondition>()
                 val batches = mutableListOf<ChangeRecord>()
                 val poller = DoltFeedPoller(
@@ -619,7 +618,7 @@ class DoltCommitFeedTest {
 
                 conditions shouldContainExactly listOf(FeedCondition.HistoryMerged(MERGE))
                 batches shouldContainExactly emptyList()
-                checkpoint.read() shouldBe "c1"
+                checkpoint.committed() shouldBe "c1"
             }
         }
 
@@ -637,8 +636,7 @@ class DoltCommitFeedTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
-                checkpoint.write("compacted-away")
+                val checkpoint = MemoryFeedCursor("compacted-away")
                 val conditions = mutableListOf<FeedCondition>()
                 val poller = DoltFeedPoller(
                     feed,

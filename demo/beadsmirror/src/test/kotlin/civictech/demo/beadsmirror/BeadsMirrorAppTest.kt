@@ -1,9 +1,11 @@
 package civictech.demo.beadsmirror
 
+import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.MirrorEvent
 import civictech.demo.beadsmirror.baseline.PollLoopDied
 import civictech.demo.beadsmirror.baseline.RebaselineReason
 import civictech.demo.beadsmirror.dolt.DoltSqlException
+import civictech.demo.beadsmirror.equality.MirrorExportEquality
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.testkit.HttpProbe
@@ -430,10 +432,104 @@ class BeadsMirrorAppTest {
             event.reason shouldBe RebaselineReason.FirstStart
             event.headCommit shouldBe head
             event.issueCount shouldBe 4
-            app!!.state.rebaselineCount shouldBe 1
+            app!!.state.rebaselineCount shouldBe 0
             app!!.state.current.view().keys shouldBe ids.toSet()
             app!!.state.current.edgeView() shouldBe setOf(MirrorEdge(ids[1], ids[0], "blocks"))
-            Files.readString(runDir.resolve("checkpoint")).trim() shouldBe head
+            app!!.mirrors.single().committedCheckpoint() shouldBe head
+        }
+
+        @Test
+        fun `a solo restart recovers its fold and cursor before polling without rebaselining`() {
+            val id = workspace.createIssue("Issue A")
+            val first = WorkspaceMirror.start(
+                workspace = workspace.root,
+                runDir = runDir,
+                pollInterval = Duration.ofMillis(50),
+                onEvent = events::add,
+            )
+            val stoppedHead = first.committedCheckpoint()
+            first.startPolling()
+            awaitUntil("the first mirror settles at its baseline head") {
+                first.committedCheckpoint() == stoppedHead && first.state.current.view().keys == setOf(id)
+            }
+            first.stop()
+
+            workspace.run("update", id, "--status", "in_progress")
+            val currentHead = DoltCommitFeed(workspace.doltRoot).history().last()
+            events.clear()
+
+            val recovered = WorkspaceMirror.start(
+                workspace = workspace.root,
+                runDir = runDir,
+                pollInterval = Duration.ofMillis(50),
+                onEvent = events::add,
+            )
+            try {
+                recovered.committedCheckpoint() shouldBe stoppedHead
+                recovered.state.rebaselineCount shouldBe 0
+                events.filterIsInstance<MirrorEvent.Rebaselined>() shouldBe emptyList()
+
+                recovered.startPolling()
+                awaitUntil("the recovered mirror consumes only the post-restart commit") {
+                    recovered.committedCheckpoint() == currentHead &&
+                        recovered.state.current.view()[id]?.get("status") == "\"in_progress\""
+                }
+                MirrorExportEquality.compare(
+                    recovered.state.current.view(),
+                    recovered.state.current.edgeView(),
+                    BdExportReader(workspace.root).read(),
+                ) shouldBe emptyList()
+                events.filterIsInstance<MirrorEvent.Rebaselined>() shouldBe emptyList()
+            } finally {
+                recovered.stop()
+            }
+        }
+
+        @Test
+        fun `a restart after a compaction swap recovers only the swapped fold`() {
+            val id = workspace.createIssue("Issue A")
+            workspace.run("update", id, "--priority", "1")
+            workspace.run("update", id, "--status", "in_progress")
+            app = startApp(pollInterval = Duration.ofSeconds(5))
+            val preSwapDots = app!!.state.current.cell.state().puts
+                .filterKeys { it.issueId == id }
+                .values
+                .flatMapTo(mutableSetOf()) { it.keys }
+
+            workspace.run("close", id)
+            workspace.flatten()
+            val flattenedHead = DoltCommitFeed(workspace.doltRoot).history().last()
+            awaitUntil("the compacted history swaps in its exported fold") {
+                events.filterIsInstance<MirrorEvent.Rebaselined>().size == 2
+            }
+            val swappedView = app!!.state.current.view()
+            val swappedEdges = app!!.state.current.edgeView()
+            val swappedDots = app!!.state.current.cell.state().puts
+                .filterKeys { it.issueId == id }
+                .values
+                .flatMapTo(mutableSetOf()) { it.keys }
+            (swappedDots intersect preSwapDots) shouldBe emptySet()
+
+            app!!.stop()
+            app = null
+            events.clear()
+            app = startApp(pollInterval = Duration.ofSeconds(30))
+
+            app!!.mirrors.single().committedCheckpoint() shouldBe flattenedHead
+            app!!.state.rebaselineCount shouldBe 0
+            events.filterIsInstance<MirrorEvent.Rebaselined>() shouldBe emptyList()
+            app!!.state.current.view() shouldBe swappedView
+            app!!.state.current.edgeView() shouldBe swappedEdges
+            val recoveredDots = app!!.state.current.cell.state().puts
+                .filterKeys { it.issueId == id }
+                .values
+                .flatMapTo(mutableSetOf()) { it.keys }
+            (recoveredDots intersect preSwapDots) shouldBe emptySet()
+            MirrorExportEquality.compare(
+                app!!.state.current.view(),
+                app!!.state.current.edgeView(),
+                BdExportReader(workspace.root).read(),
+            ) shouldBe emptyList()
         }
 
         /**
@@ -468,7 +564,7 @@ class BeadsMirrorAppTest {
             val rebuild = events.filterIsInstance<MirrorEvent.Rebaselined>()[1]
             (rebuild.reason is RebaselineReason.CheckpointGone) shouldBe true
             rebuild.headCommit shouldBe flattenedHead
-            Files.readString(runDir.resolve("checkpoint")).trim() shouldBe flattenedHead
+            app!!.mirrors.single().committedCheckpoint() shouldBe flattenedHead
 
             // A's post-gap status and the post-gap issue C are both there.
             val a = Json.parseToJsonElement(probe!!.get("/beads/issues/$idA").body()).jsonObject
@@ -490,7 +586,7 @@ class BeadsMirrorAppTest {
                 probe!!.get("/beads/issues/$idD").statusCode() == 200
             }
             events.filterIsInstance<MirrorEvent.Rebaselined>().size shouldBe 2
-            app!!.state.rebaselineCount shouldBe 2
+            app!!.state.rebaselineCount shouldBe 1
         }
 
         /**
@@ -560,7 +656,7 @@ class BeadsMirrorAppTest {
             awaitUntil("issue $idA appears on the route") {
                 probe!!.get("/beads/issues/$idA").statusCode() == 200
             }
-            val frozenCheckpoint = Files.readString(runDir.resolve("checkpoint")).trim()
+            val frozenCheckpoint = app!!.mirrors.single().committedCheckpoint()
 
             val doltDir = workspace.doltRoot.resolve(".dolt")
             val parked = workspace.doltRoot.resolve(".dolt-parked")
@@ -764,11 +860,9 @@ class BeadsMirrorAppTest {
     }
 
     /**
-     * Per-workspace checkpoint placement. [FeedCheckpoint][civictech.demo.beadsmirror.feed.FeedCheckpoint]
-     * writes a fixed `checkpoint` filename, so N mirrors sharing one run
-     * directory would overwrite each other's feed position — which is why the
-     * N > 1 case segments by identity, and why the N == 1 case must NOT, since
-     * `--run-dir` has always meant "the checkpoint goes here".
+     * Per-workspace journal placement. Each mirror owns a `main/host.journal`
+     * beneath its run directory, so the N > 1 case segments by identity while
+     * the N == 1 case keeps the configured run directory verbatim.
      */
     @Nested
     inner class RunDirectoryPerWorkspace {
@@ -948,14 +1042,14 @@ class BeadsMirrorAppTest {
             // put all five issues in both.
             a.state.current.view().keys shouldBe idsA.toSet()
             b.state.current.view().keys shouldBe idsB.toSet()
-            a.state.rebaselineCount shouldBe 1
-            b.state.rebaselineCount shouldBe 1
+            a.state.rebaselineCount shouldBe 0
+            b.state.rebaselineCount shouldBe 0
 
-            // --- one checkpoint each, at its own workspace's head ----------
+            // --- one durable input cursor each, at its workspace's head ----
             a.runDir shouldBe runDir.resolve(identityA)
             b.runDir shouldBe runDir.resolve(identityB)
-            Files.readString(a.runDir.resolve("checkpoint")).trim() shouldBe headA
-            Files.readString(b.runDir.resolve("checkpoint")).trim() shouldBe headB
+            a.committedCheckpoint() shouldBe headA
+            b.committedCheckpoint() shouldBe headB
             (headA == headB) shouldBe false
 
             // --- one dot identity each ------------------------------------
