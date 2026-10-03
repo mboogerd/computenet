@@ -36,7 +36,7 @@ import org.junit.jupiter.api.Test
  * frontier, and never touches an uncovered (winning) put-dot. `snapshot()` is
  * that reclaimer's only production caller, and `Replication.trackDeliveries`
  * installs the read on the mirror's map cell in two-node mode
- * (`MirrorPeering.attach`), so this is a live path, not a hypothetical.
+ * (`MirrorGraph.spec`, `replicated = true`), so this is a live path, not a hypothetical.
  *
  * Plus a **hazard probe** (not a premise of the applier, a projector/kernel
  * seam question): the projector's `dels` entries hold only covered put-dots —

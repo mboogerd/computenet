@@ -7,11 +7,14 @@ import civictech.cell.ClaimClass
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.graph.CellFactory
+import civictech.cell.graph.TopoEvent
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.KeyedCellFactory
 import civictech.cell.graph.KeyedFamily
 import civictech.cell.graph.SpawnStep
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
 import civictech.cell.host.KeyedCells
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.CurrentPeer
@@ -39,6 +42,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class RuntimeBootTest {
 
@@ -167,15 +171,23 @@ class RuntimeBootTest {
         )
         val first = Runtime.boot(manifest, "durable", spec)
         try {
+            assertEquals(false, first.recovered)
+            assertEquals(setOf("main", "worker"), first.journals.keys)
             first.mainHost.lookup<SetApi<String>>(ref)!!.inlet.call.add("survives-reboot")
             first.mainHost.quiescence().await(10_000, "journalId write")
             assertTrue(Files.isRegularFile(journalRoot.resolve("main").resolve("host.journal")))
+            assertTrue(
+                first.journals.getValue("main").replay()
+                    .none { JournalRecords.decode(it) is DecodedJournalRecord.Topology },
+                "journalTopology=false wrote a topology record",
+            )
         } finally {
             first.close()
         }
 
         val second = Runtime.boot(manifest, "durable", spec)
         try {
+            assertEquals(false, second.recovered)
             val journal = KeyedCells.hostJournal(File(journalRoot.toString(), "main"))
             checkNotNull(journal) { "the named host journal was not constructed" }
             second.mainHost.recoverFrom(journal).awaitApplied(10_000)
@@ -183,6 +195,154 @@ class RuntimeBootTest {
             assertTrue("survives-reboot" in recovered.membership())
         } finally {
             second.close()
+        }
+    }
+
+    @Test
+    fun `topology-journalled boot applies once then recovers graph state and durable input`() {
+        val journalRoot = tempDir.resolve("topology-recovery")
+        val manifest = Manifest(
+            mapOf(
+                "durable" to NodeSpec(
+                    journalDir = journalRoot.toString(),
+                    journalTopology = true,
+                ),
+            ),
+        )
+        val itemsCapture = "items-${UUID.randomUUID()}"
+        val auditCapture = "audit-${UUID.randomUUID()}"
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "items",
+                    factory = CapturingSetFactory(itemsCapture),
+                    journalId = "main",
+                    inputs = setOf("feed"),
+                ),
+                SpawnStep(
+                    handle = "audit",
+                    factory = CapturingSetFactory(auditCapture),
+                    journalId = "main",
+                ),
+            ),
+        )
+
+        val first = Runtime.boot(manifest, "durable", spec)
+        val firstRefs = first.refs
+        try {
+            assertEquals(false, first.recovered)
+            val topologySpawns = first.journals.getValue("main").replay()
+                .map(JournalRecords::decode)
+                .filterIsInstance<DecodedJournalRecord.Topology>()
+                .flatMap { it.events }
+                .filterIsInstance<TopoEvent.Spawn>()
+                .map { it.handle }
+                .toSet()
+            assertEquals(setOf("items", "audit"), topologySpawns)
+
+            val items = first.mainHost.lookup<SetApi<String>>(firstRefs.getValue("items"))!!.inlet.call
+            val cursor = first.inputs.getValue("items").getValue("feed").commit {
+                items.add("survives-reboot")
+                "cursor-1"
+            }
+            assertEquals("cursor-1", cursor)
+            first.mainHost.quiescence().await(10_000, "topology-journalled durable input")
+            assertTrue("survives-reboot" in capturedSets.getValue(itemsCapture).membership())
+        } finally {
+            first.close()
+            capturedSets.remove(itemsCapture)
+        }
+
+        val second = Runtime.boot(manifest, "durable", spec)
+        try {
+            assertTrue(second.recovered)
+            assertEquals(firstRefs, second.refs)
+            assertTrue("survives-reboot" in capturedSets.getValue(itemsCapture).membership())
+            assertEquals("cursor-1", second.inputs.getValue("items").getValue("feed").committed())
+        } finally {
+            second.close()
+            capturedSets.remove(itemsCapture)
+            capturedSets.remove(auditCapture)
+        }
+    }
+
+    @Test
+    fun `topology recovery refuses a spec whose non-family handle is absent from the journal`() {
+        val journalRoot = tempDir.resolve("topology-missing-handle")
+        val manifest = Manifest(
+            mapOf(
+                "durable" to NodeSpec(
+                    journalDir = journalRoot.toString(),
+                    journalTopology = true,
+                ),
+            ),
+        )
+        val existingRef = CellRef(UUID.randomUUID())
+        val existing = SpawnStep(
+            handle = "existing",
+            factory = CapturingSetFactory("existing-${UUID.randomUUID()}"),
+            identity = IdentityBinding.Exact(existingRef),
+            journalId = "main",
+        )
+        Runtime.boot(manifest, "durable", GraphSpec(listOf(existing))).close()
+
+        val failure = assertThrows<IllegalStateException> {
+            Runtime.boot(
+                manifest,
+                "durable",
+                GraphSpec(
+                    listOf(
+                        existing,
+                        SpawnStep(
+                            handle = "missing",
+                            factory = CapturingSetFactory("missing-${UUID.randomUUID()}"),
+                            journalId = "main",
+                        ),
+                    ),
+                ),
+            )
+        }
+
+        assertTrue(failure.message!!.contains("'missing'"), failure.message)
+        assertTrue(failure.message!!.contains(journalRoot.resolve("main").toString()), failure.message)
+    }
+
+    @Test
+    fun `node apply appends one topology delta through its boot context`() {
+        val manifest = Manifest(
+            mapOf(
+                "durable" to NodeSpec(
+                    journalDir = tempDir.resolve("topology-delta").toString(),
+                    journalTopology = true,
+                ),
+            ),
+        )
+        Runtime.boot(manifest, "durable", GraphSpec(emptyList())).close()
+        val node = Runtime.boot(manifest, "durable", GraphSpec(emptyList()))
+        try {
+            assertTrue(node.recovered)
+            val journal = node.journals.getValue("main")
+            val before = journal.replay().count { JournalRecords.decode(it) is DecodedJournalRecord.Topology }
+
+            val applied = node.apply(
+                GraphSpec(
+                    listOf(
+                        SpawnStep(
+                            handle = "later",
+                            factory = CapturingSetFactory("later-${UUID.randomUUID()}"),
+                            journalId = "main",
+                        ),
+                    ),
+                ),
+            )
+
+            val records = journal.replay().map(JournalRecords::decode)
+                .filterIsInstance<DecodedJournalRecord.Topology>()
+            assertEquals(before + 1, records.size)
+            assertEquals("later", (records.last().events.single() as TopoEvent.Spawn).handle)
+            assertEquals(applied.refs.getValue("later"), node.refs.getValue("later"))
+        } finally {
+            node.close()
         }
     }
 
@@ -280,6 +440,38 @@ class RuntimeBootTest {
             assertNotNull(node.replication)
         } finally {
             node.close()
+        }
+    }
+
+    @Test
+    fun `topology recovery exposes recovered keyed families on the runtime node`() {
+        val manifest = Manifest(
+            mapOf(
+                "families" to NodeSpec(
+                    journalDir = tempDir.resolve("recovered-families").toString(),
+                    journalTopology = true,
+                ),
+            ),
+        )
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "writers",
+                    factory = KeyedCellFactory { _, ref -> SetCell<String>(ref) },
+                    family = KeyedFamily("runtime-writers", journalId = "main"),
+                ),
+            ),
+        )
+
+        Runtime.boot(manifest, "families", spec).use { first ->
+            assertEquals(false, first.recovered)
+            assertEquals(setOf("writers"), first.families.keys)
+        }
+
+        Runtime.boot(manifest, "families", spec).use { second ->
+            assertTrue(second.recovered)
+            assertEquals(setOf("writers"), second.families.keys)
+            assertNotNull(second.families["writers"])
         }
     }
 
@@ -463,6 +655,11 @@ class RuntimeBootTest {
         listOf(SpawnStep("items", CellFactory { ref -> SetCell<String>(ref) })),
     )
 
+    private data class CapturingSetFactory(private val capture: String) : CellFactory {
+        override fun create(ref: CellRef): SetCell<String> =
+            SetCell<String>(ref).also { capturedSets[capture] = it }
+    }
+
     private class RecordingTransport(private val delegate: PeerTransport) : PeerTransport {
         var listenCalls: Int = 0
             private set
@@ -477,5 +674,9 @@ class RuntimeBootTest {
         }
 
         override fun dial(address: PeerAddress, side: Peering.Side): PeerConnection = delegate.dial(address, side)
+    }
+
+    companion object {
+        private val capturedSets = ConcurrentHashMap<String, SetCell<String>>()
     }
 }

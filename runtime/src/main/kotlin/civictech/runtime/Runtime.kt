@@ -3,8 +3,10 @@ package civictech.runtime
 import civictech.cell.BudgetLedger
 import civictech.cell.CellRef
 import civictech.cell.durability.Journal
+import civictech.cell.graph.AppliedGraph
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DurableInput
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -41,7 +43,8 @@ object Runtime {
 
     /**
      * Construct the node-local graph. Network endpoints and the inspector are deferred to [Node.open].
-     * A future GraphSpec structure-log hook (INT1 1.2b) belongs immediately before the apply below.
+     * A node with [NodeSpec.journalTopology] recovers its graph from the main host journal when
+     * that journal is non-empty; otherwise its spec is applied and journaled as the first topology.
      */
     fun boot(
         manifest: Manifest,
@@ -76,15 +79,46 @@ object Runtime {
                 budget = budget,
             )
         }
-        val mainHost = hosts.getValue(nodeSpec.hosts.first())
+        val mainHostName = nodeSpec.hosts.first()
+        val mainHost = hosts.getValue(mainHostName)
         val replication = Replication(registry)
+        val nodeJournals = journals.toMap()
+        val topology = if (nodeSpec.journalTopology) nodeJournals.getValue(mainHostName) else null
         applyContext = ApplyContext(
             host = mainHost,
             replication = replication,
-            journals = journals.toMap(),
+            journals = nodeJournals,
             journalDirs = journalDirs.toMap(),
+            topology = topology,
         )
-        val applied = spec.apply(applyContext)
+        val recovered = topology?.replay()?.isNotEmpty() == true
+        val families: Map<String, KeyedCells<*>>
+        val inputs: Map<String, Map<String, DurableInput>>
+        if (recovered) {
+            applyContext.recover(topology).awaitApplied(30_000)
+            val declaredSpawns = spec.lowered().filterIsInstance<SpawnStep>().filter { it.family == null }
+            declaredSpawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
+                throw IllegalStateException(
+                    "recovered topology is missing handle '${missing.handle}' declared by the GraphSpec " +
+                        "in journal directory '${journalDirs.getValue(mainHostName)}'",
+                )
+            }
+            inputs = declaredSpawns
+                .filter { it.inputs.isNotEmpty() }
+                .associate { step ->
+                    val ref = applyContext.handles.getValue(step.handle)
+                    step.handle to step.inputs.associateWith { input -> mainHost.durableInput(ref, input) }
+                }
+            families = applyContext.live().families.keys.associateWith { handle ->
+                checkNotNull(applyContext.familyFor(handle)) {
+                    "recovered topology family '$handle' was not materialized"
+                }
+            }
+        } else {
+            val applied = spec.apply(applyContext)
+            families = applied.families
+            inputs = applied.inputs
+        }
         return Node(
             name = node,
             manifest = manifest,
@@ -92,9 +126,11 @@ object Runtime {
             registry = registry,
             hosts = hosts,
             mainHost = mainHost,
-            refs = applied.refs,
-            families = applied.families,
-            inputs = applied.inputs,
+            journals = nodeJournals,
+            recovered = recovered,
+            applyContext = applyContext,
+            families = families,
+            inputs = inputs,
             replication = replication,
             replica = nodeSpec.replica,
             budget = budget,
@@ -128,7 +164,9 @@ object Runtime {
         val registry: LocationRegistry,
         val hosts: Map<String, ManagedHost>,
         val mainHost: ManagedHost,
-        val refs: Map<String, CellRef>,
+        val journals: Map<String, Journal>,
+        val recovered: Boolean,
+        private val applyContext: ApplyContext,
         val families: Map<String, KeyedCells<*>>,
         val inputs: Map<String, Map<String, DurableInput>>,
         val replication: Replication,
@@ -145,6 +183,12 @@ object Runtime {
         private var listener: PeerListener? = null
         private val connectionEndpoints = mutableListOf<PeerConnection>()
         private var inspectorExtras = InspectorExtras()
+
+        /** The current graph handles, including deltas applied after boot. */
+        val refs: Map<String, CellRef> get() = applyContext.handles
+
+        /** Apply a graph delta through this node's services and topology journal. */
+        fun apply(spec: GraphSpec): AppliedGraph = spec.apply(applyContext)
 
         /** Register inspector naming/link extras; only meaningful before [open]. */
         @Synchronized

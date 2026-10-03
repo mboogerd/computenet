@@ -8,8 +8,9 @@ import civictech.demo.beadsmirror.baseline.Rebaseline
 import civictech.demo.beadsmirror.baseline.RebaselineReason
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.feed.DoltFeedPoller
-import civictech.demo.beadsmirror.feed.FeedCheckpoint
+import civictech.demo.beadsmirror.feed.DurableFeedCursor
 import civictech.demo.beadsmirror.feed.FeedCondition
+import civictech.demo.beadsmirror.feed.FeedCursor
 import civictech.demo.beadsmirror.feed.PollLoopStopped
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.EchoExpectations
@@ -23,7 +24,7 @@ import java.time.Duration
 import kotlin.concurrent.thread
 
 /**
- * One workspace's whole mirror: its own [DoltCommitFeed], [FeedCheckpoint],
+ * One workspace's whole mirror: its own [DoltCommitFeed], durable [FeedCursor],
  * [DotMinter] identity, [MirrorProjector]/[MirrorState], [Rebaseline] and
  * [DoltFeedPoller] — everything [BeadsMirrorApp] used to hold singly (task
  * computenet-3bso.1.1, feature computenet-3bso.1).
@@ -66,7 +67,7 @@ class WorkspaceMirror private constructor(
     val identity: String,
     /** The bd workspace root this mirror reads. */
     val workspace: Path,
-    /** The run directory holding this mirror's own [FeedCheckpoint]. */
+    /** The run directory holding this mirror's journal (`main/host.journal`). */
     val runDir: Path,
     /**
      * The dot minter this workspace's first projector was built with — the one
@@ -84,6 +85,8 @@ class WorkspaceMirror private constructor(
     val minter: DotMinter,
     /** This workspace's live projector handle, swapped wholesale by a re-baseline. */
     val state: MirrorState,
+    private val graph: MirrorGraph,
+    private val cursor: FeedCursor,
     private val poller: DoltFeedPoller,
     /**
      * The two-node replica mesh, or `null` in solo mode. Only ever non-null in
@@ -144,6 +147,12 @@ class WorkspaceMirror private constructor(
     val pollerFailure: Throwable? get() = poller.failure
 
     /**
+     * The last Dolt head whose batch is durably committed and settled in the published hosted
+     * fold. A replacement head is not exposed until [state] publishes its rebuilt projector.
+     */
+    fun committedCheckpoint(): String? = state.withPublicationLock(cursor::committed)
+
+    /**
      * `null` while write-back is off, or on and healthy; set if
      * [WriteBackScheduler]'s own loop died on an uncaught exception from
      * `applyOnce` — the write-back analogue of [pollerFailure]. An applier
@@ -163,7 +172,7 @@ class WorkspaceMirror private constructor(
     fun stop() {
         poller.stop()
         writeBackScheduler?.stop()
-        peering?.close()
+        if (peering != null) peering.close() else graph.close()
     }
 
     override fun close() = stop()
@@ -288,23 +297,19 @@ class WorkspaceMirror private constructor(
             val identity = sanitizedDoltDatabaseName(workspace)
 
             val feed = DoltCommitFeed(doltRoot)
-            val checkpoint = FeedCheckpoint(runDir)
 
-            // Two-node mode, and NOTHING of it in solo mode: with no peering
-            // settings this stays null, `refs` stays null, the projector keeps
-            // its random-ref default, MirrorState keeps its no-op swap hook,
-            // and no transport/replication class is loaded. Constructed before
-            // the projector because Replication's registry hooks must precede
-            // every announcement (see [MirrorPeering]).
+            // Build the hosted graph before attaching the projector. In peered
+            // mode Runtime installs replication hooks before applying/recovering
+            // the spec; solo mode uses the same journaled spec without replicas.
             val peering = peeringSettings?.let {
-                peeringTransport?.let { transport -> MirrorPeering(it, transport) } ?: MirrorPeering(it)
+                peeringTransport?.let { transport -> MirrorPeering(it, runDir, transport) }
+                    ?: MirrorPeering(it, runDir)
             }
-            val refs = peering?.refs
+            val graph = peering?.graph ?: MirrorGraph.solo(runDir, identity)
 
             val minter = DotMinter(identity)
-            val initial = if (refs != null) MirrorProjector(minter, refs) else MirrorProjector(minter)
-            val state = MirrorState(initial, onSwap = { next -> peering?.rebind(next) })
-            peering?.attach(initial)
+            val initial = graph.projector(minter)
+            val state = MirrorState(initial)
 
             // One gate for the life of this mirror — NOT one per projector:
             // a re-baseline replaces the projector under it, and an
@@ -346,16 +351,25 @@ class WorkspaceMirror private constructor(
             val rebaseline = Rebaseline(
                 export = BdExportReader(workspace)::read,
                 feed = feed,
-                checkpoint = checkpoint,
+                graph = graph,
                 state = state,
+                input = { graph.input() },
                 workspaceIdentity = identity,
                 onEvent = onEvent,
-                refs = refs,
+            )
+
+            // Recovery already restored both cells and the feed cursor. A new
+            // journal starts from one baseline committed through the live input.
+            if (!graph.recovered) rebaseline.run(RebaselineReason.FirstStart)
+            val cursor = DurableFeedCursor(
+                input = graph.input(),
+                host = graph.host,
+                label = "beadsmirror $identity poll",
             )
 
             val poller = DoltFeedPoller(
                 feed = feed,
-                checkpoint = checkpoint,
+                cursor = cursor,
                 interval = pollInterval,
                 // Re-read the handle per batch: a re-baseline earlier in this
                 // very tick may have replaced the projector.
@@ -393,18 +407,8 @@ class WorkspaceMirror private constructor(
                 onStopped = { onEvent(PollLoopDied(it.failure, it.checkpoint, identity)) },
             )
 
-            // Before the socket: a start-time baseline is part of "started", so
-            // the very first request is answered from complete state rather than
-            // from an empty projector that fills in moments later. It runs on
-            // EVERY start, checkpoint or not — see BeadsMirrorApp's class doc.
-            val persisted = checkpoint.read()
-            rebaseline.run(
-                if (persisted == null) RebaselineReason.FirstStart else RebaselineReason.Restart(persisted),
-            )
-
-            // After the start-time baseline has swapped its projector in and
-            // `rebind` has re-pointed the mesh — so the peer's first
-            // announcement lands on cells that are already the live ones.
+            // After recovery or the first baseline, so the peer's first
+            // announcement lands on complete live cells.
             peering?.connect()
 
             return WorkspaceMirror(
@@ -413,6 +417,8 @@ class WorkspaceMirror private constructor(
                 runDir,
                 minter,
                 state,
+                graph,
+                cursor,
                 poller,
                 peering,
                 writeBackApplier,

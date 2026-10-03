@@ -18,7 +18,7 @@ import civictech.demo.beadsmirror.projector.MirrorProjector
  * [civictech.demo.beadsmirror.http.MirrorRoutes] takes a [MirrorState] rather
  * than a [MirrorProjector].
  *
- * **Threading: one writer, no lock.** [current] is written only by the
+ * **Threading: one writer; fold reads stay lock-free.** [current] is written only by the
  * re-baseline operation, which runs synchronously on the poll thread — either
  * inside `DoltFeedPoller.pollOnce`'s condition path or, on first start, before
  * the poller thread exists at all. The poll thread is also the only thread that
@@ -26,25 +26,17 @@ import civictech.demo.beadsmirror.projector.MirrorProjector
  * projector concurrently. HTTP handler threads only read [current], and they
  * read it through `@Volatile`, so each request sees either the whole old
  * projector or the whole new one — never a half-swapped mixture, and never a
- * stale reference indefinitely.
+ * stale reference indefinitely. The narrower [withPublicationLock] boundary
+ * only couples replacement publication to an externally visible durable
+ * cursor; ordinary fold readers do not acquire it.
  *
- * **The swap hook.** [onSwap] is how two-node mode (task computenet-7em.1.2)
- * survives a re-baseline: the fresh projector's cells are new objects, so the
- * replica mesh has to be re-pointed at them ([MirrorPeering.rebind]) or it
- * keeps gossiping into the discarded projector. It defaults to a no-op, so
- * single-node behaviour — every existing caller — is exactly what it was.
- * Called *after* [current] has been advanced, on the same thread as the swap.
- *
- * @param onSwap run once per [swap], with the projector that has just become
- *   [current]. Synchronous, so an implementation that blocks stalls the
- *   re-baseline that triggered it; it throwing propagates out of [swap] and
- *   therefore out of the re-baseline, which is deliberate — a mesh that failed
- *   to re-point is not a condition to swallow.
+ * The fresh cells are now materialized by one journaled topology delta under
+ * the same refs, so replication follows the respawn through the registry and
+ * no application-level swap hook is needed.
  */
-class MirrorState(
-    initial: MirrorProjector,
-    private val onSwap: (MirrorProjector) -> Unit = {},
-) {
+class MirrorState(initial: MirrorProjector) {
+
+    private val publicationLock = Any()
 
     /** The projector every read and every applied batch goes through, right now. */
     @Volatile
@@ -72,6 +64,12 @@ class MirrorState(
     fun swap(next: MirrorProjector) {
         current = next
         rebaselineCount++
-        onSwap(next)
     }
+
+    /**
+     * Serializes replacement publication with reads of the durable cursor that describes it.
+     * Fold readers remain lock-free through [current]; only callers that pair cursor progress with
+     * the published projector use this boundary.
+     */
+    internal fun <T> withPublicationLock(block: () -> T): T = synchronized(publicationLock, block)
 }

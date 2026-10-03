@@ -21,7 +21,7 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  * interval.
  *
  * Each tick:
- * 1. Reads the persisted checkpoint (or `null` for genesis) from [checkpoint].
+ * 1. Reads the committed cursor (or `null` for genesis) from [cursor].
  * 2. Calls [DoltCommitFeed.readFromWithHead] with it — one `dolt_log` read
  *    that bounds both the records and the head to persist (computenet-yspa5;
  *    see "Why step 4 is sound" below). A [DoltCommitFeed] refuses an
@@ -39,10 +39,10 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  *    into [FeedCondition.HistoryMerged], and likewise emits nothing. The two
  *    are separate conditions because the checkpoint survives a pull, so a
  *    merge never presents as truncation.
- * 3. Otherwise, if the read produced records, hands the whole batch to
- *    [onBatch] and ONLY THEN persists the new checkpoint — so a crash between
- *    steps 3's two halves re-delivers the batch next tick (acceptable, replay
- *    is idempotent downstream) rather than ever skipping it (not acceptable).
+ * 3. Otherwise, hands the whole batch to [onBatch] inside one
+ *    [FeedCursor.commit] with the new cursor. Production backs that cursor by
+ *    a durable input, so the batch frames and cursor are one journal record:
+ *    a crash leaves either both or neither.
  * 4. The new checkpoint is [FeedRead.head] — the tail of the same `dolt_log`
  *    that bounded the read — so a commit that carries no `issues`/
  *    `dependencies` row (an `events`-only no-op `bd update`, a `comments`- or
@@ -87,7 +87,7 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  */
 class DoltFeedPoller(
     private val feed: DoltCommitFeed,
-    private val checkpoint: FeedCheckpoint,
+    private val cursor: FeedCursor,
     private val interval: Duration,
     private val onBatch: (List<ChangeRecord>) -> Unit,
     private val onCondition: (FeedCondition) -> Unit = { throw FeedConditionException(it) },
@@ -171,7 +171,7 @@ class DoltFeedPoller(
      * — propagates out of this call unconverted.
      */
     fun pollOnce() {
-        val after = checkpoint.read()
+        val after = cursor.committed()
         // A single dolt_log read bounds both the records and the head: see
         // the class KDoc, "Why step 4 is sound" and
         // [DoltCommitFeed.readFromWithHead]'s KDoc. Any commit in that one log
@@ -187,13 +187,13 @@ class DoltFeedPoller(
             onCondition(FeedCondition.HistoryMerged(e.mergeCommit))
             return
         }
-        if (read.records.isNotEmpty()) onBatch(read.records)
-        // read.head is the tail of the exact log that bounded read.records
-        // (record-less commits trailing the last record included), so it is
-        // always the right checkpoint to advance to — whether or not any
-        // record was found.
         val advanceTo = read.head
-        if (advanceTo != null && advanceTo != after) checkpoint.write(advanceTo)
+        if (read.records.isNotEmpty() || (advanceTo != null && advanceTo != after)) {
+            checkNotNull(advanceTo) { "a feed read containing records did not report its bounding head" }
+            cursor.commit(advanceTo) {
+                if (read.records.isNotEmpty()) onBatch(read.records)
+            }
+        }
     }
 
     /**
@@ -202,14 +202,14 @@ class DoltFeedPoller(
      * or more than once.
      */
     /**
-     * The persisted checkpoint, or `null` when there is none — or when
+     * The committed cursor, or `null` when there is none — or when
      * reading it is itself what has just gone wrong. The loop is already
      * failing when this is called; a second failure here must not replace the
      * first, so it degrades to "unknown position" rather than propagating.
      */
     private fun checkpointOrNull(): String? =
         try {
-            checkpoint.read()
+            cursor.committed()
         } catch (_: Throwable) {
             null
         }

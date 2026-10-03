@@ -117,7 +117,8 @@ class ApplyContext(
 
     internal fun linkFor(key: TopologyLinkKey): Link? = synchronized(activeLinks) { activeLinks[key] }
 
-    internal fun familyFor(handle: String): KeyedCells<*>? = synchronized(familyInstances) { familyInstances[handle] }
+    /** The live keyed-family instance registered for [handle], or `null` when it is not a family handle. */
+    fun familyFor(handle: String): KeyedCells<*>? = synchronized(familyInstances) { familyInstances[handle] }
 
     /** Apply one recovered or already-journaled event. Recording is deliberately separate. */
     override fun apply(event: TopoEvent) {
