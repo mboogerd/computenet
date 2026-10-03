@@ -34,9 +34,9 @@ class SkillMatchInspectorTest {
                 "qualification", "gap", "supply", "demand", "market",
             ).forEach { name -> assertTrue(""""name":"$name"""" in json, "missing node $name: $json") }
 
-            // plus the six observation sinks the app folds its views through,
+            // plus two point-consistent sinks and one four-inlet aligned sink,
             // which no one named
-            assertEquals(16, json.split("\"typeFqn\"").size - 1, "unexpected node count: $json")
+            assertEquals(13, json.split("\"typeFqn\"").size - 1, "unexpected node count: $json")
             assertEquals(18, json.split("\"role\":\"CONSUME\"").size - 1, "unexpected edge count: $json")
 
             assertTrue(""""typeFqn":"civictech.cell.data.op.CombineLatestCell"""" in json, "market's class: $json")
@@ -68,8 +68,8 @@ class SkillMatchInspectorTest {
             assertTrue(""""name":"skillmatch"""" in graphs, "the pipeline's name: $graphs")
             assertTrue(""""name":null""" in graphs, "the side graph stays unnamed: $graphs")
             assertEquals(2, graphs.split("\"lifecycle\":\"hot\"").size - 1, "unexpected graph count: $graphs")
-            // 16 pipeline cells (10 named + 6 observation sinks) and 2 side cells
-            assertTrue(""""cells":16""" in graphs, "the pipeline's cell count: $graphs")
+            // 13 pipeline cells (10 named + 3 observation sinks) and 2 side cells
+            assertTrue(""""cells":13""" in graphs, "the pipeline's cell count: $graphs")
             assertTrue(""""cells":2""" in graphs, "the side graph's cell count: $graphs")
 
             // name search reaches into both components
