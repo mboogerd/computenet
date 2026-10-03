@@ -69,3 +69,27 @@ By relation shape (exact inputs, claims whose relations are all symmetric vs all
   bp-sym (parameter-free)  symmetric (n=2699) captured 0.78   argument-style (n=2998) captured -0.15
   tuned family             symmetric (n=2699) captured 0.80   argument-style (n=2998) captured 0.27
   two-sided (knows a, b)   symmetric (n=2699) captured 0.82   argument-style (n=2998) captured 0.30
+tuned on argument-style: alpha=0.955, w_sup=9.183, w_att=6.797, gamma=0.708, k=0.011, beta=-17.906, eta=0.021
+... eta=0 (doubted argument inert): alpha=0.985, w_sup=0.541, w_att=0.396, gamma=0.387, k=5.661, beta=-0.166, eta=0.000
+
+=== ARGUMENT-STYLE relations (exact inputs, held-out trees): 9801 argued claims in 2000 trees ===
+  captured = share of the argument information recovered: (logloss(base only) - logloss(rule)) / (logloss(base only) - logloss(exact))
+  rule                                  all argued                    root                 1 level                2 levels              3-4 levels
+                           captured  KL   |dlogit| captured  KL   |dlogit| captured  KL   |dlogit| captured  KL   |dlogit| captured  KL   |dlogit|
+  base only (no arguments)     0.00  0.010   0.28     0.00  0.016   0.27     0.00  0.010   0.30     0.00  0.009   0.26     0.00  0.013   0.26
+  dfquad                      -0.20  0.013   0.42    -0.29  0.017   0.32     0.15  0.011   0.42    -1.01  0.014   0.43    -0.48  0.017   0.38
+  wlo                          0.34  0.006   0.26     0.42  0.009   0.22     0.41  0.006   0.28     0.11  0.006   0.25     0.33  0.007   0.23
+  jnb                          0.10  0.009   0.31     0.07  0.014   0.29     0.32  0.008   0.32    -0.39  0.009   0.31    -0.08  0.012   0.29
+  woe                          0.32  0.006   0.27     0.39  0.009   0.23     0.39  0.006   0.28     0.12  0.006   0.26     0.31  0.008   0.24
+  euler                        0.25  0.008   0.25     0.26  0.012   0.25     0.30  0.007   0.26     0.14  0.007   0.24     0.22  0.010   0.24
+  qe                           0.32  0.007   0.26     0.25  0.011   0.25     0.35  0.007   0.27     0.25  0.007   0.24     0.28  0.009   0.24
+  mlp                          0.26  0.007   0.28     0.29  0.011   0.25     0.33  0.007   0.29     0.09  0.007   0.26     0.22  0.009   0.24
+  consensus(wlo,jnb,woe)       0.28  0.007   0.28     0.33  0.010   0.24     0.40  0.006   0.29    -0.02  0.007   0.27     0.22  0.009   0.25
+  bp-sym (parameter-free)    -13.34  0.142   1.34   -15.29  0.253   1.34   -10.27  0.113   1.29   -18.27  0.151   1.39   -17.74  0.228   1.46
+  two-sided (knows a, b)      -0.10  0.011   0.29     0.15  0.016   0.29    -0.09  0.009   0.28     0.19  0.011   0.30    -0.41  0.016   0.31
+  tuned family                -7.84  0.087   0.96    -8.59  0.151   0.97    -6.32  0.073   0.94   -10.36  0.089   0.98    -9.91  0.134   1.02
+  tuned, k only (sigmoid)     -8.72  0.096   1.11    -9.91  0.168   1.06    -6.61  0.075   1.06   -11.90  0.102   1.16   -11.99  0.157   1.19
+  tuned, no child-base        -8.32  0.092   1.00    -9.15  0.159   1.00    -6.76  0.077   0.97   -10.96  0.093   1.01   -10.42  0.141   1.06
+  tuned on noisy inputs       -5.92  0.070   0.89    -5.25  0.103   0.79    -5.34  0.066   0.91    -7.68  0.068   0.87    -5.96  0.089   0.83
+  tuned on argument-style      0.42  0.006   0.23     0.51  0.008   0.21     0.42  0.006   0.24     0.36  0.006   0.21     0.49  0.008   0.21
+    ... eta=0 (doubted argument inert)     0.40  0.007   0.24     0.53  0.009   0.22     0.43  0.007   0.25     0.13  0.006   0.22     0.57  0.008   0.22

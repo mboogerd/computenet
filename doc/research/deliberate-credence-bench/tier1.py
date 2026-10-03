@@ -30,7 +30,7 @@ lg = lambda p: np.log(np.clip(p, LO, HI) / (1 - np.clip(p, LO, HI)))
 sg = lambda z: 1 / (1 + np.exp(-np.clip(z, -40, 40)))
 
 # ---------------------------------------------------------------- generator
-def gen_forest(n, seed, logic=False):
+def gen_forest(n, seed, logic=False, shape="free"):
     """Flat arrays over all claims of n trees. parent = -1 for roots; children always have larger depth."""
     rng = np.random.default_rng(seed)
     P, D, A, B, Q, OBS, T, TREE = [], [], [], [], [], [], [], []
@@ -43,6 +43,12 @@ def gen_forest(n, seed, logic=False):
             if par < 0: a = b = 0.5
             elif logic:
                 hi_, lo_ = rng.uniform(.9, .99), rng.uniform(.01, .1)
+                a, b = (hi_, lo_) if rng.random() < .6 else (lo_, hi_)
+            elif shape == "argument":
+                # argument-style: a true argument is evidence with likelihood ratio LR = e^(4s) (s=1: ~55x); a false one
+                # says little (both conditionals small, so P(not C | P) ~ P(not C | not P)). Judged strength = s.
+                s_ = rng.uniform(.1, .95); LR = math.exp(4 * s_)
+                lo_ = rng.uniform(.05, .5) / LR; hi_ = lo_ * LR
                 a, b = (hi_, lo_) if rng.random() < .6 else (lo_, hi_)
             else:
                 while True:
@@ -82,7 +88,8 @@ def gen_forest(n, seed, logic=False):
     sub = np.zeros(N, int)                             # depth of each claim's own subtree
     for i in range(N - 1, -1, -1):
         if P[i] >= 0: sub[P[i]] = max(sub[P[i]], sub[i] + 1)
-    sign = np.where(A > B, 1.0, -1.0); s = np.abs(A - B)
+    sign = np.where(A > B, 1.0, -1.0)
+    s = np.abs(np.log(np.maximum(A, B) / np.minimum(A, B))) / 4 if shape == "argument" else np.abs(A - B)
     return dict(parent=P, depth=D, sign=sign, s=s, a=A, b=B, base=base, exact=exact, truth=T, nk=nk, sub=sub, tree=TREE,
                 symmetric=np.abs((A + B) - 1) < .25)
 
@@ -267,4 +274,12 @@ if __name__ == "__main__":
     for name in ("dfquad", "consensus(wlo,jnb,woe)", "bp-sym (parameter-free)", "tuned family", "two-sided (knows a, b)"):
         a_ = metrics(TE, R[name], (TE["nk"] > 0) & allsym); b_ = metrics(TE, R[name], (TE["nk"] > 0) & allarg)
         print(f"  {name:24} symmetric (n={a_['n']}) captured {a_['captured']:.2f}   argument-style (n={b_['n']}) captured {b_['captured']:.2f}")
+    # ---- argument-style relations (a false argument says little), as Tier 2's real trees turned out to be
+    TRa, TEa = gen_forest(2000, 21, shape="argument"), gen_forest(2000, 22, shape="argument")
+    tha = {"tuned on argument-style": fit_fam(TRa), "  ... eta=0 (doubted argument inert)": fit_fam(TRa, fixed={"eta": 0.0})}
+    for k, t in tha.items():
+        print(f"{k.strip()}: " + ", ".join(f"{p}={(math.exp(v) if p.startswith('log_') else v):.3f}".replace("log_", "") for p, v in t.items()))
+    Ra = run_rules(TEa, {**th, **tha})
+    res["argument-style"] = table("ARGUMENT-STYLE relations (exact inputs, held-out trees)", TEa, Ra)
+    th.update(tha)
     json.dump({"fitted": th, "results": res}, open(HERE / "tier1_results.json", "w"), indent=1)

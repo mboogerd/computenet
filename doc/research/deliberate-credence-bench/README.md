@@ -5,103 +5,157 @@ relations. Each tier has its own source of truth (design discussion, 2026-10-03)
 
 | Tier | Truth | Role |
 |---|---|---|
-| **1. Synthetic trees** (`tier1.py`, done) | Exact, by construction | Tune the propagation rule; separate rule error from judge error |
-| 2. Natural-language reasoning with per-step labels (ProofWriter, EntailmentBank, FOLIO, StrategyQA) | Labelled | Validate rule + real Jev judgements, with depth |
+| **1. Synthetic trees** (`tier1.py`) | Exact, by construction | Tune the rule; separate rule error from judge error |
+| **2. Real-knowledge trees, Jev-judged** (`tier2.py`) | Wikidata label at every claim | Rule plus real judgements, with doubted arguments |
 | 3. Graded or resolved empirical claims (fact-check verdicts, post-cutoff forecasts) | Graded / eventual | Calibration where truth has degrees |
 | 4. Wicked problems | None: property tests | Must-pass constraints (responsiveness, invariance, manipulation resistance), agreement with human argument-impact ratings (Kialo) |
 
 Why tiers: the earlier multiple-choice study (`../deliberate-multiclass/TUNING.md`) could not tell judge error from
-rule error. Its arguments were also almost never doubted, so it could not test doubt propagation at all.
+rule error. Its arguments were also almost never doubted, so it could not test doubt propagation.
+
+## Headline (Tiers 1 and 2 together)
+
+1. **The decisive modelling choice is what a *doubted* argument does.**
+   - Real arguments behave *argument-style*: a true argument is evidence, a false one says almost nothing.
+     "Avril was born in 1820" being false tells you little about whether Avril was born before Brahms.
+   - Under that shape, any rule that lets a doubted argument count the other way is badly wrong: −13 and −8 in the
+     table below.
+   - Tier 1's first run drew relations at random, many of them symmetric. It therefore favoured exactly such a rule, and
+     its first headline ("the parameter-free 2·atanh rule captures 46%, 100% near-logic") **does not hold for real
+     arguments**. It is kept below for the record.
+2. **A steep sigmoid on the argument's credence is right, as suspected.** Every argument-style fit, synthetic and real,
+   chooses the same per-argument contribution:
+
+   ```
+   ± w · 2·atanh( s^γ · max(0, 2·sigmoid(k·logit c) − 1) )
+   ```
+
+   - k between 2 and 9: a doubted argument is inert, and a believed one counts nearly in full.
+   - The contribution saturates at a cap set by the relation strength s.
+   - It is incremental: the parent's log-odds are its base plus a sum of these terms.
+3. **This rule beats the shipped layers on both tiers, mostly at the root.**
+   - On real Jev-judged trees it matches dfquad overall (log loss .227 vs .226) and beats the consensus layers (.252).
+   - At the root, where two partial arguments and an attack must combine, it gains .055 log loss over Jev's prior.
+     dfquad gains nothing there (+.001) and the consensus layers .023.
+   - On argument-style synthetic trees it uses 40% of the argument information, against 28% for consensus and −20% for
+     dfquad.
+4. **The judge is not the bottleneck on factual claims.**
+   - Jev's isolated plausibility is right 81% of the time.
+   - Jev rates decisive links strong (mean .92) and logically irrelevant ones irrelevant (69%, mean .10).
+   - With the true leaf values substituted ("oracle leaves"), the best rule reaches 93% accuracy against 92% with Jev's
+     leaves.
+5. **Still unsettled:**
+   - The support-versus-attack weight ratio. Tier 2 fits attacks at 2–3× supports, Tier 1 argument-style about 0.75×;
+     likely template-specific. Fitting a single shared weight was unstable on one half of Tier 2.
+   - The exact steepness k (fits range 2–9).
 
 ## Tier 1: synthetic argument trees
 
-`uv run --with numpy --with scipy python tier1.py` (offline, seeded, ~10 s). `--selftest` checks the exact target
+`uv run --with numpy --with scipy python tier1.py` (offline, seeded, ~20 s). `--selftest` checks the exact target
 against brute-force enumeration. Output: `tier1_results.txt`, `tier1_results.json`.
 
 ### The model
 
 - **Trees:** each tree is a Bayesian network (depth 1–4, 1–4 arguments per claim, up to 31 claims).
-- **Relations:** an argument C of claim P has P(C | P) = a and P(C | not P) = b.
-  - a > b makes C a support; a < b an attack.
-  - The judged strength is |a − b|.
-  - (a, b) are drawn freely. Relations therefore range from **symmetric** (a refuted support counts against) to
-    **argument-style** (a refuted argument says little), and the rule is never told which.
-- **Evidence:** each claim may carry its own noisy direct evidence.
-- **Inputs:** a claim's *base* is P(claim | its own evidence), which plays the role of Jev's isolated stance.
-- **Target:** the exact P(claim | all evidence in its subtree), the quantity a node's credence is meant to be.
-  - This target is itself **incremental**: it equals the base's log-odds plus one message per argument.
-  - So an incremental rule can in principle be exactly right.
-- **Conditions:**
-  - **Exact inputs:** base and strength are given exactly, so any error is the rule's.
-  - **Noisy inputs:** base logit + N(0, .7), strength + N(0, .15), standing in for judge error.
-  - **Near-logic:** relations with |a − b| ≥ .8 and near-certain leaves.
+- **Relations:** an argument C of claim P has P(C | P) = a and P(C | not P) = b; a > b is support, a < b attack.
+- **Inputs:** a claim's *base* is P(claim | its own evidence), playing the role of Jev's isolated stance.
+- **Target:** the exact P(claim | all evidence in its subtree). The target is itself incremental: base log-odds plus one
+  message per argument.
+- **Relation shapes:**
+  - *free*: (a, b) drawn at random, with judged strength |a − b|; relations from symmetric to argument-style.
+  - *argument-style*: a true argument has likelihood ratio e^(4s) and a false one is nearly uninformative, with judged
+    strength s.
+- **Conditions:** exact inputs; noisy inputs (base logit + N(0, .7), strength + N(0, .15)); near-logic (|a − b| ≥ .8,
+  near-certain leaves).
 - **Metric:** *captured* = (log loss of base only − log loss of the rule) / (log loss of base only − log loss of exact),
-  scored against the sampled truths.
-  - 1 = all the information in the arguments is used.
+  against the sampled truths.
+  - 1 = all the argument information used.
   - 0 = no better than ignoring the arguments.
   - Below 0 = the arguments made it worse.
 
-### Results (held-out trees, all argued claims)
+### Results (held-out trees, all argued claims, captured)
 
-| Rule | Exact inputs | Noisy inputs | Near-logic |
-|---|---|---|---|
-| dfquad (the shipped headline layer) | **−0.95** | −0.37 | 0.31 |
-| wlo / jnb / woe (the consensus members) | 0.06 / −0.15 / 0.13 | −0.03 / −0.10 / 0.01 | 0.39 / 0.27 / 0.35 |
-| consensus(wlo, jnb, woe) | 0.02 | −0.03 | 0.34 |
-| euler / qe / mlp | 0.15 / 0.10 / 0.11 | 0.06 / 0.09 / 0.04 | 0.21 / 0.29 / 0.27 |
-| **bp-sym**, parameter-free: `logit(base) + Σ ±2·atanh(s·(2c−1))` | 0.46 | 0.10 | **1.00** |
-| Tuned family (7 parameters, incremental) | **0.66** | 0.31 | 0.98 |
-| … only the sigmoid steepness k tuned | 0.61 | 0.22 | 0.95 |
-| … tuned on noisy inputs | 0.36 | **0.40** | 0.92 |
-| Two-sided (told the relation's shape (a, b) too) | 0.65 | 0.26 | 1.00 |
+| Rule | Free, exact | Free, noisy | Near-logic | **Argument-style** |
+|---|---|---|---|---|
+| dfquad (shipped headline) | −0.95 | −0.37 | 0.31 | −0.20 |
+| wlo / jnb / woe | 0.06 / −0.15 / 0.13 | −0.03 / −0.10 / 0.01 | 0.39 / 0.27 / 0.35 | 0.34 / 0.10 / 0.32 |
+| consensus(wlo, jnb, woe) | 0.02 | −0.03 | 0.34 | 0.28 |
+| euler / qe / mlp | 0.15 / 0.10 / 0.11 | 0.06 / 0.09 / 0.04 | 0.21 / 0.29 / 0.27 | 0.25 / 0.32 / 0.26 |
+| bp-sym `logit(base) + Σ ±2·atanh(s·(2c−1))` | 0.46 | 0.10 | 1.00 | **−13.3** |
+| Family tuned on free relations | 0.66 | 0.31 | 0.98 | **−7.8** |
+| **Family tuned on argument-style** | | | | **0.42** |
+| … with η = 0 (a doubted argument is inert) | | | | 0.40 (root .53) |
 
-**Fitted family** (exact inputs): α = .88 (prior weight), w_sup ≈ w_att ≈ .87, strength power γ = 1.31, sigmoid
-steepness k = 1.37, child-base discount β = .23, below-neutral weight η = .99 (a doubted argument counts the other
-way, almost fully).
+The η = 0 argument-style fit: α = .99, w_sup = .54, w_att = .40, γ = .39, **k = 5.7**, β = −.17. The unconstrained
+argument-style fit reaches 0.42 through a degenerate parameterisation (k → 0, β → −18), so η = 0 is the one to read.
 
-### Findings
+Tier-1-only observations that survive:
+- dfquad's energy `strength × credence` lets an argument nobody has evidence about (c = .5) push with half its strength.
+- With exact inputs the shipped layers fall off with depth.
+- The missing input for an exact rule is an argument's *evidence-free* prior: the two-sided rule, told (a, b) but
+  assuming a .5 prior, still scores −0.10 on argument-style trees.
 
-1. **The shipped layers use almost none of the information in the arguments.** The consensus layers capture about 0%.
-   DF-QuAD, the headline layer, is *worse than ignoring the arguments* (−0.95). They stay poor or negative even on
-   argument-style relations, the case their "a doubted argument is inert" design is built for (consensus −0.16,
-   dfquad −1.45).
-2. **The cause is the energy `strength × credence`.** Two defects:
-   - An argument nobody has evidence about (credence .5) still pushes its parent with half its strength.
-   - A refuted support (credence near 0) has no effect, when it should count against.
+## Tier 2: real-knowledge trees, judged by Jev
 
-   The correct per-argument message is centred on "no information" and saturates at a bound set by the strength.
-   It is exactly the sigmoid shape you suspected: 2·atanh(s·(2c − 1)).
-3. **A parameter-free rule of that shape is a large improvement:**
-   - 0.46 captured overall, against about 0 for the shipped layers.
-   - 0.77 at the root.
-   - 1.00 in near-logic, where the shipped layers reach 0.3 and fall to about 0 at depth 3–4.
+`tier2.py build` creates `trees.json` from the local Wikidata dumps (CC0, seeded). `tier2.py jev` makes the Jev calls
+(cached in `cache/`, which is git-ignored; about $0.09 to regenerate). `tier2.py analyze` runs offline and writes
+`tier2_results.txt`.
 
-   It is incremental, bounded, and keeps a claim with no arguments at its base.
-4. **Tuning adds a further 0.2:** 0.66 captured, with the sigmoid steepness alone giving most of it (0.61). The fitted
-   values say:
-   - Count support and attack equally.
-   - Weaken the prior slightly.
-   - Let a doubted argument count the other way.
-5. **The remaining loss is the argument's own prior, not the relation's shape.** Telling the rule (a, b) adds nothing
-   over the tuned family (0.65). The missing input is how far an argument's credence sits from what it would be *with
-   no evidence at all*. For an argument that is rarely true, a low credence is just its prior and carries no evidence.
-   The exact rule needs that "evidence-free prior" per claim, which no judge currently supplies.
-6. **Judge noise halves what any rule can use:** 0.40 at best with noisy inputs.
-   - Rules must then be tuned for the noise: a weaker prior (α .66) and smaller weights (about .58).
-   - How much noise Jev actually has is unknown. Tier 2 measures it.
+### The trees
 
-### Caveats
+200 trees, 1,798 claims, with the truth of every claim from Wikidata. 57% of claims are true, and 56% of roots.
 
-- **The truth model is Bayesian.** The rules derived from it (bp-sym, the family) are favoured by construction.
-  Argumentation semantics encode other intuitions, such as "a defeated attacker is inert".
-  - Finding 1 holds even on the argument-style relations that match those intuitions.
-  - Tier 4's property tests are where non-probabilistic desiderata get their say.
-- **Trees only:** no shared sub-arguments (DAGs) and no cycles, both of which deliberate allows.
-- **The noise model is arbitrary** until Tier 2 measures Jev.
+- **Templates:** "A was born before B" (painters, composers) and "City A lies further north than city B".
+- **Under each root:**
+  - two threshold claims that support it ("A was born before 1843", "B was born in 1854 or later");
+  - one that attacks it;
+  - a logically irrelevant distractor ("A was a painter").
+- **Under each threshold claim:** 1–2 stated values ("A was born in 1849"). 45% of them are deliberately wrong, so
+  refuted supports and true attacks are common.
+- **Judgements:** Jev rates every claim's plausibility and every link's strength, with the engine's prompts verbatim
+  (`JevJudge.kt` CRED-01 / CRED-02).
+- **Scoring:** log loss against the truth at all 800 argued claims. Fitted rules use 2-fold cross-validation by tree.
 
-### Next
+### Results
 
-- **Tier 2:** run Jev on ProofWriter-style chains (per-step truth labels, depth up to 5) to measure the real judge noise
-  and whether the bp-sym / family ranking survives real judgements.
-- **Engine candidate, if Tier 2 confirms:** bp-sym or the tuned family as a new layer beside the existing ones. It is
-  an additional `Semantics` with a different energy, not a change to the existing layers.
+| Rule | Log loss, all argued | Roots | Threshold claims | Accuracy |
+|---|---|---|---|---|
+| Base only (Jev's isolated judgement) | .366 | .265 | .400 | .81 |
+| dfquad | .226 | .266 | .212 | .91 |
+| wlo / woe | .246 / .257 | .241 / .243 | .248 / .262 | .90 / .89 |
+| consensus(wlo, jnb, woe) | .252 | .242 | .255 | .89 |
+| bp-sym (parameter-free) | .401 | .268 | .445 | .82 |
+| Family tuned on Tier 1 free relations | .376 | .259 | .415 | .83 |
+| **Family tuned on Tier 2** (2-fold CV) | **.222** | **.215** | .224 | **.92** |
+| … η = 0 (a doubted argument is inert) | .227 | .209 | .233 | .91 |
+
+- **Fitted on the two halves (η = 0):**
+  - α ≈ .94
+  - w_sup ≈ .77, w_att ≈ 1.6–2.3
+  - γ ≈ 1.1
+  - k = 2.7 / 7.2
+  - β ≈ −.15 to −.37
+
+  The free fit gives η ≈ −.2, again effectively inert.
+- **Oracle leaves** (leaf truths substituted, Jev strengths kept): best rule .158, accuracy .93. dfquad .188,
+  consensus .228.
+- **Jev as judge:**
+  - Plausibility: 81% accurate on leaves and on argued claims. Mean .77 on true leaves and .34 on false ones.
+  - Strength: decisive links rated .92 on average (80% "decisive"); partial links .46; distractors .10 (69%
+    "irrelevant").
+
+## Caveats
+
+- **Tier 2 is narrow:** two templates of factual comparison. Its arguments are conjunctive (a threshold claim needs its
+  partner), which no additive rule represents exactly. Contested, value-laden or vague claims are Tier 3/4 territory.
+- **Tier 1 is still Bayesian** and trees only (no shared sub-arguments, no cycles).
+- **Fits were tuned on the same templates they are scored on** (cross-validated, but not across templates).
+
+## Next
+
+- **Engine candidate:** the η = 0 family as an *additional* layer (`Semantics` with its own energy), beside the
+  existing ones, with k, w and γ at the Tier 2 / Tier 1 consensus values. It changes no existing layer.
+- **Tier 3:** graded fact-check verdicts and resolved forecasts, for claims whose truth has degrees, and to test across
+  templates.
+- **Tier 4:** the property tests (responsiveness, invariance, duplicate and flood resistance) as must-pass checks for
+  any adopted rule.
