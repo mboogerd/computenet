@@ -11,6 +11,7 @@ should fail.
 - [What your change reaches](#what-your-change-reaches)
 - [Mutation checks](#mutation-checks)
 - [CI evidence](#ci-evidence)
+- [Manual UI checks](#manual-ui-checks)
 - [Flakes and contention](#flakes-and-contention)
 
 ## Did the tests run
@@ -173,38 +174,69 @@ Wait for checks with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`.
 | `UNBOUND` | the rows settled over a transport that names no commit: not evidence for this diff |
 | `QUERY-FAILED` | nothing was read |
 
-**A green check does not prove the diff's tests ran.** An `assumeTrue`-guarded
-suite reports `SKIPPED` under a green conclusion, and only the job log shows
-it. Select the check's row by name, never by position:
+**A green check is not a run.** A required check can be green while the
+diff's tests never executed: the task was `FROM-CACHE`/`UP-TO-DATE`, an
+`assumeTrue` class was `SKIPPED`, or cargo captured a skip as a pass. Ship
+evidence is met only by
+`.claude/skills/work/scripts/ci-executed.sh <pr-url> <check-name> :<module>:test…`,
+which selects the job by check name on the PR's current head, reads its log,
+and prints one row per task; its header documents the tokens. Any row other
+than `EXECUTED`, a `skipped-tests` count in the diff's modules, `STALE-HEAD` or
+`QUERY-FAILED` goes under `NOT VERIFIED` in the PR body and your report, never
+"CI green".
 
-```bash
-gh pr checks <pr-url> --json name,link -q '.[]|select(.name=="<check-name>")|.link'
-```
+**Comparing runs asks the same question.** Before other runs' green says a red
+is yours, run `ci-executed.sh <run-id> <check-name> <:task>` on each compared
+run; count only runs whose task `EXECUTED`.
 
-Exactly one link must print; its trailing number is the job id. This per-job
-form works while sibling jobs are still pending:
+**Test stdout is not in CI logs.** Gradle does not echo it, and the lanes upload
+no test-results artifact for most modules. A value someone must see on Linux
+goes in the assertion message, or is measured in a local Linux container.
 
-```bash
-gh api repos/mboogerd/computenet/actions/jobs/<job-id>/logs > "<scratch>/ci-<check-name>.log"
-```
-
-Read it only if it is a non-empty log, not a JSON error body. The greps find
-skipped tests, then suites that never ran; anything skipped in the diff's
-modules goes in the PR body and your report, never under "CI green".
-
-```bash
-grep -aE 'SKIPPED|NO-SOURCE' "<scratch>/ci-<check-name>.log" | grep -v '> Task '; grep -aE '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "<scratch>/ci-<check-name>.log"
-```
+**A suite that runs only on CI** (multicast-gated, ubuntu-only): the task is
+reviewed unexecuted and merged; the feature PR's run is its first execution.
+Read that with `ci-executed.sh` before the feature review, and file a red there
+as a task under the feature. Its mutation goes in a Linux container
+([Mutation checks](#mutation-checks)); without one the mutation is
+`NOT VERIFIED` and parked. An unattended orchestrator never pushes a mutated
+commit.
 
 **A lane is evidence only for the tests its filter admits**, and a filter in
 the lane's Gradle command leaves no `SKIPPED` line: `build-test-fast` runs
 `-PexcludeMultiJvm=true`, so a `@Tag("multi-jvm")` test runs only in
 `build-test-serial`. For a tagged or flag-gated test, find the admitting lane
 in `.github/workflows/` (it may be a separate workflow run), read its log for
-the test's `PASSED` line, and name the lane.
+the test's `PASSED` line, and name the lane. `ci-executed.sh` prints the job
+id; save the log with
+`gh api repos/mboogerd/computenet/actions/jobs/<job-id>/logs > "<scratch>/ci-<check-name>.log"`
+and read it only if it is not a JSON error body.
 
 A log you could not fetch goes under `NOT VERIFIED`, never as passed. A red
 required check is attributed per [recovery.md](recovery.md#a-red-required-check).
+
+## Manual UI checks
+
+A criterion asking for a manual or "with screenshots" browser check is met
+with files, not with the Browser pane: its screenshots never reach a file, and
+the pane is shared by every concurrent agent on the machine, so another
+agent's navigation can take over your tab mid-check.
+
+1. Stage and launch in one call. `scripts/stage-preview.sh` builds the demos'
+   `installDist` and copies them to `~/.cache/computenet-preview/<app>`, a
+   directory shared with `.claude/launch.json` and every sibling. Pick a free
+   port (`lsof -iTCP:<port> -sTCP:LISTEN` prints nothing; never 8080), then
+   run the main class `.claude/launch.json` names, port last, in the background
+   per [agent.md](agent.md#waiting):
+   `java -cp "$HOME/.cache/computenet-preview/<app>/lib/*" <main-class> <port>`.
+2. Drive the check with headless Playwright from the main checkout's
+   `demo/agora/ui/node_modules/playwright` (worktrees have no `node_modules`):
+   a node script that `require`s it by absolute path, `chromium.launch()`es
+   headless, and calls `page.screenshot({ path: "<scratch>/ui-<step>.png" })`
+   at each step. Two browser contexts give a two-browser check.
+3. Put each screenshot's absolute path, and what it shows, in the report.
+4. Kill the server by pid and confirm the port is free again; close any pane
+   tab you opened. Leave the staged directory: `.claude/launch.json` points at
+   it.
 
 ## Flakes and contention
 
@@ -239,6 +271,12 @@ Gradle loop is right only for a suite that is not a JUnit package on a
 classpath (`:concord`, the npm suites); copy `<module>/build/test-results`
 aside after each failing iteration.
 
+**A timing-flake fix must show its wait waits;** green runs cannot. Show one
+of: red when the awaited condition is mutated to hold too early; a poll count
+above 1 on some run; or a before/after stress ratio. An awaited value the
+pristine state already holds is vacuous: pair it with a condition the default
+state cannot meet.
+
 **Contention comes from sibling agents** sharing Gradle caches and daemons: a
 run that stalls, times out or dies before tests run is probably not your
 defect. Read `uptime` before each long run — but **the load number is not the
@@ -270,14 +308,6 @@ Outside those, reading the build files is quick and a genuine "no path" is
 strong evidence. It is never the whole clearing procedure: run the suite alone
 and then the gate, below.
 
-Contention does not only present as a timeout. A generative or property suite
-failing an **assertion** is the same phenomenon and reads exactly like a
-regression, which is why it costs the most: seed 132 of `OrMapGcSafetySweepTest`
-did this at load ~12 on a 16-core host. So does a known flaky seed in an
-untouched suite. Clear it the same way: reachability first, then the suite alone,
-then the whole gate with `--rerun-tasks` — quoting its `N actionable tasks: N
-executed` line, because a plain re-run is mostly cache and proves nothing.
-
 Before you report a red in an untouched module, spend the two reads that
 usually name it — a known flaky seed is recorded far more often than it is
 rediscovered:
@@ -294,7 +324,8 @@ Quote whichever names it in your report.
 | a long wait on a Gradle lock, then failure | retry once; name the signature in your report |
 | Kotlin daemon `OutOfMemoryError` | `pkill -f KotlinCompileDaemon`, then retry once — it kills every daemon on the machine, so only for this signature |
 | an `awaitUntil`-style timeout, at any load | re-run that suite alone before reporting it |
-| a generative/property suite failing an assertion, in a module your diff cannot reach | the same contention shape as a timeout; clear it by reachability, isolated re-run, then `--rerun-tasks` — and if it passed alone after failing under load, also file or attribute it per the row below. The gate being green and the flake being recorded are both required, not alternatives |
+| a generative/property suite (or a known flaky seed) failing an assertion, in a module your diff cannot reach | the same contention shape as a timeout, and it reads exactly like a regression (seed 132 of `OrMapGcSafetySweepTest` at load ~12 on 16 cores); clear it by reachability, isolated re-run, then `--rerun-tasks`, quoting its `N actionable tasks: N executed` line — and if it passed alone after failing under load, also file or attribute it per the row below. The gate being green and the flake being recorded are both required, not alternatives |
 | a red suite in a module your diff did not touch | your change invalidated its cache and exposed a latent flake; attribute it, do not dismiss it |
 | it reproduces under load and passes alone | a genuine race presents exactly this way, and isolated re-runs discard the only condition that shows it; attribute or file it, naming the load — never record it as cleared |
 | a wrong value in a suite your diff CAN reach | never contention; it is yours |
+| you want CI-like load to reproduce a flake | host-wide generators (CPU hogs, `stress-ng`, busy loops) degrade every session on the shared host (load ~260); constrain inside the test JVM (`-XX:ActiveProcessorCount=2`, a small executor) or in a container with `--cpus`; never host-wide |

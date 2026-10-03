@@ -97,8 +97,9 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `wait-checks.sh` | `<pr-url> [max-rounds]` — waits on the head's checks; SETTLED / UNBOUND / TIMEOUT-PENDING / NO-RUN / QUERY-FAILED |
 | `bead.sh` | `[-C <dir>] <id> [-r] [jq-filter]` — a bead's own fields; exit 3 = spilled to the file named on stderr |
 | `junit-count.py` | `[--expect-classes N] <results-dir \| result-file.xml>...` — JUnit XML counts and freshness |
+| `ci-executed.sh` | `<pr-url\|run-id> <check-name> <:task>...` — per task in a CI job: EXECUTED / FROM-CACHE / …; exit 0 only when all EXECUTED |
 | `twin-scan.py` | `<parent-id>` — children filed twice by a double breakdown |
-| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--breakdown T] [--claim]` — the create path under a shared parent |
+| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--breakdown T] [--claim] [--no-dup-check]` — the create path under a shared parent |
 | `breakdown-marker.sh` | `<subcommand> <epic-id>` — check, acquire (pull+push), or survivor (adjudicate) the epic's write-time breakdown marker |
 | `file-retro.sh` | `--skill S --file F [--skill-version <sha>] [--started T] [--model M]` — files the session's retro record (references/retro.md) |
 | `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — files a friction item |
@@ -157,8 +158,9 @@ git -C <M> status --porcelain
 git -C <M> rev-parse HEAD > <scratch>/step1-head
 ```
 
-Tracked modifications → stop and report. STALE and clean → `git -C <M> merge
---ff-only origin/main`; refused → stop and report.
+STALE → `git -C <M> merge --ff-only origin/main`; refused → stop and report.
+Tracked modifications it does not refuse over (or with HEAD CURRENT) → leave
+them untouched and list them in the summary.
 
 ## 2. Budget
 
@@ -170,7 +172,8 @@ date -u +%s > <scratch>/slot-start
 `slot-elapsed.sh <scratch>` is the clock. Run it first in any turn where you
 might start work — dispatch, claim, route — and act on its rung, never on your
 sense of time or a notification's `duration_ms`. Never write an elapsed figure
-you did not compute that turn.
+you did not compute that turn. `claim-epic.sh` (given `SCRATCH=<scratch>`)
+refuses to claim once the rung is EXPIRED.
 
 | Rung | Means |
 |---|---|
@@ -211,7 +214,7 @@ check each non-`skill-friction` row's `metadata.holder` with `session-holder.sh
 |---|---|
 | MINE / LIVE | leave it |
 | FOREIGN | another machine's run; leave it, report it |
-| DEAD / STALE | an epic → `claim-epic.sh --release <id>`; non-zero → leave it claimed, report the printed reason, don't select it. Anything else → leave (tasks are swept; an `in_progress` feature is a resume marker) |
+| DEAD / STALE | an epic → `claim-epic.sh --release <id> --observed <holder> <answer>`; non-zero → leave it claimed, report the printed reason, don't select it. Anything else → leave (tasks are swept; an `in_progress` feature is a resume marker) |
 | UNKNOWN / none | touched within 15 minutes → LIVE, else DEAD; say you fell back |
 
 `<N>`, the sibling count used for capacity, is the number of distinct LIVE
@@ -229,14 +232,14 @@ entries first unless their in-progress feature's holder is LIVE or FOREIGN, then
 `bv --robot-triage` order if `bv` exists and its export is fresh (CLAUDE.md),
 then priority. Skip children of an epic another session holds, epics labelled
 `tracking-umbrella` (never claimed or broken down; their sub-epics stand alone)
-and epics whose `needs:<tool>` label `have-tool.sh` fails on. `claim-epic.sh
-<id>`: 0 claimed; 1 → act on the printed reason; 2 unpublished → stop, report.
+and epics whose `needs:<tool>` label `have-tool.sh` fails on. `SCRATCH=<scratch>
+claim-epic.sh <id>`: 0 claimed; 1 → act on the printed reason; 2 unpublished → stop, report.
 
 **Check workable surface** with `ready-in-epic.sh <epic>`, resolving any row it
 could not classify with `epic-of.sh`. Empty and nothing resumable:
 
-- Every child closed (at least one) → the epic-close gate (5g). Keep the
-  `owner:` label; `check-dotted-ids.sh` reads it.
+- Every child closed (at least one) → 5g if any child is a feature; none is →
+  step 4, breakdown. Keep the `owner:` label; `check-dotted-ids.sh` reads it.
 - Children open, none ready → `verify-ready.sh` them (the blocked flag goes
   stale); any READY → work it. None → comment why, naming the blockers; label
   `undefers:<epic>` each blocker outside it (`epic-of.sh` ≠ `<epic>`, unparented
@@ -264,7 +267,9 @@ again and continue at step 5, or park per "Still no children" below if that
 listing is empty; 12 (BOTH) → run `breakdown-marker.sh survivor <epic>` (exit 1:
 losers listed, not a failure; 0: nothing to adjudicate), route its `CLOSE` list
 per recovery.md "Collisions", then continue as for 11; 2 → unpublished
-acquisition, stop and report; 3 from either → treat it as 2.
+acquisition, stop and report; 3 from either → treat it as 2. `acquire` exit 0
+on OWN with children present → dispatch the breakdown anyway; the agent creates
+only the outcomes no existing feature covers.
 
 ```
 Agent({
@@ -282,7 +287,7 @@ Report the feature ids created, and any re-scope of the epic.`
 For a sub-epic the claim sentence becomes: "It is a sub-epic under <parent-id>,
 which this session holds; do not claim, assign, label or comment on it."
 Wait for completion and list again. A re-scope → re-read the epic with `bead.sh`.
-Still no children: a `needs:<tool>` label was added → select another epic; a
+Still no feature children: a `needs:<tool>` label was added → select another epic; a
 deliberate park (blocked, `human`, `QUESTION:` comment) → leave it parked and
 select another; otherwise retry once, then park, log friction, go to 5f.
 
@@ -454,10 +459,14 @@ ACTION`. Then:
 
 - A PASS: read the repair commits it names. Any that change behaviour, a test,
   or a file the acceptance names get a second reader first, whatever the
-  reviewer called them — except a repair the reviewer certified as a
-  *conforming* one ([review.md](references/review.md#repair-dont-bounce)) with
-  the governing rule quoted. Read that quote: if it decides the edit, the
-  reviewer's own read is the second read. If it does not, dispatch.
+  reviewer called them — except a test-only repair certified by its reviewer
+  as `test-only repair <sha>: mutation <m>, red <assertion>, expected from
+  <source>` (review.md), or a *conforming* one
+  ([review.md](references/review.md#repair-dont-bounce)) with the governing
+  rule quoted. Read that quote: if it decides the edit, the reviewer's own read
+  is the second read. If it does not, dispatch. A second reader's `Reader's
+  repairs:` line: read that diff yourself and ship on your own read; no
+  further reader (review.md "If you are the second reader").
 - A FAIL whose only blocker is its `Repairs needing a second reader:` line →
   second reader for those commits; merge on its PASS.
 - Any other FAIL stays `in_progress` with its branch for the next batch.
@@ -515,8 +524,8 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
 | no READY/DRAFT token | continue the agent until it states one |
 | you `TaskStop`ped it | DRAFT; route on what it wrote to the bead |
 | `REQUIRED ORCHESTRATOR ACTION` | run the commands; a merge of `main` goes through Ship step 1 |
-| READY | read the repairs it names (second reader for any that change behaviour, a test or an acceptance-named file, unless certified conforming with the rule quoted — same test as 5c), then ship |
-| READY naming a pending out-of-band measurement | ship once it reports, else leave for the next session |
+| READY | read the repairs it names (second reader for any that change behaviour, a test or an acceptance-named file, unless certified conforming with the rule quoted — same test as 5c), then ship. A second reader's `Reader's repairs:` line: read that diff yourself and ship on your own read; no further reader |
+| READY naming a pending out-of-band measurement or a re-run of a check attributed to a flake bead | ship once it reports, else leave for the next session |
 | DRAFT whose only blocker is its `Repairs needing a second reader:` line | second reader for those commits; ship on its READY |
 | DRAFT, tasks filed for gaps | 5b |
 | DRAFT on a red required check | [recovery.md](references/recovery.md), "A red required check" |
@@ -545,10 +554,12 @@ red → recovery.md; `CLEAN` → arm again, then push a fresh commit. Cannot lan
 
 ### 5f. Next unit
 
-**First, before any route: are all the epic's children closed?** If so, run
+Re-read your epic (`bead.sh <epic> -r '.assignee, .metadata.holder'`); not
+yours → dispatch nothing new into it, top the summary with it, re-claim only if
+no other holder holds it. **Then, before any route: are all the epic's children closed?** If so, run
 5g now, inline — do not wait for step 6. A child count that merely went dry
 (nothing ready) is not this; check closed, not ready. CLOSE → the epic is
-genuinely done, not just out of scheduled stories: `bd close <epic>`, then
+genuinely done, not just out of scheduled stories: `close-bead.sh <epic>`, then
 treat it as a HANDOFF (`next-batch.py --continuation --headroom-pct <N>
 --epic-closed`, which returns HANDOFF regardless of headroom) straight to
 step 6 — a verified close is a clean boundary, worth a fresh session's full
@@ -572,7 +583,7 @@ their own rows below).
 | Route | Situation | Do |
 |---|---|---|
 | 0 | a capacity lane frees while a unit runs | start a second unit if capacity allows, its claim is disjoint from running units, build contention is handled (scoped gate or no Gradle), and it gets its own branch and PR; candidate from route 3 or 4. Else leave the lane idle and note it on the epic. A concurrency question, not a continuation one — does not read headroom |
-| 2b | your feature is blocked by a sibling feature (check before 1) | park it naming the blocker; work the blocker if it fits the budget (5a), else break it down unclaimed |
+| 2b | your feature is blocked by a sibling feature (check before 1) | park it naming the blocker; work the blocker if it fits the budget (5a), else break it down unclaimed: the step 4 template with its claim sentence replaced by "It is not claimed and stays unclaimed; check with bead.sh and do not claim it." |
 | 1 | another feature under the epic is ready or in progress | 5a (sub-epic → step 4) |
 | 2 | remaining work waits on a feature you just shipped | wait for its merge, until T-45m; `DIRTY` → resolve; merged → fetch, start; else park. No new unit dispatches — does not read headroom |
 | 3 | remaining work is blocked only by an item in another epic | read headroom first (above); CONTINUE → acquire the item: pull; `epic-of.sh` — skip if its epic is held by someone or touched within 15 minutes (an `(unparented)` item skips this test); `claim-item.sh`; push |
@@ -619,7 +630,9 @@ reviewer on the result; close the items on its PASS.
 ### The SDLC exclusion
 
 Never work an item whose effective epic is `computenet-wpvy` or that carries the
-`skill-friction` label, on any route; that lane is
+`skill-friction` label, or whose `metadata.files` lie under `.claude/skills/`, on
+any route; re-parent such an item under `computenet-wpvy` (an SDLC write:
+bracket it), comment why, and skip it; that lane is
 `.claude/skills/remediate-friction/SKILL.md`. Filing friction is the only touch.
 
 ## 6. Finalize
@@ -644,8 +657,8 @@ the main checkout's HEAD against `<scratch>/step1-head` if it moved.
    (leftovers: report, do not commit) and push. Then `publish-beads.sh`; exit 2 →
    its ESCALATE line names a conflict (recovery.md) or a failure, and the
    summary's first line says tracker state is local-only. After a recovered push,
-   confirm your writes survived (children, friction items, acquisitions,
-   `bd comments --json`); a vanished write tops the summary and gets parked, never
+   confirm your writes survived (children, friction items, acquisitions, your
+   epic's own row, `bd comments --json`); a vanished write tops the summary and gets parked, never
    re-applied blind.
 5. **Worktrees:** remove those of merged tasks and closed features whose agents
    all reported and whose trees are clean.

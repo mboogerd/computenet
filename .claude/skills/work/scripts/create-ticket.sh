@@ -29,7 +29,14 @@
 #     (--parent <id> | --top-level) [--desc D | --desc-file F] \
 #     [--accept A | --accept-file F] [--priority N] \
 #     [--label L]... [--metadata '<json>'] [--model M] [--breakdown T] [--claim]
+#     [--no-dup-check]
 #
+# Duplicate pre-check (computenet-x28lp): before creating, searches open beads
+# (`bd search`) and open PRs (`gh pr list --search`) for the title and prints
+# each candidate to stderr as `POSSIBLE-DUPLICATE <id> <title>`. It never
+# blocks: the bead is still created, and a failed search is a warning. Read
+# the candidates; a real duplicate gets a comment, not a second bead.
+# --no-dup-check skips it.
 # --model: sets metadata.model (merged into --metadata), so a ticket the
 #   orchestrator files reaches next-batch.py with a dispatch model rather than
 #   tripping 5b's empty-model rule against a breakdown that never ran
@@ -60,7 +67,7 @@
 #   bd update <id> --parent=<parent>
 set -uo pipefail
 
-TYPE= TITLE= PARENT= DESC= ACCEPT= PRIO=2 META= MODEL= BREAKDOWN= CLAIM=0 TOP=0
+TYPE= TITLE= PARENT= DESC= ACCEPT= PRIO=2 META= MODEL= BREAKDOWN= CLAIM=0 TOP=0 DUPCHECK=1
 LABELS=()
 # --help prints the comment header's own Usage block rather than a second copy
 # that can drift from it. A reviewer guessed `--description-file` for
@@ -88,6 +95,7 @@ while [ $# -gt 0 ]; do
     --model)    MODEL=$2; shift 2 ;;
     --breakdown) BREAKDOWN=$2; shift 2 ;;
     --claim)    CLAIM=1; shift ;;
+    --no-dup-check) DUPCHECK=0; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) usage >&2; echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -114,6 +122,38 @@ for l in ${LABELS+"${LABELS[@]}"}; do args+=(--label="$l"); done
 [ -n "$META" ]   && args+=(--metadata "$META")
 [ -n "$DESC" ]   && args+=(--description="$DESC")
 [ -n "$ACCEPT" ] && args+=(--acceptance="$ACCEPT")
+
+# 0. duplicate pre-check: advisory only, every failure path is a warning.
+#    bd search matches the query as a title substring, so a whole-title search
+#    finds only near-verbatim refilings; the title's longest word widens it.
+#    gh search ANDs its terms, so it gets the three longest words.
+dup_check() {
+  local words longest out
+  words=$(tr -cs '[:alnum:]_.-' '\n' <<<"$TITLE" | awk 'length($0) >= 5 { print length($0), $0 }' \
+          | sort -rn | awk '!seen[$2]++ { print $2 }' | head -3)
+  longest=$(head -1 <<<"$words")
+  for q in "$TITLE" ${longest:+"$longest"}; do
+    if out=$(bd search "$q" --json --limit 5 2>/dev/null) \
+       && out=$(jq -r 'if type=="array" then .[] else (.issues // [])[] end
+                       | "POSSIBLE-DUPLICATE \(.id) \(.title)"' <<<"$out" 2>/dev/null); then
+      [ -n "$out" ] && printf '%s\n' "$out"
+    else
+      echo "warning: dup-check: bd search failed for '$q'; creating anyway" >&2
+    fi
+  done | awk '!seen[$0]++' >&2
+  [ -n "$words" ] || return 0
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "warning: dup-check: gh not found; open PRs not searched" >&2; return 0
+  fi
+  if out=$(gh pr list --search "$(tr '\n' ' ' <<<"$words")" --state open --json number,title 2>/dev/null) \
+     && out=$(jq -r '.[] | "POSSIBLE-DUPLICATE PR#\(.number) \(.title)"' <<<"$out" 2>/dev/null); then
+    [ -n "$out" ] && printf '%s\n' "$out" >&2
+  else
+    echo "warning: dup-check: gh pr list failed; open PRs not searched" >&2
+  fi
+  return 0
+}
+[ "$DUPCHECK" = 1 ] && dup_check
 
 # 1. create with NO --parent: hash id, child_counters untouched.
 #    bd CREATE returns an object (bd SHOW returns a list), so `.id` — not

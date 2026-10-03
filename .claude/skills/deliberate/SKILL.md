@@ -1,6 +1,6 @@
 ---
 name: deliberate
-description: Runs one decision through a three-model council — Opus and Sol ideate options, each option gets its strongest case and an adversarial critique, then Opus, Sol and Jev each vote with a confidence — and returns DECIDED (unanimous, mean confidence at least 70) or NO-CONSENSUS with every member's vote. A pure process with no tracker or git integration; callers feed it one brief and record the verdict where the decision lives. Use when a caller (sync-report's park pass, the weekly retrospective) has a decision that would otherwise need a person, or when the user says "deliberate", "run the council", "ask the panel".
+description: Runs one decision through a three-model council — Opus and Sol ideate options, each option gets its strongest case and an adversarial critique, then Opus, Sol and Jev each score every option 0-100 for acceptability — and returns DECIDED (the passing option with the highest mean, where passing is mean at least 70 and no score below 60) or NO-CONSENSUS with every objection. A pure process with no tracker or git integration; callers feed it one brief and record the verdict where the decision lives. Use when a caller (sync-report's park pass, the weekly retrospective) has a decision that would otherwise need a person, or when the user says "deliberate", "run the council", "ask the panel".
 ---
 
 # /deliberate
@@ -67,15 +67,20 @@ Every prompt and reply is kept in `<out>/`.
 ## 4. Read and hand back the verdict
 
 `<out>/verdict.md` starts with `DECIDED: <id> — <title>` or `NO-CONSENSUS`,
-followed by each member's choice, confidence and reason, the options, and,
-when decided, the deciding factors and the strongest objection that was
-outvoted. `verdict.json` holds the same data for scripts.
+followed by every member's score for every option, each option's mean,
+minimum and pass mark, every objection, the options, and, when decided, the
+deciding factors and the strongest case against the winner. `verdict.json`
+holds the same data for scripts.
 
-- **DECIDED** requires all three to choose the same option with a mean
-  confidence of at least 70. Jev's confidence measures how concentrated its
-  answer is on one option, so a low Jev score means "two options are close",
-  not "wrong".
-- The caller always records **every member's choice and confidence**. That
+- Each member scores **every** option 0-100 for acceptability. Jev is asked
+  P(acceptable) for each option independently, so more options do not dilute
+  its scores. A score below 60 is an objection, and the member states it (Jev
+  gives no reasons; the option's case against stands as its objection).
+- An option **passes** at a mean of at least 70 with no score below 60.
+  **DECIDED** names the passing option with the highest mean, ties going to
+  the higher minimum. No passing option is **NO-CONSENSUS**, listing every
+  objection.
+- The caller always records **every member's scores and objections**. That
   record is what stops the same expensive run happening twice. When the
   outcome is DECIDED, it also records the chosen option and its deciding
   factors.

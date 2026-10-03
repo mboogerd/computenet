@@ -63,18 +63,26 @@ covered() { # path (reads $claim_entries)
 # PR #544 added UntagCell.kt to civictech.cell.data.op, ran :kernel:test green
 # at 1273 tests, and build-test-fast went red in :inspect and :oracle.
 #
-# Not listed, deliberately: the civictech.cell.data source-cell gate
-# (oracle/src/test/resources/source-cell-inventory.txt). Its trigger directory
-# CONTAINS civictech/cell/data/op, so it would fire on every operator change —
-# a different package, a guaranteed false positive. SKILL.md 5b's enumerator
-# walk is what reaches it: `git grep -F 'civictech/cell/data'` returns it, and
-# a human reading the hits can tell a source-cell add from an operator add
-# where this table cannot. Do not add it here (computenet-y6zv).
+# The civictech.cell.data source-cell gate
+# (oracle/src/test/resources/source-cell-inventory.txt) was long left out here:
+# its directory CONTAINS civictech/cell/data/op, so a substring trigger would
+# fire on every operator add — a different package, a guaranteed false
+# positive (computenet-y6zv). It is listed now with an EXACT-PARENT trigger: a
+# trailing `/*` on an add-only trigger fires only for a new claimed file whose
+# parent directory IS that directory, so `data/op/Bar.kt` stays silent while
+# `data/Foo.kt` warns (computenet-ie3ua).
+#
+# Also coupled: a new 24-data-cells corpus scenario must be cross-checked or
+# listed out-of-vocabulary in CorpusCrossCheckTest, and deliberate's UI type
+# mirror is pinned by its test (the only ui module with that pair today).
 COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md
 +civictech/cell/data/op=>oracle/src/test/resources/operator-inventory.txt
 +civictech/cell/data/op=>inspect/src/main/kotlin/civictech/inspect/Observations.kt
 +civictech/cell/data/op=>oracle/src/main/kotlin/civictech/oracle/bind/TaggedOperators.kt
-oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt'
+oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt
++kernel/src/main/kotlin/civictech/cell/data/*=>oracle/src/test/resources/source-cell-inventory.txt
++concord/corpus/24-data-cells=>oracle/src/test/kotlin/civictech/oracle/corpus/CorpusCrossCheckTest.kt
+demo/deliberate/ui/src/api/types.ts=>demo/deliberate/ui/test/types.test.ts'
 
 # The add-only arm below asks "does this claimed path exist yet", and a claim
 # entry is repo-root-relative. Resolve the root rather than trusting the CWD:
@@ -158,15 +166,24 @@ for id in "$@"; do
     case "$trigger" in +*) addonly=1; trigger=${trigger#+} ;; esac
 
     if [ "$addonly" = 1 ]; then
+      # A trailing `/*` makes the trigger an EXACT parent directory: only a
+      # file directly in it counts, not one in a subpackage (see COUPLINGS).
+      exactdir=""
+      case "$trigger" in */\*) exactdir=${trigger%/\*} ;; esac
       inplay=0
       while IFS= read -r entry; do
-        case "$entry" in *"$trigger"*) ;; *) continue ;; esac
+        if [ -n "$exactdir" ]; then
+          case "$entry" in "$exactdir"/*) ;; *) continue ;; esac
+        else
+          case "$entry" in *"$trigger"*) ;; *) continue ;; esac
+        fi
         # Normalise exactly as covered() does. A DIRECTORY or glob entry
         # (`.../op/**`, `.../op/`) names no new file, and the raw string never
         # exists on disk — unstripped it fired all three census rows on every
         # glob claim, a guaranteed false positive (6 live beads claim globs).
         entry=${entry%/}; entry=${entry%/\*\*}; entry=${entry%/\*}; entry=${entry%/}
         [ -n "$entry" ] || continue
+        [ -z "$exactdir" ] || [ "${entry%/*}" = "$exactdir" ] || continue
         [ -e "$ROOT_PREFIX$entry" ] || inplay=1
       done <<<"$claim_entries"
       [ "$inplay" = 1 ] || continue

@@ -1,0 +1,12 @@
+# Hard-won traps a distillation must not silently delete (computenet-r7vr1).
+# <repo-root glob, ** allowed>\t<fixed string>\t<bead>. validate-skills.rb fails
+# unless some file the glob matches contains the string. Removing a trap on
+# purpose means removing its row in the same diff.
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	echo '==='	computenet-wfgba
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	--include='*.kt'	computenet-l5rc
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	[[:space:]]	computenet-s7az
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	"${R}:	computenet-frgu1
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	`&&`-chain	computenet-i9u8
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	pipestatus	computenet-fbuo
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	--no-daemon	computenet-a7j8w
+{AGENTS.md,CLAUDE.md,.claude/skills/**/*.md}	--rerun	computenet-26p

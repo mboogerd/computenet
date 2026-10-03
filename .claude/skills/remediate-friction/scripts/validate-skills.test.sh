@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for validate-skills.rb's line caps, cited-path, argument-placeholder and missing-SKILL.md
-# checks. Self-contained:
+# Tests for validate-skills.rb's line caps, cited-path, argument-placeholder, missing-SKILL.md
+# and pinned-trap checks. Self-contained:
 # builds throwaway skill trees in a temp dir, never reads .claude/skills/.
 #
 #   .claude/skills/remediate-friction/scripts/validate-skills.test.sh
@@ -93,6 +93,19 @@ r=$(skill argok 10); printf '%s\n' 'id=${1:?usage}' >> "$r/demo/SKILL.md"
 printf '%s\n' "awk '{print \$1}'" > "$r/demo/references/x.md"
 out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "braced form and references pass" || bad "exit $rc -- $out"
+
+echo "case 9: a pinned trap whose string vanished FAILS; dropping its row passes"
+repo="$ROOT/pin"; sk="$repo/.claude/skills"; mkdir -p "$sk"
+skill pin/.claude/skills 10 remediate-friction >/dev/null
+mkdir -p "$repo/docs/deep"; echo "quote it: echo '==='" > "$repo/docs/deep/traps.md"
+printf '# comment\n%s\t%s\t%s\n' 'docs/**/*.md' "echo '==='" bead-kept > "$sk/remediate-friction/pinned-traps.tsv"
+printf '%s\t%s\t%s\n' 'docs/**/*.md' 'pipestatus' bead-gone >> "$sk/remediate-friction/pinned-traps.tsv"
+out=$(ruby "$SCRIPT" "$sk" 2>&1); rc=$?
+{ [ $rc -eq 1 ] && grep -qF 'pinned trap bead-gone: "pipestatus" no longer in docs/**/*.md' <<<"$out" \
+  && ! grep -q 'bead-kept' <<<"$out"; } && ok "names the missing trap only" || bad "exit $rc -- $out"
+sed -i.bak '/bead-gone/d' "$sk/remediate-friction/pinned-traps.tsv"
+out=$(ruby "$SCRIPT" "$sk" 2>&1); rc=$?
+{ [ $rc -eq 0 ] && grep -q 'pinned-traps.tsv: OK (1 trap' <<<"$out"; } && ok "row removed: exit 0" || bad "exit $rc -- $out"
 
 echo
 echo "$pass passed, $fail failed"
