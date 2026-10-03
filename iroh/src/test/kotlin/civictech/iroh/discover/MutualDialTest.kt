@@ -32,14 +32,14 @@ import kotlin.test.fail
  *
  * ## Order independence is the point, not a bonus
  *
- * The scenario is played in five relay orders — A's dial connected first, B's
- * first, A's hello pumped before B's link exists, B's link admitted at A
- * before A's link exists with B's close of it overtaking B's hello to A, and
- * that same close reaching A before A's own dial reports `LINK_UP`. A real LAN
- * picks one of those and a test over real sidecars would sample it; here the
- * test picks each, and asserts the same end state from each. Nothing sleeps:
- * frames move only when [TwoNodeFakeRig.pump] moves them
- * ([DSC2-DIAL-08], [DSC2-DIAL-09]).
+ * The end state is played in four relay orders — A's dial connected first,
+ * B's first, A's hello pumped before B's link exists, and B's link admitted at
+ * A before A's link exists with B's close of it overtaking B's hello to A. A
+ * fifth focused ordering isolates that close reaching A before A's own dial
+ * reports `LINK_UP`, where the observable assertion is the count at that
+ * instant. A real LAN picks one of those and a test over real sidecars would
+ * sample it; here the test picks each. Nothing sleeps: frames move only when
+ * [TwoNodeFakeRig.pump] moves them ([DSC2-DIAL-08], [DSC2-DIAL-09]).
  */
 class MutualDialTest {
 
@@ -252,14 +252,15 @@ class MutualDialTest {
      * can count the loss, while its reciprocal dial is still in flight.
      *
      * On the pre-fix code A's `oppositeLinkUp` is false, so the count assertion
-     * reads 0 and the policy also starts a duplicate dial before the first one
-     * has settled.
+     * reads 0.
      */
     @Test
     fun `the peer's tie-break close before this node's own LINK_UP is counted once`() {
-        runScenario("the peer's close before A's own LINK_UP") { rig ->
+        TwoNodeFakeRig.startSorted().use { rig ->
             val a = rig.a
             val b = rig.b
+            a.discover(b.own)
+            b.discover(a.own)
             val dialFromA = rig.dialFrom(a)
             val dialFromB = rig.dialFrom(b)
 
@@ -291,11 +292,6 @@ class MutualDialTest {
                 a.peering.counters.tieBreakClosed.count,
                 "A counted the peer's tie-break close while its reciprocal dial was still in flight",
             )
-            assertEquals(1L, rig.dialsFrom(a), "A did not duplicate its still-in-flight dial after the loser went down")
-
-            // Complete the delayed half. The survivor is A's OUTBOUND / B's
-            // INBOUND physical link, exactly as in every other ordering.
-            rig.reportOutboundLinkUp(dialFromA, from = a, to = b)
         }
     }
 

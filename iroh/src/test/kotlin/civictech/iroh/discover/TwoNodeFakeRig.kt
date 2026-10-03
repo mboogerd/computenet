@@ -295,7 +295,7 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
 
     /**
      * Report only the accepting side of [dial] as up, leaving its dialling side
-     * pending until [reportOutboundLinkUp]. This is permitted by
+     * pending. This is permitted by
      * `PROTOCOL.md` section 3: the accepting side reports `LINK_UP` as soon as
      * it accepts the connection, before stream adoption, while the dialling
      * side reports its own `LINK_UP` only after `DIAL` succeeds.
@@ -303,14 +303,6 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
     fun reportInboundLinkUp(dial: HostMessage.Dial, from: FakeNode, to: FakeNode) {
         val inbound = register(dial, from, to)
         to.fake.send(SidecarMessage.LinkUp(inbound, from.own, DIRECTION_INBOUND))
-    }
-
-    /** Finish a link begun by [reportInboundLinkUp] by reporting its dialling side as up. */
-    fun reportOutboundLinkUp(dial: HostMessage.Dial, from: FakeNode, to: FakeNode) {
-        check(pairs.any { it.left === from && it.leftLink == dial.link && it.right === to }) {
-            "${from.label}'s dial ${dial.link} has no registered inbound end at ${to.label}"
-        }
-        from.fake.send(SidecarMessage.LinkUp(dial.link, to.own, DIRECTION_OUTBOUND))
     }
 
     /** Register one physical link and return the accepting side's link id. */

@@ -152,32 +152,20 @@ class DiscoveredPeering private constructor(
     private val armed = HashMap<NodeKey, AutoCloseable>()
 
     /**
-     * Discovery dials whose blocking [IrohTransport.IrohConnection.openLink]
-     * has started but whose [Command.DialDone] has not been applied. Written
-     * and read **only** on the policy thread.
+     * Blocking discovery dials started but not yet reported by
+     * [Command.DialDone], counted per key. Written and read **only** on the
+     * policy thread.
      *
      * This cannot be derived from [PeerTable]'s `Dialling` states. An accepted
      * link from the same key can be admitted while our reciprocal dial is still
      * waiting for its `LINK_UP`, moving the table entry to `Peered`; if the peer
      * then closes that accepted link as the mutual-dial loser, `linkDown` moves
-     * it to `Retained` before the original dial has finished. Keeping the
-     * operation itself here makes the pool-capacity calculation independent
-     * of that table transition; [activeDials] identifies the ordering and
-     * keeps [pump] from issuing a duplicate dial.
+     * it to `Retained` before the original dial has finished. The count remains
+     * the local evidence that this otherwise-causeless `LINK_DOWN` belongs to a
+     * mutual dial. It is a count rather than a set because the landed retry
+     * policy can have two generations of one key in flight concurrently.
      */
-    private val inFlightDials = HashSet<NodeKey>()
-
-    /**
-     * Discovery dials that have not yet failed or reached an admitted/down
-     * outcome for their own link. This outlives [inFlightDials] after a
-     * successful `openLink`: the pool slot is free then, but the key must not
-     * be dialled again in the gap before its hello is admitted. An accepted
-     * link's down does not clear it — that is the computenet-axifn ordering,
-     * where the reciprocal outbound dial still belongs to this policy.
-     *
-     * Written and read **only** on the policy thread.
-     */
-    private val activeDials = HashSet<NodeKey>()
+    private val inFlightDials = HashMap<NodeKey, Int>()
 
     /**
      * Link ids already counted on [DiscoveryCounters.tieBreakClosed], and by
@@ -494,7 +482,6 @@ class DiscoveredPeering private constructor(
         val evicted = table.linkUp(key, view.direction, view.linkId, sourceOf(view.source))
         if (evicted != null) counters.evicted.increment()
         table.admitted(key, view.linkId, peer)
-        if (view.source == IrohNode.LinkSource.DISCOVERED) activeDials -= key
     }
 
     private fun onLinkDown(command: Command.LinkDown) {
@@ -547,7 +534,7 @@ class DiscoveredPeering private constructor(
         val oppositeLinkUp = node.linksWithSettledDials(view.remoteNodeId)
             .any { it.linkId != view.linkId && it.direction != view.direction }
         val losingDirection = view.direction == PeerTable.loserDirection(table.ownKey.bytes, view.remoteNodeId)
-        val reciprocalDialInFlight = view.source == IrohNode.LinkSource.ACCEPTED && key in activeDials
+        val reciprocalDialInFlight = view.source == IrohNode.LinkSource.ACCEPTED && inFlightDials.containsKey(key)
         val quiet = outcome?.quiet == true ||
             (outcome == null && losingDirection && (oppositeLinkUp || reciprocalDialInFlight))
         if (quiet) countTieBreakClose(view.linkId)
@@ -565,7 +552,6 @@ class DiscoveredPeering private constructor(
         if (reason != null) countRefusal(view.linkId, reason)
         tieBreakCounted -= view.linkId
         refusalCounted -= view.linkId
-        if (view.source == IrohNode.LinkSource.DISCOVERED) activeDials -= key
         // The table must know of a surviving link before it decides whether
         // this key is re-dialled, and the one it can miss is this node's own
         // settled-but-unregistered outbound link — whose `LinkUp` is not even
@@ -591,9 +577,9 @@ class DiscoveredPeering private constructor(
     }
 
     private fun onDialDone(command: Command.DialDone) {
-        inFlightDials -= command.key
+        val remaining = (inFlightDials[command.key] ?: 1) - 1
+        if (remaining > 0) inFlightDials[command.key] = remaining else inFlightDials -= command.key
         if (command.success) return // The link is up; Admitted or LinkDown says what became of it.
-        activeDials -= command.key
         counters.dialsFailed.increment()
         val dueAt = table.dialFailed(command.key, clock(), policy.schedule) ?: return
         arm(command.key, dueAt - clock())
@@ -606,17 +592,10 @@ class DiscoveredPeering private constructor(
      */
     private fun pump() {
         if (!running.get()) return
-        val capacity = (policy.maxInFlightDials - inFlightDials.size).coerceAtLeast(0)
-        if (capacity == 0) return
-        val due = table.nextDue(clock(), policy.maxInFlightDials)
-            .asSequence()
-            .filterNot { it in activeDials }
-            .take(capacity)
-        for (key in due) {
+        for (key in table.nextDue(clock(), policy.maxInFlightDials)) {
             val attempt = (table.stateOf(key) as? PeerState.Retained)?.attempt ?: 0
             if (!table.markDialling(key, attempt)) continue
-            inFlightDials += key
-            activeDials += key
+            inFlightDials[key] = (inFlightDials[key] ?: 0) + 1
             val connection = connections.computeIfAbsent(key) {
                 node.dialDiscovered(
                     peerNodeId = key.bytes,
