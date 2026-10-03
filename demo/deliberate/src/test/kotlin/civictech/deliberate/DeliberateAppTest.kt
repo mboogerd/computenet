@@ -659,6 +659,12 @@ class DeliberateAppTest {
             // Topology factories legitimately encode the agora-owned Polarity enum, so assert
             // against the derived Deliberate payload types rather than the whole agora package.
             val live = File(dir, "host.journal")
+            // Engine idle does not imply that the 100 ms metadata persister has fired.
+            // Fence an explicit flush just as the crash-copy assertion below does.
+            synchronized(first.engine) {
+                first.engine.persistNow()
+                hostOf(first).quiescence().await(60_000, "deliberate metadata lands before inspecting the journal")
+            }
             val journal = live.readBytes().decodeToString()
             assertTrue("deliberate.MetaFields" in journal, "the running journal holds metadata frames")
             for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance")) {
