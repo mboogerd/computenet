@@ -19,6 +19,7 @@ import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.Propagate
 import civictech.cell.observe.AlignedCompositeCell
+import civictech.cell.observe.AlignedDrainResult
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.port.FanInlet
@@ -41,8 +42,6 @@ import civictech.nature.PortDescriptor
 import civictech.nature.PortDirection
 import java.io.Serializable
 import java.util.UUID
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 
 /**
@@ -259,26 +258,15 @@ internal class RecordedComposite(
      */
     fun drain(timeout: Duration) {
         check(!closed) { "aligned view ${cell.ref} was closed; its observation log can no longer be drained" }
-        // The binding can outlive the kernel cell's lifecycle (for example a
-        // direct onDeactivate/close leaves the Bound entry in KernelDriver).
-        // AlignedCompositeCell deliberately drops listener registrations once
-        // closed, so waiting for this barrier would otherwise consume the full
-        // compositeDrainTimeout while blaming a listener that cannot run.
-        val frontier = cell.composite().frontier.entries.firstOrNull()
-        if (frontier != null) {
-            val probe = cell.visibilityOf(Timestamp(frontier.key, frontier.value))
-            if (probe.isCompletedExceptionally) {
+        when (val result = cell.drainBarrier().await(timeout.inWholeMilliseconds)) {
+            AlignedDrainResult.Drained -> Unit
+            AlignedDrainResult.Closed, AlignedDrainResult.Deactivated ->
                 throw IllegalStateException(
-                    "aligned view ${cell.ref} was closed or deactivated; its observation log cannot be drained",
+                    "aligned view ${cell.ref} was closed or deactivated " +
+                        "(lifecycle: ${result::class.simpleName?.lowercase()}); " +
+                        "its observation log cannot be drained",
                 )
-            }
-        }
-        val barrier = CountDownLatch(1)
-        // A listener is never removed (the sink has no unregister), so later
-        // publishes call this again; counting down a released latch is a no-op.
-        cell.onChange { barrier.countDown() }
-        if (!barrier.await(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)) {
-            throw IllegalStateException(
+            AlignedDrainResult.TimedOut -> throw IllegalStateException(
                 "aligned view ${cell.ref}: its listener dispatcher did not reach the drain barrier within " +
                     "$timeout, so its observation log may be missing composites — refusing to report " +
                     "quiescence over a truncated log",

@@ -8,7 +8,9 @@ import io.kotest.matchers.string.shouldContain
 import java.util.concurrent.CountDownLatch
 import kotlin.test.Test
 import kotlin.test.assertIs
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 import org.junit.jupiter.api.assertThrows
 
 /**
@@ -167,7 +169,7 @@ class AlignedViewBindingTest {
     }
 
     @Test
-    fun `a closed bound sink makes quiesce fail promptly instead of waiting for the drain timeout`() {
+    fun `a populated closed bound sink makes quiesce fail promptly`() {
         withDriver(0) {
             compositeDrainTimeout = 1.seconds
             graphA()
@@ -177,6 +179,21 @@ class AlignedViewBindingTest {
 
             val failure = assertThrows<IllegalStateException> { quiesce(BUDGET) }
             failure.message!! shouldContain "closed or deactivated"
+        }
+    }
+
+    @Test
+    fun `an empty closed bound sink does not wait for the drain timeout`() {
+        withDriver(0) {
+            compositeDrainTimeout = 2.seconds
+            graphA()
+            (cells.getValue("c").cell as AlignedCompositeCell).close()
+
+            val started = TimeSource.Monotonic.markNow()
+            val failure = assertThrows<IllegalStateException> { quiesce(BUDGET) }
+            val elapsed = started.elapsedNow()
+            failure.message!! shouldContain "closed or deactivated"
+            check(elapsed < 500.milliseconds) { "closed sink quiesce took $elapsed" }
         }
     }
 
