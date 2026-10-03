@@ -130,7 +130,8 @@ EOF
 }
 
 run() { ( cd "$CO" && PATH="$STUB:$PATH" BD_LOG="$BD_LOG" BEADS_ACTOR=TestBox \
-            CLAIM_SWEPT_FILE="$D/swept" "$SCRIPT" "$@" 2>&1 ); }
+            CLAIM_SWEPT_FILE="$D/swept" CLOSE_BEAD_UNDEFER=/bin/true \
+            "$SCRIPT" "$@" 2>&1 ); }
 
 # ------------------------------------------------------------------ dry run --
 echo "dry-run: reports without changing anything"
