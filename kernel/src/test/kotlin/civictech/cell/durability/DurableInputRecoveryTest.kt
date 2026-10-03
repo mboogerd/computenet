@@ -236,6 +236,8 @@ class DurableInputRecoveryTest {
         first.received.shouldBeEmpty()
         second.received.shouldBeEmpty()
         input.committed() shouldBe null
+        // The refusal is dead-lettered once per captured frame (12qyp-D2).
+        host.supervisionAccounting().deadLetters shouldBe 2L
     }
 
     @Test
@@ -261,6 +263,8 @@ class DurableInputRecoveryTest {
         controller.runToIdle()
         cell.received.shouldBeEmpty()
         shouldThrow<IllegalStateException> { owned.take() }
+        // The refused frame is dead-lettered, not silently dropped (12qyp-D2).
+        host.supervisionAccounting().deadLetters shouldBe 1L
     }
 
     @Test
