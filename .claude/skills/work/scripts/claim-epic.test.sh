@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "55 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "57 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -421,6 +421,23 @@ out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
 { [ "$rc" = 3 ] && ! grep -q -- "--status=open" "$BD_LOG"; } \
   && ok "--release with an unlistable subtree checks and writes nothing (exit 3)" \
   || bad "release list-fail: rc=$rc out=$out"
+
+# m090n: no holder anywhere, but a child touched just now -> KEPT, no write.
+fixture; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '[{"id":"computenet-e.3","parent":"computenet-e","status":"open","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^KEPT" <<<"$out" && grep -q "computenet-e.3" <<<"$out" \
+  && ! grep -qE -- "--status=open|^comment" "$BD_LOG"; } \
+  && ok "--release keeps an epic whose holderless child was touched within the window" \
+  || bad "release hot: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# ...unless that touch was this machine's own sweep (x3f5a discount).
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","status":"open","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+echo "$(date +%s) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" --release computenet-e 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "--release discounts a child this run's own sweep touched" \
+  || bad "release self-swept: rc=$rc out=$out"
 
 # --- fail closed, and the bounds on FOREIGN ----------------------------------
 # An unlistable subtree is NOT CHECKED: the live-descendant refusal could not

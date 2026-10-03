@@ -72,7 +72,7 @@
 # to the epic's current metadata.holder; --observed supplies what step 3 saw.
 # A failed comment is a warning, never a reason to keep a dead claim. It applies the live-descendant
 # test first. Exit 0 released; exit 1 KEPT, a LIVE or FOREIGN session works
-# beneath it (named on stderr) — leave it claimed and do not select it; exit 3
+# beneath it, or a descendant was touched within STALE_MIN (named on stderr) — leave it claimed and do not select it; exit 3
 # NOT CHECKED, the descendants could not be listed, nothing written; exit 4
 # the release write itself failed.
 #
@@ -123,6 +123,22 @@ live_descendants() {
     done
 }
 
+# Prints "<id> updated <ts>" for up to 3 descendants touched within STALE_MIN —
+# the assignee-blind HOT signal (see the claim path's comment below). Ids this
+# machine's own sweep recorded within the window are discounted (x3f5a).
+hot_descendants() {
+  local cutoff swept
+  cutoff=$(( $(date +%s) - STALE_MIN * 60 ))
+  SWEPT_FILE=${CLAIM_SWEPT_FILE:-"${TMPDIR:-/tmp}/work-swept-${BEADS_ACTOR}"}
+  swept=$(awk -v c="$cutoff" '$1 >= c {print $2}' "$SWEPT_FILE" 2>/dev/null \
+    | jq -Rn '[inputs | select(length > 0)]')
+  [ -n "$swept" ] || swept='[]'
+  jq -r --arg e "$id" --argjson c "$cutoff" --argjson swept "$swept" "$DESC_JQ"'
+        | select(.id as $i | ($swept | index($i)) == null)
+        | select(((.updated_at // "") | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0) >= $c)
+        | "\(.id) updated \(.updated_at)"' <<<"$all_rows" 2>/dev/null | head -3
+}
+
 rows_ok() { [ "$list_rc" = 0 ] && jq -e 'type == "array" or type == "object"' >/dev/null 2>&1 <<<"$all_rows"; }
 
 if [ "$mode" = release ]; then
@@ -135,6 +151,15 @@ if [ "$mode" = release ]; then
   if [ -n "$live" ]; then
     echo "KEPT: $id — a live session works beneath it; leave it claimed and do not select it:" >&2
     printf '  %s\n' "$live" >&2
+    exit 1
+  fi
+  # m090n: a session that stamps no holder (interactive, or one whose holder
+  # could not be minted) is invisible to the holder test; recency is all it
+  # leaves. computenet-6aj8h was released under such a session's live child.
+  hot=$(hot_descendants)
+  if [ -n "$hot" ]; then
+    echo "KEPT: $id — a descendant was touched within ${STALE_MIN}m (a session without a holder may be in it); leave it claimed and do not select it:" >&2
+    printf '  %s\n' "$hot" >&2
     exit 1
   fi
   if [ -z "$obs_holder" ]; then
@@ -245,14 +270,7 @@ if [ "${CLAIM_SKIP_HOT:-}" != 1 ]; then
   # exactly the epics the resume preference is for. Neither the sweep's writes
   # nor these are published, so a local release cannot be evidence about a
   # remote session. Discount the ids the sweep recorded within the window.
-  SWEPT_FILE=${CLAIM_SWEPT_FILE:-"${TMPDIR:-/tmp}/work-swept-${BEADS_ACTOR}"}
-  swept=$(awk -v c="$cutoff" '$1 >= c {print $2}' "$SWEPT_FILE" 2>/dev/null \
-    | jq -Rn '[inputs | select(length > 0)]')
-  [ -n "$swept" ] || swept='[]'
-  hot=$(jq -r --arg e "$id" --argjson c "$cutoff" --argjson swept "$swept" "$DESC_JQ"'
-        | select(.id as $i | ($swept | index($i)) == null)
-        | select(((.updated_at // "") | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0) >= $c)
-        | "\(.id) updated \(.updated_at)"' <<<"$all_rows" 2>/dev/null | head -3)
+  hot=$(hot_descendants)
   if [ -n "$hot" ]; then
     echo "SKIP: $id's subtree is hot — a child was touched within ${STALE_MIN}m (the other machine may be in it):" >&2
     printf '  %s\n' $hot >&2 2>/dev/null || printf '%s\n' "$hot" >&2
