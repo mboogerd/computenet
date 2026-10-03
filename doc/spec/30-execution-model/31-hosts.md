@@ -77,13 +77,21 @@ write-ahead appends every accepted invocation as a wire frame at the intake
 loses nothing it acknowledged. `checkpoint(journal)` compacts the log to one
 snapshot record of every `Stateful` cell, followed by every frame accepted for
 that journal and not yet delivered (read and reset under the intake's lock, in
-acceptance order), so a checkpoint is safe at any inter-invocation boundary of
-a live host — no quiescence fence is needed for a frame still staged there (93
-I-7 R7); not yet covered are frames retained in an inlet policy tier or
-released into a cold inlet outside that inlet's hosted offer
-(computenet-amgre); `recoverFrom` (after the graph is rebuilt) restores
-the checkpoint and replays the tail through the ordinary decode path. Replay
-only stages frames, so `recoverFrom` returns a `Recovery` handle whose
+acceptance order), so no quiescence fence is needed for a frame still staged
+there at an inter-invocation boundary of a live host (93 I-7 R7). That local
+guarantee has topology limits: a cross-journal volatile-port frame staged at
+`checkpoint(J)` may be delivered twice after recovering J and the other journal
+— once from J's carry and once when the other journal re-derives it — while a
+journal-less intermediate cell between two cells of J is not loss-free across a
+checkpoint, because a frame staged at that intermediate cell's volatile inlet
+may no longer be derivable after compaction (24 §Durability spectrum;
+computenet-4fpyy, computenet-dshry). A checkpoint is therefore not
+unconditionally safe at every inter-invocation boundary for those topologies.
+Not yet covered are frames retained in an inlet policy tier or released into a
+cold inlet outside that inlet's hosted offer (computenet-amgre). `recoverFrom`
+(after the graph is rebuilt) restores the checkpoint and replays the tail
+through the ordinary decode path. Replay only stages frames, so `recoverFrom`
+returns a `Recovery` handle whose
 `awaitApplied` fences on delivery of the replayed tail and of every same-host
 frame that delivery cascades into, for a host with no attention parking
 (`AttentionPolicy.suspendAfter == null`, the default); parked traffic waits

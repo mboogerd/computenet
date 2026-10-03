@@ -152,6 +152,22 @@ class DiscoveredPeering private constructor(
     private val armed = HashMap<NodeKey, AutoCloseable>()
 
     /**
+     * Blocking discovery dials started but not yet reported by
+     * [Command.DialDone], counted per key. Written and read **only** on the
+     * policy thread.
+     *
+     * This cannot be derived from [PeerTable]'s `Dialling` states. An accepted
+     * link from the same key can be admitted while our reciprocal dial is still
+     * waiting for its `LINK_UP`, moving the table entry to `Peered`; if the peer
+     * then closes that accepted link as the mutual-dial loser, `linkDown` moves
+     * it to `Retained` before the original dial has finished. The count remains
+     * the local evidence that this otherwise-causeless `LINK_DOWN` belongs to a
+     * mutual dial. It is a count rather than a set because the landed retry
+     * policy can have two generations of one key in flight concurrently.
+     */
+    private val inFlightDials = HashMap<NodeKey, Int>()
+
+    /**
      * Link ids already counted on [DiscoveryCounters.tieBreakClosed], and by
      * the same token the links this policy has decided to close (ktn1l-D16).
      *
@@ -481,10 +497,11 @@ class DiscoveredPeering private constructor(
         //  - or it is an ACCEPTED link, which has no connection to classify it
         //    at all. Such a link is a tie-break loss when it went down with no
         //    refusal recorded against it, in THIS node's losing direction
-        //    (`PeerTable.loserDirection`), while a link of the OPPOSITE
-        //    direction for the same key is still up. Both directions up is
-        //    what a mutual dial is, and the tie-break closes the losing one
-        //    whichever node reaches the verdict first.
+        //    (`PeerTable.loserDirection`), and either the opposite direction is
+        //    already up or our reciprocal dial to the same key is still in
+        //    flight. Both sides dialling is what a mutual dial is; the peer can
+        //    see both directions and close this loser before our sidecar has
+        //    reported our outbound `LINK_UP` (computenet-axifn).
         //
         // Admitted or not does not matter (computenet-i74gh). When the larger
         // id's link is admitted here first and this node's own OUTBOUND link
@@ -501,10 +518,12 @@ class DiscoveredPeering private constructor(
         // is the one the tie-break keeps, so its drop is a drop.
         //
         // Residual, accepted: a losing-direction accepted link that drops for
-        // some other reason while the opposite link is up is counted here too.
-        // Unless the opposite link's hello is then refused, the tie-break
-        // would have closed this link the moment that hello was judged, so it
-        // is the same one closed link either way.
+        // some other reason while the opposite link is up or its reciprocal
+        // dial is still in flight is counted here too. `PROTOCOL.md` section 3
+        // makes LINK_DOWN's reason human-readable only, so these causes are not
+        // distinguishable. Unless the reciprocal hello is then refused, the
+        // tie-break would close this link the moment it was judged, so it is
+        // the same one closed link either way.
         //
         // Both routes fold into one idempotent count. @see tieBreakCounted
         //
@@ -515,8 +534,9 @@ class DiscoveredPeering private constructor(
         val oppositeLinkUp = node.linksWithSettledDials(view.remoteNodeId)
             .any { it.linkId != view.linkId && it.direction != view.direction }
         val losingDirection = view.direction == PeerTable.loserDirection(table.ownKey.bytes, view.remoteNodeId)
+        val reciprocalDialInFlight = view.source == IrohNode.LinkSource.ACCEPTED && inFlightDials.containsKey(key)
         val quiet = outcome?.quiet == true ||
-            (outcome == null && losingDirection && oppositeLinkUp)
+            (outcome == null && losingDirection && (oppositeLinkUp || reciprocalDialInFlight))
         if (quiet) countTieBreakClose(view.linkId)
         // One refused hello, counted once ([DSC2-ID-01..04], BS-05a). Charged
         // at the DOWN rather than at the refusal, because a refusal is
@@ -557,6 +577,8 @@ class DiscoveredPeering private constructor(
     }
 
     private fun onDialDone(command: Command.DialDone) {
+        val remaining = (inFlightDials[command.key] ?: 1) - 1
+        if (remaining > 0) inFlightDials[command.key] = remaining else inFlightDials -= command.key
         if (command.success) return // The link is up; Admitted or LinkDown says what became of it.
         counters.dialsFailed.increment()
         val dueAt = table.dialFailed(command.key, clock(), policy.schedule) ?: return
@@ -573,6 +595,7 @@ class DiscoveredPeering private constructor(
         for (key in table.nextDue(clock(), policy.maxInFlightDials)) {
             val attempt = (table.stateOf(key) as? PeerState.Retained)?.attempt ?: 0
             if (!table.markDialling(key, attempt)) continue
+            inFlightDials[key] = (inFlightDials[key] ?: 0) + 1
             val connection = connections.computeIfAbsent(key) {
                 node.dialDiscovered(
                     peerNodeId = key.bytes,

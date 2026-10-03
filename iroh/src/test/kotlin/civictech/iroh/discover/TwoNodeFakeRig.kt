@@ -288,10 +288,31 @@ internal class TwoNodeFakeRig(val a: FakeNode, val b: FakeNode) : AutoCloseable 
      * judged — which is the state `[DSC2-DIAL-05]` is about.
      */
     fun connect(dial: HostMessage.Dial, from: FakeNode, to: FakeNode) {
-        val inbound = nextInboundLink++
-        pairs += Pair2(from, dial.link, to, inbound)
+        val inbound = register(dial, from, to)
         from.fake.send(SidecarMessage.LinkUp(dial.link, to.own, DIRECTION_OUTBOUND))
         to.fake.send(SidecarMessage.LinkUp(inbound, from.own, DIRECTION_INBOUND))
+    }
+
+    /**
+     * Report only the accepting side of [dial] as up, leaving its dialling side
+     * pending. This is permitted by
+     * `PROTOCOL.md` section 3: the accepting side reports `LINK_UP` as soon as
+     * it accepts the connection, before stream adoption, while the dialling
+     * side reports its own `LINK_UP` only after `DIAL` succeeds.
+     */
+    fun reportInboundLinkUp(dial: HostMessage.Dial, from: FakeNode, to: FakeNode) {
+        val inbound = register(dial, from, to)
+        to.fake.send(SidecarMessage.LinkUp(inbound, from.own, DIRECTION_INBOUND))
+    }
+
+    /** Register one physical link and return the accepting side's link id. */
+    private fun register(dial: HostMessage.Dial, from: FakeNode, to: FakeNode): Long {
+        check(pairs.none { it.left === from && it.leftLink == dial.link }) {
+            "${from.label}'s dial ${dial.link} is already connected"
+        }
+        val inbound = nextInboundLink++
+        pairs += Pair2(from, dial.link, to, inbound)
+        return inbound
     }
 
     /** The id [holder] holds for the link whose other end is [link] on the other node, or null. */
