@@ -102,16 +102,20 @@ names that model.)
   and its source's credence vector. Each semantics computes its own energy
   from the pair — `energy(strength, credence)`, DF-QuAD's product for most —
   and combines a node's base with the energies of its attacks and supports.
-  Layers (all seven always run): `dfquad` (agora's
+  Layers (all eight always run): `dfquad` (agora's
   DF-QuAD), `wlo` (weighted log-odds: σ(α·logit(base) + k·(‖S^γ‖_p −
   ‖A^γ‖_p)), α = 1, k = 2.4, p = 2, γ = 1.3), `jnb` (Jeffrey / naive-Bayes:
   the argument's likelihood ratio LR(s) = ((1+s)/(1−s))^K is Jeffrey-
   conditioned on its source's credence c, energy ln(c·LR + (1−c)·LR^−r),
   exact because s and c arrive separately), `woe` (log-odds DF-QuAD, weight
   of evidence −ln(1 − e)), `euler` (Euler-based), `qe` (quadratic energy),
-  `mlp` (MLP-based); formulas and defaults as in the prototype
-  `semantics.js`, and every layer keeps agora's base (the clamped mean of the
-  stances). `dfquad` always runs. Cycle handling is agora's: the edge that
+  `mlp` (MLP-based), `glo` (gated log-odds: an argument's energy is
+  2·atanh(min(s·u(c), 0.999)) with the gate u(c) = max(0, 2·σ(5·logit c) − 1),
+  so a source at or below ½ is inert; σ(logit(base) + ‖S‖₂ − ‖A‖₂), support and
+  attack weighed alike — the rule the credence benchmark selected,
+  `doc/research/deliberate-credence-bench`); formulas and defaults of the first
+  seven as in the prototype `semantics.js`, and every layer keeps agora's base
+  (the clamped mean of the stances). `dfquad` always runs. Cycle handling is agora's: the edge that
   closes a cycle is its head and absorbs a returning source update whose
   largest per-layer change is below the quiescence threshold; a node's
   arguments are folded in ref order, so emission is deterministic. Every
@@ -587,7 +591,7 @@ Every status change is broadcast.
   each with its sway (`|sensitivity|`), how settled it is (its plausibility or,
   for a link, its strength) and, when its sensitivity is signed, which way it
   would pull the answer. Nothing is shown until the backend names a crux.
-- **UI-08 (model D).** All seven layers are still computed for every node, but
+- **UI-08 (model D).** All eight layers are still computed for every node, but
   only the consensus is shown by default: no spread band on a claim's or the
   question's gauge, no per-layer caption, no per-rule values or tooltip text.
   A "rules" pill button in the header (`aria-pressed`, off by default) toggles

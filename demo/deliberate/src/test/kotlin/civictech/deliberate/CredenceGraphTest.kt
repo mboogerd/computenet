@@ -104,6 +104,8 @@ class CredenceGraphTest {
         "euler" to listOf(0.76008123726605459, 0.89387169876513017),
         "qe" to listOf(0.75390794847182951, 0.88504277706755830),
         "mlp" to listOf(0.78875532139705162, 0.88767653023916870),
+        // glo is not in the prototype: an independent Python port of its formula on the same tree.
+        "glo" to listOf(0.9529820851773328, 0.7504871711594674),
     )
 
     @Test

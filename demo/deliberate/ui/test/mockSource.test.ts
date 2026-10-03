@@ -124,7 +124,7 @@ describe('MockSource', () => {
     const g = frames.at(-1)!;
     expect(g.consensusMembers).toEqual(['wlo', 'jnb', 'woe']);
     for (const n of g.nodes) {
-      expect(Object.keys(n.credences!)).toHaveLength(7);
+      expect(Object.keys(n.credences!)).toHaveLength(8);
       const values = Object.values(n.credences!);
       expect(n.spreadLow).toBe(Math.min(...values));
       expect(n.spreadHigh).toBe(Math.max(...values));

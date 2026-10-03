@@ -15,7 +15,7 @@ question's claim budget is spent), or stop it. The goal specification is [`SPEC.
 2. Every pro/con edge gets a Jev *relation strength* judgment: how strongly the child would bear on the parent if it were true.
    A new argument gets both judgments as soon as its round ends: plausibility in its own request, in parallel with one request that asks its strength, quality and relevance (see *Exploration*).
 3. Both judgments are recorded as stances of the user `jev`, on the claim and on the edge (an edge is a claim too: it has its own credence, and an undercutter attacks it).
-4. One cell graph propagates credence: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge. It does so under **seven semantics at once** — every claim and edge cell computes a credence *vector*, one value per layer: `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds), `jnb` (Jeffrey / naive-Bayes), `woe` (weight of evidence), `euler`, `qe` (quadratic energy) and `mlp`. An edge tells its target both its own credence vector (the strength) and its source's, so every semantics computes its own energy from the two — `jnb` conditions on the source's credence exactly as its definition says.
+4. One cell graph propagates credence: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge. It does so under **eight semantics at once** — every claim and edge cell computes a credence *vector*, one value per layer: `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds), `jnb` (Jeffrey / naive-Bayes), `woe` (weight of evidence), `euler`, `qe` (quadratic energy), `mlp` and `glo` (gated log-odds: a doubted argument is inert, support and attack weighed alike). An edge tells its target both its own credence vector (the strength) and its source's, so every semantics computes its own energy from the two — `jnb` conditions on the source's credence exactly as its definition says.
 5. The UI's headline number is the **consensus**: the geometric mean of the odds of the member layers (`wlo`, `jnb`, `woe` by default), with the **spread** (lowest to highest credence over all layers) drawn as a band behind it — visible only in the *research view* (below). Each claim cell derives both from its vector and emits them with it; they only summarise and never feed back into a layer. The deliberation code never propagates credence itself.
 6. The plausibility judgment also asks a **knowledge** question: does judging this claim need knowledge Jev doesn't have? "Outside my knowledge" maps the plausibility to 0.5 — neither believed nor doubted — whatever the five-level score would have said, rather than the low score a model gives what it hasn't heard of. No Jev request carries a current date; that pulled the judgment of claims about recent events.
 7. The question's root also gets a second verdict: the same arguments weighed from a **neutral prior** (½) instead of Jev's own first impression of the question — "what the arguments say" alongside "what Jev thought going in". See *First impression vs. arguments alone* below.
@@ -137,7 +137,7 @@ alone** re-weighs the very same arguments, but starting the root from a neutral
 answer, a note under the gauge says so and names which way the arguments alone
 lean — the first impression, not the arguments, is deciding the side.
 
-All seven credence rules are still computed for every claim, but by default
+All eight credence rules are still computed for every claim, but by default
 the UI shows only the consensus: no spread band, no per-rule numbers, no "By
 rule" breakdown. A **rules** button in the header (or `?research` in the URL)
 turns on the *research view* for the session, restoring the band, the
@@ -225,7 +225,7 @@ per-side cap of 3 below the root, a round decay of 0.5, an internal `maxDepth`
 bound (unbounded by default; only the test suite sets it — it no longer
 gates or stops anything the app does), the EXP-10 yield-reporting window (8;
 the old diminishing-returns ratio and minimum-claims thresholds are gone with
-the yield stop), all seven credence layers with the
+the yield stop), all eight credence layers with the
 consensus over `wlo,jnb,woe`, the weighted log-odds parameters (k 2.4, p 2,
 γ 1.3, α 1), and the assumed Jev price (USD 0.042 per 1M input tokens, output
 free — a third-party listing; TypeSafe publishes none).
