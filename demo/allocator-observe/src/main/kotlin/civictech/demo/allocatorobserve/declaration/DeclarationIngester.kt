@@ -1,6 +1,8 @@
 package civictech.demo.allocatorobserve.declaration
 
+import civictech.cell.data.SetOps
 import civictech.cell.data.SetCell
+import java.io.Serializable
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.Files
@@ -10,7 +12,27 @@ import java.time.Instant
 data class DeclarationEvent(
     val observedAt: Instant,
     val declaration: AllocationDeclaration,
-)
+) : Serializable {
+    /** Keep kernel checkpoints independent of the YAML DTO's serialization shape. */
+    private fun writeReplace(): Any = SerializedDeclarationEvent(
+        observedAt = observedAt,
+        weights = declaration.weights,
+        monthlyCapHours = declaration.monthlyCapHours,
+        window = declaration.window,
+    )
+}
+
+private data class SerializedDeclarationEvent(
+    val observedAt: Instant,
+    val weights: Map<String, Double>,
+    val monthlyCapHours: Double,
+    val window: String?,
+) : Serializable {
+    private fun readResolve(): Any = DeclarationEvent(
+        observedAt,
+        AllocationDeclaration(weights, monthlyCapHours, window),
+    )
+}
 
 /** The result of one [DeclarationIngester.poll]. */
 sealed interface DeclarationPollOutcome {
@@ -52,10 +74,16 @@ sealed interface DeclarationPollOutcome {
  */
 class DeclarationIngester(
     private val declarationPath: Path,
-    history: SetCell<DeclarationEvent> = SetCell(),
+    private val historyInlet: SetOps<DeclarationEvent>,
+    private val view: () -> Set<DeclarationEvent>,
     private val clock: () -> Instant = Instant::now,
 ) {
-    private val historyCell = history
+    /** Standalone fold convenience; the application composition uses the hosted-inlet primary constructor. */
+    constructor(
+        declarationPath: Path,
+        history: SetCell<DeclarationEvent> = SetCell(),
+        clock: () -> Instant = Instant::now,
+    ) : this(declarationPath, history.inlet.call, history::membership, clock)
 
     /** Number of read or parse failures since this ingester was constructed. */
     var parseFailures: Long = 0L
@@ -83,12 +111,12 @@ class DeclarationIngester(
             }
 
             is DeclarationParse.Valid -> {
-                val current = historyCell.membership().maxByOrNull { it.observedAt }?.declaration
+                val current = view().maxByOrNull { it.observedAt }?.declaration
                 if (result.declaration == current) {
                     DeclarationPollOutcome.Unchanged
                 } else {
                     val event = DeclarationEvent(clock(), result.declaration)
-                    historyCell.inlet.call.add(event)
+                    historyInlet.add(event)
                     DeclarationPollOutcome.Appended(event)
                 }
             }
@@ -99,5 +127,5 @@ class DeclarationIngester(
      * Returns all observed declarations in ascending observation-time order.
      * This is derived solely from the history cell and does not read the file.
      */
-    fun history(): List<DeclarationEvent> = historyCell.membership().sortedBy { it.observedAt }
+    fun history(): List<DeclarationEvent> = view().sortedBy { it.observedAt }
 }

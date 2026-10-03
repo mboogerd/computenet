@@ -25,8 +25,8 @@ import kotlin.io.path.readLines
  * ## What it can and cannot catch
  *
  * It is a lexical scan of the files the spend-log and run-dir paths travel
- * through, not the whole module: this package (`ingest/` — `SpendLogIngester`,
- * [OffsetCheckpoint], `SpendLogTailReader`), whose only sources of a path are
+ * through, not the whole module: this package (`ingest/` — `SpendLogIngester`
+ * and `SpendLogTailReader`), whose only sources of a path are
  * its constructor parameters, and `AllocatorObserveApp.kt`, where
  * `parseArgs` builds `AllocatorObserveConfig` — the one place a "quick local
  * run" default for `logPath` or `runDir` would be pasted. A string literal

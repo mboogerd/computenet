@@ -1,9 +1,22 @@
 package civictech.demo.allocatorobserve
 
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
+import civictech.cell.durability.FileJournal
+import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.SpawnStep
+import civictech.cell.graph.TypedRef
+import civictech.cell.graph.lookup
+import civictech.cell.host.DurableInput
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
 import civictech.demo.allocatorobserve.declaration.DeclarationEvent
 import civictech.demo.allocatorobserve.declaration.DeclarationIngester
-import civictech.demo.allocatorobserve.declaration.DeclarationPollOutcome
 import civictech.demo.allocatorobserve.http.AllocatorRoutes
 import civictech.demo.allocatorobserve.http.IngestFailureCounts
 import civictech.demo.allocatorobserve.http.IngestHealth
@@ -13,18 +26,17 @@ import civictech.demo.allocatorobserve.http.ServedStateHolder
 import civictech.demo.allocatorobserve.http.frozenJson
 import civictech.demo.allocatorobserve.http.toJson
 import civictech.demo.allocatorobserve.ingest.CheckpointState
-import civictech.demo.allocatorobserve.ingest.OffsetCheckpoint
 import civictech.demo.allocatorobserve.ingest.SpendLogIngester
-import civictech.demo.allocatorobserve.ingest.SpendOffsetStore
 import civictech.demo.allocatorobserve.ingest.TailReason
-import civictech.demo.allocatorobserve.restart.DeclarationHistoryJournal
 import civictech.demo.allocatorobserve.view.AllocatorReportViews
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.system.exitProcess
 
 /**
@@ -34,7 +46,7 @@ import kotlin.system.exitProcess
  * undecided (fpml.1-D1), so nothing here may acquire a default.
  *
  * @param logPath the spend log the tail reader follows. It need not exist yet.
- * @param runDir where the byte-offset checkpoint is persisted.
+ * @param runDir where the kernel durability journal is persisted.
  * @param declarationPath the hand-edited allocation declaration.
  * @param port the HTTP port; `0` binds an ephemeral loopback port, which is
  *   what every test uses (`DemoShell.endpoint`).
@@ -53,116 +65,97 @@ data class AllocatorObserveConfig(
     val windowLength: Duration = Duration.ofHours(168),
 )
 
+private const val ALLOCATOR_JOURNAL_ID = "main"
+private const val SPEND_INPUT_NAME = "spend"
+
+private enum class AllocatorCellKind { RECORDS, DECLARATIONS }
+
 /**
- * A [SpendOffsetStore] that remembers the last [CheckpointState] to pass
- * through it, so the served ingest health can report the log's byte checkpoint
- * offset (fpml.4-D7).
- *
- * **Why a decorator rather than an accessor on the ingester.**
- * `SpendPollOutcome` carries the poll's reason and its add/remove/failure
- * counts but *not* the checkpoint offset, and
- * `ingest/SpendLogIngester.kt` is claimed by an open sibling bug
- * (`computenet-brvag`) that this task may not edit. `SpendLogIngester` does
- * take its `checkpoint` store as a constructor parameter, precisely so a
- * caller can observe that seam — so decorating it reads the offset without
- * touching F1 at all.
- *
- * [last] is initialised from `delegate.read()` and updated AFTER the delegate's
- * write returns, so it never advertises an offset that is not yet persisted.
- *
- * Since `computenet-fpml.5.2` the delegate under it is a [ColdStartOffsetStore],
- * whose `read()` answers `null` until this process has written a checkpoint
- * once — so [last] now starts `null` in EVERY process, restarted or not, and is
- * set by the first tick that delivers lines. That is the honest reading: a
- * process that has not yet re-read the log has consumed nothing of it, and the
- * persisted offset is not the position this process is at.
- *
- * The limit of the number this produces, stated where the number is produced:
- * it is the last offset this *store* saw written, which the reader writes only
- * after the batch reaching it has been handed to the fold. A poll that
- * delivered nothing (an absent log, or no new complete line) writes nothing,
- * so [last] then stays where it was — which is the truth about the checkpoint,
- * not a stale reading of it. The one exception is a log this process had read
- * and that is now absent: the app then clears [last] through [forgetLast]
- * (6jbep-D1), because the fold no longer holds anything that offset describes.
+ * Topology recovery constructs cells from the factory serialized in the journal. The host exposes
+ * routed APIs and state snapshots, not its concrete cell object, so the ref-aware factory records
+ * the exact live instance long enough for this composition root to attach its read-side views.
  */
-class RecordingOffsetStore(private val delegate: SpendOffsetStore) : SpendOffsetStore {
+private object AllocatorCellCapture {
+    private val cells = ConcurrentHashMap<CellRef, SetCell<*>>()
 
-    /** The most recent state written through this store, or the one it was constructed over. */
-    @Volatile
-    var last: CheckpointState? = delegate.read()
-        private set
-
-    override fun read(): CheckpointState? = delegate.read()
-
-    override fun write(state: CheckpointState) {
-        delegate.write(state)
-        last = state
+    fun record(ref: CellRef, cell: SetCell<*>) {
+        cells[ref] = cell
     }
 
-    /**
-     * Clears [last] when the app has converged on a deleted log (6jbep-D1), so
-     * the served `checkpointOffset` reads `null` exactly as it does in a
-     * process restarted while the log is absent. The persisted checkpoint is
-     * not touched: nothing reads it until the next write replaces it.
-     */
-    internal fun forgetLast() {
-        last = null
-    }
+    @Suppress("UNCHECKED_CAST")
+    fun <E> take(ref: CellRef): SetCell<E> =
+        cells.remove(ref) as? SetCell<E>
+            ?: error("allocator-observe cell factory did not materialize $ref")
 }
 
-/**
- * A [SpendOffsetStore] that hides the persisted checkpoint from the FIRST read
- * of each process, so every process's first spend-log poll is a
- * `TailReason.FirstStart` whole-file read (design entry fpml.5-D4a).
- *
- * **Why this is what makes a restart equal an uninterrupted run.** The app's
- * spend fold is a fresh in-memory `SetCell`; the spend log is its durable form,
- * exactly as the socaity replay script treats it. Resuming a fresh fold from a
- * persisted byte offset would fold only the bytes appended after the restart —
- * so the offset must be ignored precisely once, while the fold is empty, and
- * honoured from then on.
- *
- * Within the process nothing changes: once this store's own [write] has run,
- * both calls delegate, so later polls resume incrementally from the checkpoint
- * and keep the truncation/replacement detection that the checkpoint's
- * fingerprint provides.
- *
- * **The cost, stated where it is paid** (fpml.5-D4a): a restart re-reads the
- * whole spend log once, which is O(log size) per process start rather than per
- * poll. And a truncation or replacement that happened while the app was DOWN is
- * absorbed silently by that whole read — the fold converges on the log's current
- * content, which is correct, but the event is not counted in `reBaselineCount`,
- * because nothing in this process ever saw the pre-replacement bytes. Only
- * re-baselines observed between two polls of one process are counted.
- *
- * **A deleted log puts the store back into its cold state** (design entry
- * 6jbep-D1): [forget] makes [read] answer `null` again, exactly as it does in a
- * process that has just started, so the log's reappearance is a whole-file
- * `FirstStart` read rather than a resume from an offset into bytes this fold no
- * longer holds. [seenHere] is how the app tells a log that was deleted from one
- * that has not arrived yet: the reader writes a checkpoint on every poll of a
- * present log (even an empty one), so a process that has written none has never
- * seen the log at all.
- */
-private class ColdStartOffsetStore(private val delegate: SpendOffsetStore) : SpendOffsetStore {
+private data class AllocatorSetFactory(val kind: AllocatorCellKind) : CellFactory {
+    override fun create(ref: CellRef): Cell = when (kind) {
+        AllocatorCellKind.RECORDS -> SetCell<SpendRecord>(ref)
+        AllocatorCellKind.DECLARATIONS -> SetCell<DeclarationEvent>(ref)
+    }.also { AllocatorCellCapture.record(ref, it) }
+}
 
-    @Volatile
-    private var writtenHere = false
+private data class AllocatorRuntime(
+    val host: ManagedHost,
+    val records: SetCell<SpendRecord>,
+    val declarations: SetCell<DeclarationEvent>,
+    val recordOps: SetOps<SpendRecord>,
+    val declarationOps: SetOps<DeclarationEvent>,
+    val spendInput: DurableInput,
+) {
+    companion object {
+        fun create(runDir: Path): AllocatorRuntime {
+            Files.createDirectories(runDir)
+            val journal = FileJournal(runDir.resolve("journal").toFile())
+            val registry = LocationRegistry()
+            lateinit var context: ApplyContext
+            val host = ManagedHost(
+                registry = registry,
+                journalFor = { ref -> context.journalFor(ref) },
+            )
+            context = ApplyContext(
+                host = host,
+                journals = mapOf(ALLOCATOR_JOURNAL_ID to journal),
+                topology = journal,
+            )
 
-    /** Whether this process has read the log at least once since it started or last [forget]. */
-    val seenHere: Boolean get() = writtenHere
+            val recovered = journal.replay().isNotEmpty()
+            val refs: Map<String, CellRef>
+            val spendInput: DurableInput
+            if (recovered) {
+                context.recover(journal).awaitApplied()
+                refs = context.handles
+                spendInput = host.durableInput(refs.getValue("records"), SPEND_INPUT_NAME)
+                host.checkpoint(journal)
+            } else {
+                val applied = GraphSpec(
+                    listOf(
+                        SpawnStep(
+                            handle = "records",
+                            factory = AllocatorSetFactory(AllocatorCellKind.RECORDS),
+                            journalId = ALLOCATOR_JOURNAL_ID,
+                            inputs = setOf(SPEND_INPUT_NAME),
+                        ),
+                        SpawnStep(
+                            handle = "declarations",
+                            factory = AllocatorSetFactory(AllocatorCellKind.DECLARATIONS),
+                            journalId = ALLOCATOR_JOURNAL_ID,
+                        ),
+                    ),
+                ).apply(context)
+                refs = applied.refs
+                spendInput = applied.inputs.getValue("records").getValue(SPEND_INPUT_NAME)
+            }
 
-    override fun read(): CheckpointState? = if (writtenHere) delegate.read() else null
-
-    override fun write(state: CheckpointState) {
-        delegate.write(state)
-        writtenHere = true
-    }
-
-    /** Back to the cold state: the next [read] answers `null`, as in a freshly started process. */
-    fun forget() {
-        writtenHere = false
+            val recordsRef = refs.getValue("records")
+            val declarationsRef = refs.getValue("declarations")
+            val records = AllocatorCellCapture.take<SpendRecord>(recordsRef)
+            val declarations = AllocatorCellCapture.take<DeclarationEvent>(declarationsRef)
+            val recordOps = checkNotNull(host.lookup(TypedRef<SetApi<SpendRecord>>(recordsRef))).inlet.call
+            val declarationOps =
+                checkNotNull(host.lookup(TypedRef<SetApi<DeclarationEvent>>(declarationsRef))).inlet.call
+            return AllocatorRuntime(host, records, declarations, recordOps, declarationOps, spendInput)
+        }
     }
 }
 
@@ -191,41 +184,22 @@ private class ColdStartOffsetStore(private val delegate: SpendOffsetStore) : Spe
  * second, differently shaped document. Building the served state inline after
  * `publish()` returns keeps one writer and one publication point.
  *
- * ## A restart IS equivalent to an uninterrupted run — and how, without durable cells
+ * ## Restart equivalence
  *
- * Stated here because this class is where the two halves meet and neither half
- * says it on its own. Both cells this app folds into are still **fresh and
- * in-memory**: `SetCell`'s durability is the kernel's `Stateful`
- * snapshot/restore seam, which nothing here wires up (the epic's non-goal).
- * Restart equivalence is instead reached by making the two folds re-derivable
- * from what the run directory and the log already hold (task
- * `computenet-fpml.5.2`, design fpml.5-D4):
- *
- * - **The spend fold is re-read, not resumed.** [ColdStartOffsetStore] hides the
- *   persisted checkpoint from this process's first poll, so that poll is a
- *   whole-file read and the fold is rebuilt from the log — the log is the
- *   durable fold. Later polls in the same process resume from the checkpoint as
- *   before.
- * - **The declaration history is journalled.** `allocation.yaml` holds only the
- *   current declaration, so [DeclarationHistoryJournal] persists one line per
- *   observed event under `config.runDir` and replays them into the declarations
- *   cell at construction, before the first poll.
- *
- * With both, a process restarted over the same run directory and log serves the
- * report an uninterrupted process would (feature `computenet-fpml.5`'s rule 2,
- * asserted at every poll boundary of the fixture week by
- * `restart/AppRestartEquivalenceTest`).
+ * The records fold, declaration fold, and spend cursor all live in one kernel
+ * journal under [AllocatorObserveConfig.runDir]. A fresh process recovers the
+ * graph and both cells before it constructs the ingesters and report views;
+ * the next spend poll therefore resumes from the committed cursor without a
+ * whole-file re-read. Declaration changes use the same hosted intake and need
+ * no application-owned history file.
  *
  * **What is still not equivalent**, stated precisely rather than dropped:
  * - `ingest` health is per-process by construction and says so — [polls],
  *   [reBaselineCount], `lastPollAt` and the ingesters' failure counters all
- *   start at zero in the new process, and `checkpointOffset` reads `null` until
- *   its first tick has written one. Only the *fold* crosses a restart, not the
+ *   start at zero in the new process. Only the fold and cursor cross a restart, not the
  *   account of how this process got there.
- * - A truncation or replacement of the log that happens while the app is DOWN
- *   is absorbed uncounted by the cold-start read ([ColdStartOffsetStore]): the
- *   fold converges on the log's current content, but `reBaselineCount` does not
- *   see an event no process observed.
+ * - A truncation or replacement of the log while the app is down is detected
+ *   on the first poll by the recovered cursor's fingerprint.
  * - A log that is DELETED — while the app is down or while it runs — no longer
  *   diverges in the fold (6jbep-D1, [convergeOnDeletedLog]): a log this process
  *   has read and that then disappears is treated as the log replaced by an
@@ -236,10 +210,6 @@ private class ColdStartOffsetStore(private val delegate: SpendOffsetStore) : Spe
  *   records go), the restarted one does not (it never saw them). A log that has
  *   not arrived yet in this process is still left alone, as
  *   `SpendLogIngester` does for `TailReason.LogAbsent`.
- * - A crash between a declaration's fold and its journal append loses that
- *   line; the next poll re-observes the declaration as a new event with a later
- *   `observedAt`, which moves one sub-interval boundary rather than losing it
- *   (see [DeclarationHistoryJournal]).
  *
  * ## Threading
  *
@@ -260,31 +230,26 @@ class AllocatorObserveApp(
     private val now: () -> Instant = Instant::now,
 ) {
 
-    private val records = SetCell<SpendRecord>()
-    private val declarations = SetCell<DeclarationEvent>()
-
-    private val journal = DeclarationHistoryJournal(config.runDir)
-
-    init {
-        // BEFORE the ingesters are constructed and before any poll: the
-        // declaration ingester reads its "current declaration" from this very
-        // cell, so a history replayed after it exists would still be correct,
-        // but a history replayed after the first poll would make that poll
-        // re-append the declaration it already knows. Property initialisers and
-        // `init` blocks run in declaration order, which is what sequences this
-        // against the two ingesters below.
-        journal.replayInto(declarations)
-    }
-
-    private val coldStart = ColdStartOffsetStore(OffsetCheckpoint(config.runDir))
-
-    private val offsets = RecordingOffsetStore(coldStart)
+    private val runtime = AllocatorRuntime.create(config.runDir)
+    private val records = runtime.records
+    private val declarations = runtime.declarations
+    private val spendInput = runtime.spendInput
 
     private val spendIngester =
-        SpendLogIngester(config.logPath, config.runDir, records = records, checkpoint = offsets)
+        SpendLogIngester(
+            logPath = config.logPath,
+            records = runtime.recordOps,
+            input = spendInput,
+            view = records::membership,
+        )
 
     private val declarationIngester =
-        DeclarationIngester(config.declarationPath, history = declarations, clock = now)
+        DeclarationIngester(
+            declarationPath = config.declarationPath,
+            historyInlet = runtime.declarationOps,
+            view = declarations::membership,
+            clock = now,
+        )
 
     private val views =
         AllocatorReportViews.derivedFrom(records, declarations, config.windowLength, now)
@@ -296,6 +261,10 @@ class AllocatorObserveApp(
     private var polls: Long = 0L
     private var reBaselineCount: Long = 0L
     private var lastPollAt: Instant? = null
+
+    /** Last spend-tail decision, exposed to the restart test that guards against whole-file re-read. */
+    internal var lastSpendReason: TailReason? = null
+        private set
 
     @Volatile
     private var running = false
@@ -332,17 +301,9 @@ class AllocatorObserveApp(
     /** The port the shell actually bound; meaningful only after [start]. */
     val boundPort: Int get() = shell.boundPort
 
-    /**
-     * Journal lines this process could not parse while replaying the declaration
-     * history at construction (see [DeclarationHistoryJournal.replayFailures]).
-     *
-     * Exposed so the loss is reachable from the process without a served
-     * request. Also carried into every [ServedState.ingest] snapshot as
-     * `IngestHealth.declarationReplayFailures` (`computenet-utib7`), so
-     * `GET /state/ingest` reports it too — this accessor and that field always
-     * agree since both read the same [journal] counter.
-     */
-    val declarationReplayFailures: Long get() = journal.replayFailures
+    /** Compatibility accessor: kernel recovery is fail-loud, so no replay failures are suppressed. */
+    @Deprecated("kernel recovery fails loudly instead of counting skipped declaration events")
+    val declarationReplayFailures: Long get() = 0L
 
     /** Non-null once the background poll loop has exited on a throwable (fpml.4-D6). */
     val pollLoopStopped: PollLoopStopped? get() = holder.stopped
@@ -377,13 +338,12 @@ class AllocatorObserveApp(
      */
     fun pollOnce() {
         val spend = spendIngester.poll()
+        lastSpendReason = spend.reason
         if (spend.reason is TailReason.LogAbsent) convergeOnDeletedLog()
-        val declaration = declarationIngester.poll()
-        // AFTER the poll returned: the event is already in the cell by then, so
-        // this persists a fold that has happened — the checkpoint's own
-        // fold-before-persist order. The reverse would let a crash leave a
-        // journal line for an event no fold ever saw.
-        if (declaration is DeclarationPollOutcome.Appended) journal.append(declaration.event)
+        declarationIngester.poll()
+        // Hosted inlet calls are asynchronous. Fence before reading either fold
+        // or publishing a report so this tick observes every accepted mutation.
+        runtime.host.quiescence().await(30_000, "allocator-observe poll")
         if (spend.reason is TailReason.ReBaselined) reBaselineCount++
         polls++
         lastPollAt = now()
@@ -398,7 +358,7 @@ class AllocatorObserveApp(
             report = report,
             ingest = IngestHealth(
                 recordCount = recordSet.size,
-                checkpointOffset = offsets.last?.offset,
+                checkpointOffset = (spendInput.committed() as? CheckpointState)?.offset,
                 reBaselineCount = reBaselineCount,
                 polls = polls,
                 lastPollAt = lastPollAt,
@@ -408,7 +368,6 @@ class AllocatorObserveApp(
                     declarationParseFailed = declarationIngester.parseFailures,
                 ),
                 declarationEvents = declarationHistory.size,
-                declarationReplayFailures = journal.replayFailures,
             ),
             records = recordSet,
             declarations = declarationHistory,
@@ -428,27 +387,13 @@ class AllocatorObserveApp(
      * bytes. A log this process has never read is left alone: it has not
      * arrived yet, which is not an empty log, and the fold is empty anyway.
      *
-     * **Why here and not in the ingester.** `SpendLogIngester` cannot tell the
-     * two cases apart — both reach it as `TailReason.LogAbsent` — and its
-     * leave-it-alone rule is right for the case it names. Only the app knows
-     * whether *this process* has seen the log ([ColdStartOffsetStore.seenHere]),
-     * because only the app makes each process start cold. And the reading is
-     * chosen so a restart equals an uninterrupted run (feature
-     * `computenet-fpml.5`'s rule 2): a restarted process cannot keep records
-     * from a log that no longer exists — the log is the durable fold
-     * (fpml.5-D4a), and nothing else holds them — so the only reading both
-     * processes can share is the log's absence. Keeping the old fold instead
-     * would need a second durable copy of the records in the run directory,
-     * which is exactly what fpml.5-D4a declined to add.
+     * The recovered fold itself distinguishes "not arrived yet" from "was
+     * present and is now absent": an empty membership needs no action; a
+     * non-empty one is reconciled to the absent log.
      *
-     * Three steps, all of which a restarted process gets for free by starting:
-     * the fold is emptied; the offset store goes back to its cold state, so the
-     * log's reappearance is a whole-file read rather than a resume at an offset
-     * into bytes the fold no longer holds (without this, a log restored with
-     * its old content would resume at EOF and the fold would stay empty); and
-     * the served `checkpointOffset` goes back to `null`. The deletion is
-     * counted once in `reBaselineCount`, as the truncation it is equivalent to
-     * would be — per-process account, which a restarted process does not share.
+     * The removals deliberately run outside a durable-input commit: disappearance
+     * changes the fold but does not invent a new source cursor. The deletion is
+     * counted once in `reBaselineCount`.
      *
      * The cost, stated where it is paid: a log that is only transiently absent
      * (a sync that unlinks and recreates the file) empties the served report
@@ -463,10 +408,9 @@ class AllocatorObserveApp(
      * still publishes one consistent fold.
      */
     private fun convergeOnDeletedLog() {
-        if (!coldStart.seenHere) return
-        records.membership().forEach { records.inlet.call.remove(it) }
-        coldStart.forget()
-        offsets.forgetLast()
+        val live = records.membership()
+        if (live.isEmpty()) return
+        live.forEach(runtime.recordOps::remove)
         reBaselineCount++
     }
 

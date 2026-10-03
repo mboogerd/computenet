@@ -1,10 +1,103 @@
 package civictech.demo.allocatorobserve.ingest
 
-import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
+import civictech.cell.host.DurableInput
+import civictech.cell.wire.WireCodec
+import civictech.cell.wire.WireSerializers
 import civictech.demo.allocatorobserve.LineClassification
 import civictech.demo.allocatorobserve.SpendRecord
 import civictech.demo.allocatorobserve.classifySpendLine
+import civictech.demo.allocatorobserve.declaration.AllocationDeclaration
+import civictech.demo.allocatorobserve.declaration.DeclarationEvent
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.polymorphic
+import kotlinx.serialization.modules.subclass
 import java.nio.file.Path
+import java.time.Instant
+
+@Serializable
+@SerialName("AllocatorSpendRecord")
+private data class SpendRecordWire(
+    val v: Int,
+    val project: String,
+    val machine: String,
+    val workItem: String,
+    val started: String,
+    val ended: String,
+)
+
+private object SpendRecordWireSerializer : KSerializer<SpendRecord> {
+    override val descriptor = SpendRecordWire.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: SpendRecord) {
+        encoder.encodeSerializableValue(
+            SpendRecordWire.serializer(),
+            SpendRecordWire(value.v, value.project, value.machine, value.workItem, value.started, value.ended),
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): SpendRecord {
+        val value = decoder.decodeSerializableValue(SpendRecordWire.serializer())
+        return SpendRecord(value.v, value.project, value.machine, value.workItem, value.started, value.ended)
+    }
+}
+
+@Serializable
+@SerialName("AllocatorDeclarationEvent")
+private data class DeclarationEventWire(
+    val observedAt: String,
+    val weights: Map<String, Double>,
+    val monthlyCapHours: Double,
+    val window: String?,
+)
+
+private object DeclarationEventWireSerializer : KSerializer<DeclarationEvent> {
+    override val descriptor = DeclarationEventWire.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: DeclarationEvent) {
+        encoder.encodeSerializableValue(
+            DeclarationEventWire.serializer(),
+            DeclarationEventWire(
+                value.observedAt.toString(),
+                value.declaration.weights,
+                value.declaration.monthlyCapHours,
+                value.declaration.window,
+            ),
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): DeclarationEvent {
+        val value = decoder.decodeSerializableValue(DeclarationEventWire.serializer())
+        return DeclarationEvent(
+            Instant.parse(value.observedAt),
+            AllocationDeclaration(value.weights, value.monthlyCapHours, value.window),
+        )
+    }
+}
+
+private object AllocatorObserveWireSerializers : WireSerializers {
+    override val module: SerializersModule = SerializersModule {
+        polymorphic(Any::class) {
+            subclass(SpendRecord::class, SpendRecordWireSerializer)
+            subclass(DeclarationEvent::class, DeclarationEventWireSerializer)
+        }
+    }
+}
+
+private object AllocatorObserveWireRegistration {
+    init {
+        WireCodec.contribute(AllocatorObserveWireSerializers)
+    }
+
+    fun ensure() = Unit
+}
+
+internal fun ensureAllocatorObserveWireTypes() = AllocatorObserveWireRegistration.ensure()
 
 /**
  * Per-reason counts of spend-log lines that did not become records
@@ -67,7 +160,7 @@ data class SpendPollOutcome(
  *
  * ## The fold
  *
- * A kernel [SetCell] keyed by the FULL record tuple — v1 has no id field, so
+ * A kernel set cell keyed by the FULL record tuple — v1 has no id field, so
  * the record *is* its identity (design note fpml.1-D2). Two consequences the
  * feature relies on:
  *
@@ -118,21 +211,11 @@ data class SpendPollOutcome(
  * @param logPath the spend log; a parameter, never a hardcoded path
  *   (fpml.1-D1 — no real socaity log exists yet and its eventual location is
  *   undecided). It need not exist.
- * @param runDir where the byte-offset checkpoint is persisted, so a restarted
- *   ingester resumes instead of re-reading the whole log. Also a parameter.
- * @param records the fold. Exposed and injectable because it is what survives a
- *   restart: the checkpoint round-trips through [runDir] on its own, while the
- *   cell's durability is the kernel's `Stateful` snapshot/restore seam, which
- *   this feature does not wire up. A restarted ingester is therefore
- *   constructed over the same [runDir] *and* handed the fold it is resuming
- *   into.
- * @param checkpoint the reader's [SpendOffsetStore], defaulted to the
- *   file-backed [OffsetCheckpoint] over [runDir] so existing callers are
- *   unaffected. Accepting it as a parameter is what makes the crash-ordering
- *   rule documented on [SpendOffsetStore] — fold before persist — observable
- *   at THIS seam: a test double can record its [SpendOffsetStore.write] and
- *   check what the fold already holds at that moment, rather than trusting
- *   that [poll]'s KDoc still matches its body (`computenet-xol9`).
+ * @param records the hosted set inlet. Every write therefore crosses the host
+ *   intake and is captured by [input].
+ * @param input the kernel durable input that commits the source cursor and all
+ *   set mutations from one poll as one journal record.
+ * @param view a snapshot read of the live hosted cell's membership.
  * @param maxLinesPerBatch how many lines the reader hands over at a time —
  *   passed through to [SpendLogTailReader] for the same reason its `chunkSize`
  *   is a parameter: it makes the multi-hand-off fold, in particular a
@@ -141,13 +224,21 @@ data class SpendPollOutcome(
  */
 class SpendLogIngester(
     logPath: Path,
-    runDir: Path,
-    val records: SetCell<SpendRecord> = SetCell(),
-    checkpoint: SpendOffsetStore = OffsetCheckpoint(runDir),
+    private val records: SetOps<SpendRecord>,
+    private val input: DurableInput,
+    private val view: () -> Set<SpendRecord>,
     maxLinesPerBatch: Int = SpendLogTailReader.DEFAULT_MAX_LINES_PER_BATCH,
 ) {
 
-    private val reader = SpendLogTailReader(logPath, checkpoint, maxLinesPerBatch = maxLinesPerBatch)
+    init {
+        ensureAllocatorObserveWireTypes()
+    }
+
+    private val reader = SpendLogTailReader(
+        logPath = logPath,
+        committed = { input.committed() as? CheckpointState },
+        maxLinesPerBatch = maxLinesPerBatch,
+    )
 
     /**
      * Running per-reason failure counts since this ingester was constructed.
@@ -158,7 +249,7 @@ class SpendLogIngester(
         private set
 
     /** The materialized record set: what the log currently says, as records. */
-    fun view(): Set<SpendRecord> = records.membership()
+    fun view(): Set<SpendRecord> = view.invoke()
 
     /**
      * Reads whatever the log has for us and folds it in.
@@ -172,7 +263,9 @@ class SpendLogIngester(
      */
     fun poll(): SpendPollOutcome {
         val fold = PollFold()
-        reader.poll(fold::absorb)
+        input.commit {
+            reader.poll(fold::absorb).next
+        }
         // The reader always delivers at least one batch per poll, on every
         // branch including LogAbsent, and exactly one of them carries `last`.
         return checkNotNull(fold.outcome) { "tail reader did not close the poll with a final batch" }
@@ -227,7 +320,10 @@ class SpendLogIngester(
          * it once here and once more at the final hand-off bounds the call
          * count at 2 per poll regardless of hand-off count.
          */
-        private var appendBaseline: Int? = null
+        private var appendBaseline: Set<SpendRecord>? = null
+
+        /** Append-only records seen across all hand-offs in this poll. */
+        private val appended = mutableSetOf<SpendRecord>()
 
         fun absorb(batch: TailBatch) {
             val valid = mutableListOf<SpendRecord>()
@@ -246,11 +342,11 @@ class SpendLogIngester(
                 // knowable once every batch is in.
                 desired += valid
                 if (batch.last) {
-                    val live = records.membership()
+                    val live = view()
                     val toAdd = desired - live
                     val toRemove = live - desired
-                    toAdd.forEach { records.inlet.call.add(it) }
-                    toRemove.forEach { records.inlet.call.remove(it) }
+                    toAdd.forEach(records::add)
+                    toRemove.forEach(records::remove)
                     added = toAdd.size
                     removed = toRemove.size
                 }
@@ -263,9 +359,10 @@ class SpendLogIngester(
                 // batch, across batches, or already present is counted added
                 // exactly once either way — the delta is size-based, not a set
                 // difference per batch.
-                if (appendBaseline == null) appendBaseline = records.membership().size
-                valid.forEach { records.inlet.call.add(it) }
-                if (batch.last) added = records.membership().size - appendBaseline!!
+                if (appendBaseline == null) appendBaseline = view()
+                appended += valid
+                valid.forEach(records::add)
+                if (batch.last) added = (appended - checkNotNull(appendBaseline)).size
             }
 
             if (batch.last) {

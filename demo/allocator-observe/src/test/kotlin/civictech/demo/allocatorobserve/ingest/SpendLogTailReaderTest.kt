@@ -11,492 +11,192 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
-/**
- * File-mechanics tests for `computenet-fpml.1.2`: the byte-offset checkpoint
- * and the truncation/replacement detection that makes the feature's rules 1
- * and 3 true at the byte level.
- *
- * Everything runs in a JUnit temp dir — no real socaity spend log exists yet
- * and no path is hardcoded anywhere (design note fpml.1-D1).
- */
+/** File-mechanics tests for the cursor-returning, persistence-free tail reader. */
 class SpendLogTailReaderTest {
 
     @TempDir
     lateinit var dir: Path
 
     private val log: Path get() = dir.resolve("spend.jsonl")
-    private val runDir: Path get() = dir.resolve("run")
+    private var committed: CheckpointState? = null
 
     private fun append(text: String) {
         Files.writeString(log, text, StandardOpenOption.CREATE, StandardOpenOption.APPEND)
     }
 
-    /**
-     * Polls a fresh reader over the same run dir and returns the poll's hand-offs
-     * CONCATENATED into one batch, so a test about file mechanics can assert on
-     * the poll's line content without caring how many hand-offs carried it.
-     *
-     * The hand-off protocol itself is checked here, on every poll every test
-     * makes, rather than in one place: at least one hand-off, `last` set on the
-     * final one and on no other, and a [TailSummary] that agrees with what the
-     * consumer actually saw. How much is resident per hand-off is what
-     * [handOffSizes] is for; this helper deliberately accumulates and so proves
-     * nothing about residency.
-     */
     private fun poll(
-        store: SpendOffsetStore = OffsetCheckpoint(runDir),
         chunkSize: Int = SpendLogTailReader.DEFAULT_CHUNK_SIZE,
         maxLinesPerBatch: Int = SpendLogTailReader.DEFAULT_MAX_LINES_PER_BATCH,
+        commit: Boolean = true,
     ): TailBatch {
-        val handOffs = mutableListOf<TailBatch>()
-        val summary =
-            SpendLogTailReader(log, store, chunkSize, maxLinesPerBatch).poll { handOffs += it }
-
-        handOffs.isEmpty() shouldBe false
-        handOffs.dropLast(1).forEach { it.last shouldBe false }
-        handOffs.last().last shouldBe true
-        handOffs.forEach { it.reason shouldBe summary.reason }
-
-        val lines = handOffs.flatMap { it.lines }
-        summary.handOffs shouldBe handOffs.size
+        val batches = mutableListOf<TailBatch>()
+        val summary = SpendLogTailReader(
+            logPath = log,
+            committed = { committed },
+            maxLinesPerBatch = maxLinesPerBatch,
+            chunkSize = chunkSize,
+        ).poll(batches::add)
+        batches.isEmpty() shouldBe false
+        batches.dropLast(1).forEach { it.last shouldBe false }
+        batches.last().last shouldBe true
+        val lines = batches.flatMap(TailBatch::lines)
         summary.lineCount shouldBe lines.size.toLong()
-        summary.offset shouldBe handOffs.last().offset
+        summary.handOffs shouldBe batches.size
+        summary.offset shouldBe batches.last().offset
+        summary.next.offset shouldBe summary.offset
+        if (commit) committed = summary.next
         return TailBatch(summary.reason, lines, summary.offset, last = true)
     }
 
-    /**
-     * One poll's hand-offs, in order, UNCONCATENATED — the instrument for what
-     * is resident at once, where [poll]'s aggregation would destroy the evidence.
-     * One poll per call, like [poll]: it advances the checkpoint exactly once.
-     */
-    private fun handOffs(
-        chunkSize: Int = SpendLogTailReader.DEFAULT_CHUNK_SIZE,
-        maxLinesPerBatch: Int = SpendLogTailReader.DEFAULT_MAX_LINES_PER_BATCH,
-    ): List<TailBatch> {
+    private fun handOffs(chunkSize: Int, maxLinesPerBatch: Int): List<TailBatch> {
         val batches = mutableListOf<TailBatch>()
-        SpendLogTailReader(log, OffsetCheckpoint(runDir), chunkSize, maxLinesPerBatch)
-            .poll { batches += it }
+        val summary = SpendLogTailReader(log, { committed }, maxLinesPerBatch, chunkSize).poll(batches::add)
+        committed = summary.next
         return batches
     }
 
     @Test
-    fun `repeated polls read each byte at most once while the log only grows`() {
+    fun `repeated polls read each byte once while the log grows`() {
         append("one\ntwo\n")
-        val first = poll()
-        first.reason shouldBe TailReason.FirstStart
-        first.lines shouldContainExactly listOf("one", "two")
-        first.offset shouldBe 8L
+        poll().also {
+            it.reason shouldBe TailReason.FirstStart
+            it.lines shouldContainExactly listOf("one", "two")
+            it.offset shouldBe 8L
+        }
 
-        // Nothing appended: nothing re-read.
-        val idle = poll()
-        idle.reason shouldBe TailReason.Resumed(8L)
-        idle.lines.shouldBeEmpty()
-        idle.offset shouldBe 8L
+        poll().also {
+            it.reason shouldBe TailReason.Resumed(8L)
+            it.lines.shouldBeEmpty()
+        }
 
         append("three\n")
-        val third = poll()
-        third.reason shouldBe TailReason.Resumed(8L)
-        third.lines shouldContainExactly listOf("three")
-        third.offset shouldBe 14L
+        poll().also {
+            it.reason shouldBe TailReason.Resumed(8L)
+            it.lines shouldContainExactly listOf("three")
+            it.offset shouldBe 14L
+        }
     }
 
     @Test
-    fun `a restart resumes at the persisted offset and reads only the new bytes`() {
+    fun `a new reader resumes from the caller committed cursor`() {
         append("one\ntwo\n")
         poll().offset shouldBe 8L
-
-        // A brand-new reader AND a brand-new checkpoint over the same run
-        // directory — i.e. a restarted process, with nothing carried in memory.
         append("three\nfour\n")
-        val resumed = poll(OffsetCheckpoint(runDir))
-        resumed.reason shouldBe TailReason.Resumed(8L)
-        resumed.lines shouldContainExactly listOf("three", "four")
-        resumed.offset shouldBe 19L
+
+        poll().also {
+            it.reason shouldBe TailReason.Resumed(8L)
+            it.lines shouldContainExactly listOf("three", "four")
+            it.offset shouldBe 19L
+        }
     }
 
     @Test
-    fun `truncating the log below the checkpoint offset re-baselines from zero`() {
+    fun `truncation and replacement re-baseline from zero`() {
         append("aaa\nbbb\n")
-        poll().offset shouldBe 8L
+        poll()
 
         Files.writeString(log, "aaa\n")
-        val rebaselined = poll()
+        val truncated = poll()
+        truncated.reason.shouldBeInstanceOf<TailReason.ReBaselined>().cause shouldBe
+            ReBaselineCause.Truncated(8L, 4L)
+        truncated.lines shouldContainExactly listOf("aaa")
 
-        val reason = rebaselined.reason.shouldBeInstanceOf<TailReason.ReBaselined>()
-        reason.cause shouldBe ReBaselineCause.Truncated(checkpointOffset = 8L, currentLength = 4L)
-        rebaselined.lines shouldContainExactly listOf("aaa")
-        rebaselined.offset shouldBe 4L
-
-        // And the re-baseline is not sticky: the next poll resumes normally
-        // from the re-baselined position.
-        append("ccc\n")
-        val after = poll()
-        after.reason shouldBe TailReason.Resumed(4L)
-        after.lines shouldContainExactly listOf("ccc")
-    }
-
-    @Test
-    fun `replacing the log with different content of at least the checkpoint length re-baselines`() {
-        append("aaa\nbbb\n")
-        poll().offset shouldBe 8L
-
-        // 12 bytes >= the 8-byte checkpoint, so length alone says "it grew".
-        // Only the head fingerprint can tell that it is a different log.
         Files.writeString(log, "xxx\nyyy\nzzz\n")
-        val rebaselined = poll()
-
-        val reason = rebaselined.reason.shouldBeInstanceOf<TailReason.ReBaselined>()
-        val cause = reason.cause.shouldBeInstanceOf<ReBaselineCause.Replaced>()
-        cause.checkpointOffset shouldBe 8L
-        (cause.expectedFingerprint == cause.actualFingerprint) shouldBe false
-        rebaselined.lines shouldContainExactly listOf("xxx", "yyy", "zzz")
-        rebaselined.offset shouldBe 12L
+        val replaced = poll()
+        replaced.reason.shouldBeInstanceOf<TailReason.ReBaselined>()
+            .cause.shouldBeInstanceOf<ReBaselineCause.Replaced>()
+        replaced.lines shouldContainExactly listOf("xxx", "yyy", "zzz")
     }
 
     @Test
-    fun `a trailing partial line is withheld until its newline arrives, then delivered once`() {
+    fun `a trailing partial line is withheld until its newline arrives`() {
         append("full\npart")
-        val partial = poll()
-        partial.lines shouldContainExactly listOf("full")
-        // Offset stops after "full\n" — it does NOT advance over "part".
-        partial.offset shouldBe 5L
-
+        poll().also {
+            it.lines shouldContainExactly listOf("full")
+            it.offset shouldBe 5L
+        }
         append("ial\n")
-        val completed = poll()
-        completed.reason shouldBe TailReason.Resumed(5L)
-        completed.lines shouldContainExactly listOf("partial")
-        completed.offset shouldBe 13L
-
-        // Exactly once: a further poll delivers nothing.
+        poll().also {
+            it.reason shouldBe TailReason.Resumed(5L)
+            it.lines shouldContainExactly listOf("partial")
+        }
         poll().lines.shouldBeEmpty()
     }
 
     @Test
-    fun `the checkpoint is written only after the batch is handed to the consumer`() {
-        append("one\ntwo\n")
-
-        val events = mutableListOf<String>()
-        val store = RecordingStore(OffsetCheckpoint(runDir), events)
-        SpendLogTailReader(log, store).poll { batch -> events += "consumed(${batch.lines.size})" }
-
-        events shouldContainExactly listOf("read", "consumed(2)", "write(8)")
-    }
-
-    @Test
-    fun `a consumer that throws leaves the checkpoint untouched, so the batch is redelivered`() {
-        append("one\ntwo\n")
-
-        val checkpoint = OffsetCheckpoint(runDir)
-        assertThrows<IllegalStateException> {
-            SpendLogTailReader(log, checkpoint).poll { error("consumer failed") }
+    fun `the cursor is exposed only after the final hand-off returns`() {
+        append((0 until 100).joinToString("") { "line-%04d\n".format(it) })
+        val before = committed
+        var handOffs = 0
+        val summary = SpendLogTailReader(log, { committed }, maxLinesPerBatch = 32, chunkSize = 64).poll {
+            committed shouldBe before
+            handOffs++
         }
-        checkpoint.read() shouldBe null
-
-        val retried = poll(checkpoint)
-        retried.reason shouldBe TailReason.FirstStart
-        retried.lines shouldContainExactly listOf("one", "two")
+        handOffs shouldBe 4
+        committed shouldBe before
+        summary.next.offset shouldBe 1000L
+        committed = summary.next
+        committed?.offset shouldBe 1000L
     }
 
     @Test
-    fun `a nonexistent log yields an empty batch rather than throwing`() {
+    fun `a consumer failure leaves the caller cursor untouched`() {
+        append("one\ntwo\n")
+        assertThrows<IllegalStateException> {
+            SpendLogTailReader(log, { committed }).poll { error("consumer failed") }
+        }
+        committed shouldBe null
+        poll().reason shouldBe TailReason.FirstStart
+    }
+
+    @Test
+    fun `an absent log returns a zero cursor and arrival resumes from zero`() {
         val absent = poll()
         absent.reason shouldBe TailReason.LogAbsent
         absent.lines.shouldBeEmpty()
-        absent.offset shouldBe 0L
-
-        // It is also not a poisoned state: once the log arrives it is read
-        // normally, from the beginning.
-        append("one\n")
-        val arrived = poll()
-        arrived.reason shouldBe TailReason.FirstStart
-        arrived.lines shouldContainExactly listOf("one")
-    }
-
-    @Test
-    fun `an empty log is neither an error nor a re-baseline trigger`() {
-        Files.createFile(log)
-        poll().lines.shouldBeEmpty()
+        committed?.offset shouldBe 0L
 
         append("one\n")
-        val grown = poll()
-        // Offset 0 was checkpointed, so this is a resume, not a re-baseline:
-        // an empty head window must not read as a changed identity.
-        grown.reason shouldBe TailReason.Resumed(0L)
-        grown.lines shouldContainExactly listOf("one")
-    }
-
-    // ---- computenet-v5c7: the read is chunked, and the chunk size is a parameter ----
-    //
-    // The defect these cover is a whole-file read (TailReason.FirstStart or
-    // TailReason.ReBaselined) over a range that does not fit an Int. A 4 GiB
-    // fixture is not a unit test, so the CHUNK SIZE is the parameter that makes
-    // the multi-chunk arithmetic — the boundary carry, the offset accounting —
-    // reachable at a size a temp dir can hold. What these tests exercise is the
-    // same loop production runs; only the number of iterations differs.
-
-    /** `count` lines of the form `line-0000`, plus their newlines. Returns the lines. */
-    private fun manyLines(count: Int): List<String> {
-        val lines = (0 until count).map { "line-%04d".format(it) }
-        append(lines.joinToString("") { it + "\n" })
-        return lines
+        poll().also {
+            it.reason shouldBe TailReason.Resumed(0L)
+            it.lines shouldContainExactly listOf("one")
+        }
     }
 
     @Test
-    fun `a line whose bytes straddle a chunk boundary is delivered exactly once and intact`() {
-        // 7-byte chunks against 9-byte lines ("abcdefgh\n"): no line can begin
-        // and end inside one chunk, so EVERY line straddles a boundary.
-        append("abcdefgh\nijklmnop\nqrstuvwx\n")
-        val batch = poll(chunkSize = 7)
-        batch.reason shouldBe TailReason.FirstStart
-        batch.lines shouldContainExactly listOf("abcdefgh", "ijklmnop", "qrstuvwx")
-        batch.offset shouldBe 27L
-
-        // Exactly once: the straddling line is not re-emitted by a later poll.
-        poll(chunkSize = 7).lines.shouldBeEmpty()
+    fun `chunk boundaries and multi-byte characters preserve complete lines`() {
+        append("abcdefgh\na€b\n" + "x".repeat(200) + "\n")
+        poll(chunkSize = 2).lines shouldContainExactly
+            listOf("abcdefgh", "a€b", "x".repeat(200))
     }
 
     @Test
-    fun `a chunk boundary landing exactly on a newline neither duplicates nor drops a line`() {
-        // 4-byte chunks against 4-byte lines ("abc\n"): every chunk ends exactly
-        // on a newline, so the carry is empty at every boundary.
-        append("abc\ndef\nghi\n")
-        val batch = poll(chunkSize = 4)
-        batch.lines shouldContainExactly listOf("abc", "def", "ghi")
-        batch.offset shouldBe 12L
-    }
+    fun `large reads are handed off in bounded batches`() {
+        val lines = (0 until 300).map { "line-%04d".format(it) }
+        append(lines.joinToString("") { "$it\n" })
 
-    @Test
-    fun `a line longer than one chunk is assembled across chunks and delivered intact`() {
-        // The carry, not the read buffer, is what has to grow here: a 200-byte
-        // line read through an 8-byte buffer spans 25 chunks.
-        val long = "x".repeat(200)
-        append("short\n" + long + "\nafter\n")
-        val batch = poll(chunkSize = 8)
-        batch.lines shouldContainExactly listOf("short", long, "after")
-        batch.offset shouldBe (6 + 201 + 6).toLong()
-    }
-
-    @Test
-    fun `the offset advances across a multi-chunk read without re-reading or skipping a byte`() {
-        // 500 lines of 10 bytes = 5000 bytes read through a 64-byte buffer:
-        // ~79 chunks in one poll, then a second poll over an append that itself
-        // spans several chunks. The union of the two batches must be the file
-        // exactly once, in order, and the offsets must chain.
-        val first = manyLines(500)
-        val batchA = poll(chunkSize = 64)
-        batchA.reason shouldBe TailReason.FirstStart
-        batchA.lines shouldContainExactly first
-        batchA.offset shouldBe 5000L
-
-        val second = (500 until 700).map { "line-%04d".format(it) }
-        append(second.joinToString("") { it + "\n" })
-        val batchB = poll(chunkSize = 64)
-        batchB.reason shouldBe TailReason.Resumed(5000L)
-        batchB.lines shouldContainExactly second
-        batchB.offset shouldBe 7000L
-
-        // Nothing re-read, nothing skipped: concatenating what the two polls
-        // delivered reconstructs the file byte-for-byte.
-        (batchA.lines + batchB.lines).joinToString("") { it + "\n" } shouldBe
-            Files.readString(log)
-
-        // And the log is now idle, not mid-prefix.
-        poll(chunkSize = 64).lines.shouldBeEmpty()
-    }
-
-    @Test
-    fun `a whole-file multi-chunk read converges the materialized set on the current content`() {
-        // Both whole-file reasons, since those are the only two that read a
-        // range large enough for the narrowing to have mattered.
-        val original = manyLines(300)
-        poll(chunkSize = 37).lines shouldContainExactly original
-
-        // Replace with LONGER, different content: a re-baseline re-reads the
-        // whole file across many chunks and must deliver all of it.
-        val replacement = (0 until 400).map { "fresh-%04d".format(it) }
-        Files.writeString(log, replacement.joinToString("") { it + "\n" })
-        val rebaselined = poll(chunkSize = 37)
-        rebaselined.reason.shouldBeInstanceOf<TailReason.ReBaselined>()
-        rebaselined.lines shouldContainExactly replacement
-        rebaselined.offset shouldBe 4400L
-
-        // The materialized set is exactly the file content, with nothing of the
-        // superseded log left in it.
-        rebaselined.lines.toSet() shouldBe replacement.toSet()
-        rebaselined.lines.any { it in original } shouldBe false
-    }
-
-    @Test
-    fun `a trailing partial line spanning the final chunks is withheld, then delivered once`() {
-        val head = manyLines(50) // 500 bytes
-        append("unterminated-tail-with-no-newline-yet")
-        val partial = poll(chunkSize = 16)
-        partial.lines shouldContainExactly head
-        partial.offset shouldBe 500L
-
-        append("-now-complete\n")
-        val completed = poll(chunkSize = 16)
-        completed.reason shouldBe TailReason.Resumed(500L)
-        completed.lines shouldContainExactly listOf("unterminated-tail-with-no-newline-yet-now-complete")
-        completed.offset shouldBe 551L
-        poll(chunkSize = 16).lines.shouldBeEmpty()
-    }
-
-    @Test
-    fun `a multi-byte character straddling a chunk boundary survives decoding`() {
-        // "€" is 3 UTF-8 bytes at offsets 1..3 and 7..9 of this 12-byte file.
-        // The chunk size has to actually SPLIT one: at 5 bytes the boundaries
-        // fall at 5 and 10, inside no character, and the test passes even if
-        // each chunk fragment is decoded separately. At 2 bytes every chunk
-        // boundary that matters lands mid-sequence, so the line is only
-        // recovered if the CARRY holds raw bytes and decoding happens once per
-        // complete line. Scanning for 0x0A bytewise is safe because a newline
-        // never occurs inside a multi-byte sequence — this pins that too.
-        append("a€b\nc€d\n")
-        poll(chunkSize = 2).lines shouldContainExactly listOf("a€b", "c€d")
-    }
-
-    // ---- computenet-xs5u: the HAND-OFF is bounded, not just the read ----
-    //
-    // v5c7 bounded the read buffer at chunkSize but still handed the consumer a
-    // List of every complete line in the range, so a whole-file read of a 4 GiB
-    // log materialized several GiB of Strings. These cover the bound that
-    // replaces it, and the crash-ordering rule it must not cost.
-
-    @Test
-    fun `a multi-chunk read hands over bounded batches instead of the range's whole line content`() {
-        val all = manyLines(300)
-
-        // 3000 bytes read through a 64-byte buffer: ~47 chunks, one poll.
         val batches = handOffs(chunkSize = 64, maxLinesPerBatch = 32)
-        val sizes = batches.map { it.lines.size }
-
-        // THE residency pin: no hand-off carries more than the bound, however
-        // many lines the range holds. Against the pre-fix reader this is a
-        // single hand-off of 300.
-        sizes.forEach { (it <= 32) shouldBe true }
-        // And the read really did span several hand-offs — without this the
-        // bound above would hold vacuously for a reader that delivered nothing.
-        sizes.size shouldBe 10
-        sizes.sum() shouldBe 300
-
-        // Bounding the hand-off costs no line, no order, and no byte.
-        batches.flatMap { it.lines } shouldContainExactly all
-        batches.last().offset shouldBe 3000L
+        batches.map { it.lines.size }.forEach { (it <= 32) shouldBe true }
+        batches.size shouldBe 10
+        batches.flatMap(TailBatch::lines) shouldContainExactly lines
         batches.last().last shouldBe true
     }
 
-    /**
-     * What this pins, and what it does not — the honest statement, kept next to
-     * the number rather than only in the bead.
-     *
-     * It pins what the reader HANDS OVER at once (`<= maxLinesPerBatch`) and
-     * that a large range is split across many such hand-offs. It does not
-     * measure heap, and no test here does: a heap measurement is flaky and
-     * would be worthless evidence (AGENTS.md — assert semantic outcomes, not
-     * timing or machine state). Two things are therefore argued rather than
-     * measured, and are stated as such:
-     *
-     * - The reader dropping its reference to each emitted batch is structural
-     *   (`streamCompleteLines` replaces the pending list rather than clearing
-     *   it), not observed here.
-     * - A CONSUMER that accumulates every hand-off has moved the
-     *   materialization rather than removed it. This test's own `poll` helper
-     *   is such a consumer, deliberately. `SpendLogIngesterTest` covers the
-     *   real consumer's side.
-     */
     @Test
-    fun `the bound holds for the whole-file reasons, which are the ones that read a large range`() {
-        // FirstStart: a whole-file read with no checkpoint.
-        manyLines(300)
-        val first = handOffs(chunkSize = 64, maxLinesPerBatch = 32)
-        first.first().reason shouldBe TailReason.FirstStart
-        first.map { it.lines.size }.forEach { (it <= 32) shouldBe true }
-
-        // ReBaselined: re-reads the WHOLE current file — the case that OOMed —
-        // so it is the one that most needs the bound.
-        val replacement = (0 until 250).map { "fresh-%04d".format(it) }
-        Files.writeString(log, replacement.joinToString("") { it + "\n" })
-        val rebaselined = handOffs(chunkSize = 37, maxLinesPerBatch = 16)
-
-        rebaselined.first().reason.shouldBeInstanceOf<TailReason.ReBaselined>()
-        rebaselined.map { it.lines.size }.forEach { (it <= 16) shouldBe true }
-        // Bounded AND complete: all 250 lines of the new content, in order.
-        rebaselined.flatMap { it.lines } shouldContainExactly replacement
-    }
-
-    @Test
-    fun `the checkpoint is written only after the LAST hand-off returns`() {
-        manyLines(100)
-
-        val events = mutableListOf<String>()
-        val store = RecordingStore(OffsetCheckpoint(runDir), events)
-        SpendLogTailReader(log, store, 64, 32).poll { batch ->
-            events += "consumed(${batch.lines.size}, last=${batch.last})"
-        }
-
-        // Four hand-offs, the write strictly after the last of them. A reader
-        // that persisted per hand-off would advance the checkpoint past lines a
-        // later hand-off might still fail on.
-        events shouldContainExactly
-            listOf(
-                "read",
-                "consumed(32, last=false)",
-                "consumed(32, last=false)",
-                "consumed(32, last=false)",
-                "consumed(4, last=true)",
-                "write(1000)",
-            )
-    }
-
-    @Test
-    fun `a consumer that throws on a LATER hand-off still leaves the checkpoint untouched`() {
-        manyLines(100)
-
-        val checkpoint = OffsetCheckpoint(runDir)
+    fun `a later hand-off failure still returns no cursor`() {
+        append((0 until 100).joinToString("") { "line-%04d\n".format(it) })
         var seen = 0
         assertThrows<IllegalStateException> {
-            SpendLogTailReader(log, checkpoint, 64, 32).poll {
-                seen++
-                if (seen == 3) error("consumer failed on the third hand-off")
+            SpendLogTailReader(log, { committed }, maxLinesPerBatch = 32, chunkSize = 64).poll {
+                if (++seen == 3) error("third hand-off")
             }
         }
-        // Not merely "nothing was written": nothing was written even though two
-        // whole hand-offs had already been accepted. Multi-hand-off delivery
-        // must not become partial-commit delivery.
-        checkpoint.read() shouldBe null
-
-        val retried = poll(checkpoint, chunkSize = 64, maxLinesPerBatch = 32)
-        retried.reason shouldBe TailReason.FirstStart
-        retried.lines.size shouldBe 100
+        committed shouldBe null
     }
 
     @Test
-    fun `a non-positive max lines per batch is refused at construction`() {
-        assertThrows<IllegalArgumentException> {
-            SpendLogTailReader(log, OffsetCheckpoint(runDir), 64, 0)
-        }
-        assertThrows<IllegalArgumentException> {
-            SpendLogTailReader(log, OffsetCheckpoint(runDir), 64, -1)
-        }
-    }
-
-    @Test
-    fun `a non-positive chunk size is refused at construction`() {
-        assertThrows<IllegalArgumentException> { SpendLogTailReader(log, OffsetCheckpoint(runDir), 0) }
-        assertThrows<IllegalArgumentException> { SpendLogTailReader(log, OffsetCheckpoint(runDir), -1) }
-    }
-
-    /** Records read/write calls into a shared ordering log, delegating the real work. */
-    private class RecordingStore(
-        private val delegate: SpendOffsetStore,
-        private val events: MutableList<String>,
-    ) : SpendOffsetStore {
-        override fun read(): CheckpointState? = delegate.read().also { events += "read" }
-
-        override fun write(state: CheckpointState) {
-            events += "write(${state.offset})"
-            delegate.write(state)
-        }
+    fun `non-positive bounds are refused`() {
+        assertThrows<IllegalArgumentException> { SpendLogTailReader(log, { null }, maxLinesPerBatch = 0) }
+        assertThrows<IllegalArgumentException> { SpendLogTailReader(log, { null }, chunkSize = 0) }
     }
 }
