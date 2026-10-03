@@ -17,11 +17,11 @@ import civictech.demo.beadsmirror.projector.MirrorCellCapture
 import civictech.demo.beadsmirror.projector.MirrorCellFactory
 import civictech.demo.beadsmirror.projector.MirrorCellKind
 import civictech.demo.beadsmirror.projector.MirrorCellRefs
+import civictech.demo.beadsmirror.projector.MirrorCells
 import civictech.demo.beadsmirror.projector.MirrorDeltaInlet
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorKey
 import civictech.demo.beadsmirror.projector.MirrorProjector
-import civictech.demo.beadsmirror.projector.SeededDefects
 import civictech.runtime.Runtime
 import java.nio.file.Files
 import java.nio.file.Path
@@ -57,18 +57,29 @@ class MirrorGraph internal constructor(
     internal fun projector(
         minter: DotMinter,
         applied: AppliedGraph? = null,
-        defects: SeededDefects = SeededDefects.NONE,
+        factory: (
+            DotMinter,
+            MirrorCells,
+            Propagate<TaggedMapDelta<MirrorKey, String>>,
+            Propagate<SetDelta<MirrorEdge>>,
+        ) -> MirrorProjector = { projectorMinter, cells, mapInlet, edgeInlet ->
+            MirrorProjector(
+                minter = projectorMinter,
+                cell = cells.cell,
+                edges = cells.edges,
+                mapInlet = mapInlet,
+                edgeInlet = edgeInlet,
+            )
+        },
     ): MirrorProjector {
         applied?.refs?.getValue(MAP_HANDLE)?.let { check(it == refs.mapRef) }
         applied?.refs?.getValue(EDGES_HANDLE)?.let { check(it == refs.edgeRef) }
         val cells = MirrorCellCapture.take(refs.mapRef, refs.edgeRef)
-        return MirrorProjector(
-            minter = minter,
-            defects = defects,
-            cell = cells.cell,
-            edges = cells.edges,
-            mapInlet = deltaInlet(host, refs.mapRef),
-            edgeInlet = deltaInlet(host, refs.edgeRef),
+        return factory(
+            minter,
+            cells,
+            deltaInlet(host, refs.mapRef),
+            deltaInlet(host, refs.edgeRef),
         )
     }
 
