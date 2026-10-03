@@ -86,7 +86,8 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
          * is asked whether it disputes the claim or only its bearing ([Judge.bearing]).
          * Below it the triage path is unchanged. Motivated by a scratch model review
          * (2026-09-27, not in the repo), not by a calibration run: treat it as a
-         * starting value, not a measured one.
+         * starting value, not an optimised one. A bounded questionless-CRED-01
+         * recalibration supported keeping it (CALIBRATION.md, 2026-10-03).
          */
         const val BEARING_PLAUSIBILITY = 0.8
 

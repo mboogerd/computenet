@@ -56,6 +56,46 @@ In the "cross estimate" column, each depth-1 strength (36 claims) is paired with
 
 With the defaults of two proposers × `argsPerCall` 1, each round offers up to two new arguments per side. Jev's saturation judgment is therefore consulted at 2 and 4 arguments per side, before the dependable `maxArgsPerSide` cap of 6 ends a side that Jev has not already saturated.
 
+## Questionless CRED-01 recalibration (2026-10-03)
+
+The CRED-01 request now holds the claim only; it no longer sends the root
+question. A bounded live run with `jev-latest` paired the old question-context
+request and the new claim-only request on 24 deterministic claims from the
+cached three-question material above (48 calls total, concurrency 4; 33,504
+input and 3,216 output tokens, about $0.0014 at the demo's assumed Jev rate).
+Per question, the sample included the chain claims at depths 1–3, two other
+root pros, two root cons, and one depth-1 pro. Both sides of every pair asked
+the current model D `knowledge` Choice. None of the 48 answers selected
+`OUTSIDE_MY_KNOWLEDGE`.
+
+| measure | result |
+|---|---:|
+| mean absolute plausibility change | 0.055 |
+| mean signed change (claim-only minus question-context) | +0.002 |
+| first impressions crossing 0.5 | **1/24 (4.2%)** |
+| at or above `BEARING_PLAUSIBILITY` 0.8, question-context → claim-only | 9/24 → 7/24 |
+| crossing 0.8 in either direction | 4/24 (16.7%): three down, one up |
+
+This small run is a shipping check, not a new population estimate: one claim
+is 4.2 percentage points, and the corpus has only three root questions. The
+claim-reuse research run is a comparison point, not its baseline: that larger
+configuration omitted the `knowledge` Choice and found 92/1,066 (8.6%) 0.5-side
+flips with mean absolute change 0.066.
+
+**Decision: keep `BEARING_PLAUSIBILITY` = 0.8.** The new context-free scores
+changed individual boundary decisions, as intended, but did not shift the
+sample as a whole (mean signed change +0.002). Lowering the boundary merely to
+preserve the old request's eligibility rate would reintroduce that request as
+the target; 0.8 still expresses the semantic condition that the attacked
+claim is highly plausible. The sample is too small to optimise a replacement.
+
+**Decision: keep `saturation` = 0.22.** Saturation has its own request over the
+question, claim, side, and existing arguments; CRED-01 changes none of its
+state, prompt, or threshold semantics. The live saturation evidence above
+therefore remains the applicable calibration. A future corpus-wide rerun may
+still test selection effects from changed exploration, but this bounded result
+provides no reason to move the threshold.
+
 ## Iteration 4: judgments changed after this calibration
 
 Plausibility no longer sees the path from the question (its state is only the

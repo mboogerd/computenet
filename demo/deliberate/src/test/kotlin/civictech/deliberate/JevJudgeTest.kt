@@ -88,19 +88,20 @@ class JevJudgeTest {
     private val ctx = ClaimContext("Should cities ban cars?", listOf("Should cities ban cars?"), "Cars pollute.", listOf("p1"), listOf("c1", "c2"))
 
     @Test
-    fun `plausibility sends a five-level score and maps it to unit range`() {
+    fun `plausibility sends only the claim with a five-level score and maps it to unit range`() {
         plausibilityReply(3.0)
         assertEquals(0.75, judge.plausibility("Q?", "Claim."), 1e-9)
         val req = seen.single()
         assertEquals("Bearer test-key", req.auth)
         assertEquals("jev-latest", req.body["model"]!!.jsonPrimitive.content)
         val state = req.body["state"]!!.jsonObject
-        // CRED-01: no path — it pulled the judgment towards the claim's role in the argument
-        assertEquals(setOf("root_question", "claim"), state.keys)
-        assertEquals("Q?", state["root_question"]!!.jsonPrimitive.content)
+        // CRED-01: the question biases a reusable claim's first impression.
+        assertEquals(setOf("claim"), state.keys)
         assertEquals("Claim.", state["claim"]!!.jsonPrimitive.content)
         val q = question(req.body, "plausibility")
-        assertTrue("Judge only what `claim` itself asserts" in q["instructions"]!!.jsonPrimitive.content)
+        val instructions = q["instructions"]!!.jsonPrimitive.content
+        assertTrue("Judge only what `claim` itself asserts" in instructions)
+        assertTrue("root_question" !in instructions)
         assertEquals("score", q["type"]!!.jsonPrimitive.content)
         val criteria = (q["criteria"] as JsonArray).map { it.jsonPrimitive.content }
         assertEquals(5, criteria.size)
@@ -365,8 +366,8 @@ class JevJudgeTest {
         assertEquals(Assessment(plausibility = 0.75, strength = 0.5, quality = 0.9, relevance = 0.4), a)
         assertEquals(2, seen.size)
         val plaus = seen.single { "plausibility" in it.body["questions"]!!.jsonObject }.body
-        // CRED-01: plausibility sees the claim and the question only
-        assertEquals(setOf("root_question", "claim"), plaus["state"]!!.jsonObject.keys)
+        // CRED-01: the parallel plausibility request also sees the claim only.
+        assertEquals(setOf("claim"), plaus["state"]!!.jsonObject.keys)
         assertEquals("Child.", plaus["state"]!!.jsonObject["claim"]!!.jsonPrimitive.content)
         val body = seen.single { "strength" in it.body["questions"]!!.jsonObject }.body
         assertEquals(setOf("strength", "quality", "relevant"), body["questions"]!!.jsonObject.keys)
