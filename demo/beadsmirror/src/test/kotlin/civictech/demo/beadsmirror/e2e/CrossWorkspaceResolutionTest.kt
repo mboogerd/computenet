@@ -162,18 +162,11 @@ class CrossWorkspaceResolutionTest {
         awaitUntil("wsA's seed issue appears on its fold") { foldContainsIssue(identityA, idA0) }
         awaitUntil("wsB's seeded foreign-prefix target appears on its fold") { foldContainsIssue(identityB, sibId) }
 
-        // Captured right after the start-time baseline of both mirrors —
-        // R3's "unchanged" assertion below reads against this, not against 0.
-        // Asserted here (not just captured) so the steady-state check below is
-        // paired, through this SAME accessor, with a positive observation that
-        // it actually moved: every fresh BdScratchWorkspace has no persisted
-        // checkpoint, so BeadsMirrorApp.start triggers exactly one
-        // RebaselineReason.FirstStart swap per mirror (Rebaseline.run) before
-        // this line runs. Without this assertion, a wsA wired to never
-        // increment the counter at all would make the later "unchanged" check
-        // pass just as easily as a correct implementation would.
+        // First start baselines each live hosted projector; it does not replace
+        // either projector, so no swap is counted. R3's "unchanged" assertion
+        // below reads against this explicit startup value.
         val rebaselineCountAfterStart = mirrorState(identityA).rebaselineCount
-        rebaselineCountAfterStart shouldBe 1
+        rebaselineCountAfterStart shouldBe 0
 
         val resolver = EdgeResolver.forMirrors(app!!.mirrors)
 
@@ -216,8 +209,8 @@ class CrossWorkspaceResolutionTest {
         }
 
         // The negative half of R3, paired with the positive close-observed
-        // above through the same rebaselineCount accessor: wsA's own fold was
-        // never rebaselined by wsB's flip — only wsB's incremental feed moved.
+        // above: wsA's own fold was never rebaselined by wsB's flip — only
+        // wsB's incremental feed moved.
         mirrorState(identityA).rebaselineCount shouldBe rebaselineCountAfterStart
     }
 }
