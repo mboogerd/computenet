@@ -6,6 +6,7 @@ import civictech.cell.data.Replicable
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Shadow
 import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.DurableInput
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.Recovery
@@ -247,4 +248,5 @@ data class AppliedGraph(
     val refs: Map<String, CellRef>,
     val families: Map<String, KeyedCells<*>>,
     val links: Map<String, Link>,
+    val inputs: Map<String, Map<String, DurableInput>> = emptyMap(),
 )
