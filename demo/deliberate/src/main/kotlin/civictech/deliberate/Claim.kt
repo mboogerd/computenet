@@ -149,15 +149,21 @@ internal class EngineState {
     val yields = HashMap<CellRef, MutableList<Double>>()
     /** CTL-05: paused questions — no new round starts in them except a forced one (CTL-02). */
     val paused = HashSet<CellRef>()
+    /**
+     * CTL-03 on a question root: questions the human stopped — their queued work
+     * is cancelled (STOPPED) and no new round starts in them except a forced one
+     * (CTL-02), until AUTO on the root restarts them.
+     */
+    val stopped = HashSet<CellRef>()
 
     /** What [ExplorationPolicy] sees of question [root]. */
     fun questionView(root: CellRef) = QuestionView(
-        treeSize = treeSize.getValue(root), paused = root in paused,
+        treeSize = treeSize.getValue(root), paused = root in paused, stopped = root in stopped,
     )
 
     /** The snapshot's tolerant view: the old projection reported an absent tree as empty. */
     fun projectionQuestionView(root: CellRef) = QuestionView(
-        treeSize = treeSize[root] ?: 0, paused = root in paused,
+        treeSize = treeSize[root] ?: 0, paused = root in paused, stopped = root in stopped,
     )
 
     /** What proposers and Jev are told about [c] (a claim or a link). */

@@ -11,6 +11,13 @@ export const MODE_HINT: Record<Override, string> = {
   STOP: 'Stop exploring this claim',
 };
 
+/** CTL-03/04 on a question root: STOP ends the whole question, AUTO restarts it. */
+export const QUESTION_MODE_HINT: Record<Override, string> = {
+  AUTO: 'Let Jev decide what to explore; restarts a stopped question',
+  EXPAND: 'Explore the question itself for one more round, regardless of what Jev thinks',
+  STOP: 'Stop the whole question: cancel every queued claim (rounds in flight still finish)',
+};
+
 /** SPEC §3 "Links as claims": the same control, steering a link. */
 export const LINK_MODE_HINT: Record<Override, string> = {
   AUTO: 'Let Jev decide whether this link is worth exploring',
@@ -18,8 +25,8 @@ export const LINK_MODE_HINT: Record<Override, string> = {
   STOP: 'Stop exploring this link',
 };
 
-export function OverrideControl(props: { id: string; value: Override; what?: 'claim' | 'link' }) {
-  const hints = () => (props.what === 'link' ? LINK_MODE_HINT : MODE_HINT);
+export function OverrideControl(props: { id: string; value: Override; what?: 'claim' | 'link' | 'question' }) {
+  const hints = () => (props.what === 'link' ? LINK_MODE_HINT : props.what === 'question' ? QUESTION_MODE_HINT : MODE_HINT);
   // Optimistic until the next frame reports a different server value.
   const [pending, setPending] = createSignal<Override>();
   // Memo so a new frame carrying the same value does not clear `pending`.

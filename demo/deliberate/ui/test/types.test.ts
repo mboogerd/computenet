@@ -18,7 +18,7 @@ type ExpectedQuestionDto = {
   yieldRounds?: number;
   yieldRecent?: number;
   yieldEarlier?: number;
-  stoppedBy?: 'budget' | 'voi';
+  stoppedBy?: 'human' | 'budget' | 'voi';
   paused?: boolean;
   costUsd?: number;
   projectedUsd?: number;

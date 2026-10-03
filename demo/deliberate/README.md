@@ -7,7 +7,9 @@ that steers the exploration: triage of new arguments, their quality and
 relevance, saturation, and the stances credence is computed from. A kernel-hosted
 argumentation graph, modelled on agora's, propagates credence. You can override the explorer per claim: force it
 to expand a claim (it always runs at least one more round, even when the
-question's claim budget is spent), or stop it. The goal specification is [`SPEC.md`](SPEC.md).
+question's claim budget is spent), or stop it. Stop on the question itself ends
+the whole deliberation ("stopped by you": queued work is cancelled, rounds in
+flight finish); Auto on it restarts it. The goal specification is [`SPEC.md`](SPEC.md).
 
 ## Credence model
 

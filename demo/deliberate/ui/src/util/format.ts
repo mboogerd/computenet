@@ -39,9 +39,10 @@ export const STATUS_HINT: Record<Status, string> = {
 
 /**
  * Why a question stopped growing early, in plain words ("stopped: nothing
- * left could change the answer"), or undefined while it has not (SPEC EXP-06, model C).
+ * left could change the answer"), or undefined while it has not (SPEC CTL-03, EXP-06, model C).
  */
 export function stoppedText(q: QuestionDto | undefined): string | undefined {
+  if (q?.stoppedBy === 'human') return 'stopped by you';
   if (q?.stoppedBy === 'voi') return 'stopped: nothing left could change the answer';
   if (q?.stoppedBy === 'budget') return 'stopped: claim budget spent';
   return undefined;
@@ -49,6 +50,9 @@ export function stoppedText(q: QuestionDto | undefined): string | undefined {
 
 /** One-line explanation of a stop, for a tooltip. */
 export function stoppedHint(q: QuestionDto | undefined): string | undefined {
+  if (q?.stoppedBy === 'human') {
+    return 'You stopped this question: queued claims were cancelled and no new round starts. Auto on the question restarts it';
+  }
   if (q?.stoppedBy === 'budget') return STATUS_HINT.BUDGET;
   if (q?.stoppedBy !== 'voi') return undefined;
   return 'Every claim left to explore could move the answer too little to be worth a round (value of information below the threshold)';
