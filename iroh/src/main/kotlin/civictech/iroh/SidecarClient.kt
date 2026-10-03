@@ -97,6 +97,16 @@ class SidecarLink internal constructor(
     internal val peerSpoke = CountDownLatch(1)
 
     /**
+     * Set before this host writes `CLOSE_LINK`. An `ERROR` that arrives after
+     * this point adds no recovery action: the link is already terminal here.
+     * In particular, a peer close can remove a mutual-dial loser at the
+     * sidecar just before this host's tie-break `CLOSE_LINK` reaches it; the
+     * sidecar then answers "no such link" before its already-queued
+     * `LINK_DOWN` (computenet-amf8l).
+     */
+    internal val closeRequested = AtomicBoolean(false)
+
+    /**
      * For a link that answers this host's `DIAL`: open once the dialling thread
      * has decided the link's fate — returned it to its caller, or abandoned it
      * (computenet-c45fr). The reader passes it before reading [listenerRef], so
@@ -168,6 +178,7 @@ class SidecarLink internal constructor(
     /** Ask the sidecar to take this link down. A [LinkListener.onDown] follows. */
     fun close() {
         if (downDelivered.get()) return
+        closeRequested.set(true)
         client.sendMessage(HostMessage.CloseLink(id))
     }
 
@@ -558,6 +569,13 @@ class SidecarClient(
                     return
                 }
                 val link = links[message.link] ?: return
+                // An ERROR that follows this host's own CLOSE_LINK has no new
+                // recovery information: the link is already terminal here.
+                // The sidecar can produce it when a peer close removed the
+                // link before our close arrived, while that close's LINK_DOWN
+                // is still queued. Do not parse the human-readable reason;
+                // local ordering is the protocol fact (computenet-amf8l).
+                if (link.closeRequested.get()) return
                 // PROTOCOL.md §2, Backpressure (computenet-ey4v): an ERROR on an
                 // ESTABLISHED link is terminal for that link, so the client takes
                 // it down here rather than leaving the rule to each host of this
@@ -565,7 +583,7 @@ class SidecarClient(
                 // answered with "no such link" — a race with a LINK_DOWN already
                 // in flight, and the one ERROR this could otherwise ping-pong on.
                 if (link.refused.compareAndSet(false, true)) {
-                    runCatching { sendMessage(HostMessage.CloseLink(link.id)) }
+                    runCatching { link.close() }
                 }
                 listenerOf(link)?.onError(link, message.reason)
             }
