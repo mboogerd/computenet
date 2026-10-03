@@ -42,6 +42,8 @@ internal data class QuestionView(
     val treeSize: Int = 1,
     /** CTL-05. */
     val paused: Boolean = false,
+    /** CTL-03 on a question root: the human stopped the whole question. */
+    val stopped: Boolean = false,
 )
 
 /** EXP-10: one argument a round attached, as its round yield counts it. */
@@ -87,6 +89,9 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
          * starting value, not a measured one.
          */
         const val BEARING_PLAUSIBILITY = 0.8
+
+        /** QuestionDto.stoppedBy of a question the human stopped (CTL-03 on its root). */
+        const val STOPPED_BY_HUMAN = "human"
     }
 
     // ---------------------------------------------------------------- EXP-04 caps and saturation
@@ -129,6 +134,13 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     fun held(c: ClaimView, q: QuestionView): Boolean = q.paused && !c.forceRound
 
     /**
+     * CTL-03 on a question root: [c]'s question was stopped by the human and its
+     * next round is not a forced one (CTL-02), so its queued work ends STOPPED.
+     * Checked before [held]: a stopped question cancels what a pause would only withhold.
+     */
+    fun cancelled(c: ClaimView, q: QuestionView): Boolean = q.stopped && !c.forceRound
+
+    /**
      * The gate that ends a QUEUED claim before its first round without any
      * judgment (EXP-05; CTL-02 skips them), or null when it is queued: links
      * off, beyond an explicit `maxDepth` (DEPTH_LIMIT), the hard cap (BUDGET,
@@ -161,6 +173,7 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
      */
     fun terminalStatus(c: ClaimView, q: QuestionView): Status? = when {
         c.override == Override.STOP -> Status.STOPPED
+        cancelled(c, q) -> Status.STOPPED
         nextSides(c).isEmpty() -> Status.SATURATED
         !c.forceRound && c.rounds >= c.roundLimit -> Status.ROUND_LIMIT
         !c.forceRound && q.treeSize >= config.maxClaims -> Status.BUDGET
@@ -184,10 +197,12 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
 
     /**
      * Why a question stopped growing early, if it did (QuestionDto.stoppedBy):
-     * its hard cap, or — once no work is left ([active] false) — model C's
-     * value-of-information stop, when it left at least one node DIMINISHING.
+     * the human stopped it (CTL-03 on its root), its hard cap, or — once no work
+     * is left ([active] false) — model C's value-of-information stop, when it
+     * left at least one node DIMINISHING.
      */
     fun stoppedBy(q: QuestionView, active: Boolean, anyDiminishing: Boolean): String? = when {
+        q.stopped -> STOPPED_BY_HUMAN
         q.treeSize >= config.maxClaims -> "budget"
         !active && anyDiminishing -> "voi"
         else -> null

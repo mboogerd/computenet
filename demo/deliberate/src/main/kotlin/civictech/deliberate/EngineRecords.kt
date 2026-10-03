@@ -88,6 +88,8 @@ internal object EngineRecords {
         val yields: List<Double>,
         /** CTL-05: the question is paused. */
         val paused: Boolean = false,
+        /** CTL-03 on its root: the human stopped the question (restored stopped, nothing re-queued). */
+        val stopped: Boolean = false,
     )
 
     fun recordOf(c: Claim) = ClaimRecord(
@@ -152,7 +154,7 @@ internal object EngineRecords {
     fun questionFieldsOf(q: CellRef, state: EngineState, ledger: CostLedger): Map<String, String> =
         RECORDS.encodeToJsonElement(
             QuestionRecord.serializer(),
-            QuestionRecord(state.yields[q].orEmpty().toList(), q in state.paused),
+            QuestionRecord(state.yields[q].orEmpty().toList(), q in state.paused, q in state.stopped),
         ).jsonObject.mapValues { it.value.toString() } +
             // SPEC §12: one field per backend, so a call rewrites only its backend's counters.
             ledger.tallies(q).map { (b, t) -> COST_FIELD + b to RECORDS.encodeToString(BackendTally.serializer(), t) }
@@ -257,6 +259,7 @@ internal object EngineRecords {
             if (q !in state.questions) continue
             state.yields[q] = r.yields.toMutableList()
             if (r.paused) state.paused += q
+            if (r.stopped) state.stopped += q
         }
         // DUR-06: --start-paused pauses every restored question before anything is scheduled.
         if (startPaused) state.paused += state.questions.keys

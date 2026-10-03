@@ -96,6 +96,8 @@ class ExplorationPolicyTest {
             Case("STOP ends it (CTL-03)", fresh.copy(override = Override.STOP) to q, Status.STOPPED),
             Case("STOP ends even a forced round", fresh.copy(override = Override.STOP, forceRound = true) to q, Status.STOPPED),
             Case("STOP wins over saturation", bothSaturated.copy(override = Override.STOP) to q, Status.STOPPED),
+            Case("a stopped question ends it (CTL-03 on the root)", fresh to q.copy(stopped = true), Status.STOPPED),
+            Case("a stopped question still runs a forced round", fresh.copy(forceRound = true) to q.copy(stopped = true), null),
             Case("both sides saturated", bothSaturated to q, Status.SATURATED),
             Case("one side saturated leaves the other", fresh.copy(jevSaturated = setOf(SUPPORT)) to q, null),
             Case("a forced round ignores saturation", bothSaturated.copy(forceRound = true) to q, null),
@@ -159,12 +161,20 @@ class ExplorationPolicyTest {
             Case("running does not hold", fresh to q, false),
         ) { (c, qv) -> defaults.held(c, qv) }
         table(
+            Case("a stopped question cancels", fresh to q.copy(stopped = true), true),
+            Case("a stopped question does not cancel a forced round", fresh.copy(forceRound = true) to q.copy(stopped = true), false),
+            Case("a paused question does not cancel", fresh to q.copy(paused = true), false),
+        ) { (c, qv) -> defaults.cancelled(c, qv) }
+        table(
             Case("room left", 179 to false, true),
             Case("full", 180 to false, false),
             Case("full but forced", 180 to true, true),
         ) { (n, forced) -> defaults.mayReserve(n, forced) }
         table(
             Case("growing", Triple(QuestionView(treeSize = 10), true, false), null),
+            Case("stopped by the human", Triple(QuestionView(treeSize = 10, stopped = true), false, false), "human"),
+            Case("stopped by the human, round in flight", Triple(QuestionView(treeSize = 10, stopped = true), true, false), "human"),
+            Case("stopped by the human wins over the hard cap", Triple(QuestionView(treeSize = 180, stopped = true), false, true), "human"),
             Case("the hard cap", Triple(QuestionView(treeSize = 180), false, true), "budget"),
             Case("the hard cap, still running", Triple(QuestionView(treeSize = 180), true, false), "budget"),
             Case("no work left and a node below ε", Triple(QuestionView(treeSize = 10), false, true), "voi"),
