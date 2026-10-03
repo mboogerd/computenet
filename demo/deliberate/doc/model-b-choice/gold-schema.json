@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["labels"],
+  "properties": {
+    "labels": {
+      "type": "array",
+      "minItems": 64,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "reason"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 0, "maximum": 63},
+          "label": {
+            "type": "string",
+            "enum": ["DISPUTES_CLAIM", "DENIES_BEARING", "NEITHER"]
+          },
+          "reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}

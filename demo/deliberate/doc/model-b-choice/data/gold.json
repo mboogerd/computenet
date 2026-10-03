@@ -1,0 +1,967 @@
+{
+  "policy": "Opus+Sonnet agreement; a fresh blind Opus pass adjudicates disagreement",
+  "primary_agreement": 51,
+  "all_different": 2,
+  "items": [
+    {
+      "id": 0,
+      "label": "NEITHER",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Accepts that the cost barrier is removed and raises a countervailing cost: service cuts.",
+        "sonnet": "Grants the barrier removal and raises a countervailing service-cut cost.",
+        "opus-adjudicator": "Countervailing cost of service cuts; does not deny the barrier is removed."
+      }
+    },
+    {
+      "id": 1,
+      "label": "NEITHER",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Raises a countervailing cost (regressive funding) without denying the barrier is removed.",
+        "sonnet": "Raises a separate funding cost rather than disputing barrier removal.",
+        "opus-adjudicator": "Countervailing cost from regressive funding."
+      }
+    },
+    {
+      "id": 2,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says that for already-exempt residents, no financial barrier is actually removed.",
+        "sonnet": "Accepts barrier concept but says abolition adds no benefit for already-exempt residents.",
+        "opus-adjudicator": "Says no barrier is removed for residents who already ride free."
+      }
+    },
+    {
+      "id": 3,
+      "label": "NEITHER",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Names a separate barrier (overcrowding) as a countervailing cost.",
+        "sonnet": "Independent overcrowding cost.",
+        "opus-adjudicator": "Countervailing cost from overcrowding."
+      }
+    },
+    {
+      "id": 4,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "For these residents, the fare is not what blocks access, which narrows the claim.",
+        "sonnet": "Points to other access barriers, not denying the fare barrier.",
+        "opus-adjudicator": "For these residents the fare was not the barrier, so the claim is overstated."
+      }
+    },
+    {
+      "id": 5,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "The financial barrier remains for these residents, so the claim is overstated.",
+        "sonnet": "Independent additional cost barrier.",
+        "opus-adjudicator": "Other costs remain, so the claim that fare removal enables access is overstated."
+      }
+    },
+    {
+      "id": 6,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Denies that revenue losses often force cuts and notes that service sometimes expands.",
+        "sonnet": "Says cities often expand rather than cut service.",
+        "opus-adjudicator": "Denies that revenue loss forces cuts where subsidies fill the gap."
+      }
+    },
+    {
+      "id": 7,
+      "label": "NEITHER",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Offers a separate harm (overcrowding) instead of addressing the cuts claim.",
+        "sonnet": "Adds a different degradation mechanism, not disputing the claim.",
+        "opus-adjudicator": "Gives a separate reason access worsens, not a challenge to the claim."
+      }
+    },
+    {
+      "id": 8,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Lower collection costs shrink the funding gap, which challenges the claim that losses force cuts.",
+        "sonnet": "Argues the funding gap forcing cuts is smaller than claimed.",
+        "opus-adjudicator": "Lower collection costs shrink the revenue gap said to force cuts."
+      }
+    },
+    {
+      "id": 9,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says cuts fall first on suburban routes, not low-income ones.",
+        "sonnet": "Says cuts typically fall on wealthier suburban routes, not low-income ones.",
+        "opus-adjudicator": "Denies that cuts fall on low-income routes."
+      }
+    },
+    {
+      "id": 10,
+      "label": "DENIES_BEARING",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Weighs a countervailing benefit (net access gain) against the cuts.",
+        "sonnet": "Grants cuts but says access still gains overall.",
+        "opus-adjudicator": "Grants some cuts but says the net access gain from removing the barrier still holds."
+      }
+    },
+    {
+      "id": 11,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says safeguards protect low-income routes from cuts.",
+        "sonnet": "Says equity reviews protect low-income routes from cuts.",
+        "opus-adjudicator": "Says equity reviews protect low-income routes from cuts."
+      }
+    },
+    {
+      "id": 12,
+      "label": "NEITHER",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Suggests a different policy design rather than disputing the claim or its link to the parent.",
+        "sonnet": "Says cuts are avoidable, contradicting that revenue loss forces them.",
+        "opus-adjudicator": "Proposes a different policy design."
+      }
+    },
+    {
+      "id": 13,
+      "label": "DENIES_BEARING",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Accepts the cases but says they are not representative, so they do not show cuts happen often.",
+        "sonnet": "Says not inevitable but doesn't deny that several cities had this outcome.",
+        "opus-adjudicator": "Grants the cases but denies they generalize to cuts happening 'often'."
+      }
+    },
+    {
+      "id": 14,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Disputes the claimed cause: other factors may explain the cuts.",
+        "sonnet": "Challenges the causal link from surges to route cuts.",
+        "opus-adjudicator": "Disputes that the surge caused the cuts."
+      }
+    },
+    {
+      "id": 15,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Even if service is redistributed, it may not worsen access for low-income riders.",
+        "sonnet": "Grants redistribution but says it doesn't worsen poor-area access.",
+        "opus-adjudicator": "Grants the shift but denies it necessarily worsens access."
+      }
+    },
+    {
+      "id": 16,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Gives counterexamples where no route cuts were documented.",
+        "sonnet": "Cites cities with no documented cuts.",
+        "opus-adjudicator": "Counterexample where no cuts followed."
+      }
+    },
+    {
+      "id": 17,
+      "label": "NEITHER",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Independent point about boarding efficiency.",
+        "sonnet": "Argues capacity can absorb riders so overcrowding and cuts needn't occur.",
+        "opus-adjudicator": "Independent efficiency benefit."
+      }
+    },
+    {
+      "id": 18,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Ridership growth may not mean overcrowding, which challenges the claim's premise.",
+        "sonnet": "Says ridership growth doesn't show overcrowding.",
+        "opus-adjudicator": "Disputes that the surge meant overcrowding."
+      }
+    },
+    {
+      "id": 19,
+      "label": "NEITHER",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Addresses fare revenue loss (the parent), not the overcrowding claim.",
+        "sonnet": "Says service may be preserved without added funding.",
+        "opus-adjudicator": "Independent cost-saving reason about the parent."
+      }
+    },
+    {
+      "id": 20,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Questions whether the observed association is valid evidence, not whether studies report it.",
+        "sonnet": "Measurement error undermines what the studies show about the curve.",
+        "opus-adjudicator": "Measurement error weakens the causal inference, not the reported association."
+      }
+    },
+    {
+      "id": 21,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Disputes that the findings are consistent across cohorts.",
+        "sonnet": "Says consistency across cohorts isn't established.",
+        "opus-adjudicator": "Disputes consistency across cohorts."
+      }
+    },
+    {
+      "id": 22,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Confounding means the association may not show a causal benefit.",
+        "sonnet": "Confounding explains the association rather than causal effect.",
+        "opus-adjudicator": "Confounding breaks the link from association to causation."
+      }
+    },
+    {
+      "id": 23,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Disputes that the evidence covers diverse populations.",
+        "sonnet": "Says populations aren't actually diverse enough.",
+        "opus-adjudicator": "Disputes 'across diverse populations'."
+      }
+    },
+    {
+      "id": 24,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Reverse causation breaks the causal inference.",
+        "sonnet": "Reverse causation explains association without supporting benefit.",
+        "opus-adjudicator": "Reverse causation undermines the causal link."
+      }
+    },
+    {
+      "id": 25,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "A methodological bias weakens the association as evidence.",
+        "sonnet": "Bias produces the pattern, weakening its support.",
+        "opus-adjudicator": "Analytic artifact undermines the inference."
+      }
+    },
+    {
+      "id": 26,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says the apparent consistency is overstated.",
+        "sonnet": "Says consistency is overstated due to selective reporting.",
+        "opus-adjudicator": "Says the consistency is overstated."
+      }
+    },
+    {
+      "id": 27,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Detection bias could produce the association without a real effect.",
+        "sonnet": "Detection bias could produce the pattern spuriously.",
+        "opus-adjudicator": "Detection bias explains the association without causation."
+      }
+    },
+    {
+      "id": 28,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says intake is measured reasonably accurately.",
+        "sonnet": "Says self-report validates well, so error is not severe.",
+        "opus-adjudicator": "Says intake measurement is reasonably accurate."
+      }
+    },
+    {
+      "id": 29,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Even granting imprecision, it would not create a spurious inverse trend.",
+        "sonnet": "Grants imprecision but says it can't explain the trend.",
+        "opus-adjudicator": "Grants imprecision but denies it creates the inverse trend."
+      }
+    },
+    {
+      "id": 30,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Repeated measurement reduces the imprecision the claim describes.",
+        "sonnet": "Says repeated assessment reduces the reporting error.",
+        "opus-adjudicator": "Repeated assessments reduce the imprecision."
+      }
+    },
+    {
+      "id": 31,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "The prospective design keeps errors from distorting the outcome relationship.",
+        "sonnet": "Grants imprecision but says it doesn't create outcome-linked distortion.",
+        "opus-adjudicator": "Prospective design limits the distortion that matters for the parent."
+      }
+    },
+    {
+      "id": 32,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Mendelian randomization evidence shows the signal is not a questionnaire artifact.",
+        "sonnet": "Grants imprecision but says the signal isn't an artifact of it.",
+        "opus-adjudicator": "Independent evidence shows the signal is not a questionnaire artifact."
+      }
+    },
+    {
+      "id": 33,
+      "label": "DENIES_BEARING",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Imprecise dose does not invalidate cups as the exposure.",
+        "sonnet": "Addresses brew strength, a different issue.",
+        "opus-adjudicator": "Imprecision about dose does not invalidate a cups-based analysis."
+      }
+    },
+    {
+      "id": 34,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "A poor biomarker reference means the discrepancies do not show questionnaire error.",
+        "sonnet": "Biomarker is a poor reference so discrepancies don't show error.",
+        "opus-adjudicator": "Biomarker mismatch does not show questionnaire error."
+      }
+    },
+    {
+      "id": 35,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Biomarker variability means the mismatch need not reflect questionnaire error.",
+        "sonnet": "Biomarker mismatch may reflect metabolism, not questionnaire error.",
+        "opus-adjudicator": "Biomarker variability, not the questionnaire, may drive the mismatch."
+      }
+    },
+    {
+      "id": 36,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Biomarkers are invalid references, so the findings do not show questionnaire error.",
+        "sonnet": "Biomarker validity limits so discrepancies don't show misclassification.",
+        "opus-adjudicator": "Biomarkers are invalid reference measures, so the error they reveal is doubtful."
+      }
+    },
+    {
+      "id": 37,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "The validation results may not generalize to the cohorts.",
+        "sonnet": "Small samples may not generalize the error.",
+        "opus-adjudicator": "Grants the error but denies it generalizes to the cohorts."
+      }
+    },
+    {
+      "id": 38,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says validation studies find good agreement, not substantial error.",
+        "sonnet": "Says validation shows good agreement, not substantial misclassification.",
+        "opus-adjudicator": "Good agreement contradicts frequent misclassification."
+      }
+    },
+    {
+      "id": 39,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Calibration corrects the error, so it does not distort the dose-response.",
+        "sonnet": "Calibration corrects error so it doesn't explain the association.",
+        "opus-adjudicator": "Calibration corrects the error before analysis."
+      }
+    },
+    {
+      "id": 40,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says the evidence does not establish category misclassification.",
+        "sonnet": "Says modest correlation doesn't establish substantial misclassification.",
+        "opus-adjudicator": "Modest correlation does not show substantial misclassification."
+      }
+    },
+    {
+      "id": 41,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Random error biases toward the null instead of creating a spurious trend.",
+        "sonnet": "Random error biases toward null, not a spurious trend.",
+        "opus-adjudicator": "Random error would not produce a spurious inverse trend."
+      }
+    },
+    {
+      "id": 42,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says breakeven often comes well under five years.",
+        "sonnet": "Says costs are recovered well under five years.",
+        "opus-adjudicator": "Says break-even often comes well under five years."
+      }
+    },
+    {
+      "id": 43,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Denies a typical five-year recovery period.",
+        "sonnet": "Denies a typical five-year recovery period.",
+        "opus-adjudicator": "Denies there is a typical five-year period."
+      }
+    },
+    {
+      "id": 44,
+      "label": "DENIES_BEARING",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Costs can be cut, shortening breakeven below the stated period.",
+        "sonnet": "Mitigation possibility, not a denial of the typical case.",
+        "opus-adjudicator": "An individual buyer can avoid the typical costs."
+      }
+    },
+    {
+      "id": 45,
+      "label": "DENIES_BEARING",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Moving costs apply to renters too, so they do not favor renting.",
+        "sonnet": "Says moving costs are overcounted as buying costs.",
+        "opus-adjudicator": "Moving costs also apply to renting, so they don't favor renting."
+      }
+    },
+    {
+      "id": 46,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Even with unrecovered costs, buying may still beat renting.",
+        "sonnet": "Grants costs but says buying may still beat renting.",
+        "opus-adjudicator": "Countervailing equity benefit of buying."
+      }
+    },
+    {
+      "id": 47,
+      "label": "NEITHER",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Tax benefits offset costs, so slow appreciation-based breakeven need not favor renting.",
+        "sonnet": "Says tax benefits shorten the break-even.",
+        "opus-adjudicator": "Separate tax benefit offsetting costs."
+      }
+    },
+    {
+      "id": 48,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Rent savings can offset costs without appreciation.",
+        "sonnet": "Other savings offset costs, so the claim doesn't favor renting.",
+        "opus-adjudicator": "Separate rent-savings benefit."
+      }
+    },
+    {
+      "id": 49,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Rising rents erode the advantage the claim implies for renting.",
+        "sonnet": "Rising rent erases the advantage the costs imply.",
+        "opus-adjudicator": "Separate cost of renting."
+      }
+    },
+    {
+      "id": 50,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Possible fast gains are speculative, so they do not undermine the 'typically' claim.",
+        "sonnet": "Grants possibility but says it's unreliable as an offset.",
+        "opus-adjudicator": "Possible fast appreciation is too unreliable to undercut the typical claim."
+      }
+    },
+    {
+      "id": 51,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says early principal paydown is too small to help much.",
+        "sonnet": "Says principal paydown is too small to offset costs.",
+        "opus-adjudicator": "Early principal paydown is too small to help."
+      }
+    },
+    {
+      "id": 52,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says counting paydown as an offset overstates the gains.",
+        "sonnet": "Says paydown isn't a real gain, overstating the offset.",
+        "opus-adjudicator": "Paydown should not count as an offset."
+      }
+    },
+    {
+      "id": 53,
+      "label": "NEITHER",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "NEITHER",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Raises other ongoing costs as a countervailing factor.",
+        "sonnet": "Adds separate ownership costs.",
+        "opus-adjudicator": "Countervailing ongoing costs."
+      }
+    },
+    {
+      "id": 54,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Gains may not be realizable when the move date is fixed.",
+        "sonnet": "Timing uncontrollability prevents capturing the gains.",
+        "opus-adjudicator": "Gains may not be realizable when the move date is fixed."
+      }
+    },
+    {
+      "id": 55,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "A tax bill prevents the gains from actually covering the costs.",
+        "sonnet": "Tax bill prevents appreciation from covering costs.",
+        "opus-adjudicator": "Countervailing tax cost."
+      }
+    },
+    {
+      "id": 56,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Says expected appreciation is already priced in at purchase.",
+        "sonnet": "Says appreciation is already priced in.",
+        "opus-adjudicator": "Appreciation is already priced in, so the gains are overstated."
+      }
+    },
+    {
+      "id": 57,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Boom rates are outliers and do not show this is typical or predictable.",
+        "sonnet": "Boom rates are unrepresentative and unpredictable.",
+        "opus-adjudicator": "Outlier booms don't support claims about many markets."
+      }
+    },
+    {
+      "id": 58,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "Taxes erode the gains, so they do not establish faster breakeven.",
+        "sonnet": "Taxes erode gains used to justify breakeven.",
+        "opus-adjudicator": "Countervailing tax cost."
+      }
+    },
+    {
+      "id": 59,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Metro-wide gains do not carry over to an individual property.",
+        "sonnet": "Metro data doesn't ensure an individual property's gains.",
+        "opus-adjudicator": "Metro-wide figures don't carry over to individual homes."
+      }
+    },
+    {
+      "id": 60,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DENIES_BEARING"
+      },
+      "reasons": {
+        "opus": "Boom gains can reverse before the sale.",
+        "sonnet": "Gains may reverse before a forced sale.",
+        "opus-adjudicator": "Temporary gains may not be there at sale."
+      }
+    },
+    {
+      "id": 61,
+      "label": "DISPUTES_CLAIM",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DISPUTES_CLAIM",
+        "sonnet": "DISPUTES_CLAIM",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Disputes the claimed 8-10% transaction-cost baseline during booms.",
+        "sonnet": "Says true round-trip costs are higher than assumed.",
+        "opus-adjudicator": "Boom-period transaction costs exceed the cited baseline."
+      }
+    },
+    {
+      "id": 62,
+      "label": "NEITHER",
+      "resolution": "fresh blind opus adjudication",
+      "votes": {
+        "opus": "NEITHER",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "NEITHER"
+      },
+      "reasons": {
+        "opus": "About buying versus renting overall, not whether gains exceed transaction costs.",
+        "sonnet": "Appreciation exceeding costs doesn't show buying beats renting.",
+        "opus-adjudicator": "Addresses buy vs rent, not the parent's break-even claim."
+      }
+    },
+    {
+      "id": 63,
+      "label": "DENIES_BEARING",
+      "resolution": "opus-sonnet agreement",
+      "votes": {
+        "opus": "DENIES_BEARING",
+        "sonnet": "DENIES_BEARING",
+        "opus-adjudicator": "DISPUTES_CLAIM"
+      },
+      "reasons": {
+        "opus": "Price gains include renovation spending, so they overstate the return.",
+        "sonnet": "Renovation-driven gains overstate the return from appreciation.",
+        "opus-adjudicator": "Renovation spending inflates the measured equity gains."
+      }
+    }
+  ]
+}

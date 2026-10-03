@@ -1,0 +1,27 @@
+items 64; gold support {'NEITHER': 10, 'DISPUTES_CLAIM': 23, 'DENIES_BEARING': 31}
+Opus/Sonnet exact agreement 51/64 = 0.797; Cohen kappa 0.671; three-way splits 2
+
+CURRENT CHOICE
+gold\pred  DISPUTES_CLAIM  DENIES_BEARING         NEITHER
+DISPUTES_CLAIM               20               3               0
+DENIES_BEARING               10              21               0
+NEITHER                       5               5               0
+outcome          support       precision          recall              f1
+DISPUTES_CLAIM       23           0.571           0.870           0.690
+DENIES_BEARING       31           0.724           0.677           0.700
+NEITHER              10           0.000           0.000           0.000
+accuracy 41/64 = 0.641; macro-F1 0.463
+
+GRADED TWO-SCORE
+gold\pred  DISPUTES_CLAIM  DENIES_BEARING         NEITHER
+DISPUTES_CLAIM               12               8               3
+DENIES_BEARING                7              16               8
+NEITHER                       1               5               4
+outcome          support       precision          recall              f1
+DISPUTES_CLAIM       23           0.600           0.522           0.558
+DENIES_BEARING       31           0.552           0.516           0.533
+NEITHER              10           0.267           0.400           0.320
+accuracy 32/64 = 0.500; macro-F1 0.470
+
+paired disagreements: Choice-only correct 15; graded-only correct 6
+graded - Choice accuracy -0.141; paired bootstrap 95% CI [-0.281, 0.000]; exact McNemar p=0.078
