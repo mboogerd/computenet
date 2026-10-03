@@ -107,14 +107,38 @@ sealed interface MirrorEvent {
 }
 
 /**
- * Raised when a non-initial snapshot unexpectedly contains no rows.
+ * Raised by [Rebaseline.run] when `bd export` succeeds with zero rows for a
+ * workspace that has already been baselined (any reason except
+ * [RebaselineReason.FirstStart]). The exception is raised before the graph
+ * replacement and durable input commit, leaving the current fold and cursor
+ * untouched.
  *
- * A successful empty export during a history-gap rebuild would otherwise
- * replace the recovered fold with nothing. The guard deliberately covers only
- * the total-loss case; deciding whether a smaller non-empty export is valid
- * needs policy this demo does not define. An operator who has intentionally
- * emptied the workspace may either enable the constructor override or remove
- * the mirror's `main/` journal before starting again.
+ * ## The measured hazard
+ *
+ * A zero-row, exit-zero export is a real `bd` outcome. Measured paths include
+ * a genuinely empty workspace, and a populated workspace exported while
+ * `BEADS_DIR` points at a different empty workspace. The latter also occurs
+ * under `--sandbox`: with cwd in the populated workspace and `BEADS_DIR` set
+ * to an empty one, `bd --sandbox export` succeeds with zero rows while
+ * [DoltCommitFeed] continues reading the database selected by workspace path.
+ * If accepted during a later baseline, the empty snapshot could replace the
+ * populated fold and checkpoint that empty state. A failed export does not
+ * produce this condition; its exception propagates from [Rebaseline.run].
+ *
+ * ## What this guard does not protect against
+ *
+ * - **A partial export.** Any non-empty row set passes this zero-row check.
+ * - **A wrong-but-full export.** The guard does not validate exported content.
+ * - **A false refusal.** A workspace intentionally emptied after a prior
+ *   baseline is also refused; use `acceptEmptyExport = true` when that is
+ *   intended.
+ *
+ * Empty exports are accepted on a genuine first start. This guard concerns
+ * the snapshot's row count only; it makes no claim that all durable state is
+ * absent across process restarts.
+ *
+ * @param reason the reason for the re-baseline that was refused.
+ * @param foldSize the number of issues currently visible in the fold.
  */
 class EmptyExportRefused(
     val reason: RebaselineReason,
@@ -131,23 +155,25 @@ class EmptyExportRefused(
 )
 
 /**
- * Applies a `bd export` snapshot to the hosted mirror and atomically commits
- * its feed cursor through one [DurableInput] event.
+ * Applies a `bd export` snapshot to the hosted mirror and commits its feed
+ * cursor through one [DurableInput] event.
  *
- * Head is captured before export so a concurrent commit is, at worst, folded
- * once by the snapshot and once by the subsequent incremental read. Reversing
- * those reads could checkpoint content absent from the snapshot and skip it
- * forever.
+ * The feed head is captured before export. A concurrent commit can then be
+ * folded by both the snapshot and the next incremental read, while reversing
+ * the order could checkpoint content missing from the snapshot.
  *
- * First start uses the graph Runtime already spawned. A history-gap rebuild
- * applies one [GraphSpec] that despawns and respawns both cells under the same
- * exact refs, then captures the fresh hosted handles. Applying the snapshot
- * and returning the captured head from one durable input commit makes the
- * baseline batch and cursor one journaled `RECORD_INPUT`. Host quiescence is
- * fenced before the observable event is emitted.
+ * First start applies records to the graph already spawned. A history-gap
+ * rebuild applies one [GraphSpec] that despawns and respawns both cells under
+ * the same refs, then applies the snapshot and cursor in one journaled input.
+ * Host quiescence completes before the re-baseline event is emitted.
  *
- * History-gap calls run synchronously inside [DoltFeedPoller.pollOnce], so no
- * later batch can reach the old projector while replacement is in progress.
+ * After startup, history-gap re-baselines triggered from
+ * [DoltFeedPoller.pollOnce] run synchronously on its poller thread. That
+ * thread is the sole writer of [MirrorState.current] and sole caller of
+ * `applyAll`; first-start initialization applies its baseline before the
+ * poller starts. HTTP readers access the projector through the volatile
+ * [MirrorState.current] reference and observe the old or new projector. No
+ * lock is needed for this handoff.
  */
 class Rebaseline(
     private val export: () -> List<ExportRow>,
@@ -160,7 +186,15 @@ class Rebaseline(
     private val acceptEmptyExport: Boolean = false,
 ) {
 
-    /** Replaces or initializes the fold and reports the completed snapshot. */
+    /**
+     * Replaces or initializes the fold and reports the completed snapshot.
+     * Nothing is caught here: export failures and an empty `dolt_log` from
+     * [BaselineBuilder.captureHead] propagate before the graph replacement,
+     * leaving the fold and durable cursor untouched. A zero-row export on any
+     * non-first-start reason raises [EmptyExportRefused] before replacement
+     * unless [acceptEmptyExport] is enabled. Successful baselines apply the
+     * snapshot and head cursor in one durable input commit.
+     */
     fun run(reason: RebaselineReason) {
         val (headCommit, headHeight) = BaselineBuilder.captureHead(feed)
         val rows = export()
