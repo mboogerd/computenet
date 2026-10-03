@@ -1,0 +1,64 @@
+data: train 105 (push-tune 55, know 50), held-out 25; J<=32, K<=10
+CV: 4x repeated 5-fold on train; Metaculus baseline, uniform = 0; 95% bootstrap CI over questions
+
+REFERENCE (not a candidate, not an input)
+  Opus mean of 5                                push-tune   46.1 [ 35.0, 56.2]  know   78.5 [ 66.1, 88.6]  pooled   61.5 [ 52.7, 69.8]
+
+BASELINES
+  uniform                                       push-tune    0.0 [  0.0,  0.0]  know    0.0 [  0.0,  0.0]  pooled    0.0 [  0.0,  0.0]
+  model A (Jev position plausibility, fitted T)  push-tune   23.3 [ 13.2, 33.1]  know   22.0 [ 10.8, 33.0]  pooled   22.7 [ 15.1, 30.3]
+  shipped semantics, args alone (CV m)          push-tune   25.5 [ 10.9, 38.6]  know   22.0 [  7.6, 35.3]  pooled   23.8 [ 13.5, 33.4]
+
+INCREMENTAL FAMILY (all components free)
+  full family                                   push-tune   25.5 [ 13.1, 37.1]  know   26.7 [ 14.6, 38.7]  pooled   26.1 [ 17.7, 34.5]  Δ vs shipped  +2.2 [ -1.2, +5.9]
+    support = attack weight                     push-tune   25.4 [ 13.3, 36.9]  know   28.0 [ 15.9, 39.9]  pooled   26.7 [ 18.2, 35.1]  Δ vs shipped  +2.8 [ -0.6, +6.4]
+    linear gate (no sigmoid)                    push-tune   25.0 [ 13.0, 36.4]  know   25.1 [ 13.0, 36.9]  pooled   25.1 [ 16.9, 33.4]  Δ vs shipped  +1.3 [ -2.3, +5.2]
+
+ABLATIONS (one component pinned to neutral; Δ is vs shipped)
+    without context-free mix                    push-tune   25.5 [ 13.2, 37.1]  know   26.7 [ 14.6, 38.7]  pooled   26.1 [ 17.7, 34.5]  Δ vs shipped  +2.2 [ -1.2, +5.9]
+    without outside discount                    push-tune   25.3 [ 12.9, 37.0]  know   25.9 [ 13.7, 38.0]  pooled   25.6 [ 16.9, 34.2]  Δ vs shipped  +1.8 [ -1.3, +5.2]
+    without power gamma                         push-tune   24.9 [ 11.6, 37.3]  know   24.9 [ 12.6, 36.8]  pooled   24.9 [ 16.0, 33.8]  Δ vs shipped  +1.1 [ -1.5, +3.8]
+    without rule-out mass                       push-tune   25.8 [ 13.4, 37.4]  know   27.3 [ 15.4, 39.2]  pooled   26.5 [ 18.3, 34.9]  Δ vs shipped  +2.7 [ -0.8, +6.4]
+    without settles mass                        push-tune   25.3 [ 12.8, 36.9]  know   27.2 [ 15.2, 39.0]  pooled   26.2 [ 17.8, 34.6]  Δ vs shipped  +2.4 [ -0.9, +6.0]
+    without paraphrase agreement                push-tune   25.7 [ 13.0, 37.4]  know   23.0 [  9.2, 36.2]  pooled   24.4 [ 15.1, 33.5]  Δ vs shipped  +0.6 [ -2.1, +3.2]
+    without Sol claim weight                    push-tune   25.1 [ 12.5, 36.7]  know   24.6 [ 13.1, 36.0]  pooled   24.9 [ 16.5, 33.3]  Δ vs shipped  +1.0 [ -2.4, +4.7]
+    without position prior                      push-tune   26.0 [ 13.3, 37.7]  know   26.0 [ 13.9, 37.9]  pooled   26.0 [ 17.3, 34.7]  Δ vs shipped  +2.2 [ -0.9, +5.5]
+    without count damping                       push-tune   23.1 [  9.5, 35.8]  know   27.1 [ 16.8, 37.5]  pooled   25.0 [ 16.4, 33.6]  Δ vs shipped  +1.2 [ -2.6, +5.4]
+
+SIGMOID STEEPNESS PROFILE (s pinned, everything else refit)
+    s = 0.5                                     push-tune   25.5 [ 12.8, 37.3]  know   26.1 [ 14.0, 37.9]  pooled   25.8 [ 17.3, 34.3]  Δ vs shipped  +1.9 [ -1.3, +5.4]
+    s = 1                                       push-tune   25.5 [ 13.1, 37.1]  know   26.6 [ 14.6, 38.4]  pooled   26.0 [ 17.6, 34.4]  Δ vs shipped  +2.2 [ -1.2, +5.9]
+    s = 2                                       push-tune   25.5 [ 13.1, 37.1]  know   26.7 [ 14.6, 38.6]  pooled   26.0 [ 17.7, 34.5]  Δ vs shipped  +2.2 [ -1.2, +5.9]
+    s = 4                                       push-tune   25.5 [ 13.1, 37.1]  know   26.7 [ 14.6, 38.7]  pooled   26.1 [ 17.7, 34.5]  Δ vs shipped  +2.2 [ -1.2, +5.9]
+    s = 8                                       push-tune   25.3 [ 12.9, 37.1]  know   27.2 [ 15.3, 39.1]  pooled   26.2 [ 17.9, 34.7]  Δ vs shipped  +2.4 [ -1.0, +6.1]
+    s = 16                                      push-tune   25.3 [ 12.7, 37.1]  know   27.6 [ 15.7, 39.4]  pooled   26.4 [ 18.0, 34.8]  Δ vs shipped  +2.6 [ -0.8, +6.2]
+    s = 32                                      push-tune   25.2 [ 12.3, 37.1]  know   27.4 [ 15.3, 39.5]  pooled   26.2 [ 17.7, 34.8]  Δ vs shipped  +2.4 [ -0.7, +5.9]
+    s = 64                                      push-tune   25.5 [ 12.9, 37.3]  know   27.9 [ 15.9, 39.8]  pooled   26.6 [ 18.2, 35.2]  Δ vs shipped  +2.8 [ -0.5, +6.4]
+
+INCREMENTAL, LEARNED per-claim contribution (LININC; rho x ridge grid)
+    LININC rho=0 ridge=0.3                      push-tune   25.1 [ 11.9, 36.8]  know   27.0 [ 15.8, 37.9]  pooled   26.0 [ 17.8, 34.4]  Δ vs shipped  +2.2 [ -2.6, +7.3]
+    LININC rho=0 ridge=3                        push-tune   26.7 [ 14.4, 37.9]  know   22.9 [ 13.4, 32.5]  pooled   24.9 [ 17.1, 32.7]  Δ vs shipped  +1.1 [ -3.0, +5.6]
+    LININC rho=0 ridge=30                       push-tune   27.7 [ 15.9, 38.2]  know   17.3 [ 10.2, 24.7]  pooled   22.7 [ 15.5, 29.9]  Δ vs shipped  -1.1 [ -5.6, +4.1]
+    LININC rho=0.5 ridge=0.3                    push-tune   26.3 [ 14.5, 37.1]  know   26.5 [ 13.5, 38.6]  pooled   26.4 [ 18.0, 35.1]  Δ vs shipped  +2.6 [ -2.6, +7.9]
+    LININC rho=0.5 ridge=3                      push-tune   27.2 [ 15.7, 37.6]  know   24.4 [ 12.8, 35.9]  pooled   25.9 [ 17.8, 34.1]  Δ vs shipped  +2.0 [ -1.3, +5.6]
+    LININC rho=0.5 ridge=30                     push-tune   27.7 [ 16.2, 38.0]  know   21.0 [ 10.6, 31.1]  pooled   24.5 [ 16.7, 32.2]  Δ vs shipped  +0.7 [ -2.8, +4.6]
+    LININC rho=1 ridge=0.3                      push-tune   26.9 [ 16.5, 36.5]  know   23.0 [  7.2, 37.7]  pooled   25.0 [ 15.6, 34.4]  Δ vs shipped  +1.2 [ -6.0, +7.8]
+    LININC rho=1 ridge=3                        push-tune   27.5 [ 17.2, 36.8]  know   24.5 [ 10.6, 37.7]  pooled   26.0 [ 17.4, 34.5]  Δ vs shipped  +2.2 [ -1.4, +6.0]
+    LININC rho=1 ridge=30                       push-tune   27.5 [ 17.3, 36.5]  know   23.0 [  9.1, 36.0]  pooled   25.3 [ 16.7, 33.6]  Δ vs shipped  +1.5 [ -1.7, +5.0]
+
+NON-INCREMENTAL: what is possible (GBT); FLEX below measures what the restriction costs
+  GBT (trees, unrestricted)                     push-tune   26.4 [ 13.8, 37.6]  know   17.6 [ -0.9, 35.6]  pooled   22.2 [ 11.2, 32.7]  Δ vs shipped  -1.6 [ -7.9, +4.4]
+
+NON-INCREMENTAL REFERENCE (max/min aggregates; what the restriction costs)
+  FLEX conditional logit                        push-tune   25.7 [ 13.9, 36.5]  know   31.1 [ 16.4, 45.4]  pooled   28.3 [ 19.0, 37.5]  Δ vs shipped  +4.5 [ +0.0, +9.0]
+
+FULL FIT ON TRAIN, applied once to push held-out (n=25)
+  fitted: {'log_s': 1.122, 'theta': -0.79, 'lam_l': -0.032, 'omega_l': 0.304, 'w_sup': 2.552, 'w_att': 0.626, 'log_gamma': -0.93, 'w_r0': 0.025, 'w_r4': 1.474, 'log_kappa': 3.645, 'log_wsol': -2.025, 'a': 0.278, 'rho_l': -0.878} -> s=3.07 lam=0.49 omega=0.58 gamma=0.39 kappa=38.28 w_sol=0.13 rho=0.29
+  uniform                      held-out    0.0 [  0.0,  0.0]  top-1 0.12
+  model A                      held-out   23.0 [  5.5, 40.8]  top-1 0.36
+  shipped semantics            held-out   27.4 [  6.0, 47.2]  top-1 0.44
+  incremental family           held-out   22.6 [ -0.2, 44.4]  top-1 0.44
+  LININC rho=.5 ridge=3        held-out   28.3 [ 10.2, 45.4]  top-1 0.48
+  FLEX (non-incremental)       held-out   30.1 [ 10.5, 48.6]  top-1 0.40
+  GBT (non-incremental)        held-out   21.6 [  0.1, 40.1]  top-1 0.32
+  Opus mean of 5 (reference)   held-out   52.2 [ 38.5, 63.7]  top-1 0.60

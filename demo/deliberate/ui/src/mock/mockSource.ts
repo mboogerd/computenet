@@ -11,8 +11,8 @@ import {
 } from '../api/types';
 
 /** The backend's credence layers, and per-layer log-odds shifts that make the mock's rules disagree plausibly. */
-const LAYERS = ['dfquad', 'wlo', 'jnb', 'woe', 'euler', 'qe', 'mlp'] as const;
-const LAYER_SHIFT = [0, 0.18, -0.12, 0.08, 0.5, -0.4, 0.3];
+const LAYERS = ['dfquad', 'wlo', 'jnb', 'woe', 'euler', 'qe', 'mlp', 'glo'] as const;
+const LAYER_SHIFT = [0, 0.18, -0.12, 0.08, 0.5, -0.4, 0.3, 0.12];
 const logit = (p: number) => Math.log(p / (1 - p));
 const sigmoid = (z: number) => 1 / (1 + Math.exp(-z));
 const clampP = (p: number) => Math.min(0.999, Math.max(0.001, p));

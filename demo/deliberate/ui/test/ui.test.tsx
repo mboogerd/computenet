@@ -490,7 +490,7 @@ describe('UI-09 model A: framing', () => {
     const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
 
     expect(text).toContain('Do fish sleep?');
-    expect(hero).toContain('depends on what you mean by sleep');
+    expect(hero).toContain('between 40% and 55%, depending on what you mean by sleep');
     expect(hero).not.toContain('gauge__track');
     expect(hero).not.toContain('gauge__fill');
 
@@ -514,13 +514,13 @@ describe('UI-09 model A: framing', () => {
     expect((p2Section.match(/aria-label="Exploration override"/g) ?? []).length).toBe(1);
   });
 
-  it('A-8 READINGS without a term: the heading reads "depends on the reading"', () => {
+  it('A-8 READINGS without a term: the heading reads "…, depending on the reading"', () => {
     const noTerm: GraphDto = {
       ...readingsGraph,
       questions: [{ ...readingsGraph.questions[0], framing: { mode: 'READINGS', positions: readingsGraph.questions[0].framing!.positions } }],
     };
     const html = renderToString(() => <TreeView graph={noTerm} root="q" />);
-    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('depends on the reading');
+    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('depending on the reading');
   });
 
   it('A-8 POSITIONS: lists a distribution in order with proportional bars and percentages', () => {

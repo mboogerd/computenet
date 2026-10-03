@@ -260,6 +260,21 @@ export function framingText(f: FramingDto): string {
   return f.term === undefined ? 'depends on the reading' : `depends on what you mean by ${f.term}`;
 }
 
+/**
+ * computenet-3z7w5: the framing line of a READINGS question states how far its
+ * readings' credences spread — "between 22% and 66%, depending on what you
+ * mean by intelligent", "about 40%, …" when they round to the same value.
+ * Falls back to {@link framingText} for POSITIONS or without readings.
+ */
+export function readingsLine(f: FramingDto): string {
+  const cs = f.positions.map((p) => p.credence).filter((c): c is number => typeof c === 'number');
+  if (f.mode !== 'READINGS' || cs.length === 0) return framingText(f);
+  const lo = pct(Math.min(...cs));
+  const hi = pct(Math.max(...cs));
+  const range = lo === hi ? `about ${lo}` : `between ${lo} and ${hi}`;
+  return `${range}, ${f.term === undefined ? 'depending on the reading' : `depending on what you mean by ${f.term}`}`;
+}
+
 /** `?debug`: show internals (claim refs) that mean nothing to a reader. */
 export function isDebug(): boolean {
   return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
@@ -333,6 +348,7 @@ export const LAYER_NAMES: Record<string, string> = {
   euler: 'Euler-based',
   qe: 'quadratic energy',
   mlp: 'MLP-based',
+  glo: 'gated log-odds',
 };
 
 /** One line per rule, e.g. "weighted log-odds · 62% · in consensus", in the backend's layer order. */

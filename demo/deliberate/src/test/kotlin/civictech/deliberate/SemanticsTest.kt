@@ -40,6 +40,9 @@ class SemanticsTest {
         "euler" to listOf(0.73138869750773972, 0.64501586296664981, 0.49875640597824877, 0.5, 0.83800074747896569),
         "qe" to listOf(0.46215392614202572, 0.69512195121951215, 0.64999999999999991, 0.5, 0.24177300201477503),
         "mlp" to listOf(0.62978495051931360, 0.68997448112761250, 0.53810152622444896, 0.5, 0.63349143234382577),
+        // glo is not in the prototype: values from an independent Python port of its formula
+        // (doc/research/deliberate-credence-bench; credence 1 opens the gate fully, so energy = 2·atanh(min(e, .999))).
+        "glo" to listOf(0.23819301848049287, 0.7461139896373057, 0.6900762679573311, 0.5, 0.18653467765532622),
     )
 
     @Test
@@ -95,7 +98,7 @@ class SemanticsTest {
     @Test
     fun `symmetric layers treat attack as mirrored support`() {
         // Euler-based semantics is not symmetric by design and is left out.
-        for (id in listOf("dfquad", "wlo", "jnb", "woe", "qe", "mlp")) {
+        for (id in listOf("dfquad", "wlo", "jnb", "woe", "qe", "mlp", "glo")) {
             val s = SemanticsCatalog.of(id)
             for (b in listOf(0.2, 0.5, 0.7)) {
                 val a = listOf(0.3, 0.8)
@@ -129,6 +132,56 @@ class SemanticsTest {
         val doubted = listOf(Arg(0.9, 0.5))
         assertTrue(abs(JeffreyNaiveBayes().evaluate(0.5, emptyList(), doubted) -
             JeffreyNaiveBayes().evaluate(0.5, emptyList(), listOf(Arg(0.45, 1.0)))) > 1e-3)
+    }
+
+    /**
+     * The Tier 4 properties the credence benchmark selected glo on
+     * (doc/research/deliberate-credence-bench/tier4.py): what a rule used for a
+     * collective bet must do even where no answer can be scored.
+     */
+    @Test
+    fun `glo - a refuted or unknown source is inert`() {
+        val glo = GatedLogOdds()
+        for (b in listOf(0.3, 0.5, 0.7)) {
+            assertEquals(b, glo.evaluate(b, emptyList(), listOf(Arg(0.9, 0.05))), 0.02, "refuted support at $b")
+            assertEquals(b, glo.evaluate(b, listOf(Arg(0.9, 0.05)), emptyList()), 0.02, "refuted attack at $b")
+            assertEquals(b, glo.evaluate(b, emptyList(), listOf(Arg(0.9, 0.5))), 0.02, "unknown support at $b")
+            assertEquals(b, glo.evaluate(b, listOf(Arg(0.9, 0.5)), emptyList()), 0.02, "unknown attack at $b")
+        }
+    }
+
+    @Test
+    fun `glo - one strong believed unrebutted argument outweighs the prior (computenet-nxege)`() {
+        val glo = GatedLogOdds()
+        assertTrue(glo.evaluate(0.25, emptyList(), listOf(Arg(0.9, 0.9))) > 0.5)
+        assertTrue(glo.evaluate(0.75, listOf(Arg(0.9, 0.9)), emptyList()) < 0.5)
+    }
+
+    @Test
+    fun `glo - support and attack are weighed alike`() {
+        val glo = GatedLogOdds()
+        val up = glo.evaluate(0.5, emptyList(), listOf(Arg(0.7, 0.8))) - 0.5
+        val down = 0.5 - glo.evaluate(0.5, listOf(Arg(0.7, 0.8)), emptyList())
+        assertTrue(up > 0.1)
+        assertEquals(up, down, 1e-12)
+    }
+
+    @Test
+    fun `glo - one decisive certain argument does not create certainty`() {
+        val glo = GatedLogOdds()
+        assertTrue(glo.evaluate(0.5, emptyList(), listOf(Arg(1.0, 1.0))) < 0.9999)
+        assertTrue(glo.evaluate(0.5, listOf(Arg(1.0, 1.0)), emptyList()) > 0.0001)
+    }
+
+    @Test
+    fun `glo - a duplicate is damped and a flood of weak arguments does not overturn a strong one`() {
+        val glo = GatedLogOdds()
+        fun lo(p: Double) = ln(p / (1 - p))
+        val once = lo(glo.evaluate(0.5, emptyList(), listOf(Arg(0.7, 0.8))))
+        val twice = lo(glo.evaluate(0.5, emptyList(), List(2) { Arg(0.7, 0.8) }))
+        assertEquals(kotlin.math.sqrt(2.0), twice / once, 1e-9)
+        val flood = glo.evaluate(0.5, listOf(Arg(0.9, 0.9)), List(50) { Arg(0.2, 0.7) })
+        assertTrue(flood < 0.5, "50 weak supports overturned one strong attack: $flood")
     }
 
     @Test
