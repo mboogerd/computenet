@@ -236,7 +236,7 @@ class FanInlet<Api : Any>(
         try {
             (entry ?: terminal).invoke(invocation)
         } catch (failure: Throwable) {
-            checkpointOrder.remove(invocation)
+            if (!checkpointHeld(invocation)) checkpointOrder.remove(invocation)
             throw failure
         }
         if (!checkpointHeld(invocation)) checkpointOrder.remove(invocation)

@@ -814,4 +814,62 @@ class LiveCheckpointTest {
             checkpointAcceptanceCount(inlet) shouldBe 0
         }
     }
+
+    @Test
+    fun `(q) a throwing sibling preserves the completing offer already released into a cold tail`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val cold = FanInlet.create<Consumer<String>>()
+        val hot = FanInlet.create<Consumer<String>>()
+        cold.install(frontier.arm())
+        hot.install(frontier.arm())
+        val coldEdge = openFrontierEdge(cold)
+        val hotEdge = openFrontierEdge(hot)
+        val sourceId = UUID.randomUUID()
+        val originalFailure = IllegalStateException("sibling failed")
+        hot.serve(object : Consumer<String> {
+            override fun provide(input: String) = throw originalFailure
+        })
+
+        hot.offerHosted(frontierInvocation(hotEdge.from, sourceId, 1, "throws"), 1)
+        val survivor = frontierInvocation(coldEdge.from, sourceId, 1, "cold-survivor")
+        val failure = shouldThrow<IllegalStateException> { cold.offerHosted(survivor, 2) }
+
+        (failure === originalFailure) shouldBe true
+        withClue("successful cold prefix keeps its acceptance position when a later arm throws") {
+            cold.checkpointParked() shouldBe listOf(2L to survivor)
+            checkpointAcceptanceCount(cold) shouldBe 1
+            checkpointAcceptanceCount(hot) shouldBe 0
+        }
+        cold.resetPolicies()
+        hot.resetPolicies()
+        cold.checkpointParked() shouldBe listOf(2L to survivor)
+
+        val delivered = mutableListOf<String>()
+        cold.serve(object : Consumer<String> {
+            override fun provide(input: String) { delivered += input }
+        })
+        delivered shouldBe listOf("cold-survivor")
+        cold.checkpointParked() shouldBe emptyList()
+        checkpointAcceptanceCount(cold) shouldBe 0
+    }
+
+    @Test
+    fun `(r) reoffering the same invocation to ALIGN preserves its original acceptance`() {
+        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
+        val inlet = FanInlet.create<Consumer<String>>()
+        inlet.install(frontier)
+        val edge = openFrontierEdge(inlet)
+        openFrontierEdge(inlet)
+        val invocation = frontierInvocation(edge.from, UUID.randomUUID(), 1, "same-object")
+        inlet.offerHosted(invocation, 7)
+
+        frontier.offer(invocation)
+
+        withClue("reoffering the identical object is not a discarded replacement") {
+            inlet.checkpointParked() shouldBe listOf(7L to invocation)
+            checkpointAcceptanceCount(inlet) shouldBe 1
+        }
+        inlet.resetPolicies()
+        checkpointAcceptanceCount(inlet) shouldBe 0
+    }
 }
