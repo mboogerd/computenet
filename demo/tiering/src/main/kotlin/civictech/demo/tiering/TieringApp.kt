@@ -17,8 +17,10 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.link
+import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
+import civictech.cell.observe.observeAligned
 import civictech.cell.replication.Replication
 import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerListener
@@ -378,15 +380,19 @@ class TieringApp(
     private var wsConnection: PeerConnection? = null
 
     private val state = Object()
-    // Read model: each derived outlet materialized by a kernel observation sink,
-    // read via current() in stateJson. Constructed WITHOUT an onChange listener
-    // so no broadcast() fires before all eight sinks exist; listeners are
-    // registered in init once construction is complete.
+    // Read model: each outlet is materialized by either a point-consistent sink
+    // or a same-root aligned sink, then read via current() in stateJson.
+    // Constructed without listeners so no broadcast fires before all eight
+    // named views exist; listeners are registered in init afterwards.
     private val itemsView = host.observe(refs.items.ref, View.set<String>())
-    private val valuationsView = host.observe(refs.vals.ref, View.set<Valuation>())
-    private val prefsView = host.observe(refs.prefs.ref, View.set<Pref>())
-    private val tierAvgView = host.observe(refs.tierAvg.ref, View.map<String, Double>())
-    private val prefAvgView = host.observe(refs.prefAvg.ref, View.map<String, Double>())
+    private val valuationAligned: AlignedCompositeCell = host.observeAligned {
+        set("valuations", refs.vals.ref)
+        map("tierAvg", refs.tierAvg.ref)
+    }
+    private val preferenceAligned: AlignedCompositeCell = host.observeAligned {
+        set("prefs", refs.prefs.ref)
+        map("prefAvg", refs.prefAvg.ref)
+    }
     private val fusedView = host.observe(refs.fused.ref, View.map<String, Tiered>())
 
     /** The converged manual map, read off the [UntagCell] rather than the OR-map. */
@@ -394,6 +400,18 @@ class TieringApp(
 
     /** What the UI board and `/state`'s `"board"` render: fused, manual-overridden. */
     private val boardView = host.observe(refs.board.ref, View.map<String, Tiered>())
+
+    /** Same-root observation groups must drain completely once the host is idle. */
+    internal val alignedBufferedWaves: Int
+        get() = valuationAligned.bufferedWaves + preferenceAligned.bufferedWaves
+
+    // Expose the published snapshots to frame-contract tests: reading current()
+    // from an asynchronous callback can hide intermediate publications.
+    internal fun onValuationSnapshot(listener: (Map<String, Any?>) -> Unit) =
+        valuationAligned.onChange(listener)
+
+    internal fun onPreferenceSnapshot(listener: (Map<String, Any?>) -> Unit) =
+        preferenceAligned.onChange(listener)
 
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
     // keeps a Valuation-valued shadow index. This lightweight KEY set exists only
@@ -436,13 +454,11 @@ class TieringApp(
     val manualInstanceId: Long get() = manualCell.ref.instanceId
 
     init {
-        // Register one broadcast per sink now that all eight exist; registering
+        // Register one broadcast per sink now that all eight views exist; registering
         // fires an immediate catch-up (harmless — clients is still empty).
         itemsView.onChange { broadcast() }
-        valuationsView.onChange { broadcast() }
-        prefsView.onChange { broadcast() }
-        tierAvgView.onChange { broadcast() }
-        prefAvgView.onChange { broadcast() }
+        valuationAligned.onChange { broadcast() }
+        preferenceAligned.onChange { broadcast() }
         fusedView.onChange { broadcast() }
         manualView.onChange { broadcast() }
         boardView.onChange { broadcast() }
@@ -557,10 +573,16 @@ class TieringApp(
         fun num(d: Double) = "%.4f".format(Locale.ROOT, d)
 
         val items = itemsView.current()
-        val valuations = valuationsView.current()
-        val prefs = prefsView.current()
-        val tierAvg = tierAvgView.current()
-        val prefAvg = prefAvgView.current()
+        val valuationSnapshot = valuationAligned.current()
+        val preferenceSnapshot = preferenceAligned.current()
+        @Suppress("UNCHECKED_CAST")
+        val valuations = valuationSnapshot["valuations"] as Set<Valuation>
+        @Suppress("UNCHECKED_CAST")
+        val tierAvg = valuationSnapshot["tierAvg"] as Map<String, Double>
+        @Suppress("UNCHECKED_CAST")
+        val prefs = preferenceSnapshot["prefs"] as Set<Pref>
+        @Suppress("UNCHECKED_CAST")
+        val prefAvg = preferenceSnapshot["prefAvg"] as Map<String, Double>
         val fused = fusedView.current()
         // The board renders the OVERRIDE cell — fused with the converged
         // manual pins applied. The signals table below still reads `fused`

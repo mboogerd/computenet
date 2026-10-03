@@ -20,6 +20,7 @@ import {
   verdict,
 } from '../util/format';
 import { OverrideControl } from './OverrideControl';
+import { sameRefs } from '../util/byRef';
 import { TweenPct } from './Tween';
 
 /** Every claim of the rendered tree, by ref, with the edge (= link) that
@@ -58,6 +59,20 @@ const FOCUS_MS = 1600;
  * graph) so a stale setter is never called.
  */
 const collapseSetters = new Map<string, (collapsed: boolean) => void>();
+
+/**
+ * A collapsed/expanded state for the children of [ref] — a claim card, or a
+ * framed question's reading (computenet-urmh0) — registered so
+ * {@link focusInTree} can expand it before scrolling to something under it.
+ */
+export function useCollapse(ref: string) {
+  const [collapsed, setCollapsed] = createSignal(false);
+  onMount(() => collapseSetters.set(ref, setCollapsed));
+  onCleanup(() => {
+    if (collapseSetters.get(ref) === setCollapsed) collapseSetters.delete(ref);
+  });
+  return [collapsed, setCollapsed] as const;
+}
 
 let focusTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -132,8 +147,6 @@ export interface Selection {
   research?: Accessor<boolean>;
 }
 
-const sameRefs = (a: string[], b: string[]) => a.length === b.length && a.every((r, i) => r === b[i]);
-
 /** Stable child refs of a tree entry, so a new frame with the same children keeps their DOM. */
 export function useChildRefs(entry: Accessor<{ node: TreeNode } | undefined>) {
   return createMemo(() => entry()?.node.children.map((a) => a.node.claim.ref) ?? [], undefined, { equals: sameRefs });
@@ -180,15 +193,11 @@ function CredenceBar(props: { node: NodeDto; leaf: boolean; research?: boolean }
 
 export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel: Selection }) {
   const entry = () => props.index().get(props.claimRef);
-  const [collapsed, setCollapsed] = createSignal(false);
-  const [linkOpen, setLinkOpen] = createSignal(false);
-  const childRefs = useChildRefs(entry);
   // computenet-lmfg8: let a cruxes/disagreement entry elsewhere on the page
   // expand this card open before it scrolls to something inside it.
-  onMount(() => collapseSetters.set(props.claimRef, setCollapsed));
-  onCleanup(() => {
-    if (collapseSetters.get(props.claimRef) === setCollapsed) collapseSetters.delete(props.claimRef);
-  });
+  const [collapsed, setCollapsed] = useCollapse(props.claimRef);
+  const [linkOpen, setLinkOpen] = createSignal(false);
+  const childRefs = useChildRefs(entry);
 
   return (
     <Show when={entry()}>

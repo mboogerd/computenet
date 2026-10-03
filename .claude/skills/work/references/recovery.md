@@ -19,7 +19,7 @@ The orchestrator reads this when something rare interrupts SKILL.md's normal flo
 | The host rebooted | As above, after re-creating the scratch dir. If `claim-epic.sh` exits 1 with a LIVE or FOREIGN holder, another session has the epic: leave it and return to SKILL.md "3. Sync and claim one epic" | A reboot also clears `/private/tmp`, and with it your scratch dir |
 | Every file operation in the repository is refused, sandbox or not | Do not retry. Ship only PRs a reviewer certified whose checks are green, working from outside the repository with `--repo mboogerd/computenet`; end by listing the bead writes that did not happen | The host revoked access and only a person can restore it; local tracker state survives for the next session |
 
-Recover the clock from the original slot start, never from now: run `.claude/skills/work/scripts/slot-elapsed.sh <previous session's scratch dir>`. If that directory is gone, create a new one and write `slot-start` (epoch seconds) and `slot-seconds` into it. Take the start from the epic's `started_at`, which the claim set a few minutes after the true start. Read it with `.claude/skills/work/scripts/bead.sh <epic-id> -r '.started_at'`, then convert it to epoch seconds. Take the slot length from the routine that invoked you. If neither can be recovered, write the current time with a length of 3600, and say so in the summary.
+Recover the clock from the original slot start, never from now: run `.claude/skills/work/scripts/slot-elapsed.sh <previous session's scratch dir>`. If that directory is gone, create a new one and write `slot-start` (epoch seconds) and `slot-seconds` into it. Take the start from the epic's `started_at`, which the claim set a few minutes after the true start. Read it with `.claude/skills/work/scripts/bead.sh <epic-id> -r '.started_at'`, then convert it to epoch seconds. The length is SKILL.md step 2's 43200. If the start cannot be recovered, write the current time, and say so in the summary.
 
 Query side effects, then resume rather than restart. A killed breakdown may already have filed its children, and a killed implementer may already have committed. Re-dispatch only the units that left nothing behind, with the resume framing from "Stalled agents and load".
 
@@ -110,12 +110,12 @@ from any route (5b/5c's own task loop); routes 0 and 2 never call this (5f).
 cross-epic item while selecting it, so checking headroom only once acquired
 risks a stale claim abandoned to Finalize.
 
-HANDOFF means Finalize now, same as EXPIRED (SKILL.md 6), except step 2's
-`slot-elapsed.sh` rung is still the hard backstop: EXPIRED always means
-Finalize even when this reads CONTINUE, because the auto-compact floor is a
-soft signal on an estimate and the wall clock is not. CONTINUE means treat
-5f's chosen route as OPEN and proceed, whatever rung `slot-elapsed.sh` names,
-short of EXPIRED.
+HANDOFF means Finalize now, same as EXPIRED (SKILL.md 6). Headroom resets
+after an auto-compaction, so a session whose context was compacted passes
+`--compacted`, which always reads HANDOFF. Step 2's 12h clock is the last
+backstop: EXPIRED always means Finalize, even when this reads CONTINUE.
+CONTINUE means treat 5f's chosen route as OPEN and proceed, whatever rung
+`slot-elapsed.sh` names, short of EXPIRED.
 
 ## A red required check
 

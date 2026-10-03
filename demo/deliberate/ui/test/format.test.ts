@@ -3,6 +3,7 @@ import type { FramingDto, NodeDto } from '../src/api/types';
 import {
   agreementText,
   framingText,
+  readingsLine,
   layerLines,
   phaseOf,
   priorDecidesText,
@@ -118,6 +119,12 @@ describe('strength and status wording', () => {
     expect(stoppedHint({ ...q, stoppedBy: 'voi' })).toContain('value of information');
     expect(stoppedHint(q)).toBeUndefined();
   });
+
+  it('words the human stop of a whole question (CTL-03 on the root)', () => {
+    const q = { root: 'q', text: 'Q?', claims: 12, active: false, stoppedBy: 'human' as const };
+    expect(stoppedText(q)).toBe('stopped by you');
+    expect(stoppedHint(q)).toContain('Auto on the question restarts it');
+  });
 });
 
 describe('questionProgress', () => {
@@ -208,6 +215,17 @@ describe('model A framing', () => {
     const noTerm: FramingDto = { mode: 'READINGS', positions: [] };
     expect(framingText(withTerm)).toBe('depends on what you mean by sleep');
     expect(framingText(noTerm)).toBe('depends on the reading');
+  });
+
+  it('readingsLine states how far the readings spread (computenet-3z7w5)', () => {
+    const r = (cs: number[], term?: string): FramingDto => ({
+      mode: 'READINGS', term, positions: cs.map((credence, i) => ({ ref: `p${i}`, text: `r${i}`, credence })),
+    });
+    expect(readingsLine(r([0.66, 0.22, 0.31], 'intelligent'))).toBe('between 22% and 66%, depending on what you mean by intelligent');
+    expect(readingsLine(r([0.401, 0.399], 'sleep'))).toBe('about 40%, depending on what you mean by sleep');
+    expect(readingsLine(r([0.2, 0.7]))).toBe('between 20% and 70%, depending on the reading');
+    expect(readingsLine(r([], 'sleep'))).toBe('depends on what you mean by sleep');
+    expect(readingsLine({ mode: 'POSITIONS', positions: [{ ref: 'a', text: 'A', credence: 0.3, share: 1 }] })).toBe('several possible answers');
   });
 
   it('reads a POSITIONS heading as "several possible answers", term or not', () => {

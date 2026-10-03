@@ -66,9 +66,12 @@ spawn-and-link.
 
 The step vocabulary's decided extension (decided in 93 I-21; `SpawnStep`'s
 identity/parent/factory parameters and `UnlinkStep`/`DespawnStep` built):
-steps are `SpawnStep(handle, factory, identity, parent)`, `ConnectStep`,
+steps are `SpawnStep(handle, factory, identity, parent, ...)`, `ConnectStep`,
 `UnlinkStep(from, outlet, to, inlet)`, and `DespawnStep(handle)` (`Link.unlink()`
-as a recorded step). `identity` is
+as a recorded step). Separately, `SpawnStep` has `journalId` and `inputs`
+parameters; `inputs` alone lowers named durable inputs to
+`ManagedHost.durableInput` after the spawn (computenet-12qyp, design
+12qyp-D5). `identity` is
 an `IdentityBinding` choosing which ref the host mints — `FreshLogical`
 (default: the shipped replay-as-new-graph behavior, so "replay mints fresh
 cells and refs" stays true by default), `NewInstanceOf(logicalId)` (fresh

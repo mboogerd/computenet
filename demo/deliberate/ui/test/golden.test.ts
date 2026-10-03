@@ -14,7 +14,7 @@ const graph = golden as GraphDto;
 
 const OVERRIDES: readonly Override[] = ['AUTO', 'EXPAND', 'STOP'];
 const POLARITIES = ['SUPPORT', 'ATTACK'];
-const STOPPED_BY = ['budget', 'voi'];
+const STOPPED_BY = ['human', 'budget', 'voi'];
 const FRAMING_MODES = ['READINGS', 'POSITIONS'];
 
 describe('golden fixture', () => {
@@ -47,7 +47,7 @@ describe('golden fixture', () => {
     }
   });
 
-  it('every question stoppedBy is budget or voi', () => {
+  it('every question stoppedBy is human, budget or voi', () => {
     for (const q of graph.questions) {
       if (q.stoppedBy === undefined) continue;
       expect(STOPPED_BY).toContain(q.stoppedBy);

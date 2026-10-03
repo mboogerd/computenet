@@ -25,8 +25,8 @@ import kotlin.io.path.readLines
  * ## What it can and cannot catch
  *
  * It is a lexical scan of the files the spend-log and run-dir paths travel
- * through, not the whole module: this package (`ingest/` — `SpendLogIngester`,
- * [OffsetCheckpoint], `SpendLogTailReader`), whose only sources of a path are
+ * through, not the whole module: this package (`ingest/` — `SpendLogIngester`
+ * and `SpendLogTailReader`), whose only sources of a path are
  * its constructor parameters, and `AllocatorObserveApp.kt`, where
  * `parseArgs` builds `AllocatorObserveConfig` — the one place a "quick local
  * run" default for `logPath` or `runDir` would be pasted. A string literal
@@ -80,9 +80,9 @@ class NoHardcodedLogPathTest {
     fun `no source on the log path's route names a concrete log path`() {
         val sources = mainSources()
         // Guard against the scan silently passing because it found nothing to
-        // scan — the three ingest files plus the app, and if it ever finds
+        // scan — the two ingest files plus the app, and if it ever finds
         // fewer, that is the bug rather than a pass.
-        (sources.size >= 4) shouldBe true
+        (sources.size >= 3) shouldBe true
 
         val offenders =
             sources.flatMap { file ->

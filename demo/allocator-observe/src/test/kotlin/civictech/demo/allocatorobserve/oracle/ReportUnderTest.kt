@@ -1,6 +1,12 @@
 package civictech.demo.allocatorobserve.oracle
 
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.graph.TypedRef
+import civictech.cell.graph.lookup
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
 import civictech.demo.allocatorobserve.SpendRecord
 import civictech.demo.allocatorobserve.declaration.AllocationDeclaration
 import civictech.demo.allocatorobserve.declaration.DeclarationEvent
@@ -37,8 +43,8 @@ object ReportUnderTest {
      * [windowLength]: the `report` document, as `GET /state/report` would
      * encode it for a process that had ingested exactly this.
      *
-     * A fresh run directory is used for the checkpoint, so every call is a
-     * `FirstStart` whole read of [log] (`unverified:` per the bead — a log
+     * A fresh durable input is used for the cursor, so every call is a
+     * `FirstStart` whole read of [log] (a log
      * larger than one hand-off is still one `poll()`, because
      * `SpendLogTailReader` hands off in bounded batches within a single poll).
      */
@@ -48,12 +54,16 @@ object ReportUnderTest {
         now: Instant,
         windowLength: Duration,
     ): JsonElement {
-        val runDir = Files.createTempDirectory("report-under-test-run")
         val records = SetCell<SpendRecord>()
         val declarations = SetCell<DeclarationEvent>()
         val views = AllocatorReportViews.derivedFrom(records, declarations, windowLength, now = { now })
 
-        SpendLogIngester(log, runDir, records).poll()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = InMemoryJournal())
+        host.managementInlet.call.spawn(records)
+        val recordOps = checkNotNull(host.lookup(TypedRef<SetApi<SpendRecord>>(records.ref))).inlet.call
+        SpendLogIngester(log, recordOps, host.durableInput(records.ref, "spend"), records::membership).poll()
+        controller.runToIdle()
         history.forEach { spec ->
             declarations.inlet.call.add(
                 DeclarationEvent(
@@ -84,9 +94,7 @@ object ReportUnderTest {
 
 /**
  * The declaration-history file's per-event shape (fpml.5-D7). Deliberately a
- * separate, private DTO rather than a reuse of `restart/DeclarationHistoryJournal`'s
- * (which is `private` to its own file and lives in `src/main`, one layer this
- * test-only parser has no reason to depend on) or `http/AllocatorJson.kt`'s
+ * separate, private DTO rather than a reuse of `http/AllocatorJson.kt`'s
  * `DeclarationDto` (the HTTP exchange's own type) — the field names and
  * nesting match both by design (fpml.5-D7 pins them to the exchange shape),
  * and that agreement is exactly what a divergence in this harness would catch.

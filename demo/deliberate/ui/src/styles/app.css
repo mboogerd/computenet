@@ -791,6 +791,86 @@ button {
   color: var(--text-3);
 }
 
+/* computenet-3z7w5: a READINGS question's readings on one no–yes track — a
+   neutral band over their spread, a numbered marker per reading (neutral, UI-04:
+   the framing is not a verdict), and the legend with each reading's full text. */
+.spread {
+  margin: 14px 0 0;
+}
+
+.spread__track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track);
+}
+
+.spread__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: var(--band);
+  transition: left 700ms var(--ease), width 700ms var(--ease);
+}
+
+.spread__mark {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-2);
+  background: var(--page);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  transition: left 700ms var(--ease);
+}
+
+.spread__legend {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.spread__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.spread__n {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-2);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  color: var(--text);
+}
+
+.spread__text {
+  overflow-wrap: anywhere;
+}
+
+.spread__pct {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
 /* Model A: one reading/position, explored as a root of its own beneath the
    framed question — its own gauge, caption, status/override and tree. */
 .readings {

@@ -226,3 +226,132 @@ to carry, kept here with the measurements it summarises.
   con sides, so con sides stopped early — one root ended 5 pro / 2 con —
   which is why a side holding fewer arguments than the other is never
   saturated by Jev's judgment.
+
+## Prior dominance after model C (2026-10-01)
+
+`PriorDominanceTest` reuses the three live questions in
+`src/test/resources/calibration/material.json`. It reconstructs their full
+root → d1 → d2 → d3 branches (172 claims and 169 links), obtains current Jev
+plausibility and strength judgments once, and caches those judgments and all
+reassessments in `prior-dominance.json`. A cached run succeeds with
+`TYPESAFE_API_KEY` absent. Run it with:
+
+```
+DELIBERATE_CALIBRATE=1 ./gradlew :demo:deliberate:test \
+  --tests 'civictech.deliberate.PriorDominanceTest' --rerun --no-build-cache
+```
+
+The measurements use these explicit counterfactuals:
+
+- **freeze dK** replaces every depth-K claim's deliberated standing by its Jev
+  prior and recomputes its ancestors;
+- a claim is **immovable** when freezing that one argued claim changes the
+  root headline by less than 0.01;
+- **prior share** is `|actual − local-neutral-prior|` divided by that distance
+  plus `|actual − arguments-removed|`; the complementary share is the
+  argument share. These are diagnostic counterfactual distances, not an
+  additive causal decomposition.
+
+### Current semantics
+
+| question | root | freeze d1 | freeze d2 | freeze d3 |
+|---|---:|---:|---:|---:|
+| free public transport | 0.463 | 0.011 | 0.003 | 0.000 |
+| coffee and diabetes | 0.853 | 0.001 | 0.001 | 0.000 |
+| rent versus buy | 0.939 | 0.000 | 0.001 | 0.000 |
+
+The largest depth-1 freeze delta is **0.011**, below the out-of-repository
+scratch comparison point of 0.046. Across all 12 argued claims, 8/12 (67%)
+cannot move the root by 0.01; excluding the three question roots, 8/9 (89%)
+cannot. The quoted 53% used an unavailable scratch procedure, so neither
+comparison is treated as a reproduced baseline; the in-repository definitions
+and cache above are the reproducible result.
+
+The mechanism is the full-prior term at every node. In the headline's three
+member layers, `wlo` keeps `alpha * logit(base)` with alpha 1, `woe` likewise
+keeps the unshrunk log-odds base, and `jnb` keeps the unshrunk base odds while
+argument evidence is conditioned on the child's credence and edge strength.
+At depth 1 the mean prior shares are **0.938 / 0.893 / 0.931** for
+`wlo / jnb / woe`; their argument shares are only 0.062 / 0.107 / 0.069.
+The mean fraction of a claim's local argument-driven move transmitted to the
+root compounds by level:
+
+| layer | depth 1 | depth 2 | depth 3 |
+|---|---:|---:|---:|
+| headline consensus | 0.135 | 0.010 | 0.001 |
+| wlo | 0.151 | 0.012 | 0.001 |
+| jnb | 0.060 | 0.002 | 0.000 |
+| woe | 0.203 | 0.017 | 0.002 |
+
+The requested exact strong-argument subgroup is empty on this material. There
+are 65 claims at credence at least 0.8, but no link strength reaches 0.8; the
+maximum is 0.7975. The harness reports `n/a` and does not relax the threshold.
+The implementation recommendation below therefore requires the property as a
+synthetic semantics test rather than claiming it was observed live. To keep
+the candidates comparable against that property, the harness also isolates
+the nearest actual support and attack whose child already clears 0.8 credence,
+and raises only their measured strengths to the exact 0.8 boundary: support
+0.835 credence and 0.7975 → 0.8 strength; attack 0.945 credence and 0.785 → 0.8
+strength. These are labelled counterfactual probes, never live observations.
+
+### Candidate semantics on the same material
+
+For the two formal candidates, a node with no arguments keeps its Jev prior;
+only an argued node's base is shrunk. All outputs stayed in [0,1]. Prior-share
+columns average the headline member layers (`wlo`, `jnb`, `woe`) at d0–d3.
+
+| candidate | max freeze d1 / d2 / d3 | prior share d0 / d1 / d2 / d3 | exact-threshold target probes |
+|---|---|---|---:|
+| current full prior | 0.011 / 0.003 / 0.000 | 0.424 / 0.921 / 0.545 / 0.422 | 12/16 layers |
+| weak prior, weight 0.25 | 0.035 / 0.002 / 0.000 | 0.200 / 0.293 / 0.322 / 0.328 | 15/16 layers |
+| arguments-first neutral base | **0.048** / 0.002 / 0.000 | 0 / 0 / 0 / 0 | **16/16 layers** |
+| bottom-up Jev reassessment | **0.057** / 0.010 / 0.013 | 0.262 / 0.424 / 0.331 / 0.094 | 2/2 judgments |
+
+The weak and neutral formal views make depth-1 work more visible, but the
+remaining d2/d3 attenuation shows that removing the local prior is not the
+same as making arbitrary deep branches influential. The neutral view is a
+diagnostic arguments-first view, not evidence that arguments improve answer
+accuracy. The multi-class study summarized in
+`doc/design/claims-and-questions.md` found arguments alone worse than the
+direct judgment and neutral as an adjustment, so changing the headline is not
+justified by this measurement.
+
+### Bottom-up Jev reassessment
+
+The harness presented each claim with its direct pro and con arguments, their
+bottom-up deliberated credences, their relation strengths, and the claim's
+first impression. It asked for both a considered standing and an
+arguments-only standing. The design questions resolve as follows:
+
+1. **Double counting:** the considered standing replaces formal aggregation
+   in this candidate. It may be shown beside the formal view, but it must not
+   become a new base with the same arguments aggregated on top.
+2. **Re-trigger:** reassess after subtree quiescence or a VoI stop, only when a
+   shown direct child's standing changed by at least 0.05 since the last
+   fingerprint, with at most two reassessments per node per question.
+3. **Cost:** one stable pass made four calls per question and cost
+   $0.000261–$0.000288 per question at the assumed Jev rate. The two-pass cap
+   projects $0.000522–$0.000577 per question; this belongs in the normal cost
+   estimate if the candidate is ever implemented.
+4. **Determinism and restore:** a live model answer is not reproducible derived
+   state. Journal the considered judgment and the exact shown-child
+   fingerprint as an input; restore it until that fingerprint crosses the
+   re-trigger rule.
+5. **Calibration for the job:** Jev's mean argument shares exceed its prior
+   shares at every measured depth (0.738, 0.576, 0.669, 0.906 at d0–d3), so it
+   does not merely copy the first impression. Its effective propagation is
+   nevertheless uneven: freezing d1 moved the policy root 0.057 but the other
+   roots only 0.003 and 0.000. It followed both exact-threshold counterfactual
+   probes (2/2), but with no live ≥0.8-strength example this is not enough
+   evidence that reassessment reliably satisfies the target property.
+
+### Recommendation
+
+Generalise model D's deterministic **arguments-first neutral-prior view to
+every argued node**, keep a no-argument node at its Jev prior, and expose the
+view beside the existing headline. Do not change the headline yet. This is the
+smallest candidate that removes local prior dominance, increases the maximum
+depth-1 freeze delta from 0.011 to 0.048, adds no LLM cost or durability state,
+and preserves the accuracy caution above. Bottom-up reassessment costs little,
+but its restore/re-trigger machinery and uneven effect are not justified by
+these three questions.

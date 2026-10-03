@@ -129,6 +129,20 @@ describe('SPEC UI contract', () => {
     expect(html).toContain('not worth exploring');
   });
 
+  it('CTL-03 on the root: a question the human stopped reads "stopped by you", once, and its Stop says it stops the question', () => {
+    const running = renderToString(() => <TreeView graph={graph} root="q" />);
+    expect(running).not.toContain('stopped by you');
+    expect(running).toContain('Stop the whole question');
+    const stopped: GraphDto = {
+      ...graph,
+      questions: [{ ...graph.questions[0], active: false, stoppedBy: 'human' }],
+      nodes: graph.nodes.map((n) => (n.ref === 'q' ? { ...n, status: 'STOPPED', override: 'STOP' } : n)),
+    };
+    const html = renderToString(() => <TreeView graph={stopped} root="q" />).replace(/<!--[^>]*-->/g, '');
+    expect(html.match(/stopped by you/g)).toHaveLength(1);
+    expect(html).not.toContain('question stopped');
+  });
+
   it('model C lists the question\'s cruxes under "what would change the answer", best first', () => {
     expect(renderToString(() => <CruxesPanel graph={graph} root="q" />)).not.toContain('What would change the answer');
     const withCruxes: GraphDto = {
@@ -490,7 +504,7 @@ describe('UI-09 model A: framing', () => {
     const hero = text.slice(text.indexOf('aria-label="Question"'), readingsAt);
 
     expect(text).toContain('Do fish sleep?');
-    expect(hero).toContain('depends on what you mean by sleep');
+    expect(hero).toContain('between 40% and 55%, depending on what you mean by sleep');
     expect(hero).not.toContain('gauge__track');
     expect(hero).not.toContain('gauge__fill');
 
@@ -514,13 +528,13 @@ describe('UI-09 model A: framing', () => {
     expect((p2Section.match(/aria-label="Exploration override"/g) ?? []).length).toBe(1);
   });
 
-  it('A-8 READINGS without a term: the heading reads "depends on the reading"', () => {
+  it('A-8 READINGS without a term: the heading reads "…, depending on the reading"', () => {
     const noTerm: GraphDto = {
       ...readingsGraph,
       questions: [{ ...readingsGraph.questions[0], framing: { mode: 'READINGS', positions: readingsGraph.questions[0].framing!.positions } }],
     };
     const html = renderToString(() => <TreeView graph={noTerm} root="q" />);
-    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('depends on the reading');
+    expect(html.replace(/<!--[^>]*-->/g, '')).toContain('depending on the reading');
   });
 
   it('A-8 POSITIONS: lists a distribution in order with proportional bars and percentages', () => {

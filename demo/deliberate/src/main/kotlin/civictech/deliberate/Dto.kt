@@ -34,7 +34,8 @@ data class QuestionDto(
     /** EXP-10: mean yield of every recorded round before those; null until there are more than `yieldWindow`. */
     val yieldEarlier: Double? = null,
     /**
-     * Why the tree stopped growing early: "budget" (the hard cap, EXP-06), "voi"
+     * Why the tree stopped growing early: "human" (the human stopped the question:
+     * STOP on its root, CTL-03), "budget" (the hard cap, EXP-06), "voi"
      * (model C: no work left, and at least one node ended DIMINISHING because its
      * value of information fell below ε), or null. ("diminishing", the removed
      * yield stop, is no longer sent.)

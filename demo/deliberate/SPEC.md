@@ -102,16 +102,20 @@ names that model.)
   and its source's credence vector. Each semantics computes its own energy
   from the pair — `energy(strength, credence)`, DF-QuAD's product for most —
   and combines a node's base with the energies of its attacks and supports.
-  Layers (all seven always run): `dfquad` (agora's
+  Layers (all eight always run): `dfquad` (agora's
   DF-QuAD), `wlo` (weighted log-odds: σ(α·logit(base) + k·(‖S^γ‖_p −
   ‖A^γ‖_p)), α = 1, k = 2.4, p = 2, γ = 1.3), `jnb` (Jeffrey / naive-Bayes:
   the argument's likelihood ratio LR(s) = ((1+s)/(1−s))^K is Jeffrey-
   conditioned on its source's credence c, energy ln(c·LR + (1−c)·LR^−r),
   exact because s and c arrive separately), `woe` (log-odds DF-QuAD, weight
   of evidence −ln(1 − e)), `euler` (Euler-based), `qe` (quadratic energy),
-  `mlp` (MLP-based); formulas and defaults as in the prototype
-  `semantics.js`, and every layer keeps agora's base (the clamped mean of the
-  stances). `dfquad` always runs. Cycle handling is agora's: the edge that
+  `mlp` (MLP-based), `glo` (gated log-odds: an argument's energy is
+  2·atanh(min(s·u(c), 0.999)) with the gate u(c) = max(0, 2·σ(5·logit c) − 1),
+  so a source at or below ½ is inert; σ(logit(base) + ‖S‖₂ − ‖A‖₂), support and
+  attack weighed alike — the rule the credence benchmark selected,
+  `doc/research/deliberate-credence-bench`); formulas and defaults of the first
+  seven as in the prototype `semantics.js`, and every layer keeps agora's base
+  (the clamped mean of the stances). `dfquad` always runs. Cycle handling is agora's: the edge that
   closes a cycle is its head and absorbs a returning source update whose
   largest per-layer change is below the quiescence threshold; a node's
   arguments are folded in ref order, so emission is deterministic. Every
@@ -490,9 +494,27 @@ open question, each explored as a root of its own.
 - **CTL-03** `STOP` cancels queued work for that claim and prevents future
   rounds; an in-flight round finishes but its results are still attached
   (arguments are never silently dropped once produced). Status becomes
-  `STOPPED`. Descendants are not affected.
+  `STOPPED`. Descendants are not affected — except on a **question root**,
+  where `STOP` ends the whole question: every claim and link of it that waits
+  for a round (`QUEUED`, or `EXPLORING` with rounds left) ends `STOPPED` at
+  once and no pending forced round survives; a round in flight anywhere in
+  the question finishes, its arguments are attached and assessed, and they —
+  like its claim, at the round boundary — end `STOPPED` instead of being
+  queued. The question is no longer `active` once its rounds in flight end,
+  and reports `stoppedBy = "human"` (the hero reads "stopped by you", and the
+  hero's Stop control says it stops the whole question). `EXPAND` on a claim of a stopped question
+  is still CTL-02 (on the root: the root's round only); what it attaches ends
+  `STOPPED` too. The stop is durable: it is part of the question's record
+  (DUR-02), and a restart restores the question stopped — whatever the
+  restart interrupted ends `STOPPED`, nothing is re-queued. It is independent
+  of the pause (CTL-05). A framed root (§3 "Framing") follows the same rule
+  over its readings/positions, though the UI offers it no control (UI-09).
 - **CTL-04** `AUTO` returns the decision to Jev; setting it on a `STOPPED`
-  claim re-queues it through the normal gates.
+  claim re-queues it through the normal gates. On the root of a stopped
+  question it restarts the question: every claim and link the stop ended
+  `STOPPED` (any whose own override is not `STOP`) is re-queued through the
+  normal gates, exactly as a restart would (DUR-03) — an argument never
+  assessed is assessed first — and `stoppedBy` clears.
 - **CTL-05** The human can **pause** and **resume** a whole question
   (`POST /question/pause`). A paused question starts no new round: a round
   in flight finishes and its results are attached and assessed (as CTL-03);
@@ -537,7 +559,8 @@ Every status change is broadcast.
   claim and link carries `activity` while it is being explored, judged or
   assessed; the graph carries `consensusMembers`; every question
   carries `yieldRounds`, `yieldRecent`, `yieldEarlier` (EXP-10, informational)
-  and `stoppedBy` (`"budget"`, `"voi"` or null; model C, §3), `paused`
+  and `stoppedBy` (`"human"` — STOP on its root, CTL-03 —, `"budget"`,
+  `"voi"` or null; model C, §3), `paused`
   (CTL-05), `cruxes` (model C, up to 3 refs for "what would change the
   answer"), `costUsd`, `projectedUsd` and `cost` (§12), and — model D —
   `firstImpression` (Jev's plausibility of the question itself, judged before
@@ -587,7 +610,7 @@ Every status change is broadcast.
   each with its sway (`|sensitivity|`), how settled it is (its plausibility or,
   for a link, its strength) and, when its sensitivity is signed, which way it
   would pull the answer. Nothing is shown until the backend names a crux.
-- **UI-08 (model D).** All seven layers are still computed for every node, but
+- **UI-08 (model D).** All eight layers are still computed for every node, but
   only the consensus is shown by default: no spread band on a claim's or the
   question's gauge, no per-layer caption, no per-rule values or tooltip text.
   A "rules" pill button in the header (`aria-pressed`, off by default) toggles

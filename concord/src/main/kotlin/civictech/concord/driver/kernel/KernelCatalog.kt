@@ -490,8 +490,8 @@ internal object KernelCatalog {
         }
         val cell = AlignedCompositeCell(views = folds)
         // Appended on the sink's dispatcher thread, read on the runner thread
-        // after [RecordedComposite.drain]: the drain latch's countDown/await is
-        // the happens-before edge; the synchronized list is belt and braces.
+        // after [RecordedComposite.drain]: the successful kernel barrier wait
+        // supplies the happens-before edge; the synchronized list is belt and braces.
         val log: MutableList<Value> = Collections.synchronizedList(mutableListOf())
         val sink = RecordedComposite(cell, kinds, log)
         return Built(cell, sink, ViewKind.COMPOSITE, observations = log)

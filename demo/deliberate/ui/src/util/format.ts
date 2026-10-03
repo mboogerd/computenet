@@ -39,9 +39,10 @@ export const STATUS_HINT: Record<Status, string> = {
 
 /**
  * Why a question stopped growing early, in plain words ("stopped: nothing
- * left could change the answer"), or undefined while it has not (SPEC EXP-06, model C).
+ * left could change the answer"), or undefined while it has not (SPEC CTL-03, EXP-06, model C).
  */
 export function stoppedText(q: QuestionDto | undefined): string | undefined {
+  if (q?.stoppedBy === 'human') return 'stopped by you';
   if (q?.stoppedBy === 'voi') return 'stopped: nothing left could change the answer';
   if (q?.stoppedBy === 'budget') return 'stopped: claim budget spent';
   return undefined;
@@ -49,6 +50,9 @@ export function stoppedText(q: QuestionDto | undefined): string | undefined {
 
 /** One-line explanation of a stop, for a tooltip. */
 export function stoppedHint(q: QuestionDto | undefined): string | undefined {
+  if (q?.stoppedBy === 'human') {
+    return 'You stopped this question: queued claims were cancelled and no new round starts. Auto on the question restarts it';
+  }
   if (q?.stoppedBy === 'budget') return STATUS_HINT.BUDGET;
   if (q?.stoppedBy !== 'voi') return undefined;
   return 'Every claim left to explore could move the answer too little to be worth a round (value of information below the threshold)';
@@ -260,6 +264,21 @@ export function framingText(f: FramingDto): string {
   return f.term === undefined ? 'depends on the reading' : `depends on what you mean by ${f.term}`;
 }
 
+/**
+ * computenet-3z7w5: the framing line of a READINGS question states how far its
+ * readings' credences spread — "between 22% and 66%, depending on what you
+ * mean by intelligent", "about 40%, …" when they round to the same value.
+ * Falls back to {@link framingText} for POSITIONS or without readings.
+ */
+export function readingsLine(f: FramingDto): string {
+  const cs = f.positions.map((p) => p.credence).filter((c): c is number => typeof c === 'number');
+  if (f.mode !== 'READINGS' || cs.length === 0) return framingText(f);
+  const lo = pct(Math.min(...cs));
+  const hi = pct(Math.max(...cs));
+  const range = lo === hi ? `about ${lo}` : `between ${lo} and ${hi}`;
+  return `${range}, ${f.term === undefined ? 'depending on the reading' : `depending on what you mean by ${f.term}`}`;
+}
+
 /** `?debug`: show internals (claim refs) that mean nothing to a reader. */
 export function isDebug(): boolean {
   return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
@@ -333,6 +352,7 @@ export const LAYER_NAMES: Record<string, string> = {
   euler: 'Euler-based',
   qe: 'quadratic energy',
   mlp: 'MLP-based',
+  glo: 'gated log-odds',
 };
 
 /** One line per rule, e.g. "weighted log-odds · 62% · in consensus", in the backend's layer order. */
