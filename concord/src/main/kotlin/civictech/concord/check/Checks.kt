@@ -348,9 +348,17 @@ object Checks {
                 when {
                     cell.type == "map" && (cell.fn == null || cell.fn == "identity") -> Unit
                     cell.type == "filter" && cell.fn != null -> predicates += try {
-                        Functions.predicate(cell.fn)
-                    } catch (e: IllegalStateException) {
-                        return fail("member '$member' arm cell '$at' (filter) has fn '${cell.fn}', not a catalog predicate")
+                        Functions.predicate(cell.fn).also { predicate ->
+                            // The function catalog parses parameterised arguments lazily when
+                            // the returned predicate is invoked. Probe with a numeric value so
+                            // malformed numeric arguments fail while the arm is still named.
+                            predicate(Value.IntVal(0))
+                        }
+                    } catch (e: Exception) {
+                        return fail(
+                            "member '$member' arm cell '$at' (filter) has fn '${cell.fn}' " +
+                                "that cannot be evaluated as a catalog predicate: ${e.message ?: e::class.simpleName}",
+                        )
                     }
                     else -> return fail(
                         "member '$member' arm passes through cell '$at' of type '${cell.type}'" +
