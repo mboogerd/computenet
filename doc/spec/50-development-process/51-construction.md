@@ -173,10 +173,11 @@ entries — is the journaled topology recovery path (decided in 93 I-7):
 recovery re-applies those spawns under their pinned refs, then restores the
 links and other topology events in journal order before replaying frames.
 Checkpoint compaction carries the live topology fold, so the graph remains
-self-describing after compaction. The remaining recorded divergence is that
-replay re-emits frames without the decided NoOp-served suppression (93 I-7
-R4); replay-stable identity, idempotent merges, and catch-up dedup make that
-safe for the current vocabulary.
+self-describing after compaction. Frame replay follows amended 93 I-7 R4:
+`recoverFrom` uses the ordinary decode/intake path with un-suppressed emission,
+while per-frame replay provenance prevents replayed frames and their
+same-journal derivations from being appended again. Replay-stable identity,
+idempotent merges, and catch-up dedup make that safe for the current vocabulary.
 
 ## Code generation (direction fixed by ADR 3)
 
