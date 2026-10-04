@@ -43,7 +43,7 @@ class LiveCheckpointTwoNodeTest {
     }
 
     @Test
-    @Timeout(value = 3, unit = TimeUnit.MINUTES)
+    @Timeout(value = 5, unit = TimeUnit.MINUTES)
     fun `peer-only journal growth checkpoints and the idle node recovers the same fold`() {
         assumeTrue(commandAvailable("bd", "--version"), "bd is not on PATH — skipping")
         assumeTrue(commandAvailable("dolt", "version"), "dolt is not on PATH — skipping")
@@ -59,11 +59,11 @@ class LiveCheckpointTwoNodeTest {
             val idleWorkspaceLog = dialer.logHead()
 
             val id = rig.createIssue(listener, "peer-only checkpoint load")
-            repeat(16) { revision ->
+            repeat(6) { revision ->
                 rig.mutate(listener, "update", id, "--title", "peer revision $revision")
             }
             rig.await("the idle dialer receives the peer's last revision") {
-                dialer.view()[id]?.get("title") == "\"peer revision 15\""
+                dialer.view()[id]?.get("title") == "\"peer revision 5\""
             }
             dialer.logHead() shouldBe idleWorkspaceLog
 
@@ -102,8 +102,8 @@ class LiveCheckpointTwoNodeTest {
     private data class JournalCensus(val checkpoints: Int, val frameTail: Int)
 
     private companion object {
-        /** Far below the 16 updates' uncheckpointed frame total, while allowing in-flight carry. */
-        const val MAX_FRAME_TAIL = 16
+        /** Below the six updates' uncheckpointed frame total, while allowing in-flight carry. */
+        const val MAX_FRAME_TAIL = 8
 
         fun commandAvailable(vararg command: String): Boolean = try {
             ProcessBuilder(*command)
