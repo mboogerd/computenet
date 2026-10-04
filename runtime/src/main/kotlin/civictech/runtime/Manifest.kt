@@ -7,7 +7,10 @@ import java.io.File
 
 /** The complete, explicit network topology from which one runtime node boots. */
 @Serializable
-data class Manifest(val nodes: Map<String, NodeSpec>) {
+data class Manifest(
+    val nodes: Map<String, NodeSpec>,
+    val placements: Map<String, String> = emptyMap(),
+) {
 
     /** Validate a directly constructed manifest with the same rules [parse] applies. */
     fun validated(): Manifest {
@@ -30,6 +33,12 @@ data class Manifest(val nodes: Map<String, NodeSpec>) {
                     "journalTopology requires journalDir",
                 )
             }
+            if (placements.isNotEmpty() && node.journalTopology) {
+                violations += ManifestViolation(
+                    "nodes[$name].journalTopology",
+                    "topology journalling is not supported with placements",
+                )
+            }
             node.dial.forEachIndexed { index, targetName ->
                 val target = nodes[targetName]
                 when {
@@ -43,6 +52,15 @@ data class Manifest(val nodes: Map<String, NodeSpec>) {
                         "node '$targetName' has no listen address",
                     )
                 }
+            }
+        }
+
+        placements.forEach { (selector, node) ->
+            if (node !in nodes) {
+                violations += ManifestViolation(
+                    "placements[$selector]",
+                    "unknown node '$node'",
+                )
             }
         }
 
