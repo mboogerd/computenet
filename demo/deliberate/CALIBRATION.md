@@ -61,13 +61,94 @@ With the defaults of two proposers × `argsPerCall` 1, each round offers up to t
 VoI now uses the propagated credence `q` and exact two-point re-evaluation of
 every path to each active answer root; the retired local derivative and its
 `4p(1-p)` plausibility factor no longer schedule or stop work. The existing
-`--voi-eps` default 0.01 remains a starting value, not a calibration result,
-and must be recalibrated separately after this change. The shipping regression
+`--voi-eps` default 0.01 remained a starting value until the bounded live
+calibration below. The shipping regression
 fixture puts a depth-1 support beyond the weight-of-evidence energy clamp: the
 old linear value is 0 while the exact expected root movement is 0.061838. The
 test suite also checks deterministic random trees against an independent
 recursive two-point evaluator; the unavailable scratchpad population figures
 are not treated as reproduced evidence.
+
+## Current exact-VoI stop calibration (2026-10-04)
+
+The calibration harness grew three **fresh** trees on the current code and
+judgments: the policy, empirical and practical questions at the top of this
+file. It used `claude-sonnet-5-5` as the one proposer, current Jev 1.13.0, one
+engine worker and one CLI process at a time. Each node had one round and the
+live tree had a depth-1 bound and 12-claim cap; links were explored. This is a
+bounded shipping sample, not a population estimate or a run at the production
+180-claim cap. The live answers were recorded in memory and replayed through
+the real engine and exact evaluator at every candidate epsilon, so all
+candidates saw identical proposals and judgments and the replays made no model
+calls. Replays used an 11-claim cap: the live cap left every call such a replay
+could make on the tape, while the one-claim reduction made the competition
+between epsilon and the hard budget observable.
+
+The fresh generation made 170 external calls: 40 Claude calls (139,609 input,
+3,025 output tokens, $0.369084 API-equivalent cost reported by Claude Code) and
+130 Jev calls (108,680 input, 8,054 output tokens, $0.004565 at the demo's
+assumed Jev rate), **$0.373648 total**. Per question:
+
+| question | live claims | explored claims / links | calls | cost |
+|---|---:|---:|---:|---:|
+| free public transport | 12 | 3 / 4 | 59 | $0.128239 |
+| coffee and type 2 diabetes | 12 | 2 / 5 | 58 | $0.135064 |
+| rent versus buy | 12 | 2 / 4 | 53 | $0.110345 |
+
+Candidate replay results use `claims / explored claims / explored links`:
+
+| `--voi-eps` | transport | coffee | rent/buy | question stops: VoI / budget / round-or-depth limits |
+|---:|---:|---:|---:|---:|
+| 0 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| 0.0025 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| 0.005 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| **0.01** | **11 / 2 / 4** | **11 / 2 / 4** | **11 / 2 / 3** | **0 / 3 / 0** |
+| 0.02 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| 0.04 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+
+The harness captured exact propagated-q-weighted VoI when each non-root claim
+or link first became terminal. At the current 0.01 candidate the 60 stop-point
+values were min 0.0003, p25 0.0275, median 0.0482, p75 0.1083, max 0.3615.
+By terminal reason: 2 `DIMINISHING` nodes were 0.0025 and 0.0051; 12 `BUDGET`
+nodes ranged 0.0092–0.1153 (median 0.0615); 32 depth-bound nodes ranged
+0.0003–0.1392 (median 0.0347); and 14 round-limited nodes ranged
+0.0482–0.3615 (median 0.1695). Across candidates, the diminishing-node count
+was 0, 1, 1, 2, 2 and 3 respectively; the overall distribution and the work
+counts above did not change.
+
+**Decision: keep `DEFAULT_VOI_EPSILON` = 0.01.** This sample does not justify a
+move in either direction. Raising epsilon fourfold found one more low-value
+node but changed no tree's explored work or stop owner; lowering it to zero
+also changed neither. The 11-claim experimental cap won every tree before the
+threshold could discriminate, so these data are evidence against tuning from
+this small run, not evidence that 0.01 is optimal. A larger run with the
+production round and claim limits would be needed to move the value.
+
+The old yield stop is **obsolete**: model C removed it in PR #1138. Yield
+history remains diagnostic only, and no yield parameter or stop is
+reintroduced by this calibration.
+
+## Current-judgment saturation check (2026-10-04)
+
+The same harness invocation re-asked current Jev on the cached 24 node-sides
+at six argument counts, two samples per side/count: 288 saturation calls. The
+result remains within a few points of the original calibration:
+
+| arguments on side | samples | mean saturation | share at or above 0.22 |
+|---:|---:|---:|---:|
+| 0 | 48 | 0.074 | 0% |
+| 1 | 48 | 0.149 | 4.2% |
+| 2 | 48 | 0.186 | 20.8% |
+| 3 | 48 | 0.212 | 47.9% |
+| 4 | 48 | 0.230 | 62.5% |
+| 6 | 48 | 0.262 | 79.2% |
+
+**Decision: keep `DEFAULT_SATURATION` = 0.22.** On current judgments, roughly
+half of sides saturate by three arguments and nearly two thirds by four; empty
+sides never do. That is the intended early-stop shape, while the cap remains
+the dependable bound. The fresh VoI trees above used only one round per node,
+so they do not add a second saturation-threshold sample beyond this depth
+replay.
 
 ## Questionless CRED-01 recalibration (2026-10-03)
 
@@ -268,8 +349,9 @@ to carry, kept here with the measurements it summarises.
   these corrections prevent a high-yield root from depressing the apparent
   return of its children and prevent exhausted trees from claiming they were
   stopped (section "Iteration 5").
-- **Residual.** A full recalibration of `saturation` under the current
-  judgments is still outstanding.
+- **2026-10-04 check.** The current-judgment rerun above kept `saturation` at
+  0.22: 47.9% of sides saturated by three arguments and 62.5% by four, with no
+  empty side saturated.
 
 ## Findings behind individual requirements
 

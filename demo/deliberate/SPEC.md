@@ -324,7 +324,8 @@ This value, decayed by `roundDecay^(rounds already run)`, **is the
 claim's priority in the exploration queue** (below), replacing the earlier
 reach × relevance ordering; and once it falls below `--voi-eps`
 (`DEFAULT_VOI_EPSILON` = 0.01 — a starting value from a one-off scratch
-review, not a calibration run) the claim gets no (further) round and ends
+review, retained after the bounded 2026-10-04 calibration in §10) the claim
+gets no (further) round and ends
 `DONE` with reason `DIMINISHING`; the UI wording is "not worth exploring" /
 "nothing left could change the answer". A question therefore stops once the
 largest value of information over its remaining nodes falls below `--voi-eps`
@@ -702,7 +703,7 @@ typically saturates by 3–4 arguments. (`minInfluence`, the EXP-10 yield-stop
 parameters and `maxDepth` as a stop rule are removed by model C — §3
 "Exact value of information" — and appear only as history.
 `--voi-eps`'s default is a starting value from a one-off scratch model
-review, not a calibration run.)
+review, retained after the bounded live calibration below.)
 
 The measurements, the history of each default, and what remains to
 recalibrate live in `CALIBRATION.md`; this section states only the criteria.
@@ -715,6 +716,21 @@ bearing boundary (three down, one up). This does not justify moving
 `BEARING_PLAUSIBILITY` from 0.8, and CRED-01 does not change the separate
 saturation request, so `saturation` remains 0.22. Sampling and caveats are in
 `CALIBRATION.md`.
+
+The 2026-10-04 exact-VoI calibration grew three fresh bounded trees with
+current Jev judgments and one Sonnet proposer, then replayed the recorded
+answers through epsilon candidates 0, 0.0025, 0.005, 0.01, 0.02 and 0.04.
+The live generation made 170 external calls and cost $0.373648
+API-equivalent/assumed in total. Under the deliberately small 11-claim replay
+cap, every candidate explored the same number of claims in every tree and all
+three trees stopped at the budget; 0.01 stopped two of 60 non-root nodes by
+VoI, at exact values 0.0025 and 0.0051. The sample therefore does not justify
+moving `DEFAULT_VOI_EPSILON` from 0.01. The same invocation remeasured
+saturation on 24 cached node-sides with current Jev: at 0.22, 47.9% saturated
+by three arguments and 62.5% by four, with no empty side saturated, so
+`DEFAULT_SATURATION` remains 0.22. Full distributions, per-tree exploration,
+cost and the experimental limits are in `CALIBRATION.md`. The model-C yield
+stop remains removed; this calibration does not reintroduce it.
 
 ## 11. Durability (requirements DUR-*)
 
