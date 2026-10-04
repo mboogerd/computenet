@@ -118,9 +118,11 @@ edit when the Edit tool refuses, never for one you may not.
    untracked file, grep it for the mutated text.
 6. Run the test's whole class, never the one test alone (an async or
    order-dependent false pass shows only beside its siblings), with
-   `--rerun --no-build-cache` into `"<scratch>/mut.log"`, then
-   `grep -aE '^e:|BUILD' "<scratch>/mut.log"`. An `e:` line means it never
-   compiled: no test ran, the XML on disk is stale, and nothing was caught.
+   `--rerun --no-build-cache` into `"<scratch>/mut.log"`, then `grep -aE
+   '^e:|BUILD' "<scratch>/mut.log" | grep -v 'e: Daemon compilation failed'`
+   (that line is the daemon's in-process fallback, not an error). Any other
+   `e:` line means it never compiled: no test ran, the XML on disk is stale,
+   and nothing was caught.
 7. Name the assertion that went red and its message. A red at setup, a
    fixture await, a throwing helper, an earlier assertion or another test is
    not the criterion discriminating: narrow the mutation until the criterion's
