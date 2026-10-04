@@ -293,16 +293,51 @@
       "category": "payloads",
       "kind": "frame",
       "file": "payloads/WV-PAYLOAD-STAMPED-03.json"
+    },
+    {
+      "id": "WV-PAYLOAD-COUNTERDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-COUNTERDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-PNCOUNTERDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-PNCOUNTERDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-LISTDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-LISTDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-ROUTEDCOMMAND-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-ROUTEDCOMMAND-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-OWNED-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-OWNED-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-FROZEN-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-FROZEN-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-BORROWED-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-BORROWED-01.json"
     }
   ],
   "pending": [
-    {"discriminator": "CounterDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "PnCounterDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "ListDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "RoutedCommand", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Owned", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Frozen", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Borrowed", "owedBy": "computenet-ncz.3"},
     {"discriminator": "Attention", "owedBy": "computenet-ncz.4"},
     {"discriminator": "Progress", "owedBy": "computenet-ncz.4"},
     {"discriminator": "SaturationSignal", "owedBy": "computenet-ncz.4"},
