@@ -120,8 +120,8 @@ The decided recovery-regime precedence (amended in
 **checkpoint restore → un-suppressed journal-tail replay → parked (SUSPEND)
 live drain**. Re-announcement and catch-up remain ordinary topology/link
 behavior, not a mandatory replay-exit re-baseline over existing links.
-Durability subsumes RESTART: a durable
-cell's RESTART MUST restore its latest snapshot + journal tail instead of
+Durability subsumes RESTART: a durable cell's RESTART MUST restore its latest
+snapshot + journal tail instead of
 the spawn-time checkpoint — same mechanism, richer checkpoint source; the
 non-durable cell is the degenerate case (spawn snapshot, empty tail).
 

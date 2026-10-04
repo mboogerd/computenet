@@ -2754,7 +2754,8 @@ sequence number that already makes `(priority, sequence)` order inviolable (C-8,
    - `Topology` entries reconstruct the graph — spawn with the **pinned** full ref +
      factory, connect/unlink, re-apply supervision. This is `GraphSpec.applyTo` (`50/51`) in
      **preserve-refs mode** (rebind existing `(id, instanceId)`), not construction mode
-     (which mints fresh). Cells activate in **REPLAY MODE**.
+     (which mints fresh). Cells activate normally; replay identity is carried per frame,
+     not by a host-wide replay mode.
    - `Accepted` entries route through the ordinary decode/intake path. Outlets remain real
      and emission is **un-suppressed**. In-memory replay provenance follows each replayed
      frame and its same-host derivations: the frame is not appended again to the journal
