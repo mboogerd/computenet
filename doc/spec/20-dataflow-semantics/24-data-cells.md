@@ -1325,11 +1325,13 @@ loss or duplication into the fed cell. This is a guarantee about input into
 the graph, not effects out of it; the external-sink at-least-once window in
 `[24-DUR-09]` is unchanged.
 
-**Boundary of the landed mechanism** (decided in 93 I-7): un-suppressed
-replay through the ordinary decode path is safe exactly for the
-replay-stable idempotent vocabulary above — ref-derived identities,
-idempotent merges, and anti-entropy/catch-up dedup absorb the
-re-emissions. For `Effectful` sinks *(G-59 resolved, W2.6, closes C-9)*: an
+**Boundary of the landed mechanism** (decided by amended 93 I-7 R4):
+un-suppressed replay through the ordinary decode path is safe exactly for
+the replay-stable idempotent vocabulary above — ref-derived identities,
+idempotent merges, and anti-entropy/catch-up dedup absorb the re-emissions.
+Per-frame replay provenance prevents a replayed frame and its same-journal
+derivations from being appended again, while concurrent live traffic remains
+journaled. For `Effectful` sinks *(G-59 resolved, W2.6, closes C-9)*: an
 `Effectful` inlet journals a processed-frontier — the last applied
 `(sourceId, counter)` per inlet — consulted by both `recoverFrom` replay and
 post-recovery live delivery; an invocation at or behind the frontier is
@@ -1522,9 +1524,9 @@ its intake coverage: 93 I-7 journals only `PORT_API` data plus topology events,
 while the shipped journal appends every intake frame (management included).
 Topology records are now the journaled source of truth: recovery re-applies
 their concrete refs and links before frame replay, and checkpoint compaction
-carries the live topology fold. The remaining recorded divergence is
-un-suppressed replay (93 I-7 R4), which is safe for the replay-stable,
-idempotent vocabulary described above.
+carries the live topology fold. Emission follows amended 93 I-7 R4:
+un-suppressed replay is safe for the replay-stable, idempotent vocabulary
+described above, with `[24-DUR-05..09]` governing `Effectful` sinks.
 
 ⚠ GAP (G-59): The M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells: wall-clock/random logic,

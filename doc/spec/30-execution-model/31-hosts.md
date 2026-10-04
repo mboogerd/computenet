@@ -115,29 +115,30 @@ generation bump is undetectable — on-disk shape is a property of arbitrary
 `Stateful.snapshot` implementations — and a pre-versioning journal, having no
 header, is assumed to belong to generation 1 rather than checked.
 
-The decided recovery-regime precedence (decided in
-[93 I-7](../90-roadmap/93-feature-interactions.md)) is one ordered pipeline:
-**checkpoint restore → journal-tail replay → re-announce + catch-up →
-parked (SUSPEND) live drain**. Durability subsumes RESTART: a durable
+The decided recovery-regime precedence (amended in
+[93 I-7 R4](../90-roadmap/93-feature-interactions.md)) is one pipeline:
+**checkpoint restore → un-suppressed journal-tail replay → parked (SUSPEND)
+live drain**. Re-announcement and catch-up remain ordinary topology/link
+behavior, not a mandatory replay-exit re-baseline over existing links.
+Durability subsumes RESTART: a durable
 cell's RESTART MUST restore its latest snapshot + journal tail instead of
 the spawn-time checkpoint — same mechanism, richer checkpoint source; the
 non-durable cell is the degenerate case (spawn snapshot, empty tail).
 
-Two divergences between the landed M10 design and the decided I-7 model are
+One divergence between the landed M10 design and the decided I-7 model is
 recorded, not silently resolved. *Classification*: I-7 journals only
 `PORT_API` data invocations plus topology events; the landed tee appends
 *every* intake frame (management included) and does not journal topology at
 all — the graph must be rebuilt out-of-band before `recoverFrom` (the demo
 rebuilds it from a users file plus re-routed writer→union links), not
 replayed from topology entries in a preserve-refs GraphSpec mode.
-*Emission*: I-7's linchpin is replay with outlets NoOp-served (the G-32
-suppression) so recovery never re-transmits; the landed `recoverFrom`
-replays frames through the ordinary decode path with un-suppressed emission
-(replay identity is per frame: a replayed frame and its same-journal
-derivations are not re-appended, while live traffic accepted during recovery
-is journaled), made safe for *state* by
-replay-stable identity (ref-derived tags/PN slots, tag counter in
-snapshots) + idempotent merges + anti-entropy/catch-up dedup. `Effectful`
+*Emission* follows amended I-7 R4: `recoverFrom` replays frames through the
+ordinary decode path with un-suppressed emission. Replay identity is per
+frame: a replayed frame and its same-journal derivations are not re-appended,
+while live traffic accepted during recovery is journaled. That path is safe
+for *state* through replay-stable identity (ref-derived tags/PN slots, tag
+counter in snapshots) + idempotent merges + anti-entropy/catch-up dedup.
+There is no phase-3 recovery re-baseline over existing links. `Effectful`
 sinks *(G-59 resolved in part, W2.6, closes C-9)* are the one case
 un-suppressed emission is not safe for: an `Effectful` inlet now journals a
 processed-frontier — the last applied `(sourceId, counter)` per inlet — and

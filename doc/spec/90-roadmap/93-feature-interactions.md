@@ -2571,7 +2571,13 @@ silently taking the weak tier.
 > Existing gaps touched: G-25, G-26, G-32 · Confidence: medium
 > Spec drift (judged at `a69186a`): 12/17 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
 > Landed topology slice at main `7f920a91` (`computenet-8xstm`): **LANDED** — `GraphSpec.apply` resolves each lowered delta to concrete `TopoEvent`s and appends one additive `RECORD_TOPOLOGY` (type 6) record write-ahead; `ApplyContext` owns the live fold; `HostDurability.recoverFrom` re-applies topology in journal order through that context with the recorded refs; and checkpoints put the folded topology before checkpoint state. `KeyedCells` records durable family membership as `FamilyKey` events in the selected key-cell journal, so recovery spawns each key before its frames and no keys side file is needed. The remaining I-7 work is the output-side source/effect treatment and the follow-on gaps below.
-> ⚠ Divergence with the landed recovery path: R4's proposed NoOp-served replay (G-32 suppression) is not the implementation here — `HostDurability.recoverFrom` re-enters frames through the ordinary decode/intake path and baseline-marks contextual replay frames instead. That residual is separate from the topology-journaling rule now landed by `computenet-8xstm`.
+> R4 amendment (2026-09-29, `computenet-xy7w4.5`): **DECIDED / LANDED** —
+> `HostDurability.recoverFrom` re-enters journaled frames through the ordinary
+> decode/intake path with emission un-suppressed. Replay-stable identity,
+> idempotent merges, per-frame replay provenance, and catch-up dedup make that
+> safe for state; `Effectful` sinks use the `[24-DUR-05..09]` processed-frontier
+> and discharged-baseline rules. R4 below retains the former NoOp-served rule as
+> explicitly superseded rather than leaving the landed path as a divergence.
 
 #### 1. Challenge restatement
 
@@ -2681,7 +2687,7 @@ Recovery applies deltas directly to rebuild state; cell logic never re-runs.
   in-flight inbound and for cells whose output underdetermines their state. Good as the
   *source/effect* case, not as the whole answer.
 
-##### Candidate C — Input-side WAL + snapshots, replay with **suppressed emission**, rejoin via catch-up (recommended)
+##### Candidate C — Input-side WAL + snapshots, replay with **suppressed emission**, rejoin via catch-up (original recommendation; emission half superseded)
 
 The durable host write-ahead-logs accepted `PORT_API` invocations and topology events in
 host-sequence order, plus periodic per-cell `Stateful` snapshots. Recovery replays the log
@@ -2704,12 +2710,21 @@ not inbound-deterministic.
   snapshot/restore, G-32 NoOp-serve, catch-up, GraphSpec replay, host-sequence ordering).
   **Recommended.**
 
+The input-side WAL and snapshot parts remain the adopted foundation. The
+NoOp-served replay and mandatory replay-exit catch-up described in this
+candidate were superseded on 2026-09-29 by the R4 amendment below
+(`computenet-xy7w4.5`). They remain here as the evaluated alternative and the
+historical wording of the former decision.
+
 #### 4. Recommended resolution
 
-Adopt **Candidate C**. Durability is a per-host opt-in; a durable host keeps one
-host-sequence-ordered write-ahead log plus per-cell snapshots; recovery replays that log
-with emission suppressed and reconciles downstream by the existing catch-up path. Every
-member pair falls out of one rule set.
+Adopt **Candidate C's input-side WAL and snapshot shape**, amended to the landed
+replay model. Durability is a per-host opt-in; a durable host keeps one
+host-sequence-ordered write-ahead log plus per-cell snapshots; recovery re-enters that log
+through the ordinary decode/intake path with emission un-suppressed. Replay-stable
+identity, idempotent merges, per-frame replay provenance, and ordinary catch-up dedup make
+that safe for state; `Effectful` sinks are covered by `[24-DUR-05..09]`. Recovery does not
+synthesize a replay-exit re-baseline over existing links.
 
 ##### Data shapes
 
@@ -2731,7 +2746,7 @@ TopoEvent = Spawn(ref: CellRef, factory: CellFactory) | Connect(from,to,ports) |
 pays off" as `20/24` promised. `HostSeq` is the host's existing per-cell-invocation
 sequence number that already makes `(priority, sequence)` order inviolable (C-8, `30/31`).
 
-##### Recovery protocol (four phases, total order)
+##### Recovery protocol (four phases; R4 amendment applied)
 
 1. **Restore snapshots.** For each cell load the newest *complete* `Snapshot` (atomic
    write-then-swap; torn snapshots ignored). Empty for a cell with no snapshot.
@@ -2740,13 +2755,20 @@ sequence number that already makes `(priority, sequence)` order inviolable (C-8,
      factory, connect/unlink, re-apply supervision. This is `GraphSpec.applyTo` (`50/51`) in
      **preserve-refs mode** (rebind existing `(id, instanceId)`), not construction mode
      (which mints fresh). Cells activate in **REPLAY MODE**.
-   - `Accepted` entries route to their target cell, which applies them with **every outlet
-     NoOp-served** (the `Shadow.spawn` mechanism of G-32, `50/52`). State advances; nothing
-     is broadcast, no effect fires, no `Owned` is re-transferred, no frame hits the wire.
-3. **Exit replay mode.** Restore real outlets; re-announce this host's refs to the location
-   registry (`40/41 §Addressing`); each restored link's `onLinked` fires ordinary
-   **idempotent catch-up** (state-as-delta-from-empty, `20/21`), reconciling any downstream
-   that lagged. Tag idempotence (`20/24`) absorbs duplicates.
+   - `Accepted` entries route through the ordinary decode/intake path. Outlets remain real
+     and emission is **un-suppressed**. In-memory replay provenance follows each replayed
+     frame and its same-host derivations: the frame is not appended again to the journal
+     it came from, while concurrent live traffic and a derivation targeting another
+     journal retain the ordinary write-ahead rule.
+   - Replay-stable identities and idempotent merges absorb state duplicates; ordinary
+     catch-up dedup absorbs later reconciliation. At an `Effectful` inlet, the
+     processed-frontier and discharged-baseline set apply `[24-DUR-05..09]`, so a frame
+     already acted on is suppressed at the sink while an unprocessed tail frame fires.
+3. **Complete replay delivery without a recovery re-baseline.** `Recovery.awaitApplied`
+   fences delivery of the replayed tail and its same-host cascades. There is no replay-mode
+   outlet swap and no mandatory re-announce/`onLinked` pass over existing links: volatile
+   downstream state is rebuilt by phase 2's ordinary emissions. Catch-up remains the
+   idempotent path for a link that is actually established or re-established.
 4. **Drain parked (SUSPEND) traffic live** — un-suppressed — since parked traffic is
    post-recovery live delivery, not already-applied history.
 
@@ -2769,20 +2791,34 @@ sequence number that already makes `(priority, sequence)` order inviolable (C-8,
   deterministic and automatically preserves: per-link FIFO; topology-before-the-data-that-
   flows-over-it (N13 — a link event and a wave-t delta over it keep their recorded order);
   and glitch-free frontier reconstruction (N12 — the same inbound order rebuilds the same
-  per-wave version buffers; suppression means a completed wave becomes restored state
-  rather than an emission, so buffers need no special snapshot handling).
-- **R4 — Replay suppresses emission.** During phase 2, outlets are NoOp-served (G-32).
-  Recovery reconstructs state; it never re-transmits. This single rule dissolves N2
-  (no re-broadcast), N8 (a `CounterDelta` is applied to the counter's state exactly once,
-  never re-emitted — so non-idempotent merge is a non-issue), N14 (no `Owned`/`Leased`
-  re-delivery — the *result* of consuming an owned payload is captured as state, the owned
-  command is not re-run), N22 (no duplicate wire delivery), and N26 (no effectful re-fire
-  for interior effectful cells; sinks handled by R8).
-- **R5 — One reconciliation path.** After replay, downstream lag is closed by the ordinary
-  idempotent catch-up of `20/21`, identical to late-join and to `40/42` anti-entropy.
-  There is **no second recovery protocol** (recorded decision honored). Replayed emissions
-  do not re-gossip because they do not happen; live re-convergence gossips normally and
-  dedups by tag.
+  per-wave version buffers, while replay-stable identities keep replayed emissions in the
+  same merge positions).
+- **R4 — Replay re-emits with replay-stable identity and provenance.** During phase 2,
+  `recoverFrom` re-enters journaled frames through the ordinary decode/intake path and
+  outlets remain real: state transitions re-emit in process and may re-transmit over the
+  wire. A replayed frame and its same-journal derivations carry in-memory replay provenance
+  and are not appended to that journal again; concurrent live traffic remains journaled.
+  Replay-stable identities, idempotent merges, and catch-up dedup absorb repeats for the
+  replay-stable state vocabulary. At an `Effectful` inlet, `[24-DUR-05..09]`'s durable
+  processed-frontier and discharged-baseline set decide whether replay is suppressed as
+  already acted on or delivered under the stated at-least-once window.
+
+  **Superseded wording (2026-09-29, `computenet-xy7w4.5`):** “During phase 2,
+  outlets are NoOp-served (G-32). Recovery reconstructs state; it never re-transmits.”
+  That literal rule would leave volatile downstreams empty unless recovery added a
+  phase-3 re-baseline over existing links. A fresh re-baseline reaching an `Effectful`
+  inlet must be acted on under `[24-DUR-07]` and does not advance the processed-frontier;
+  `[24-DUR-08]` can suppress only an exact position already discharged, not the fresh
+  position. The result would be every restart re-firing the recovered state at every
+  downstream `Effectful` sink. The amendment resolves that collision by retaining the
+  landed un-suppressed replay and by not creating a phase-3 recovery re-baseline; the
+  processed-frontier-shape question remains open in §9.
+- **R5 — One ordinary reconciliation vocabulary, no replay-exit pass.** Replay itself
+  rebuilds currently linked volatile downstreams through ordinary emission. A link that is
+  actually established or re-established still receives the idempotent catch-up of
+  `20/21`, identical to late join and compatible with `40/42` anti-entropy, and replayed
+  identities dedup there. Recovery does **not** synthesize a second, phase-3 re-baseline
+  over every existing link.
 - **R6 — Keying and identity.** Snapshots and journal entries key on the **full**
   `CellRef(id, instanceId)` (I-2, full-ref addressing). Recovery **preserves `instanceId`**
   (I-2's RESTART lifecycle rule): the recovered cell is the *same* instance, so its links
@@ -2802,16 +2838,19 @@ sequence number that already makes `(priority, sequence)` order inviolable (C-8,
   (`30/33`, deferred to G-25) lives: parked frames spill into the journal. An **`Effectful`
   sink** (`50/52` marker) journals a **processed-frontier** — the set of tags/waves it has
   already acted on — so that post-recovery live re-delivery is *deduped* (dropped as
-  already-processed) rather than re-acted. This connects G-32 to recovery for the external-
-  effect case (N26): shadow-mode suppresses effects during replay; the processed-frontier
-  suppresses them against live re-delivery after replay.
+  already-processed) rather than re-acted. This closes the external-effect case (N26)
+  without using G-32 as a recovery mechanism: the processed-frontier and
+  discharged-baseline set suppress positions
+  already acted on during replay or live re-delivery after replay; an unprocessed tail
+  position fires, subject to `[24-DUR-09]`'s at-least-once crash window.
 - **R9 — Composition with the two existing regimes (precedence fixed).** Durability
   *subsumes* RESTART: a durable cell's RESTART restores its latest snapshot + WAL suffix
-  (suppressed) instead of the spawn-time checkpoint — same mechanism, richer checkpoint
+  (un-suppressed) instead of the spawn-time checkpoint — same mechanism, richer checkpoint
   source; a non-durable cell's RESTART is the degenerate case (spawn snapshot, empty WAL).
-  SUSPEND's parked replay stays **live/un-suppressed** and runs in phase 4, strictly after
-  suppressed recovery. Total precedence: **snapshot → suppressed WAL replay → re-announce +
-  catch-up → parked live drain.** Three regimes, one ordered pipeline (N18 resolved).
+  SUSPEND's parked replay stays **live/un-suppressed** and runs in phase 4, after journal
+  replay delivery. Total precedence: **snapshot → un-suppressed WAL replay → parked live
+  drain.** Re-announcement and catch-up remain ordinary topology/link behavior, not a
+  mandatory recovery re-baseline phase. Three regimes share one pipeline (N18 resolved).
 
 ##### Locus (N7)
 
@@ -2829,17 +2868,19 @@ traffic below the intake is not separately journaled (R2).
 Each partition organelle is an ordinary cell with its own full ref, placed and journaled on
 its own (possibly durable, possibly not) host — partition placement is ordinary placement
 (recorded decision). Each partition recovers independently from its own journal; the merging
-outlet reconstructs by re-catching-up from each recovered child (R5). Convergence — not a
-distributed snapshot — is the consistency story, consistent with P4 and "partitioning must
-not become a second distribution mechanism."
+outlet reconstructs from each recovered child's replayed emissions, with ordinary catch-up
+remaining available when a link is actually established or re-established (R5).
+Convergence — not a distributed snapshot — is the consistency story, consistent with P4
+and "partitioning must not become a second distribution mechanism."
 
 ##### Net effect
 
-Recovery is *local state reconstruction with suppressed emission, reconciled by the one
-catch-up path*. The classification question is answered by "journal at the intake:
-`PORT_API` data + topology, never protocol metadata, never fused interiors." The downstream
-question is answered by one rule (R4: suppress on replay) plus tag idempotence. The locus is
-the host intake. And it reuses five already-shipped mechanisms rather than inventing any.
+Recovery is *local state reconstruction through ordinary, un-suppressed replay*.
+The classification question is answered by "journal at the intake: `PORT_API` data +
+topology, never protocol metadata, never fused interiors." The downstream question is
+answered by R4's replay-stable identity, per-frame provenance, idempotent state merge and
+catch-up dedup, with `[24-DUR-05..09]` governing `Effectful` sinks. The locus is the host
+intake; no synthetic replay-exit reconciliation protocol is added.
 
 #### 5. Principle check (P1–P10)
 
@@ -2849,33 +2890,33 @@ the host intake. And it reuses five already-shipped mechanisms rather than inven
 | P2 Near-zero-cost fast path | **Satisfied (with a stated opt-in cost)** — non-durable hosts are unchanged; a durable host pays a batched log append per accepted invocation, a configured durability cost, not a change to the non-durable steady state. Replay/snapshot are rare operations (P2 budget). |
 | P3 Explicit topology | **Satisfied** — the topology log is the GraphSpec (visible, serializable); recovery rebinds visible refs; no hidden reconstruction. |
 | P4 Local, compositional consistency | **Satisfied** — per-cell uncoordinated snapshots, per-host ordered WAL, cross-host reconciliation by convergence; no global barrier/clock/cut. |
-| P5 Correctness by construction | **Satisfied** — suppression (NoOp-served outlets) is a structural mechanism (G-32), not runtime discipline; exactly-once is preserved because owned/effect/non-idempotent emissions simply do not re-occur. |
+| P5 Correctness by construction | **Satisfied within the stated replay boundary** — replay-stable identity and idempotent merge absorb state repeats; per-frame provenance prevents same-journal growth; `[24-DUR-05..09]` makes `Effectful` behavior explicit. Owned/Leased crash semantics and non-deterministic cells remain named gaps rather than being hidden by a suppression claim. |
 | P6 Interest drives resources | **Satisfied** — durability is opt-in per host; nothing is journaled "just in case"; protocol metadata and fused interiors are excluded. |
 | P7 Open / local-first | **Untouched** — durability is orthogonal to boundary security (the journal is a bridge/host configuration, like encryption). |
 | P8 Live evolution | **Satisfied** — recovery preserves `instanceId` so links survive; topology replay is ordinary spawn/connect; a durable graph is still fully mutable at runtime. |
 | P9 Serialization-friendly | **Satisfied, load-bearing** — the journal *is* serializable `Invocation`s/`Snapshot`s/`TopoEvent`s (the wire form); no lambdas/handles (CellFactory is already a `Serializable` fun interface, `50/51`). |
-| P10 Niche first | **Satisfied** — the trade (state reconstruction + convergent catch-up over general command-replay-with-re-emission) resolves in favor of decentralized, idempotent, long-lived, interest-driven recovery. |
+| P10 Niche first | **Satisfied** — the trade selects ordinary replay with stable identities and local dedup for decentralized, idempotent, long-lived, interest-driven recovery; broader source/effect/exclusive cases retain explicit limits. |
 
 #### 6. Prior-decision consistency
 
 - **G-25 "durable host journals applied invocations; replay = recovery; cells oblivious":**
   consistent, refined. Cells stay oblivious (they re-drive transitions unaware). "Applied
   invocations" is sharpened to "accepted `PORT_API` invocations + topology events at the
-  host intake"; "replay = recovery" is sharpened to "replay **with emission suppressed**,
-  reconciled by catch-up." No CONFLICT — this fills the sketch, it does not contradict it.
+  host intake"; "replay = recovery" is sharpened to ordinary un-suppressed replay with
+  replay-stable identity, provenance, and explicit effect-frontier semantics.
 - **A snapshot IS a delta (state-as-delta-from-empty):** strongly consistent — `Snapshot`
   is `Stateful.snapshot()` = a delta; recovery applies it; catch-up serves it.
 - **Replication reuses dataflow + delta gossip; NO second sync protocol:** strongly
-  consistent — R5 makes recovery reconcile through the *same* catch-up/anti-entropy path
-  `40/42` already uses; no second recovery protocol.
+  consistent — R5 uses ordinary emission during replay and the same catch-up/anti-entropy
+  vocabulary for actual joins; no replay-only synchronization protocol is introduced.
 - **Suspension = ONE Buffering primitive; park/replay by full ref:** consistent — parked
-  (SUSPEND) replay is live and distinct from suppressed journal replay; R9 orders them.
+  (SUSPEND) replay is live and distinct from journal replay provenance; R9 orders them.
 - **Drain ordering invariant; per-link FIFO end-to-end:** consistent — the WAL is the
   "accepted" set; replay in `HostSeq` order preserves accepted-before-closure and per-link
   FIFO exactly.
-- **Cardinality/SPSC; Owned→move-by-serialize, Leased not crossing machines:** consistent —
-  R4 means owned payloads are never re-delivered on recovery; the state resulting from their
-  consumption is captured, the transfer is not re-run.
+- **Cardinality/SPSC; Owned→move-by-serialize, Leased not crossing machines:** the amended
+  R4 makes no blanket no-redelivery claim. Owned/Leased crash semantics remain the named
+  follow-on gap in §8 and `20/24` G-46.
 - **CellRef(id, instanceId); links bind full refs (I-2):** consistent — R6 keys on full
   refs and preserves `instanceId`; recovery is the same instance.
 - **Generic protocols are a bounded metadata plane (I-1):** consistent — R2 excludes
@@ -2885,32 +2926,34 @@ the host intake. And it reuses five already-shipped mechanisms rather than inven
   `WireFrame`/`Invocation` serialization; no new wire dimension.
 - **G-20 per-source waves; no global barrier:** consistent — R7 recovers per host to its own
   frontier; convergence not simultaneity.
-- **G-32 shadow / `Effectful` marker; G-30 GraphSpec replay:** consistent, newly connected —
-  G-32 NoOp-serve is the suppression mechanism (R4); GraphSpec replay gains a preserve-refs
-  mode for recovery (R6). No decision reopened.
+- **G-32 shadow / `Effectful` marker; G-30 GraphSpec replay:** consistent — G-32 remains
+  the live-shadow suppression mechanism, not the recovery mechanism. GraphSpec replay uses
+  preserve-refs mode for recovery (R6), while `Effectful` replay is governed by
+  `[24-DUR-05..09]`.
 
-No CONFLICT flag required.
+The former R4/`[24-DUR-07]` conflict is resolved by the 2026-09-29 amendment;
+no unresolved CONFLICT flag remains.
 
 #### 7. Spec impact
 
-- **`20/24 §Durability spectrum`** — replace the three-sentence sketch with the Candidate-C
-  mechanism: durable-host opt-in, the `JournalEntry`/`Snapshot` shapes, the four-phase
-  recovery protocol, R1–R9, and the input-mode/output-mode split.
+- **`20/24 §Durability spectrum`** — replace the three-sentence sketch with the amended
+  mechanism: durable-host opt-in, the `JournalEntry`/`Snapshot` shapes, ordinary
+  un-suppressed replay, R1–R9, and the input-mode/output-mode split.
 - **`30/31 §Normative rules`** — add durability as a host property; state that a durable
   host journals accepted `PORT_API` + topology events in `HostSeq` order; state the
   precedence (R9) subsuming RESTART and ordering SUSPEND drain after recovery; note
   children-first cascade for durable host hierarchies (G-28).
-- **`50/52 §Live invariants`** — record that G-32's NoOp-serve suppression is *also* the
-  replay-suppression mechanism, and that `Effectful` sinks hold a durable processed-frontier
-  for post-recovery dedup.
+- **`50/52 §Live invariants`** — keep G-32 scoped to live-shadow suppression; record that
+  `Effectful` sinks hold a durable processed-frontier and discharged-baseline set for
+  replay and post-recovery dedup.
 - **`50/51 §Graph construction DSL`** — add a preserve-refs replay mode (rebind existing
   `(id, instanceId)`) distinct from construction (mint fresh); the topology log is a
   GraphSpec replayed in that mode.
-- **`20/21 §Pull`** — note that recovery reuses the `onLinked` catch-up path verbatim; a
-  recovered cell is reconciled exactly like a late joiner.
+- **`20/21 §Pull`** — ordinary `onLinked` catch-up remains the actual-link/late-join path;
+  recovery does not manufacture an `onLinked` pass over existing links.
 - **`40/42 §Anti-entropy`** — cross-reference: durable recovery and replica anti-entropy are
-  the same reconciliation path; a durable replica restores its journal then rejoins the mesh
-  (does not re-gossip replayed deltas).
+  one reconciliation vocabulary; a durable replica restores its journal with ordinary
+  emissions, then uses normal mesh dedup and anti-entropy behavior.
 - **`30/33` (drain/park)** — the deferred disk-overflow mailbox for parked wire traffic is
   realized as output-side journaling on a durable host (R8).
 - **`10/11 §Membranes`** — clarify that "replay at crossings" is realized mechanically at
@@ -2959,23 +3002,24 @@ No CONFLICT flag required.
 
 #### 9. Confidence & open questions
 
-**Confidence: medium-high.** The mechanism reuses five already-shipped pieces — `Stateful`
-snapshot/restore (M3.3), G-32 NoOp-serve suppression (M9.2), `onLinked` catch-up (M4.2),
-GraphSpec replay (M4.5), and the host's `(priority, seq)` ordering (C-8) — and the single
-load-bearing idea (replay with **suppressed** emission, reconcile by catch-up) collapses the
-entire downstream member-pair cluster (N2/N8/N14/N22/N26) into one rule while honoring "no
-second sync protocol" and "snapshot is a delta." The classification and locus questions
-resolve cleanly by placing the journal at the host intake. Confidence is not higher because
-three pieces are genuinely new design rather than reclassification: the output-side journal
-for sources/effectful sinks (R8), the determinism requirement for input-mode replay, and log
-compaction — all spun out as follow-on gaps.
+**Confidence: medium-high.** The amended mechanism describes the tested recovery path:
+`Stateful` snapshot/restore (M3.3), ordinary decode/intake replay, per-frame replay
+provenance, replay-stable identities, `Effectful` processed-frontier/discharge state, and
+the host's `(priority, seq)` ordering (C-8). It preserves "no second sync protocol" by
+leaving catch-up as ordinary actual-link behavior and by adding no recovery-only
+re-baseline. The classification and locus questions resolve cleanly at the host intake.
+Confidence is not higher because output-side journaling for sources, the determinism
+requirement for input-mode replay, Owned/Leased crash semantics, and log compaction remain
+follow-on gaps.
 
 **Open questions:** (1) whether input-mode (command WAL) should be the default with
 output-mode as fallback, or whether a durable host should choose per cell by a determinism
 marker; (2) the exact processed-frontier shape that makes effectful-sink recovery dedup
-correct against concurrent live deltas; (3) whether any tightly-coupled subgraph genuinely
-needs an opt-in coordinated checkpoint, or whether per-host frontiers + catch-up always
-suffice within the niche.
+correct against concurrent live deltas, including how any future recovery re-baseline
+proposal could distinguish its fresh baseline from a genuine late-join baseline without
+violating `[24-DUR-07]` (the amended model creates no such recovery re-baseline); (3)
+whether any tightly-coupled subgraph genuinely needs an opt-in coordinated checkpoint, or
+whether per-host frontiers + ordinary catch-up always suffice within the niche.
 
 ### I-8 — PartitionedCell composite design: routing, merging, lifecycle, identity, and wave semantics (G-24)
 
@@ -8272,7 +8316,7 @@ catch-up carrying a `supersede` bit and the producer's current `SourceId`.
    increments its host-held `generation` (R1). `instanceId` is unchanged (I-2).
 2. **Restore the freshest available checkpoint** (R3), preferring re-derivation over
    rollback:
-   - *durable cell* → I-7 recovery: latest snapshot + suppressed WAL replay (no loss; the
+   - *durable cell* → I-7 recovery: latest snapshot + un-suppressed WAL replay (no loss; the
      WAL replay restores the true counter high-water, so no aliasing even before the
      generation bump);
    - *post-import (G-33) cell* → the **imported** state is the baseline (not spawn-time);
@@ -8335,11 +8379,12 @@ catch-up carrying a `supersede` bit and the producer's current `SourceId`.
   (pull-merge) there is no retraction: forward idempotent merge only.
 
 - **R6 — RESTART never replays inputs.** RESTART restores *state*, it does not re-drive the
-  invocations that produced it (contrast I-7 suppressed WAL replay, which re-drives with
-  outlets NoOp-served but is still state-reconstruction). Therefore a previously-consumed
-  `Owned`/`Leased` payload is **never re-delivered**: the state resulting from consuming it is
-  whatever the checkpoint holds; any loss is reconciled by the re-baseline. SPSC exactly-once
-  is preserved by construction (N14 sub-problem 1 dissolved — there is no second consumption).
+  invocations that produced it (contrast amended I-7 WAL replay, which re-drives through
+  ordinary outlets and retains an explicit Owned/Leased recovery gap). Therefore a
+  previously-consumed `Owned`/`Leased` payload is **never re-delivered**: the state resulting
+  from consuming it is whatever the checkpoint holds; any loss is reconciled by the
+  re-baseline. SPSC exactly-once is preserved by construction (N14 sub-problem 1 dissolved —
+  there is no second consumption).
 
 - **R7 — SUSPEND's parked buffer is the one Buffering primitive; exactly-once preserved.**
   Per the recorded decision *"Suspension is ONE Buffering primitive at two granularities,"*
