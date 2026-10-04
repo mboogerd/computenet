@@ -175,6 +175,70 @@ class PlacementPlanTest {
     }
 
     @Test
+    fun `three nodes classify full and delta unlinks by assigned endpoints`() {
+        val nodes = listOf("a", "b", "c")
+        val manifest = threeNodeManifest("b" to "b")
+
+        fun outcome(
+            spec: GraphSpec,
+            node: String,
+            previous: PlacementPlan? = null,
+        ): Pair<String?, List<UnlinkStep>?> {
+            val result = runCatching {
+                requireNotNull(
+                    if (previous == null) {
+                        PlacementPlan.of(spec, manifest, node)
+                    } else {
+                        PlacementPlan.of(spec, manifest, node, previous)
+                    },
+                )
+            }
+            return result.exceptionOrNull()?.message to
+                result.getOrNull()?.localSpec?.steps?.filterIsInstance<UnlinkStep>()
+        }
+
+        val localSpawns = listOf(
+            spawn("source", placement = "b"),
+            spawn("sink", placement = "b"),
+        )
+        val localConnect = ConnectStep("source", "outlet", "sink", "inlet")
+        val localUnlink = UnlinkStep("source", "outlet", "sink", "inlet")
+        val fullLocalOutcomes = nodes.map { node ->
+            outcome(GraphSpec(localSpawns + localConnect + localUnlink), node)
+        }
+        val deltaLocalOutcomes = nodes.map { node ->
+            val base = requireNotNull(
+                PlacementPlan.of(GraphSpec(localSpawns + localConnect), manifest, node),
+            )
+            outcome(GraphSpec(listOf(localUnlink)), node, base)
+        }
+        val expectedLocalOutcomes = listOf(
+            null to emptyList<UnlinkStep>(),
+            null to listOf(localUnlink),
+            null to emptyList(),
+        )
+
+        assertEquals(expectedLocalOutcomes, fullLocalOutcomes)
+        assertEquals(expectedLocalOutcomes, deltaLocalOutcomes)
+
+        val crossSpawns = listOf(
+            spawn("replica", replicated = true),
+            spawn("sink", placement = "b"),
+        )
+        val crossUnlink = UnlinkStep("replica", "outlet", "sink", "inlet")
+        val expectedCrossMessage =
+            "unlink replica.outlet->sink.inlet: cross-node unlink is not supported"
+        val crossOutcomes = nodes.map { node ->
+            val full = outcome(GraphSpec(crossSpawns + crossUnlink), node).first
+            val base = requireNotNull(PlacementPlan.of(GraphSpec(crossSpawns), manifest, node))
+            val delta = outcome(GraphSpec(listOf(crossUnlink)), node, base).first
+            full to delta
+        }
+
+        assertEquals(List(3) { expectedCrossMessage to expectedCrossMessage }, crossOutcomes)
+    }
+
+    @Test
     fun `null-selector replica linked to placed handle is refused identically on every node`() {
         val manifest = threeNodeManifest("b" to "b")
         val spawns = listOf(
