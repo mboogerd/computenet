@@ -752,6 +752,11 @@ open class ManagedHost(
      * topology replay remains free to use the management band while later data tasks defer.
      * Guarded by [dataLock], whose release at the end also publishes the restored maps to the
      * scheduler thread before dispatch resumes.
+     *
+     * Limit: while this is positive a staged frame may have no pending data task, so a
+     * [Quiescence] fence or a priority-30 drain barrier another thread takes during recovery
+     * can complete with frames still staged. [Recovery.awaitApplied]'s fence is taken after
+     * the gate lifts and is unaffected (computenet-1vpsb review).
      */
     private var recoveryRecordLoops = 0
 
