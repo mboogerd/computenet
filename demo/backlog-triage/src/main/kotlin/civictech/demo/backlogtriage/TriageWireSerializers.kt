@@ -45,6 +45,7 @@ private class StringFieldsSerializer<T>(
     }
 }
 
+/** The `backlogtriage.Pref` wire name stays stable across the class move. */
 private val prefSerializer = StringFieldsSerializer(
     "backlogtriage.Pref",
     { value: Pref -> listOf(value.agent, value.winner, value.loser) },

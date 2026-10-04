@@ -18,6 +18,8 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.CombineLatestCell
 import civictech.cell.data.view.MapDiffPublisher
+import civictech.demograph.ranking.Borda
+import civictech.demograph.ranking.RatingEngine
 
 /**
  * `@CellBase` Api for [RatingCell] (T09 §C: the first `@CellBase` consumer
