@@ -65,12 +65,21 @@ class EncodingDeterminismTest {
          * covers, per the task's Deliverables: `SetDelta`/`WatermarkDelta` fold
          * over unordered backing collections during merge; `MapDelta`/
          * `TaggedMapDelta` are the structured-key-map vectors this task adds,
-         * whose `puts`/`groups` iterate a `LinkedHashMap`; `kotlin.Double`
-         * because JVM `Double.toString` rendering is the other documented
+         * whose `puts`/`groups` iterate a `LinkedHashMap`; `PnCounterDelta`/
+         * `RoutedCommand` are the map-bearing vectors added by this task;
+         * `kotlin.Double` because JVM `Double.toString` rendering is the other documented
          * source of cross-run/cross-runtime byte variation (SCHEMA.md's Double
          * call-out, [WIR1-C16]).
          */
-        val SELECTED_TYPES: Set<String> = setOf("SetDelta", "MapDelta", "TaggedMapDelta", "WatermarkDelta", "kotlin.Double")
+        val SELECTED_TYPES: Set<String> = setOf(
+            "SetDelta",
+            "MapDelta",
+            "TaggedMapDelta",
+            "WatermarkDelta",
+            "PnCounterDelta",
+            "RoutedCommand",
+            "kotlin.Double",
+        )
 
         private fun typeNodesOf(decoded: kotlinx.serialization.json.JsonElement): Set<String> =
             RegistrationCoverageTest.typeNodes(decoded)
