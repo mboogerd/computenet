@@ -141,3 +141,22 @@ nothing to tolerate yet), and the bead or disposition that owns resolving it.
   decode-negative arm asserts a throw classified `invalid-utf8`, and mark this
   entry resolved. Not a Nondeterminism-table row: the bytes are fixed, only the
   outcome diverges.
+
+- **2026-10-04 — computenet-ncz.3 close-out
+  (053816d339a21c04ae3bad93424eab7574f86c44).** The feature vectored all 27
+  discriminators it owned: `kotlin.Int`, `kotlin.Boolean`, `Uuid`, `Timestamp`,
+  `CellRef`, `PortRef`, `TopologyLink`, `MessageContext`, `CounterDelta`,
+  `PnCounterDelta`, `WatermarkDelta`, `SetDelta`, `ListDelta`, `RoutedCommand`,
+  `Stamped`, `LeaderMark`, `Owned`, `Frozen`, `Borrowed`, `Assignment`,
+  `Interest.Total`, `Interest.Empty`, `Interest.Union`, `Interest.Intersect`,
+  `Interest.Complement`, `Interest.Ranges`, and `Interest.Slots`. Every
+  registered class has an explicit simple-name or `Interest.<Arm>` discriminator;
+  no registered subclass encodes an FQN discriminator, so no vector was withheld
+  under `[WIR1-I18]`/B1.7 and no bead was filed for that branch. The only
+  `kotlin.` fragments in authored corpus bytes are the five quoted primitive
+  discriminator tokens `kotlin.String`, `kotlin.Long`, `kotlin.Int`,
+  `kotlin.Boolean`, and `kotlin.Double`, in discriminator position. The
+  Nondeterminism table remains `_(none yet)_`; no feature vector has an
+  unrecorded byte-variation gap. Strict mode remains unchanged and is left to
+  `computenet-ncz.4` (ncz.3-D5): `pending = [Attention, Progress,
+  SaturationSignal, EdgeOpen, EdgeClose, StateRequest]`.
