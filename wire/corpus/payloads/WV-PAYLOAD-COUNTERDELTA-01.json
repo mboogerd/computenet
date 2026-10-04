@@ -17,6 +17,6 @@
       "args": [{"type": "CounterDelta", "fields": {"amount": -3}}]
     }
   },
-  "encoded": {"utf8": "{}", "base64": "e30="},
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"CounterDelta\",{\"amount\":-3}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siQ291bnRlckRlbHRhIix7ImFtb3VudCI6LTN9XV19"},
   "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, then read back and pinned here. OBSERVED: CounterDelta emits its single amount field as -3; there are no map entries or defaulted fields to reorder or omit in this vector. covers [WIR1-C05] and [WIR1-I01]-[WIR1-I03]."
 }

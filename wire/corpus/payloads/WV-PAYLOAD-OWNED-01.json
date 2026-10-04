@@ -17,6 +17,6 @@
       "args": [{"type": "Owned", "fields": {"value": {"type": "kotlin.String", "value": "payload"}}}]
     }
   },
-  "encoded": {"utf8": "{}", "base64": "e30="},
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Owned\",{\"value\":[\"kotlin.String\",\"payload\"]}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siT3duZWQiLHsidmFsdWUiOlsia290bGluLlN0cmluZyIsInBheWxvYWQiXX1dXX0="},
   "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, then read back and pinned here. OBSERVED: the wrapper's polymorphic inner String encodes as kotlin.String and no default field is omitted. Decoding produces a fresh, unconsumed Owned wrapper; Owned has no equals, so the JVM driver compares it structurally through WireEquality (ncz.3-D6), while a non-JVM driver compares the inner value. Spec 23 says Owned crosses as move-by-serialize; the CONSUME is BridgeEgressCell.deliver's, pinned by OwnershipBoundaryTest, not by this vector. Leased has no vector because it never crosses (WV-NEG-LEASED-AT-ENCODE-01). covers [WIR1-C05] and [WIR1-I01]-[WIR1-I03]."
 }
