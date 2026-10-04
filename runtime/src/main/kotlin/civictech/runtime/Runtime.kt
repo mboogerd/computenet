@@ -143,6 +143,22 @@ object Runtime {
 
     private fun CrossEdge.key(): String = "$fromHandle.$outlet -> $toHandle.$inlet"
 
+    /** Drain every host built by a boot that failed before it could return a [Node]. */
+    private fun closeFailedBootHosts(hosts: Collection<ManagedHost>, failure: Throwable) {
+        hosts.forEach { host ->
+            try {
+                host.managementInlet.call.drainHost()
+            } catch (cleanupFailure: Throwable) {
+                failure.addSuppressed(cleanupFailure)
+            }
+            try {
+                host.quiescence().await(30_000, "closing runtime boot host after failed boot")
+            } catch (cleanupFailure: Throwable) {
+                failure.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
     /**
      * Construct with an exact transport instance without exposing the optional
      * Inspector type to callers that do not otherwise depend on `:inspect`.
@@ -192,73 +208,78 @@ object Runtime {
                 budget = budget,
             )
         }
-        val mainHostName = nodeSpec.hosts.first()
-        val mainHost = hosts.getValue(mainHostName)
-        val replication = Replication(registry)
-        val nodeJournals = journals.toMap()
-        val topology = if (nodeSpec.journalTopology) nodeJournals.getValue(mainHostName) else null
-        applyContext = ApplyContext(
-            host = mainHost,
-            replication = replication,
-            journals = nodeJournals,
-            journalDirs = journalDirs.toMap(),
-            topology = topology,
-        )
-        val placement = PlacementPlan.of(spec, manifest, node)
-        val placedCells = linkedMapOf<String, Cell>()
-        val recovered = topology?.replay()?.isNotEmpty() == true
-        val families: Map<String, KeyedCells<*>>
-        val inputs: Map<String, Map<String, DurableInput>>
-        if (recovered) {
-            applyContext.recover(topology).awaitApplied(30_000)
-            val declaredSpawns = spec.lowered().filterIsInstance<SpawnStep>().filter { it.family == null }
-            declaredSpawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
-                throw IllegalStateException(
-                    "recovered topology is missing handle '${missing.handle}' declared by the GraphSpec " +
-                        "in journal directory '${journalDirs.getValue(mainHostName)}'",
-                )
-            }
-            inputs = declaredSpawns
-                .filter { it.inputs.isNotEmpty() }
-                .associate { step ->
-                    val ref = applyContext.handles.getValue(step.handle)
-                    step.handle to step.inputs.associateWith { input -> mainHost.durableInput(ref, input) }
+        return try {
+            val mainHostName = nodeSpec.hosts.first()
+            val mainHost = hosts.getValue(mainHostName)
+            val replication = Replication(registry)
+            val nodeJournals = journals.toMap()
+            val topology = if (nodeSpec.journalTopology) nodeJournals.getValue(mainHostName) else null
+            applyContext = ApplyContext(
+                host = mainHost,
+                replication = replication,
+                journals = nodeJournals,
+                journalDirs = journalDirs.toMap(),
+                topology = topology,
+            )
+            val placement = PlacementPlan.of(spec, manifest, node)
+            val placedCells = linkedMapOf<String, Cell>()
+            val recovered = topology?.replay()?.isNotEmpty() == true
+            val families: Map<String, KeyedCells<*>>
+            val inputs: Map<String, Map<String, DurableInput>>
+            if (recovered) {
+                applyContext.recover(topology).awaitApplied(30_000)
+                val declaredSpawns = spec.lowered().filterIsInstance<SpawnStep>().filter { it.family == null }
+                declaredSpawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
+                    throw IllegalStateException(
+                        "recovered topology is missing handle '${missing.handle}' declared by the GraphSpec " +
+                            "in journal directory '${journalDirs.getValue(mainHostName)}'",
+                    )
                 }
-            families = applyContext.live().families.keys.associateWith { handle ->
-                checkNotNull(applyContext.familyFor(handle)) {
-                    "recovered topology family '$handle' was not materialized"
+                inputs = declaredSpawns
+                    .filter { it.inputs.isNotEmpty() }
+                    .associate { step ->
+                        val ref = applyContext.handles.getValue(step.handle)
+                        step.handle to step.inputs.associateWith { input -> mainHost.durableInput(ref, input) }
+                    }
+                families = applyContext.live().families.keys.associateWith { handle ->
+                    checkNotNull(applyContext.familyFor(handle)) {
+                        "recovered topology family '$handle' was not materialized"
+                    }
                 }
-            }
-        } else {
-            val applied = if (placement == null) {
-                spec.apply(applyContext)
             } else {
-                applyPlacement(placement, applyContext, mainHost, registry, placedCells)
+                val applied = if (placement == null) {
+                    spec.apply(applyContext)
+                } else {
+                    applyPlacement(placement, applyContext, mainHost, registry, placedCells)
+                }
+                families = applied.families
+                inputs = applied.inputs
             }
-            families = applied.families
-            inputs = applied.inputs
+            Node(
+                name = node,
+                manifest = manifest,
+                nodeSpec = nodeSpec,
+                registry = registry,
+                hosts = hosts,
+                mainHost = mainHost,
+                journals = nodeJournals,
+                recovered = recovered,
+                applyContext = applyContext,
+                families = families,
+                inputs = inputs,
+                replication = replication,
+                replica = nodeSpec.replica,
+                budget = budget,
+                overrides = overrides.toMap(),
+                inspectorOptions = inspector,
+                transportOverride = transport,
+                initialPlacement = placement,
+                placedCells = placedCells,
+            )
+        } catch (failure: Throwable) {
+            closeFailedBootHosts(hosts.values, failure)
+            throw failure
         }
-        return Node(
-            name = node,
-            manifest = manifest,
-            nodeSpec = nodeSpec,
-            registry = registry,
-            hosts = hosts,
-            mainHost = mainHost,
-            journals = nodeJournals,
-            recovered = recovered,
-            applyContext = applyContext,
-            families = families,
-            inputs = inputs,
-            replication = replication,
-            replica = nodeSpec.replica,
-            budget = budget,
-            overrides = overrides.toMap(),
-            inspectorOptions = inspector,
-            transportOverride = transport,
-            initialPlacement = placement,
-            placedCells = placedCells,
-        )
     }
 
     /**
@@ -314,7 +335,15 @@ object Runtime {
         var placement: PlacementPlan? = initialPlacement
             private set
 
-        /** Apply a graph delta through this node's services and topology journal. */
+        /**
+         * Apply a graph delta through this node's services and topology journal.
+         *
+         * A placed delta is not atomic. If [applyPlacement] throws after its local prefix has
+         * been applied, [placement] remains the previous cumulative plan while live cells and
+         * links may already reflect part of the delta. The kernel has no rollback mechanism and
+         * [PlacementPlan] cannot represent that partial bridge state, so this node is unusable
+         * for further placed deltas after such a failure; close it and boot a fresh node instead.
+         */
         fun apply(spec: GraphSpec): AppliedGraph {
             val previous = placement ?: return spec.apply(applyContext)
             val next = requireNotNull(PlacementPlan.of(spec, manifest, name, previous))
