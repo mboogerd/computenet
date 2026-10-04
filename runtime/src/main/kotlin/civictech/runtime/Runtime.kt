@@ -129,6 +129,43 @@ object Runtime {
 
     private fun CrossEdge.key(): String = "$fromHandle.$outlet -> $toHandle.$inlet"
 
+    /**
+     * Enforce the journal-observable part of the cumulative placed-spec boot contract.
+     * Bridge halves themselves are deliberately absent from the local topology fold, but
+     * every active local endpoint and its pinned identity must agree before any half is
+     * reinstalled.
+     */
+    private fun recoveredPlacementSpawns(
+        plan: PlacementPlan,
+        context: ApplyContext,
+        journalDir: File,
+    ): List<SpawnStep> {
+        val expected = plan.activeLocalSpawns().associateBy(SpawnStep::handle)
+        val recovered = context.handles
+        val missing = expected.keys.firstOrNull { it !in recovered }
+        val unexpected = recovered.keys.firstOrNull { it !in expected }
+        val wrongRef = expected.values.firstOrNull { step ->
+            !step.replicated && recovered[step.handle]?.let { it != plan.refOf(step.handle) } == true
+        }
+        if (missing != null || unexpected != null || wrongRef != null) {
+            val mismatch = when {
+                missing != null -> "is missing active local handle '$missing'"
+                unexpected != null -> "contains undeclared active local handle '$unexpected'"
+                else -> {
+                    val handle = checkNotNull(wrongRef).handle
+                    "binds active local handle '$handle' to ${recovered.getValue(handle)} " +
+                        "instead of ${plan.refOf(handle)}"
+                }
+            }
+            throw IllegalStateException(
+                "recovered placed topology $mismatch; Runtime.boot requires the cumulative placed " +
+                    "GraphSpec (the original boot spec followed by every successful Node.apply delta) " +
+                    "for journal directory '$journalDir'",
+            )
+        }
+        return expected.values.toList()
+    }
+
     /** Drain every host built by a boot that failed before it could return a [Node]. */
     private fun closeFailedBootHosts(hosts: Collection<ManagedHost>, failure: Throwable) {
         hosts.forEach { host ->
@@ -148,6 +185,8 @@ object Runtime {
     /**
      * Construct with an exact transport instance without exposing the optional
      * Inspector type to callers that do not otherwise depend on `:inspect`.
+     * A recovered placed node has the same cumulative [spec] contract documented
+     * on the full [boot] overload below.
      */
     fun boot(
         manifest: Manifest,
@@ -162,6 +201,13 @@ object Runtime {
      * that journal is non-empty; otherwise its spec is applied and journaled as the first topology.
      * A recovered placed node reinstalls its bridge halves before [Node.open], with the asymmetric
      * `EdgeOpen` limitation documented on [applyPlacement] (8i1m6.2-D5).
+     *
+     * For a placed node, [spec] on recovery MUST be the cumulative ordered graph history: the
+     * original boot spec followed by every successfully applied [Node.apply] delta. Local cells
+     * recover from the topology journal, but cross-node halves are deliberately not journaled, so
+     * the cumulative spec is their recovery source and becomes [Node.placement]. Recovery refuses
+     * a spec whose active local handles or pinned refs disagree with the journal, naming this
+     * contract; an ordered spawn followed by an isolated despawn is valid and remains absent.
      */
     fun boot(
         manifest: Manifest,
@@ -215,14 +261,21 @@ object Runtime {
             val inputs: Map<String, Map<String, DurableInput>>
             if (recovered) {
                 applyContext.recover(topology).awaitApplied(30_000)
-                val declaredSpawns = (placement?.localSpec?.steps ?: spec.lowered())
-                    .filterIsInstance<SpawnStep>()
-                    .filter { it.family == null }
-                declaredSpawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
-                    throw IllegalStateException(
-                        "recovered topology is missing handle '${missing.handle}' declared by the GraphSpec " +
-                            "in journal directory '${journalDirs.getValue(mainHostName)}'",
-                    )
+                val journalDir = journalDirs.getValue(mainHostName)
+                val declaredSpawns = if (placement != null) {
+                    recoveredPlacementSpawns(placement, applyContext, journalDir)
+                } else {
+                    spec.lowered()
+                        .filterIsInstance<SpawnStep>()
+                        .filter { it.family == null }
+                        .also { spawns ->
+                            spawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
+                                throw IllegalStateException(
+                                    "recovered topology is missing handle '${missing.handle}' declared by " +
+                                        "the GraphSpec in journal directory '$journalDir'",
+                                )
+                            }
+                        }
                 }
                 if (placement != null) installHalves(placement, mainHost, registry)
                 inputs = declaredSpawns
@@ -325,6 +378,9 @@ object Runtime {
 
         /**
          * Apply a graph delta through this node's services and topology journal.
+         * When this is a placed, topology-journalled node, the caller must retain each
+         * successful delta after the original boot spec and pass that cumulative ordered
+         * [GraphSpec] to the next [Runtime.boot]; bridge halves are not journaled.
          *
          * A placed delta is not atomic. If [applyPlacement] throws after its local prefix has
          * been applied, [placement] remains the previous cumulative plan while live cells and
