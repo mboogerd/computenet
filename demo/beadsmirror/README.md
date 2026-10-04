@@ -59,9 +59,12 @@ requires a snapshot, the poller applies one topology delta that despawns and
 respawns both cells under the same refs. It then builds the hosted projector on
 the fresh cells and commits the baseline and head through one durable-input
 record. To intentionally reset a mirror, delete `<runDir>/main/`; the next
-start is a first start and accepts an empty export. There is no journal
-compaction during a live run; the journal grows with durable-input records until
-recovery allows the host checkpoint step.
+start is a first start and accepts an empty export. During a live run, every 64
+ordinary durable-input records trigger a host checkpoint after that record has
+drained. This bounds the journal tail in both solo and two-node mode; idle polls
+append no record and therefore do not checkpoint. The 64-record cadence is a
+safety bound rather than a throughput-derived optimum: realistic non-idle volume
+and replay cost have not yet been measured.
 
 ## `--write-back`: opt-in, imposes the fold's winner onto `bd`
 

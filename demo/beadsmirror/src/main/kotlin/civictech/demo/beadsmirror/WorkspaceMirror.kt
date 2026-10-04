@@ -295,6 +295,29 @@ class WorkspaceMirror private constructor(
              * vocabularies stay separate. Ignored when [writeBack] is false.
              */
             onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
+        ): WorkspaceMirror = start(
+            workspace = workspace,
+            runDir = runDir,
+            pollInterval = pollInterval,
+            onEvent = onEvent,
+            checkpointEveryRecords = LIVE_CHECKPOINT_EVERY_RECORDS,
+            peeringSettings = peeringSettings,
+            peeringTransport = peeringTransport,
+            writeBack = writeBack,
+            onWriteBackEvent = onWriteBackEvent,
+        )
+
+        /** The production construction path, with a smaller cadence available to restart tests. */
+        internal fun start(
+            workspace: Path,
+            runDir: Path,
+            pollInterval: Duration,
+            onEvent: (MirrorEvent) -> Unit,
+            checkpointEveryRecords: Int,
+            peeringSettings: MirrorPeeringSettings? = null,
+            peeringTransport: PeerTransport? = null,
+            writeBack: Boolean = false,
+            onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
         ): WorkspaceMirror {
             val doltRoot = doltRootFor(workspace)
             val identity = sanitizedDoltDatabaseName(workspace)
@@ -368,6 +391,8 @@ class WorkspaceMirror private constructor(
                 input = graph.input(),
                 host = graph.host,
                 label = "beadsmirror $identity poll",
+                checkpointEveryRecords = checkpointEveryRecords,
+                checkpoint = graph::checkpoint,
             )
 
             val poller = DoltFeedPoller(
@@ -429,5 +454,13 @@ class WorkspaceMirror private constructor(
                 echoGate,
             )
         }
+
+        /**
+         * Maximum ordinary durable-input records appended between live checkpoints. This is a
+         * safety bound, not a throughput-derived optimum: realistic non-idle record volume and
+         * replay cost remain unmeasured. Counting journal records (rather than changed rows) caps
+         * exactly the tail that recovery must replay without making idle polls compact anything.
+         */
+        private const val LIVE_CHECKPOINT_EVERY_RECORDS = 64
     }
 }
