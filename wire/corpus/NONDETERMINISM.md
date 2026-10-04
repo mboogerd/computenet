@@ -108,6 +108,16 @@ nothing to tolerate yet), and the bead or disposition that owns resolving it.
   document order (ncz.2.1-D1) and the encoder walks that same map. No entry
   was added to the Nondeterminism table above; it stays `_(none yet)_`.
 
+  **UPDATE (task computenet-ncz.3.3): `kotlin.Int` and `kotlin.Boolean` are
+  now OBSERVED on the wire as `"kotlin.Int"` / `"kotlin.Boolean"` in
+  `WV-PAYLOAD-INT-01` / `WV-PAYLOAD-BOOLEAN-01`, and top-level
+  `kotlin.String` / `kotlin.Long` are pinned in `WV-PAYLOAD-STRING-01` /
+  `WV-PAYLOAD-LONG-01`.** All five primitive labels are resolved; the
+  `kotlin.` question stays decided by ncz.2-D7 and the rename proposal stays
+  **`computenet-w2twp`**. `WV-PAYLOAD-UUID-01` also OBSERVES and pins
+  `UuidSerializer`'s lower-case UUID rendering (`UUID.toString()`), including
+  the two literal UUID arguments in its encoded bytes.
+
 - **`WV-NEG-INVALID-UTF8-01` — the JVM codec accepts invalid UTF-8, against
   `[WIR1-I07]`.** Requirement: bytes that are not valid UTF-8 SHALL be rejected
   (`expect.reject: invalid-utf8`). Mechanism: `WireCodec.decodeFrame`

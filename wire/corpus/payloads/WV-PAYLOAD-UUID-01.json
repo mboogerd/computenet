@@ -1,0 +1,28 @@
+{
+  "id": "WV-PAYLOAD-UUID-01",
+  "title": "UUID args pinning Uuid's discriminator and lower-case rendering",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-C11", "WIR1-C16", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I18"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {"type": "Uuid", "value": "00000000-0000-0000-0000-0000000000a1"},
+        {"type": "Uuid", "value": "ffffffff-ffff-ffff-ffff-ffffffffffff"}
+      ]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Uuid\",\"00000000-0000-0000-0000-0000000000a1\"],[\"Uuid\",\"ffffffff-ffff-ffff-ffff-ffffffffffff\"]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siVXVpZCIsIjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBhMSJdLFsiVXVpZCIsImZmZmZmZmZmLWZmZmYtZmZmZi1mZmZmLWZmZmZmZmZmZmZmZiJdXX0="
+  },
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from decoded, then read back and pinned here. OBSERVED: UuidSerializer's discriminator is \"Uuid\" and UUID.toString() renders both literals in lower-case hex; this lower-case spelling is pinned-because-current ([WIR1-C05], [WIR1-C09], [WIR1-C11], [WIR1-C16], [WIR1-I01]-[WIR1-I03], [WIR1-I18])."
+}
