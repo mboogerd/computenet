@@ -312,19 +312,14 @@ export function framingOf(
 }
 
 /**
- * Model A, POSITIONS: the "softmax cell" mirrored in TS — score = logit(clamped
- * credence), temperature 1 → shares = normalised odds (exp(logit)/Σ, which is
- * the same as each position's own credence-odds normalised over the set).
- * Sums to 1; before any position has emitted (all credences equal) every
- * share is 1/n.
+ * Model A, POSITIONS: the backend distribution mirrored in TS. Consensus
+ * credences are absolute weights, normalised only above a total of 1. When
+ * they total below 1, the missing share means none of the listed answers.
  */
 export function mockShares(nodes: readonly NodeDto[]): number[] {
-  const odds = nodes.map((n) => {
-    const p = clampP(n.consensus ?? n.credence);
-    return p / (1 - p);
-  });
-  const sum = odds.reduce((a, b) => a + b, 0);
-  return sum === 0 ? nodes.map(() => 1 / nodes.length) : odds.map((o) => o / sum);
+  const weights = nodes.map((n) => Math.max(0, Math.min(1, n.consensus ?? n.credence)));
+  const total = Math.max(1, weights.reduce((a, b) => a + b, 0));
+  return weights.map((weight) => weight / total);
 }
 
 /** Model C: the top 3 of [nodes] by |sensitivity| × 4·p·(1 − p) (a link's p is its strength), as the backend ranks them. */
@@ -424,7 +419,7 @@ function seedFinished(m: MockSource): void {
 
 /**
  * Model A: an open question framed POSITIONS — three possible answers with
- * no privileged ordering claim, whose shares (softmax over their consensus)
+ * no privileged ordering claim, whose shares (absolute consensus weights)
  * the UI shows as a distribution instead of a single verdict.
  */
 function seedFramedPositions(m: MockSource): void {

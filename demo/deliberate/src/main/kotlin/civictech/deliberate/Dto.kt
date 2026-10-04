@@ -106,7 +106,10 @@ data class PositionDto(
     val neutralCredence: Double? = null,
     /** Model D: its credence and [neutralCredence] fall strictly on different sides of ½. */
     val verdictsDisagree: Boolean = false,
-    /** POSITIONS: its share of the consensus shares (the shares sum to 1); null for READINGS. */
+    /**
+     * POSITIONS: its absolute consensus share; null for READINGS. Listed shares
+     * may sum below 1, whose remainder means none of the listed answers.
+     */
     val share: Double? = null,
 )
 

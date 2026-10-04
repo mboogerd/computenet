@@ -195,23 +195,21 @@ object Consensus {
 }
 
 /**
- * Model A: the shares competing positions of one issue hold — a softmax over
- * each position's score `logit(clamped credence) / T`. At [TEMPERATURE] 1
- * this is odds normalisation: (0.8, 0.6, 0.2) → odds (4, 1.5, 0.25) →
- * (0.696, 0.261, 0.043). Monotone in every credence, sums to 1; the clamp to
- * [Consensus.LOW]..[Consensus.HIGH] keeps a credence of 0 or 1 finite.
- * T = 1 is a starting value, not calibrated (feature computenet-dq2fy.29, D7).
+ * Model A: absolute shares for the listed positions of one issue. Credences
+ * are used as weights and normalised only when their sum exceeds one. The
+ * remainder `1 - shares.sum()` is the share that none of the listed positions
+ * holds. This makes complementary binary positions reproduce their verdict,
+ * preserves first impressions instead of sharpening their odds, and exposes
+ * jointly implausible positions instead of forcing them to fill the frame.
+ *
+ * The object keeps its original name for source compatibility with the first
+ * model-A implementation; the operation is deliberately no longer a softmax.
  */
 object Softmax {
-    const val TEMPERATURE = 1.0
-
-    fun shares(credences: List<Double>, temperature: Double = TEMPERATURE): List<Double> {
+    fun shares(credences: List<Double>): List<Double> {
         if (credences.isEmpty()) return emptyList()
-        require(temperature > 0) { "softmax temperature must be positive: $temperature" }
-        val scores = credences.map { logit(it.coerceIn(Consensus.LOW, Consensus.HIGH)) / temperature }
-        val top = scores.max()
-        val weights = scores.map { exp(it - top) }
-        val total = weights.sum()
+        val weights = credences.map { it.coerceIn(0.0, 1.0) }
+        val total = maxOf(1.0, weights.sum())
         return weights.map { it / total }
     }
 }

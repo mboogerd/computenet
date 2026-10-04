@@ -58,4 +58,25 @@ describe('one spread bar for a framed question’s readings (computenet-3z7w5)',
     expect(host.querySelector('.spread__track')).toBeNull();
     expect(host.querySelectorAll('.framing__row')).toHaveLength(1);
   });
+
+  const positions = (...shares: number[]): FramingDto => ({
+    mode: 'POSITIONS',
+    positions: shares.map((share, i) => ({ ref: `p${i + 1}`, text: `Answer ${i + 1}`, credence: share, share })),
+  });
+
+  it('jointly implausible POSITIONS show a none-of-the-listed row, not an even split (computenet-x91yk)', () => {
+    const host = mount(() => <FramingSummary framing={positions(0.1, 0.1, 0.1)} />);
+    const rows = [...host.querySelectorAll('.framing__row')].map((r) => r.textContent);
+    expect(rows).toEqual(['Answer 110%', 'Answer 210%', 'Answer 310%', 'None of the listed answers70%']);
+    const fills = [...host.querySelectorAll<HTMLElement>('.framing__bar-fill')].map((f) => f.style.transform);
+    expect(fills[3]).toBe('scaleX(0.7)');
+  });
+
+  it('POSITIONS whose shares fill the frame show no none-of-the-listed row (computenet-x91yk)', () => {
+    const credences = [0.15, 0.2, 0.7];
+    const total = credences.reduce((a, b) => a + b, 0);
+    const host = mount(() => <FramingSummary framing={positions(...credences.map((c) => c / total))} />);
+    const rows = [...host.querySelectorAll('.framing__row')].map((r) => r.textContent);
+    expect(rows).toEqual(['Answer 114%', 'Answer 219%', 'Answer 367%']);
+  });
 });
