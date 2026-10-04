@@ -34,7 +34,7 @@ checks the implementation against requirement ids embedded in the spec.
 
                 :kernel ◄── :timetravel ◄── test ── :demo:agora  (offline journal reader / reconstruction / diff; TTD1)
 
-                :kernel ◄── :demograph  (DGR, epic computenet-drz8)
+                :kernel ◄── :demograph ◄── :demo:backlog-triage  (DGR, epic computenet-drz8)
 
                 :kernel ◄── :economy  (validated, serializable EconomicPolicy + token-bucket budget ledger; ECO1, epic computenet-66m)
 ```
