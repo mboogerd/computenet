@@ -45,8 +45,9 @@ export interface QuestionDto {
   cost?: CostDto;
   /**
    * Model C, "what would change the answer": up to 3 node refs (claims below the
-   * root, links as EDGE refs) with the highest |sensitivity| × 4·p·(1 − p), best
-   * first. Has a Kotlin default and is always sent; optional so older fixtures stay valid.
+   * root, links as EDGE refs) with the highest exact q-weighted expected root
+   * movement, best first. Has a Kotlin default and is always sent; optional so
+   * older fixtures stay valid.
    */
   cruxes?: string[];
   /**
@@ -228,15 +229,12 @@ export interface NodeDto {
   relevance?: number;
   /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
   quality?: number;
-  /**
-   * Shown only since model C (the queue follows sensitivity × 4·p·(1 − p)): reach × relevance × quality × 4·p·(1 − p),
-   * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
-   */
+  /** Reference-only contribution metric; it does not determine exploration order or stopping. */
   contribution?: number;
   /**
-   * Model C: d headline(root) / d this node's credence — how far the question's
-   * answer moves per unit move of this node (root ≈ 1; a link's is its edge's).
-   * Absent until the sensitivity cells reached it.
+   * Model C: the signed exact secant `R(node=1) − R(node=0)` ("sway") for the
+   * active answer root to which this node has the largest exact value of
+   * information. Absent until the backend computes it.
    */
   sensitivity?: number;
   /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */

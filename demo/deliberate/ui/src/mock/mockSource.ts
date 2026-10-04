@@ -220,8 +220,10 @@ export class MockSource implements GraphSource {
       n.reach = arg?.reach;
       if (n.reach !== undefined && n.strength !== undefined) n.contribution = n.reach * 4 * n.strength * (1 - n.strength);
     }
-    // Model C: a stand-in sensitivity shaped like the backend's (root 1, halved and signed per
-    // edge by its strength — or, for the edge itself, by its argument's credence), not its arithmetic.
+    // Model C: a mock-only approximation of the backend's signed exact sway.
+    // This scripted graph does not replay every dependent node at 0 and 1, so
+    // it propagates a signed stand-in through its edges instead of claiming
+    // backend parity.
     const edgeOf = new Map(nodes.filter((n) => n.kind === 'EDGE').map((e) => [e.source!, e]));
     const sensitivityOf = (n: NodeDto): number | undefined => {
       if (n.kind === 'CLAIM' && n.depth === 0) return 1;
@@ -322,11 +324,16 @@ export function mockShares(nodes: readonly NodeDto[]): number[] {
   return weights.map((weight) => weight / total);
 }
 
-/** Model C: the top 3 of [nodes] by |sensitivity| × 4·p·(1 − p) (a link's p is its strength), as the backend ranks them. */
+/**
+ * Model C mock-only approximation: production ranks by exact q-weighted
+ * expected root movement. The fixture applies the local-linear expected-
+ * movement proxy to its stand-in sway and current propagated credence, keeping
+ * the demo's ordering useful without claiming to reproduce backend VoI.
+ */
 export function mockCruxes(nodes: readonly NodeDto[]): string[] {
   const score = (n: NodeDto): number => {
-    const p = (n.kind === 'EDGE' ? n.strength : n.plausibility) ?? 0.5;
-    return n.sensitivity === undefined ? 0 : Math.abs(n.sensitivity) * 4 * p * (1 - p);
+    const q = clampP(n.credence);
+    return n.sensitivity === undefined ? 0 : Math.abs(n.sensitivity) * 4 * q * (1 - q);
   };
   return nodes
     .filter((n) => score(n) > 0)

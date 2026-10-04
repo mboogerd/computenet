@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GraphDto } from '../src/api/types';
-import { EXAMPLE_QUESTION, GENERIC, MockSource } from '../src/mock/mockSource';
+import { EXAMPLE_QUESTION, GENERIC, MockSource, mockShares } from '../src/mock/mockSource';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -213,19 +213,22 @@ describe('MockSource', () => {
     source.stop();
   });
 
-  it('model A POSITIONS: shares sum to 1 and are proportional to consensus (softmax odds normalisation)', () => {
+  it('model A POSITIONS: shares use absolute consensus weights and preserve the none-of-listed residual', () => {
     const source = new MockSource(10, false);
     source.start(() => undefined, () => undefined);
     const g = source.snapshot();
     const positions = g.questions.find((q) => q.framing?.mode === 'POSITIONS')!;
     const shares = positions.framing!.positions.map((p) => p.share!);
     expect(shares.every((s) => s !== undefined)).toBe(true);
-    expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 9);
-    // the highest-consensus position gets the highest share
     const byRef = new Map(g.nodes.map((n) => [n.ref, n]));
-    const consensuses = positions.framing!.positions.map((p) => byRef.get(p.ref)!.consensus ?? byRef.get(p.ref)!.credence);
-    const order = [...shares.keys()].sort((a, b) => consensuses[b] - consensuses[a]);
-    expect([...shares.keys()].sort((a, b) => shares[b] - shares[a])).toEqual(order);
+    const weights = positions.framing!.positions.map((p) => byRef.get(p.ref)!.consensus ?? byRef.get(p.ref)!.credence);
+    const denominator = Math.max(1, weights.reduce((a, b) => a + b, 0));
+    expect(shares).toHaveLength(weights.length);
+    shares.forEach((share, i) => expect(share).toBeCloseTo(weights[i] / denominator, 9));
+
+    const lowWeights = positions.framing!.positions.map((p) => ({ ...byRef.get(p.ref)!, consensus: 0.1 }));
+    expect(mockShares(lowWeights)).toEqual([0.1, 0.1, 0.1]);
+    expect(1 - mockShares(lowWeights).reduce((a, b) => a + b, 0)).toBeCloseTo(0.7, 9);
     source.stop();
   });
 });
