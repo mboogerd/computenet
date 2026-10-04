@@ -19,6 +19,66 @@
       "file": "payloads/WV-PAYLOAD-DOUBLE-01.json"
     },
     {
+      "id": "WV-PAYLOAD-INT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-INT-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-BOOLEAN-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-BOOLEAN-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STRING-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STRING-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-LONG-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-LONG-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-UUID-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-UUID-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-TIMESTAMP-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-TIMESTAMP-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-CELLREF-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-CELLREF-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-PORTREF-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-PORTREF-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-TOPOLOGYLINK-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-TOPOLOGYLINK-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-MESSAGECONTEXT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-MESSAGECONTEXT-01.json"
+    },
+    {
       "id": "WV-PAYLOAD-MAPDELTA-01",
       "category": "payloads",
       "kind": "frame",
@@ -35,6 +95,54 @@
       "category": "payloads",
       "kind": "frame",
       "file": "payloads/WV-PAYLOAD-WATERLINEDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-ASSIGNMENT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-ASSIGNMENT-01.json"
+    },
+    {
+      "id": "WV-INTEREST-TOTAL-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-TOTAL-01.json"
+    },
+    {
+      "id": "WV-INTEREST-EMPTY-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-EMPTY-01.json"
+    },
+    {
+      "id": "WV-INTEREST-UNION-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-UNION-01.json"
+    },
+    {
+      "id": "WV-INTEREST-INTERSECT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-INTERSECT-01.json"
+    },
+    {
+      "id": "WV-INTEREST-COMPLEMENT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-COMPLEMENT-01.json"
+    },
+    {
+      "id": "WV-INTEREST-RANGES-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-RANGES-01.json"
+    },
+    {
+      "id": "WV-INTEREST-SLOTS-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-SLOTS-01.json"
     },
     {
       "id": "WV-NEG-LEASED-AT-ENCODE-01",
@@ -137,41 +245,104 @@
       "category": "handshake",
       "kind": "handshake-text",
       "file": "handshake/WV-HELLO-UNNAMED-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STAMPED-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STAMPED-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STAMPED-02",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STAMPED-02.json"
+    },
+    {
+      "id": "WV-PAYLOAD-WATERMARKDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-WATERMARKDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-WATERMARKDELTA-02",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-WATERMARKDELTA-02.json"
+    },
+    {
+      "id": "WV-PAYLOAD-LEADERMARK-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-LEADERMARK-01.json"
+    },
+    {
+      "id": "WV-PORT-API-SETDELTA-01",
+      "category": "frames/port-api",
+      "kind": "frame",
+      "file": "frames/port-api/WV-PORT-API-SETDELTA-01.json"
+    },
+    {
+      "id": "WV-PORT-MGMT-LINKTO-01",
+      "category": "frames/port-management",
+      "kind": "frame",
+      "file": "frames/port-management/WV-PORT-MGMT-LINKTO-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STAMPED-03",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STAMPED-03.json"
+    },
+    {
+      "id": "WV-PAYLOAD-COUNTERDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-COUNTERDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-PNCOUNTERDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-PNCOUNTERDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-LISTDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-LISTDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-ROUTEDCOMMAND-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-ROUTEDCOMMAND-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-OWNED-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-OWNED-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-FROZEN-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-FROZEN-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-BORROWED-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-BORROWED-01.json"
     }
   ],
   "pending": [
-    {"discriminator": "kotlin.Int", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "kotlin.Boolean", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Uuid", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Timestamp", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "CellRef", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "PortRef", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "TopologyLink", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "MessageContext", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "CounterDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "PnCounterDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "WatermarkDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "SetDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "ListDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "RoutedCommand", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Stamped", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "LeaderMark", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Owned", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Frozen", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Borrowed", "owedBy": "computenet-ncz.3"},
     {"discriminator": "Attention", "owedBy": "computenet-ncz.4"},
     {"discriminator": "Progress", "owedBy": "computenet-ncz.4"},
     {"discriminator": "SaturationSignal", "owedBy": "computenet-ncz.4"},
     {"discriminator": "EdgeOpen", "owedBy": "computenet-ncz.4"},
     {"discriminator": "EdgeClose", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "StateRequest", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "Assignment", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Total", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Empty", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Union", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Intersect", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Complement", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Ranges", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Slots", "owedBy": "computenet-ncz.3"}
+    {"discriminator": "StateRequest", "owedBy": "computenet-ncz.4"}
   ]
 }

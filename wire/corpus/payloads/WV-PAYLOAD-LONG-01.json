@@ -1,0 +1,25 @@
+{
+  "id": "WV-PAYLOAD-LONG-01",
+  "title": "Long args pinning kotlin.Long's discriminator and signed boundary",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I18"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {"type": "kotlin.Long", "value": 1},
+        {"type": "kotlin.Long", "value": -9223372036854775808}
+      ]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"kotlin.Long\",1],[\"kotlin.Long\",-9223372036854775808]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1sia290bGluLkxvbmciLDFdLFsia290bGluLkxvbmciLC05MjIzMzcyMDM2ODU0Nzc1ODA4XV19"},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from decoded, then read back and pinned here. OBSERVED: the discriminator is \"kotlin.Long\" and Long.MIN_VALUE remains the exact JSON integer -9223372036854775808, not a rounded JavaScript Number ([WIR1-C05], [WIR1-I01]-[WIR1-I03], [WIR1-I18])."
+}

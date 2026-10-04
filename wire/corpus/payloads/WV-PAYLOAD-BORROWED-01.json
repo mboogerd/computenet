@@ -1,0 +1,22 @@
+{
+  "id": "WV-PAYLOAD-BORROWED-01",
+  "title": "Borrowed wrapper carrying a polymorphic Long",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{"type": "Borrowed", "fields": {"value": {"type": "kotlin.Long", "value": 42}}}]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Borrowed\",{\"value\":[\"kotlin.Long\",42]}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siQm9ycm93ZWQiLHsidmFsdWUiOlsia290bGluLkxvbmciLDQyXX1dXX0="},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, then read back and pinned here. OBSERVED: the wrapper's polymorphic inner Long encodes as kotlin.Long and no default field is omitted. Decoding produces a fresh, unconsumed Borrowed wrapper; Borrowed has no equals, so the JVM driver compares it structurally through WireEquality (ncz.3-D6), while a non-JVM driver compares the inner value. Spec 23 says Owned crosses as move-by-serialize; the CONSUME is BridgeEgressCell.deliver's, pinned by OwnershipBoundaryTest, not by this vector. Leased has no vector because it never crosses (WV-NEG-LEASED-AT-ENCODE-01). covers [WIR1-C05] and [WIR1-I01]-[WIR1-I03]."
+}

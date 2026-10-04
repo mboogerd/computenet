@@ -1,0 +1,29 @@
+{
+  "id": "WV-PAYLOAD-LISTDELTA-01",
+  "title": "ListDelta with an add, update and removal",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{
+        "type": "ListDelta",
+        "fields": {
+          "adds": [{"index": 0, "value": {"type": "kotlin.String", "value": "first"}}],
+          "updates": [{"index": 1, "value": {"type": "kotlin.String", "value": "second"}}],
+          "removals": [2]
+        }
+      }]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"ListDelta\",{\"adds\":[{\"index\":0,\"value\":[\"kotlin.String\",\"first\"]}],\"updates\":[{\"index\":1,\"value\":[\"kotlin.String\",\"second\"]}],\"removals\":[2]}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siTGlzdERlbHRhIix7ImFkZHMiOlt7ImluZGV4IjowLCJ2YWx1ZSI6WyJrb3RsaW4uU3RyaW5nIiwiZmlyc3QiXX1dLCJ1cGRhdGVzIjpbeyJpbmRleCI6MSwidmFsdWUiOlsia290bGluLlN0cmluZyIsInNlY29uZCJdfV0sInJlbW92YWxzIjpbMl19XV19"},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, then read back and pinned here. OBSERVED: each IndexedValue is a typed plain object with index/value keys, the polymorphic String values retain their list order, and all three non-default fields are emitted; no map order or default omission is involved. covers [WIR1-C05] and [WIR1-I01]-[WIR1-I03]."
+}

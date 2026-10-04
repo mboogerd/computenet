@@ -1,0 +1,26 @@
+{
+  "id": "WV-PORT-MGMT-LINKTO-01",
+  "title": "RemoteLink.requestLinkTo crosses as a PORT_MANAGEMENT frame",
+  "category": "frames/port-management",
+  "kind": "frame",
+  "covers": ["WIR1-C04", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": 94634193552645876,
+      "methodId": -913197834910771176,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_MANAGEMENT",
+      "args": [
+        {"type": "CellRef", "fields": {"id": "00000000-0000-0000-0000-000000000043"}},
+        {"type": "kotlin.String", "value": "outlet"},
+        {"type": "kotlin.Long", "value": -996426215734216040}
+      ]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":94634193552645876,\"methodId\":-913197834910771176,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_MANAGEMENT\",\"args\":[[\"CellRef\",{\"id\":\"00000000-0000-0000-0000-000000000043\"}],[\"kotlin.String\",\"outlet\"],[\"kotlin.Long\",-996426215734216040]]}", "base64": "eyJjb250cmFjdElkIjo5NDYzNDE5MzU1MjY0NTg3NiwibWV0aG9kSWQiOi05MTMxOTc4MzQ5MTA3NzExNzYsImNlbGxSZWYiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDIifSwicG9ydE5hbWUiOiJpbmxldCIsInR5cGUiOiJQT1JUX01BTkFHRU1FTlQiLCJhcmdzIjpbWyJDZWxsUmVmIix7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQzIn1dLFsia290bGluLlN0cmluZyIsIm91dGxldCJdLFsia290bGluLkxvbmciLC05OTY0MjYyMTU3MzQyMTYwNDBdXX0="},
+  "notes": "Generated from the literal decoded value by ./gradlew :wire:wireVectors -Pwire.vectors.write=true and read back afterward. This names contract RemoteLink (the only @Contract(management = true) surface a PORT_MANAGEMENT frame can carry) and method RemoteLink.requestLinkTo; linkTo/linkFrom take live ports and are not wire-capable. Against WV-PORT-API-SETDELTA-01, the only structural differences are \"type\":\"PORT_MANAGEMENT\", the contract/method ids and the args. OBSERVED: the CellRef, String and Long arguments retain their literal values and integer spelling."
+}

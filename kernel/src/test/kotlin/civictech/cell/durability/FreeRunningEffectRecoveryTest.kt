@@ -39,6 +39,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -88,6 +89,8 @@ class FreeRunningEffectRecoveryTest {
         val firstEntered = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
         val received = ConcurrentLinkedQueue<Int>()
+        val deactivations = AtomicInteger()
+        val deactivated = CountDownLatch(1)
         val inlet = registerPort("inlet", FanInlet.create<IntInlet>())
 
         init {
@@ -103,6 +106,32 @@ class FreeRunningEffectRecoveryTest {
                 }
             })
         }
+
+        override fun onDeactivate(ctx: CellContext) {
+            deactivations.incrementAndGet()
+            deactivated.countDown()
+        }
+    }
+
+    private class PauseOnReplay(private val delegate: Journal = InMemoryJournal()) : Journal by delegate {
+        private val entered = CountDownLatch(1)
+        private val release = CountDownLatch(1)
+
+        override fun replay(): List<ByteArray> {
+            entered.countDown()
+            check(release.await(30, TimeUnit.SECONDS)) {
+                "test did not release journal replay within 30 seconds"
+            }
+            return delegate.replay()
+        }
+
+        fun awaitPaused() {
+            check(entered.await(30, TimeUnit.SECONDS)) {
+                "recovery did not reach journal replay within 30 seconds"
+            }
+        }
+
+        fun releaseReplay() = release.countDown()
     }
 
     private class PauseBeforeFirstFrontier(private val delegate: Journal) : Journal by delegate {
@@ -198,6 +227,30 @@ class FreeRunningEffectRecoveryTest {
         error("recovery record-loop gate did not rise within 30 seconds")
     }
 
+    private fun awaitRecoveryGateOrCompletion(host: ManagedHost, recovery: Future<*>): Boolean {
+        val dataLock = ManagedHost::class.java.getDeclaredField("dataLock").apply { isAccessible = true }.get(host)
+        val loops = ManagedHost::class.java.getDeclaredField("recoveryRecordLoops").apply { isAccessible = true }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (System.nanoTime() < deadline) {
+            if (recovery.isDone) return false
+            if (synchronized(dataLock) { loops.getInt(host) } > 0) return true
+            Thread.onSpinWait()
+        }
+        error("recovery neither raised its record-loop gate nor completed within 30 seconds")
+    }
+
+    private fun awaitSchedulerQueueSize(scheduler: VirtualThreadScheduler, minimum: Int) {
+        val queue = VirtualThreadScheduler::class.java.getDeclaredField("queue")
+            .apply { isAccessible = true }
+            .get(scheduler) as PriorityBlockingQueue<*>
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        while (System.nanoTime() < deadline) {
+            if (queue.size >= minimum) return
+            Thread.onSpinWait()
+        }
+        error("scheduler did not retain $minimum queued task(s) within 30 seconds")
+    }
+
     @Test
     @Timeout(60)
     fun `uncompacted recovery restores an effect frontier before replay can re-fire the sink`() {
@@ -271,6 +324,165 @@ class FreeRunningEffectRecoveryTest {
             recovery.get(30, TimeUnit.SECONDS).awaitApplied(30_000)
         } finally {
             executor.close()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `recovering parent refuses drain before cascading to child hosts`() {
+        val parentScheduler = VirtualThreadScheduler("recovering-parent-drain")
+        val childScheduler = VirtualThreadScheduler("recovering-parent-child")
+        val parent = ManagedHost(scheduler = parentScheduler)
+        val child = ManagedHost(scheduler = childScheduler)
+        parent.managementInlet.call.spawn(child)
+
+        val journal = PauseOnReplay()
+        val executor = Executors.newVirtualThreadPerTaskExecutor()
+        val recovery = executor.submit<Recovery> { parent.recoverFrom(journal) }
+        try {
+            journal.awaitPaused()
+            parent.managementInlet.call.drainHost()
+            parentScheduler.quiescence().await(30_000, "parent drain refusal during recovery")
+            childScheduler.quiescence().await(30_000, "child after refused parent drain")
+
+            child.isDrained shouldBe false
+            parent.isDrained shouldBe false
+        } finally {
+            journal.releaseReplay()
+            recovery.get(30, TimeUnit.SECONDS)
+            executor.close()
+            parentScheduler.shutdown()
+            childScheduler.shutdown()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `recovery cannot overtake a pending host drain phase two`() {
+        val scheduler = VirtualThreadScheduler("recovery-pending-host-drain")
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = scheduler, registry = registry)
+        val sink = BlockingIntSink()
+        host.managementInlet.call.spawn(sink)
+        scheduler.quiescence().await(30_000, "spawn blocking sink")
+        val inlet = (HostedCellProxy.create(sink.ref, registry, IntInletProxy::class.java) as IntInletProxy).inlet.call
+
+        val schedulerBlocked = CountDownLatch(1)
+        val releaseScheduler = CountDownLatch(1)
+        val journal = PauseOnReplay()
+        val executor = Executors.newVirtualThreadPerTaskExecutor()
+        scheduler.submit(-1) {
+            schedulerBlocked.countDown()
+            check(releaseScheduler.await(30, TimeUnit.SECONDS)) {
+                "test did not release the scheduler blocker within 30 seconds"
+            }
+        }
+        try {
+            check(schedulerBlocked.await(30, TimeUnit.SECONDS)) {
+                "scheduler blocker did not start within 30 seconds"
+            }
+            inlet.provide(1)
+            inlet.provide(2)
+            host.managementInlet.call.drainHost()
+            releaseScheduler.countDown()
+            check(sink.firstEntered.await(30, TimeUnit.SECONDS)) {
+                "first accepted delivery did not enter after drain phase one"
+            }
+
+            val recovery = executor.submit<Recovery> { host.recoverFrom(journal) }
+            val overlapped = awaitRecoveryGateOrCompletion(host, recovery)
+            sink.releaseFirst.countDown()
+            if (overlapped) {
+                journal.awaitPaused()
+                check(sink.deactivated.await(30, TimeUnit.SECONDS)) {
+                    "pending drain phase two did not run while recovery was paused"
+                }
+                sink.deactivations.get() shouldBe 0
+            }
+            journal.releaseReplay()
+
+            val failure = shouldThrow<ExecutionException> { recovery.get(30, TimeUnit.SECONDS) }
+            failure.cause.shouldBeInstanceOf<IllegalStateException>()
+            scheduler.quiescence().await(30_000, "host drain after refused recovery")
+            sink.received.toList() shouldBe listOf(1, 2)
+        } finally {
+            releaseScheduler.countDown()
+            sink.releaseFirst.countDown()
+            journal.releaseReplay()
+            executor.close()
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `recovery refuses while an external quiescence fence is in flight`() {
+        val scheduler = VirtualThreadScheduler("recovery-pending-quiescence")
+        val host = ManagedHost(scheduler = scheduler)
+        val schedulerBlocked = CountDownLatch(1)
+        val releaseScheduler = CountDownLatch(1)
+        val executor = Executors.newVirtualThreadPerTaskExecutor()
+        scheduler.submit(-1) {
+            schedulerBlocked.countDown()
+            check(releaseScheduler.await(30, TimeUnit.SECONDS)) {
+                "test did not release the scheduler blocker within 30 seconds"
+            }
+        }
+        try {
+            check(schedulerBlocked.await(30, TimeUnit.SECONDS)) {
+                "scheduler blocker did not start within 30 seconds"
+            }
+            val externalFence = host.quiescence()
+            val recovery = executor.submit<Recovery> { host.recoverFrom(InMemoryJournal()) }
+            awaitRecoveryGateOrCompletion(host, recovery)
+            releaseScheduler.countDown()
+
+            val failure = shouldThrow<ExecutionException> { recovery.get(30, TimeUnit.SECONDS) }
+            failure.cause.shouldBeInstanceOf<IllegalStateException>()
+            externalFence.await(30_000, "external quiescence after refused recovery")
+        } finally {
+            releaseScheduler.countDown()
+            executor.close()
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `recovery refuses while a cell drain barrier is in flight`() {
+        val scheduler = VirtualThreadScheduler("recovery-pending-cell-drain")
+        val host = ManagedHost(scheduler = scheduler)
+        val sink = BlockingIntSink()
+        host.managementInlet.call.spawn(sink)
+        scheduler.quiescence().await(30_000, "spawn cell for draining")
+
+        val schedulerBlocked = CountDownLatch(1)
+        val releaseScheduler = CountDownLatch(1)
+        val executor = Executors.newVirtualThreadPerTaskExecutor()
+        scheduler.submit(-1) {
+            schedulerBlocked.countDown()
+            check(releaseScheduler.await(30, TimeUnit.SECONDS)) {
+                "test did not release the scheduler blocker within 30 seconds"
+            }
+        }
+        try {
+            check(schedulerBlocked.await(30, TimeUnit.SECONDS)) {
+                "scheduler blocker did not start within 30 seconds"
+            }
+            val drain = executor.submit<Unit> { host.drainCellThenDespawn(sink.ref) }
+            awaitSchedulerQueueSize(scheduler, 1)
+            val recovery = executor.submit<Recovery> { host.recoverFrom(InMemoryJournal()) }
+            awaitRecoveryGateOrCompletion(host, recovery)
+            releaseScheduler.countDown()
+
+            val failure = shouldThrow<ExecutionException> { recovery.get(30, TimeUnit.SECONDS) }
+            failure.cause.shouldBeInstanceOf<IllegalStateException>()
+            drain.get(30, TimeUnit.SECONDS)
+            scheduler.quiescence().await(30_000, "cell drain after refused recovery")
+        } finally {
+            releaseScheduler.countDown()
+            executor.close()
+            scheduler.shutdown()
         }
     }
 
