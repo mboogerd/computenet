@@ -126,9 +126,10 @@ relabelled budget stops. The explored nodes' stop-point VoI was at least
 behave identically under these limits. They show nothing for or against 0.01
 under the production round, depth and 180-claim limits, where the VoI stop can
 end a question. 0.01 stays because nothing here supports a different number.
-A run that can discriminate needs production limits, candidates reaching past
-the stop-point median (0.048), and a persisted tape so that candidates can be
-added without new calls.
+A production-representative follow-up should use production limits and persist
+its tape so that candidates can be added without new calls. On this tape, a
+candidate would have to reach past the lowest explored-node VoI (0.048) to
+change explored work.
 
 The old yield stop is **obsolete**: model C removed it in PR #1138. Yield
 history remains diagnostic only, and no yield parameter or stop is

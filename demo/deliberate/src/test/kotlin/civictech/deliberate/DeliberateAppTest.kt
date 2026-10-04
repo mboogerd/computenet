@@ -399,7 +399,7 @@ class DeliberateAppTest {
         assertEquals(Int.MAX_VALUE, Options(emptyArray()).config.maxDepth, "the app sets no depth limit")
         assertTrue("--voi-eps" in Options.USAGE && "--max-claims" in Options.USAGE)
         assertTrue("(${DeliberationEngine.Config.DEFAULT_VOI_EPSILON})" in Options.USAGE, "help prints the VoI default")
-        assertTrue("(${DeliberationEngine.Config.DEFAULT_SATURATION})" in Options.USAGE, "help prints the saturation default")
+        assertTrue("(${DeliberationEngine.Config.DEFAULT_SATURATION})" in Options.USAGE, "help prints the calibrated saturation default")
         // Knobs kept in code only (SPEC §3 defaults), no longer command-line flags.
         for (gone in listOf(
             "--args-per-call", "--max-args-per-side-child", "--round-decay", "--yield-window", "--yield-ratio",
