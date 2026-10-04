@@ -88,10 +88,15 @@ for documentation maintenance.
 - `demograph/` (`:demograph`): charter/vocabulary module for subjective stances
   and personal preferences per actor, and their consolidation into aggregate
   views — insights over the participating actors (DGR, epic `computenet-drz8`);
-  today the module holds exactly one file, `civictech.demograph.Vocabulary`
-  (KDoc-only), and no data structures yet. Same dependency shape as
-  `:identity` — depends on `:kernel` (and, transitively, `:nature`); `:kernel`
-  must not depend on it.
+  the module holds the vocabulary KDoc plus its first concrete family,
+  `civictech.demograph.ranking` (DGR.2, `computenet-drz8.2`):
+  `PairwisePreference`/`Contribution` value types, the `RatingEngine` library
+  (mean-of-signs, Bradley–Terry, Elo, TrueSkill, Glicko, Weng–Lin,
+  `WilsonAggregator`, `Borda`, `MetaRank`), and the `RatingCell` (`@CellBase`)
+  / `MetaRankCell` dataflow cells, which `:demo:backlog-triage` consumes.
+  It applies `buildsrc.convention.ksp-cell` (processor-time `:gen` only).
+  Same dependency shape as `:identity` — depends on `:kernel` (and,
+  transitively, `:nature`); `:kernel` must not depend on it.
   `civictech.demograph.Vocabulary` KDocs the six-term charter vocabulary
   (actor, stance, preference, weight, contestation, aggregation) and its
   boundary line (no need, credit, subsidy, or vote-as-civic-act).
@@ -170,8 +175,9 @@ for documentation maintenance.
     `computenet-07k`).
   - `demo/alignment/` (`:demo:alignment`): team alignment — ideas rated 1-9
     per creator-defined dimension, aggregated by a demo-local
-    `WeightedFusionCell` (ALN1, epic `computenet-6brvy`); one of only two
-    demos that define their own KSP cell.
+    `WeightedFusionCell` (ALN1, epic `computenet-6brvy`); the only demo that
+    defines its own KSP cell (backlog-triage consumes `:demograph`'s
+    `RatingCell`/`MetaRankCell`, computenet-drz8.2).
   - `demo/allocator-observe/` (`:demo:allocator-observe`): spend-log
     observability for the socaity allocator MVP (ALOB, epic
     `computenet-fpml`) — ingests a JSONL spend log via a total per-line
