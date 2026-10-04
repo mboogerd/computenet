@@ -2,13 +2,19 @@ package civictech.runtime
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
+import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.PresenceCountCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.DespawnStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
+import civictech.cell.port.FanInlet
+import civictech.cell.port.LinkFrom
+import civictech.cell.port.registerPort
 import civictech.cell.wire.PortAddress
 import civictech.cell.wire.WireEdgeLink
 import civictech.testkit.awaitUntil
@@ -20,6 +26,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 @Suppress("UNCHECKED_CAST")
@@ -146,6 +153,121 @@ class PlacementRecoveryTest {
             awaitUntil("the recovered post-boot edge carries a later delta", 15_000) {
                 membership(recoveredView) == setOf("before-reboot", "after-reboot")
             }
+        } finally {
+            b2?.close()
+            b1?.close()
+            a.close()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `a bridged producer half catches its consumer up on state written before the edge`() {
+        captured.clear()
+        val base = evolvingBaseSpec()
+        val delta = evolvingDeltaSpec()
+        val manifest = evolvingManifest()
+        val a = Runtime.boot(manifest, "a", base)
+        var b: Runtime.Node? = null
+
+        try {
+            a.open()
+            val address = requireNotNull(a.boundAddress).text
+            b = Runtime.boot(manifest, "b", base, overrides = mapOf("a" to address))
+            b.open()
+
+            (captured.getValue("w") as SetCell<String>).inlet.call.add("before-edge")
+            b.apply(delta)
+            a.apply(delta)
+            val view = captured.getValue("v") as UnionSetCell<String>
+            // The single-host twin's late link replays the producer's state; the
+            // bridged producer half's onLinked catch-up must reach the remote
+            // consumer rather than a surrogate ref ([41-LOC-01]).
+            awaitUntil("the late-bridged consumer receives the producer's prior state", 15_000) {
+                membership(view) == setOf("before-edge")
+            }
+        } finally {
+            b?.close()
+            a.close()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `a surviving edge-keyed consumer does not double count a recovered producer`() {
+        val expected = singleHostPresenceOutcome("before-reboot", "after-reboot")
+        captured.clear()
+        val spec = presenceSpec()
+        val manifest = presenceManifest(recovering = "a", listening = "b")
+        val b = Runtime.boot(manifest, "b", spec)
+        var a1: Runtime.Node? = null
+        var a2: Runtime.Node? = null
+
+        try {
+            b.open()
+            val address = requireNotNull(b.boundAddress).text
+            a1 = Runtime.boot(manifest, "a", spec, overrides = mapOf("b" to address))
+            a1.open()
+
+            (captured.getValue("w") as SetCell<String>).inlet.call.add("before-reboot")
+            val view = captured.getValue("v") as CountFoldCell
+            awaitUntil("the surviving consumer receives the pre-reboot value", 15_000) {
+                view.counts == mapOf("before-reboot" to 1)
+            }
+
+            a1.close()
+            a2 = Runtime.boot(manifest, "a", spec, overrides = mapOf("b" to address))
+            assertTrue(a2.recovered)
+            a2.open()
+
+            (captured.getValue("w") as SetCell<String>).inlet.call.add("after-reboot")
+            awaitUntil("the surviving consumer receives through the recovered producer", 15_000) {
+                view.counts.keys == expected.keys
+            }
+            assertEquals(expected, view.counts)
+        } finally {
+            a2?.close()
+            a1?.close()
+            b.close()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `a recovered edge-keyed consumer observes its surviving producer exactly once`() {
+        val expected = singleHostPresenceOutcome("before-reboot", "after-reboot")
+        captured.clear()
+        val spec = presenceSpec()
+        val manifest = presenceManifest(recovering = "b", listening = "a")
+        val a = Runtime.boot(manifest, "a", spec)
+        var b1: Runtime.Node? = null
+        var b2: Runtime.Node? = null
+
+        try {
+            a.open()
+            val address = requireNotNull(a.boundAddress).text
+            b1 = Runtime.boot(manifest, "b", spec, overrides = mapOf("a" to address))
+            b1.open()
+
+            val writer = captured.getValue("w") as SetCell<String>
+            writer.inlet.call.add("before-reboot")
+            val firstView = captured.getValue("v") as CountFoldCell
+            awaitUntil("the first consumer receives the pre-reboot value", 15_000) {
+                firstView.counts == mapOf("before-reboot" to 1)
+            }
+
+            b1.close()
+            b2 = Runtime.boot(manifest, "b", spec, overrides = mapOf("a" to address))
+            assertTrue(b2.recovered)
+            b2.open()
+            val recoveredPresence = captured.getValue("p") as PresenceCountCell<String>
+            val recoveredView = observeCounts(recoveredPresence)
+
+            writer.inlet.call.add("after-reboot")
+            awaitUntil("the recovered consumer receives from the surviving producer", 15_000) {
+                recoveredView.counts.keys == expected.keys
+            }
+            assertEquals(expected, recoveredView.counts)
         } finally {
             b2?.close()
             b1?.close()
@@ -286,8 +408,55 @@ class PlacementRecoveryTest {
         placements = mapOf("source" to "a", "sink" to "b"),
     )
 
+    private fun singleHostPresenceOutcome(vararg values: String): Map<String, Int> {
+        captured.clear()
+        val manifest = Manifest(
+            nodes = mapOf("only" to NodeSpec(transport = "ws", peerName = "only")),
+            placements = mapOf("source" to "only", "sink" to "only"),
+        )
+        return Runtime.boot(manifest, "only", presenceSpec()).use {
+            val writer = captured.getValue("w") as SetCell<String>
+            val view = captured.getValue("v") as CountFoldCell
+            values.forEach(writer.inlet.call::add)
+            awaitUntil("the single-host presence fold reaches its expected keys", 15_000) {
+                view.counts.keys == values.toSet()
+            }
+            view.counts
+        }
+    }
+
+    private fun presenceSpec(): GraphSpec = GraphSpec(
+        listOf(
+            SpawnStep("w", SetFactory("w"), placement = "source"),
+            SpawnStep("p", PresenceFactory("p"), placement = "sink"),
+            SpawnStep("v", CountFoldFactory("v"), placement = "sink"),
+            ConnectStep("w", "outlet", "p", "inlet"),
+            ConnectStep("p", "outlet", "v", "inlet"),
+        ),
+    )
+
+    private fun presenceManifest(recovering: String, listening: String): Manifest = Manifest(
+        nodes = listOf("a", "b").associateWith { name ->
+            NodeSpec(
+                transport = "ws",
+                listen = if (name == listening) "ws://127.0.0.1:0" else null,
+                dial = if (name == listening) emptyList() else listOf(listening),
+                peerName = name,
+                journalDir = if (name == recovering) tempDir.resolve("presence-$name").toString() else null,
+                journalTopology = name == recovering,
+            )
+        },
+        placements = mapOf("source" to "a", "sink" to "b"),
+    )
+
     private fun membership(cell: UnionSetCell<String>): Set<String> =
         (cell.snapshot() as Map<String, *>).keys
+
+    @Suppress("UNCHECKED_CAST")
+    private fun observeCounts(cell: PresenceCountCell<String>): CountFoldCell =
+        CountFoldCell(CellRef(UUID.randomUUID())).also { view ->
+            cell.outlet.linkTo(view.inlet as LinkFrom<Propagate<MapDelta<String, Int>>>)
+        }
 
     private data class SetFactory(private val handle: String) : CellFactory {
         override fun create(ref: CellRef): SetCell<String> =
@@ -299,9 +468,40 @@ class PlacementRecoveryTest {
             UnionSetCell<String>(ref).also { captured[handle] = it }
     }
 
+    private data class PresenceFactory(private val handle: String) : CellFactory {
+        override fun create(ref: CellRef): PresenceCountCell<String> =
+            PresenceCountCell<String>(ref).also { captured[handle] = it }
+    }
+
+    private data class CountFoldFactory(private val handle: String) : CellFactory {
+        override fun create(ref: CellRef): CountFoldCell =
+            CountFoldCell(ref).also { captured[handle] = it }
+    }
+
     private data class FoldFactory(private val handle: String) : CellFactory {
         override fun create(ref: CellRef): PlacementFixture.SetFoldCell =
             PlacementFixture.SetFoldCell(ref).also { captured[handle] = it }
+    }
+
+    private class CountFoldCell(override val ref: CellRef) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<String, Int>>>())
+
+        @Volatile
+        var counts: Map<String, Int> = emptyMap()
+            private set
+
+        init {
+            inlet.serve(object : Propagate<MapDelta<String, Int>> {
+                override fun propagate(value: MapDelta<String, Int>) {
+                    synchronized(this@CountFoldCell) {
+                        counts = counts.toMutableMap().apply {
+                            putAll(value.puts)
+                            value.removals.forEach(::remove)
+                        }
+                    }
+                }
+            })
+        }
     }
 
     companion object {

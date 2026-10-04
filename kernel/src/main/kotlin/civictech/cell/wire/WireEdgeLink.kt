@@ -8,6 +8,7 @@ import civictech.cell.link.Linked
 import civictech.cell.link.ProtocolBridge
 import civictech.cell.link.handshake
 import civictech.cell.protocol.EdgeClose
+import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.Port
 import civictech.cell.port.PortRef
 import civictech.cell.protocol.ProtocolId
@@ -61,12 +62,22 @@ class WireEdgeLink(
      * handshake reconciles the real cross-host vector; DEFAULT ⇒ zero wire bytes.
      */
     val natures: NatureVector = NatureVector.DEFAULT,
+    /**
+     * Recovery reinstalls one physical half of an already-open logical edge.
+     * The producer half must still run the ordinary handshake locally, but its
+     * `EdgeOpen` is not a topology change and must not reach the surviving
+     * consumer (spec 13 [13-REBIND-01], 93 I-13).
+     */
+    private val suppressEdgeOpen: Boolean = false,
 ) : Link {
     @Volatile private var active = true
     private val unlinkListeners = mutableListOf<(Link) -> Unit>()
 
     override val protocolBridge: ProtocolBridge? = sink?.let { s ->
         ProtocolBridge { protocolId, message, upstream ->
+            if (suppressEdgeOpen && protocolId == Protocols.TopologyOrder && message == EdgeOpen) {
+                return@ProtocolBridge
+            }
             val target = if (upstream) fromAddr else toAddr
             s.deliver(
                 HostedPortInvocation(
@@ -84,7 +95,7 @@ class WireEdgeLink(
 
     /** Attaches a working reply [sink] and negotiated [capabilities] to a bare, decode-reconstructed link. */
     fun withBridge(sink: InvocationSink, capabilities: Set<ProtocolId>): WireEdgeLink =
-        WireEdgeLink(id, from, to, fromAddr, toAddr, capabilities, sink, fromPort, toPort, natures)
+        WireEdgeLink(id, from, to, fromAddr, toAddr, capabilities, sink, fromPort, toPort, natures, suppressEdgeOpen)
 
     override fun onUnlink(listener: (Link) -> Unit) {
         if (active) unlinkListeners += listener else listener(this)
@@ -120,6 +131,12 @@ fun defaultProtocolCapabilities(): Set<ProtocolId> =
 private enum class BridgeSide { PRODUCER, CONSUMER }
 
 /**
+ * Whether a bridge call creates a logical edge or reconstructs this process's
+ * physical half of an edge that stayed logically open while the node rebooted.
+ */
+enum class BridgeInstallMode { OPEN, RECOVERED }
+
+/**
  * computenet-1mbp: the identity under which two bridged [WireEdgeLink]s
  * describe ONE logical half-edge — the `PortAddress` pair, role and
  * [BridgeSide], stable across repeated calls to the SAME side, unlike the
@@ -150,6 +167,18 @@ private val activeBridgedLinks = ConcurrentHashMap<BridgeSlot, WireEdgeLink>()
 private fun registerBridgedLink(slot: BridgeSlot, link: WireEdgeLink) {
     activeBridgedLinks[slot] = link
     link.onUnlink { activeBridgedLinks.remove(slot, link) }
+}
+
+/**
+ * Replaces only the rebooted process's stale half-link bookkeeping. Unlike an
+ * explicit re-bridge, recovery is not a rebind and emits no remote [EdgeClose]
+ * or second [EdgeOpen]. The old local record is still unlinked so its listeners
+ * and port bookkeeping cannot leak into the recovered cell.
+ */
+private fun recoverBridgedLink(slot: BridgeSlot, link: WireEdgeLink) {
+    val previous = activeBridgedLinks.put(slot, link)
+    link.onUnlink { activeBridgedLinks.remove(slot, link) }
+    previous?.unlink()
 }
 
 /**
@@ -191,11 +220,48 @@ fun <T> T.bridgeTo(
      * same typed [civictech.nature.NatureMismatch] the consumer side reaches.
      */
     counterpart: NatureVector = NatureVector.DEFAULT,
+): LinkResult where T : Linked, T : Port = bridgeToInstalling(
+    selfAddr,
+    toAddr,
+    sink,
+    capabilities,
+    counterpart,
+    PortRef.generate(toAddr.cell),
+    BridgeInstallMode.OPEN,
+)
+
+/** Additive placed-runtime overload; the original bridge signature stays binary-compatible. */
+fun <T> T.bridgeTo(
+    selfAddr: PortAddress,
+    toAddr: PortAddress,
+    sink: InvocationSink,
+    capabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
+    counterpart: NatureVector = NatureVector.DEFAULT,
+    counterpartRef: PortRef,
+    installMode: BridgeInstallMode,
+): LinkResult where T : Linked, T : Port = bridgeToInstalling(
+    selfAddr,
+    toAddr,
+    sink,
+    capabilities,
+    counterpart,
+    counterpartRef,
+    installMode,
+)
+
+private fun <T> T.bridgeToInstalling(
+    selfAddr: PortAddress,
+    toAddr: PortAddress,
+    sink: InvocationSink,
+    capabilities: Set<ProtocolId>,
+    counterpart: NatureVector,
+    counterpartRef: PortRef,
+    installMode: BridgeInstallMode,
 ): LinkResult where T : Linked, T : Port {
     val link = WireEdgeLink(
         id = UUID.randomUUID(),
         from = ref,
-        to = PortRef.generate(toAddr.cell),
+        to = counterpartRef,
         fromAddr = selfAddr,
         toAddr = toAddr,
         protocolCapabilities = capabilities,
@@ -203,6 +269,7 @@ fun <T> T.bridgeTo(
         fromPort = this,
         // this producer's own natures ride the EdgeOpen frame to the consumer
         natures = natures,
+        suppressEdgeOpen = installMode == BridgeInstallMode.RECOVERED,
     )
     // Route through the shared handshake (C-13): source-side onLink admission
     // + onLinked catch-up hooks run, and EdgeOpen is fired downstream over the
@@ -213,8 +280,12 @@ fun <T> T.bridgeTo(
         // pair supersedes the first — closed only now that this one is
         // admitted, so a refusal above never disturbs the incumbent.
         val slot = BridgeSlot(selfAddr, toAddr, LinkRole.Consume, BridgeSide.PRODUCER)
-        supersedeBridgedLink(slot, downstream = true)
-        registerBridgedLink(slot, link)
+        if (installMode == BridgeInstallMode.RECOVERED) {
+            recoverBridgedLink(slot, link)
+        } else {
+            supersedeBridgedLink(slot, downstream = true)
+            registerBridgedLink(slot, link)
+        }
     }
     return result
 }
@@ -243,10 +314,52 @@ fun <T> T.bridgeFrom(
      * or today's caller ⇒ today's behavior verbatim (additive default).
      */
     counterpart: NatureVector = NatureVector.DEFAULT,
+): LinkResult where T : Linked, T : Port = bridgeFromInstalling(
+    selfAddr,
+    fromAddr,
+    sink,
+    capabilities,
+    counterpart,
+    BridgeInstallMode.OPEN,
+)
+
+/** Additive recovery overload; the original bridge signature stays binary-compatible. */
+fun <T> T.bridgeFrom(
+    selfAddr: PortAddress,
+    fromAddr: PortAddress,
+    sink: InvocationSink,
+    capabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
+    counterpart: NatureVector = NatureVector.DEFAULT,
+    installMode: BridgeInstallMode,
+): LinkResult where T : Linked, T : Port = bridgeFromInstalling(
+    selfAddr,
+    fromAddr,
+    sink,
+    capabilities,
+    counterpart,
+    installMode,
+)
+
+private fun <T> T.bridgeFromInstalling(
+    selfAddr: PortAddress,
+    fromAddr: PortAddress,
+    sink: InvocationSink,
+    capabilities: Set<ProtocolId>,
+    counterpart: NatureVector,
+    installMode: BridgeInstallMode,
 ): LinkResult where T : Linked, T : Port {
     val link = WireEdgeLink(
         id = UUID.randomUUID(),
-        from = PortRef.generate(fromAddr.cell),
+        // A recovered consumer has no fresh remote EdgeOpen from which to
+        // relearn the producer's replay-stable port identity. Re-derive the
+        // identity live data carries so edge-keyed cells can attribute it to
+        // the locally reconstructed open lane. Ordinary calls retain their
+        // per-call surrogate (computenet-5nw9).
+        from = if (installMode == BridgeInstallMode.RECOVERED) {
+            PortRef.of(fromAddr.cell, fromAddr.port)
+        } else {
+            PortRef.generate(fromAddr.cell)
+        },
         to = ref,
         fromAddr = fromAddr,
         toAddr = selfAddr,
@@ -266,8 +379,20 @@ fun <T> T.bridgeFrom(
         // pair supersedes the first — closed only now that this one is
         // admitted, so a refusal above never disturbs the incumbent.
         val slot = BridgeSlot(fromAddr, selfAddr, LinkRole.Consume, BridgeSide.CONSUMER)
-        supersedeBridgedLink(slot, downstream = false)
-        registerBridgedLink(slot, link)
+        if (installMode == BridgeInstallMode.RECOVERED) {
+            recoverBridgedLink(slot, link)
+            // The surviving producer's logical edge stayed open, but this
+            // rebuilt consumer has fresh volatile edge-keyed bookkeeping.
+            // Reconstruct that one local observation without a wire event.
+            // Runtime requests producer state once its remote location is
+            // re-announced: recovery replay ran before this physical half
+            // existed, so edge-keyed cells could not attribute those replayed
+            // frames to an open lane.
+            Protocols.sendDownstream(link, Protocols.TopologyOrder, EdgeOpen)
+        } else {
+            supersedeBridgedLink(slot, downstream = false)
+            registerBridgedLink(slot, link)
+        }
     }
     return result
 }
