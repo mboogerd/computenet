@@ -175,6 +175,31 @@ class PlacementPlanTest {
     }
 
     @Test
+    fun `null-selector replica linked to placed handle is refused identically on every node`() {
+        val manifest = threeNodeManifest("b" to "b")
+        val spawns = listOf(
+            spawn("replica", replicated = true),
+            spawn("sink", placement = "b"),
+        )
+        val connect = ConnectStep("replica", "outlet", "sink", "inlet")
+        val expected =
+            "link replica.outlet->sink.inlet: replicated handle 'replica' has no single remote ref"
+
+        val messages = listOf("a", "b", "c").map { node ->
+            val fullSpec = runCatching {
+                PlacementPlan.of(GraphSpec(spawns + connect), manifest, node)
+            }.exceptionOrNull()?.message
+            val base = requireNotNull(PlacementPlan.of(GraphSpec(spawns), manifest, node))
+            val delta = runCatching {
+                PlacementPlan.of(GraphSpec(listOf(connect)), manifest, node, base)
+            }.exceptionOrNull()?.message
+            fullSpec to delta
+        }
+
+        assertEquals(List(3) { expected to expected }, messages)
+    }
+
+    @Test
     fun `cross-node links refuse replicated and family endpoints`() {
         val replicatedFailure = assertThrows<IllegalStateException> {
             PlacementPlan.of(

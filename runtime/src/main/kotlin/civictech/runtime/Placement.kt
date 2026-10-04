@@ -190,7 +190,6 @@ class PlacementPlan private constructor(
                         val crossesNodes =
                             assignedNodes.getValue(step.from) != assignedNodes.getValue(step.to)
                         when {
-                            fromLocal && toLocal -> localSteps += step
                             crossesNodes -> {
                                 val key = edgeKey(step.from, step.outlet, step.to, step.inlet)
                                 if (step.options != LinkOptions.DEFAULT) {
@@ -203,6 +202,7 @@ class PlacementPlan private constructor(
                                 if (toLocal) consumerHalves += edge
                                 liveCrossEdges += edge
                             }
+                            fromLocal && toLocal -> localSteps += step
                         }
                     }
 
