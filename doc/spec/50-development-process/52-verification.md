@@ -215,16 +215,17 @@ W2.6, closes C-9)*: the `Effectful` marker connects to durability. [52-EFF-01] A
 `Effectful` sink journals a **processed-frontier** — per inlet, the last
 applied `(sourceId, counter)` — so both journal replay and post-recovery
 live re-delivery are *deduped* (dropped as already-processed) rather than
-re-acted. Divergence, recorded: the I-7 resolution's linchpin was replay
-with outlets NoOp-served (this section's suppression mechanism) so recovery
-never re-transmits; the landed M10 design instead replays intake frames
-with emission un-suppressed by default (replay identity is per frame: a
-replayed frame and its same-journal derivations are not re-appended, while
-live traffic accepted during recovery is journaled), made safe for *state*
-by replay-stable identity + idempotent
-merges + catch-up dedup, and safe for *effects* specifically by the
-processed-frontier check at the `Effectful` inlet — the frontier is the
-decided closure for that case.
+re-acted. Under amended 93 I-7 R4, the landed M10 design replays intake frames
+through the ordinary decode/intake path with emission un-suppressed (replay
+identity is per frame: a replayed frame and its same-journal derivations are
+not re-appended, while live traffic accepted during recovery is journaled),
+PN-2 baseline-marks contextual replay frames, and `[24-DUR-05]`, `[24-DUR-07]`,
+and `[24-DUR-08]` govern their delivery at an `Effectful` inlet. Replay-stable
+identity + idempotent merges + catch-up dedup make replay safe for *state*;
+the processed-frontier and discharged-baseline set govern replayed *effects*.
+Topology-journal checkpoint restoration also re-handshakes every folded link,
+creating fresh catch-up baseline positions; whether that re-fires an
+already-acted `Effectful` sink remains open under `computenet-n2jwi`.
 
 ⚠ GAP (G-59): the M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells — wall-clock/random logic,

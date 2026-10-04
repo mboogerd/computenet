@@ -1309,7 +1309,11 @@ each applied `GraphSpec` delta is written ahead as a topology record, whose
 concrete refs are re-applied in journal order before the frames that follow.
 Topology recovery uses preserve-refs mode, so links bind to the instances the
 journal already names, and checkpoint compaction carries the live topology fold
-alongside the `Stateful` snapshots.
+alongside the `Stateful` snapshots. After checkpoint state is restored,
+`ApplyContext.checkpointRestored()` unlinks and re-connects every folded link so
+ordinary `onLinked` catch-up observes that restored state. A compacted checkpoint
+with no frame tail rebuilds volatile downstream state through this catch-up; an
+uncompacted tail rebuilds it through ordinary replay emission.
 
 An external input can participate in the same recovery boundary through a
 durable-input record (computenet-12qyp). `ManagedHost.durableInput(cellRef,
@@ -1325,11 +1329,16 @@ loss or duplication into the fed cell. This is a guarantee about input into
 the graph, not effects out of it; the external-sink at-least-once window in
 `[24-DUR-09]` is unchanged.
 
-**Boundary of the landed mechanism** (decided in 93 I-7): un-suppressed
-replay through the ordinary decode path is safe exactly for the
-replay-stable idempotent vocabulary above — ref-derived identities,
-idempotent merges, and anti-entropy/catch-up dedup absorb the
-re-emissions. For `Effectful` sinks *(G-59 resolved, W2.6, closes C-9)*: an
+**Boundary of the landed mechanism** (decided by amended 93 I-7 R4):
+un-suppressed replay through the ordinary decode path is safe exactly for
+the replay-stable idempotent vocabulary above — ref-derived identities,
+idempotent merges, and anti-entropy/catch-up dedup absorb the re-emissions.
+Per-frame replay provenance prevents a replayed frame and its same-journal
+derivations from being appended again, while concurrent live traffic remains
+journaled. PN-2 also baseline-marks every replayed frame that already carries a
+`MessageContext`, which is why contextual replay reaches `[24-DUR-05]`,
+`[24-DUR-07]`, and `[24-DUR-08]` rather than being treated as a live wave. For
+`Effectful` sinks *(G-59 resolved, W2.6, closes C-9)*: an
 `Effectful` inlet journals a processed-frontier — the last applied
 `(sourceId, counter)` per inlet — consulted by both `recoverFrom` replay and
 post-recovery live delivery; an invocation at or behind the frontier is
@@ -1522,9 +1531,12 @@ its intake coverage: 93 I-7 journals only `PORT_API` data plus topology events,
 while the shipped journal appends every intake frame (management included).
 Topology records are now the journaled source of truth: recovery re-applies
 their concrete refs and links before frame replay, and checkpoint compaction
-carries the live topology fold. The remaining recorded divergence is
-un-suppressed replay (93 I-7 R4), which is safe for the replay-stable,
-idempotent vocabulary described above.
+carries the live topology fold. After checkpoint restore, recovery re-handshakes
+every folded link so ordinary catch-up observes restored state. Emission follows
+amended 93 I-7 R4: un-suppressed replay is safe for the replay-stable,
+idempotent vocabulary described above, with PN-2 baseline marking and
+`[24-DUR-05..09]` governing `Effectful` sinks. The effect of the re-handshake's
+fresh catch-up baselines is tracked by `computenet-n2jwi`.
 
 ⚠ GAP (G-59): The M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells: wall-clock/random logic,
