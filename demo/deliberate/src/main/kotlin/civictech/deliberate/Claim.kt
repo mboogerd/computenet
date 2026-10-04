@@ -40,6 +40,8 @@ internal class Claim(
      */
     val structureText: String = text
     var status = Status.QUEUED
+    /** Why [status] is [Status.DONE]; null for every other status. */
+    var reason: Reason? = null
     var override = Override.AUTO
     var plausibility: Double? = null
     var relevance: Double? = null
@@ -102,14 +104,11 @@ internal class Claim(
     /** Texts from the root down to (excluding) this claim. */
     fun path(): List<String> = generateSequence(parent) { it.parent }.map { it.text }.toList().asReversed()
 
-    /**
-     * What [ExplorationPolicy] sees of it; [sensitivity] (model C) is the
-     * sensitivity layer's d root / d this node, which only the graph knows.
-     */
-    fun view(sensitivity: Double? = null) = ClaimView(
+    /** What [ExplorationPolicy] sees of it; exact VoI is supplied by the graph. */
+    fun view(valueOfInformation: Double? = null) = ClaimView(
         isRoot = parent == null, isLink = isLink, depth = depth, status = status, override = override,
         forceRound = forceRound, rounds = rounds, roundLimit = roundLimit, reach = reach, contribution = contribution,
-        sensitivity = sensitivity, plausibility = if (isLink) argument!!.edge?.strength else plausibility,
+        valueOfInformation = valueOfInformation, plausibility = if (isLink) argument!!.edge?.strength else plausibility,
         pros = countOf(Polarity.SUPPORT), cons = countOf(Polarity.ATTACK), jevSaturated = saturated.toSet(),
         waiting = waiting, rewriteInFlight = rewriteInFlight,
     )

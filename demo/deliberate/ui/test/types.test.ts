@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type {
-  BackendCostDto, CostDto, FramingDto, GraphDto, NodeDto, Override, PositionDto, QuestionDto, Status,
+  BackendCostDto, CostDto, FramingDto, GraphDto, NodeDto, Override, PositionDto, QuestionDto, Reason, Status,
 } from '../src/api/types';
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -58,8 +58,8 @@ type ExpectedBackendCostDto = {
   note?: string;
 };
 type ExpectedStatus =
-  | 'QUEUED' | 'JUDGING' | 'EXPLORING' | 'SATURATED' | 'ROUND_LIMIT'
-  | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'DIMINISHING' | 'STOPPED' | 'FAILED' | 'FRAMED';
+  | 'QUEUED' | 'JUDGING' | 'EXPLORING' | 'FRAMED' | 'DONE' | 'STOPPED' | 'FAILED';
+type ExpectedReason = 'SATURATED' | 'ROUND_LIMIT' | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'DIMINISHING';
 type ExpectedOverride = 'AUTO' | 'EXPAND' | 'STOP';
 type ExpectedNodeDto = {
   ref: string;
@@ -70,9 +70,12 @@ type ExpectedNodeDto = {
   consensus?: number;
   spreadLow?: number;
   spreadHigh?: number;
+  argumentsFirstCredences?: Record<string, number>;
+  argumentsFirstConsensus?: number;
   text?: string;
   depth?: number;
   status?: Status;
+  reason?: Reason;
   override?: Override;
   activity?: 'exploring' | 'judging' | 'assessing';
   proposer?: string;
@@ -103,6 +106,7 @@ type ExpectedNodeDto = {
 const graphMatches: Equal<GraphDto, ExpectedGraphDto> = true;
 const questionMatches: Equal<QuestionDto, ExpectedQuestionDto> = true;
 const statusMatches: Equal<Status, ExpectedStatus> = true;
+const reasonMatches: Equal<Reason, ExpectedReason> = true;
 const overrideMatches: Equal<Override, ExpectedOverride> = true;
 const nodeMatches: Equal<NodeDto, ExpectedNodeDto> = true;
 const costMatches: Equal<CostDto, ExpectedCostDto> = true;
@@ -112,7 +116,7 @@ const positionMatches: Equal<PositionDto, ExpectedPositionDto> = true;
 
 it('mirrors the Dto.kt wire contract field for field', () => {
   expect([
-    graphMatches, questionMatches, statusMatches, overrideMatches, nodeMatches, costMatches, backendCostMatches,
+    graphMatches, questionMatches, statusMatches, reasonMatches, overrideMatches, nodeMatches, costMatches, backendCostMatches,
     framingMatches, positionMatches,
-  ]).toEqual([true, true, true, true, true, true, true, true, true]);
+  ]).toEqual([true, true, true, true, true, true, true, true, true, true]);
 });

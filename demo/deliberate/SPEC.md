@@ -41,13 +41,13 @@ names that model.)
 - **Contribution** — reach × relevance × quality (EXP-05); 1 for the root.
   Shown for reference only: since model C it no longer orders exploration or
   gates a claim (see **Value of information**).
-- **Sensitivity** — d root / d claim (or, for a link, d root / d its edge),
-  computed top-down by cells of their own, separate from the credence graph
-  (model C, §3 "Sensitivity and value of information"): how much settling
-  this node could still move the root's answer.
-- **Value of information (VoI)** — |sensitivity| × 4·p·(1 − p), `p` the
-  claim's plausibility (a link's its own edge strength; model C). It is a
-  claim's priority in the exploration queue and, once it falls below
+- **Sway** — the signed exact secant `R(node=1) − R(node=0)` shown through the
+  wire-compatible `NodeDto.sensitivity` field: which way, and by how much, an
+  answer root can move when the node resolves.
+- **Value of information (VoI)** — the exact, propagated-credence-weighted
+  expected root movement from resolving a claim or link (§3 "Exact value of
+  information"). It is a claim's priority in the exploration queue and, once
+  it falls below
   `--voi-eps` for every remaining node in a question, the question's stop
   condition — replacing contribution-based ordering, `minInfluence`,
   `maxDepth` as a stop rule and the yield stop (below).
@@ -62,13 +62,11 @@ names that model.)
 
 - **CRED-01** Every claim receives a Jev *plausibility* judgment — a Score over
   five ordered levels (almost certainly false … almost certainly true) mapped
-  linearly to [0,1] — judged on a state holding only `root_question` and
-  `claim`: no path, parent, direction or date, and not its arguments (the
-  path biases the judgment towards the claim's role in the argument; evidence
-  in `CALIBRATION.md`). The instruction tells Jev the
-  question only names the topic, and not to reward or penalise the claim for
-  the answer it favours. It is applied as the stance of user `jev` on
-  that claim. An argument is judged the moment it is attached: plausibility
+  linearly to [0,1] — judged on a state holding only `claim`: no root question,
+  path, parent, direction or date, and not its arguments (question context
+  biases the judgment of a reusable claim; evidence in `CALIBRATION.md`). It
+  is applied as the stance of user `jev` on that claim. An argument is judged
+  the moment it is attached: plausibility
   in its own request, in parallel with one request asking its CRED-02
   strength and EXP-05 quality and relevance (independent questions over the
   argument's full state); the root, or an argument whose assessment failed, is
@@ -78,7 +76,9 @@ names that model.)
   maps the plausibility to `Judge.OUTSIDE_KNOWLEDGE` (0.5) whatever the score
   says; an unrecognised answer fails the call. No Jev request carries a
   current date, on any judgment kind: the judgment rests on Jev's own
-  knowledge (a date moved the judgment of claims about recent events).
+  knowledge (a date moved the judgment of claims about recent events). The
+  stance is journaled input (DUR-01): restoring a claim keeps the plausibility
+  recorded by an older request and does not ask Jev to reinterpret it.
 - **CRED-02** Every edge receives a Jev *relation strength* judgment — a Score:
   "if the child claim were true, how strongly would it bear on the parent in
   the stated direction" (irrelevant … decisive), mapped to [0,1]. Applied as the
@@ -136,18 +136,23 @@ names that model.)
   consensus is a pure function of the vector, so computing it where the
   vector is computed is the simplest derived form — no second cell per node,
   no second hop, no second fold. The snapshot only reads the hub.
-- **Model D — the neutral-prior vector.** A question root's `ClaimNode` also
-  evaluates every layer with its base shrunk towards a neutral prior before
-  the arguments are weighed: `base' = LayerSet.NEUTRAL_PRIOR +
+- **Model D — the arguments-first neutral-prior vector.** Every claim and edge
+  cell also evaluates every layer with its local base shrunk towards a neutral
+  prior before its direct arguments are weighed: `base' = LayerSet.NEUTRAL_PRIOR +
   LayerSet.WEAK_PRIOR_WEIGHT * (base - LayerSet.NEUTRAL_PRIOR)`, with
   `NEUTRAL_PRIOR = 0.5` and `WEAK_PRIOR_WEIGHT = 0.0` — a fully neutral base,
   the smallest choice (a weak, non-zero prior would be `0 < w < 1`). This
-  rides the root's own `Credence` emission as an optional `neutral` vector,
-  computed the moment the root's ordinary vector is (same stances, same
-  attacks and supports); every other node's `Credence.neutral` is null. The
-  root's ordinary credence is unaffected — `priorWeight == 1.0` leaves the
-  base untouched — so Jev's plausibility stays the root's stance and prior as
-  before.
+  rides the node's own `Credence` emission as `neutral`, computed the moment
+  its ordinary vector is, from the same stances and the same ordinary attack
+  and support inputs. A node with no incoming arguments instead copies its
+  ordinary vector: no argument means no invented neutral standing. A question
+  or reading root's `neutralCredence` keeps its earlier value, the neutral ½
+  evaluation, until the root has an argument. The
+  arguments-first vector never feeds an influence, queue, verdict
+  or another layer; `priorWeight == 1.0` leaves every ordinary vector exactly
+  as before. The cached prior-dominance measurement in `CALIBRATION.md` is
+  design evidence for exposing this diagnostic view, not evidence that it
+  improves answer accuracy.
 
 ## 3. Exploration (requirements EXP-*)
 
@@ -247,22 +252,23 @@ names that model.)
   bears on its parent in the stated direction, not a restatement, off-topic or
   a rhetorical question?"). Its **contribution** is
   `reach × relevance × quality`, shown for reference only — since model C
-  (§3 "Sensitivity and value of information") it does not gate or order
-  exploration; there is no contribution floor and no `PRUNED`-by-contribution
-  outcome (the `minInfluence` flag is removed). An undercutter's reach is
+  (§3 "Exact value of information") it does not gate or order
+  exploration; there is no contribution floor and no `DONE`/`PRUNED`
+  outcome from contribution (the `minInfluence` flag is removed). An undercutter's reach is
   `reach(parent) × strength(its edge) × strength(the undercut edge)`. Quality
   carries no canonical-form factor: canonical form is asked of the proposers
   only (EXP-02; why, in `CALIBRATION.md`). If the assessment fails, strength
   0.5 is used and relevance and quality count as 1. The root is always
   expanded. `maxDepth` survives only as an internal engine bound (unbounded by
   default) that tests use to keep a fake-driven tree small; it has no CLI flag
-  and a `DEPTH_LIMIT` claim beyond it does not otherwise arise in practice.
+  and a claim finished with reason `DEPTH_LIMIT` does not otherwise arise in
+  practice.
 - **EXP-06** A global `maxClaims` budget (default 180 per question) is enforced:
   no argument is attached once the tree holds that many claims. The budget is
   spent in exploration order (below), so it goes to the highest
   value-of-information claims first. Gates run in the order links-off → depth
   → budget → value of information (below); a claim that meets the cap ends
-  `BUDGET` whether or not it already ran a round — `rounds` still tells the
+  `DONE` with reason `BUDGET` whether or not it already ran a round — `rounds` still tells the
   two cases apart. A question at its budget reports `stoppedBy = "budget"`. The budget is a
   hard ceiling that stands beside the value-of-information stop below; it is
   checked first, so it wins over a claim whose value of information is still
@@ -293,38 +299,36 @@ names that model.)
   `--yield-stop` flag (removed); the yields remain durable (DUR-02) purely as
   a diagnostic.
 
-### Sensitivity and value of information (model C)
+### Exact value of information
 
-Alongside the credence graph (§2), a second, one-way graph of cells computes
-**sensitivity**: how much the root's answer would move per unit change of
-each node's credence, `d root / d node`, per layer. The root's cell emits 1
-(per layer); every other node's cell folds the same stances and incoming
-influences its credence cell folds, and for each incoming edge sends (its own
-sensitivity × the local partial derivative of its credence with respect to
-that edge's strength or its source's credence) to that edge's cell, which
-sums what arrives from every path back to the source claim (the chain rule;
-a deliberation tree has exactly one path per node). The local partials are
-central finite differences of the layer's own semantics at the node's current
-inputs. No sensitivity cell feeds a credence cell: the credence graph gains no
-new input and no cycle, and sensitivity is a pure function of the replayed
-structure and stances — like credence, it is **derived, never journaled**
-(DUR-01); a restart recomputes it from scratch. A node's scalar sensitivity
-(used below) is `d headline(root) / d node`, via the same per-layer weights
-`headlineOf` (CRED-05) uses.
+Value of information is a pure, on-demand two-point re-evaluation of the
+credence graph snapshot. For candidate node `n`, let `q` be its propagated
+headline credence, `R` an active answer root's current headline, and `R₀` and
+`R₁` that root after replacing every layer of `n` by 0 or 1 and recomputing
+every dependent node from its replayed stances and influences. Every path to
+the root participates; converging paths are evaluated together. The root's
+exact value is:
 
-A claim's (or link's) **value of information** is
-`|sensitivity| × 4·p·(1 − p)`, `p` its plausibility (a link's is its own edge
-strength) — the same uncertainty factor as `uncertainty(p)` above, unjudged
-`p` counting ½ (factor 1). A sensitivity the layer has not yet delivered
-counts `FALLBACK_STRENGTH` (0.5), as a failed strength judgment does for
-reach. This value, decayed by `roundDecay^(rounds already run)`, **is the
+`VoI(n, R) = 2 · (q·|R₁−R| + (1−q)·|R₀−R|)`.
+
+The factor 2 preserves model C's scale: on a locally linear path this equals
+`|dR/dn|·4q(1−q)`. A claim reachable from several active answer roots uses the
+sum of `VoI(n, R)` over those roots. Results are memoised per credence/topology
+version. `NodeDto.sensitivity` keeps its wire shape but carries the signed exact
+secant `R₁−R₀` for the root to which the node has the largest VoI; no derivative
+or sensitivity cell feeds display, scheduling or stopping. Exact VoI is derived,
+never journaled (DUR-01), and a restart recomputes it from the restored structure
+and stances.
+
+This value, decayed by `roundDecay^(rounds already run)`, **is the
 claim's priority in the exploration queue** (below), replacing the earlier
 reach × relevance ordering; and once it falls below `--voi-eps`
 (`DEFAULT_VOI_EPSILON` = 0.01 — a starting value from a one-off scratch
-review, not a calibration run) the claim gets no (further) round and ends
-`DIMINISHING` (the status name is kept so pre-model-C records still restore;
-its meaning and the UI wording changed to "not worth exploring" /
-"nothing left could change the answer"). A question therefore stops once the
+review, still uncalibrated: neither 2026-10-04 run in §10 established a
+candidate that ends a production-shaped question by VoI) the claim
+gets no (further) round and ends
+`DONE` with reason `DIMINISHING`; the UI wording is "not worth exploring" /
+"nothing left could change the answer". A question therefore stops once the
 largest value of information over its remaining nodes falls below `--voi-eps`
 — reported `stoppedBy = "voi"` — with `maxClaims` (EXP-06) still standing as
 a hard cap checked first. `--voi-eps 0` disables the value-of-information
@@ -334,10 +338,8 @@ only as an unbounded-by-default internal bound, EXP-05) and the yield stop
 above (`--yield-stop`, removed) as a question's stop rule.**
 
 **Cruxes.** `QuestionDto.cruxes` lists up to 3 refs of the question's nodes
-(claims below the root, and links as `EDGE` refs) by `|sensitivity| ×
-4·p·(1 − p)` — the same value-of-information score, without the round-decay
-and `FALLBACK_STRENGTH` fallbacks a node without a sensitivity yet is simply
-left out — best first, ties in creation order. The UI's "what would change
+(claims below the root, and links as `EDGE` refs) by that exact VoI without
+round decay — best first, ties in creation order. The UI's "what would change
 the answer" panel (§7) lists them.
 
 ### Exploration order
@@ -351,8 +353,9 @@ sibling's first. Ties go first-in, first-out. An argument is queued, at its
 value-of-information priority, as soon as its attach-time assessment
 completes — at the end of the round that attached it, since a later turn may
 still reword it; it does not wait for its parent to finish later rounds.
-Because the sensitivity cells settle asynchronously, priorities are ranked
-when a worker takes the next task, not fixed when a claim is enqueued. A claim
+Because credences change as arguments settle, exact priorities are recomputed
+from the current snapshot when a worker takes the next task, not fixed when a
+claim is enqueued. A claim
 the human forces with `EXPAND` is queued ahead of everything else
 (`FORCED_PRIORITY`). Links (below) share this one queue.
 
@@ -380,12 +383,11 @@ child rewords its link), and explores the link exactly like a claim:
   strength (0.5 when that judgment failed: factor 1) — shown for reference
   only, like a claim's contribution (EXP-05). `reach(link) = reach(argument)`.
   A link's **value of information** follows the same formula as a claim's
-  (§3 "Sensitivity and value of information"), reading the link's own edge
-  strength as its plausibility and the *edge's* sensitivity cell as its
-  sensitivity: `|sensitivity(edge)| × 4·s·(1 − s)` — 1 at s = ½, 0 for a link
-  judged irrelevant or decisive — so a clear-cut link is left alone unless the
-  human expands it, and an open link under a claim the answer is sensitive to
-  is explored early. An argument about a link then has
+  (§3 "Exact value of information"): `q` is the edge node's propagated
+  credence, and resolving it to 0 or 1 re-evaluates every path from that edge
+  to each active answer root. A clear-cut link therefore has little or no
+  expected value, while an open link that can move an answer is explored early.
+  An argument about a link then has
   `reach = reach(argument) × strength(its own edge)` — for an undercutter,
   exactly EXP-05's formula.
 - **LINK-04 Scheduling.** A link joins the queue with its argument, once the
@@ -393,7 +395,7 @@ child rewords its link), and explores the link exactly like a claim:
   at its value of information; the links-off, depth, budget and
   value-of-information gates (§3) apply as to a claim. `--explore-links off`
   (default on) keeps links from being explored automatically — they end
-  `PRUNED` — while `EXPAND` still explores one.
+  `DONE` with reason `PRUNED` — while `EXPAND` still explores one.
 - **LINK-05 Rounds.** A link's round is EXP-02..04 with the link as the claim:
   per-side cap `maxArgsPerSideChild`, triage against the link's own
   arguments (EXP-03, so duplicates are caught against them; the claim-level
@@ -442,11 +444,10 @@ open question, each explored as a root of its own.
   `parent = null` (a second root of the same tree, `proposer` = `Claim.READING`
   ("reading") or `Claim.POSITION` ("position") by mode) — so it inherits, with
   no engine change beyond creating it: its own CRED-01 first impression
-  (`Judge.plausibility`, judged with `root_question` the *original* question
-  and `claim` the item's restated text — the pilot's "restated question"
-  judged in the original's context), its own model D neutral-prior verdict
-  and disagreement flag, its own model C sensitivity root and value of
-  information (1, like any root), and the shared budget (EXP-06), cost
+  (`Judge.plausibility`, judged from the item's self-contained restated text
+  alone), its own model D neutral-prior verdict
+  and disagreement flag, its own exact-VoI answer root (value 1, like any
+  root), and the shared budget (EXP-06), cost
   (§12) and pause (CTL-05) of the question. The question root itself takes no
   round: it finishes `Status.FRAMED` (§5) the moment framing succeeds, and an
   `EXPAND` on it runs no round either.
@@ -454,16 +455,21 @@ open question, each explored as a root of its own.
   one `IssueNode` cell, fed by every position's credence outlet, emitting
   `Shares` (per layer, and the consensus) to a `sharesHub` — derived and
   volatile like credence (DUR-01), never journaled, and wired **one-way**:
-  nothing flows from it back into any credence or sensitivity cell (CRED-03).
-  `Softmax.shares` computes it: `score = logit(clamped credence) / T`,
-  `Softmax.TEMPERATURE` (`T`) 1 → normalised odds — monotone in every
-  credence, sums to 1; e.g. credences (0.8, 0.6, 0.2) → odds (4, 1.5, 0.25) →
-  shares (0.696, 0.261, 0.043). Before any position has emitted, every share
-  is 1/n. `READINGS` spawns no `IssueNode`: each reading's verdict is its own
-  credence, with no shares to fold.
+  nothing flows from it back into any credence cell (CRED-03).
+  `Softmax.shares` (the object keeps its original name, but is no longer a
+  softmax) treats each clamped credence as an absolute weight and divides by
+  `max(1, sum(weights))`. The listed shares therefore sum to at most 1; the
+  residual `1 - sum(shares)` is the share that none of the listed answers
+  holds. Two complementary positions `(p, 1-p)` retain shares `(p, 1-p)`;
+  first impressions (0.15, 0.2, 0.7) simply normalise to (0.143, 0.190,
+  0.667); and jointly implausible positions (0.1, 0.1, 0.1) leave 0.7 for
+  none of the listed answers. Before any position has emitted, its weight is
+  0.5; the listed shares are therefore 1/n when `n > 2` and (0.5, 0.5) when
+  `n = 2`, with no residual. `READINGS` spawns no `IssueNode`: each reading's
+  verdict is its own credence, with no shares to fold.
 - **FRA-04 Durability.** `CredenceGraph` applies one `GraphSpec` delta for an
-  issue framing — the position claims, their sensitivity cells, the `IssueNode`
-  when present and every wire — as one write-ahead topology record, with the
+  issue framing — the position claims, the `IssueNode` when present and every
+  wire — as one write-ahead topology record, with the
   refs pre-allocated. The delta is atomic at journal admission: if its record
   is absent on restart, none of that framing's topology is rebuilt; if it is
   present, the whole framing is restored under its recorded refs before
@@ -478,7 +484,7 @@ open question, each explored as a root of its own.
   claims"; the `/override` id is then the edge ref) — override to `AUTO`,
   `EXPAND` or `STOP` at any time. CTL-02..04 apply to a link unchanged.
 - **CTL-02** `EXPAND` always explores: whatever the claim's status —
-  queued, running, or finished for any reason including `BUDGET` and
+  queued, running, or `DONE` for any reason including `BUDGET` and
   `DIMINISHING` — its next
   round is **forced**, and it runs at least that round. It skips every
   scheduling gate (links-off, depth, budget and value of information), is
@@ -531,14 +537,17 @@ open question, each explored as a root of its own.
 
 ## 5. Claim status (the state machine the UI renders)
 
-`QUEUED → JUDGING → EXPLORING → SATURATED | ROUND_LIMIT`, with terminal
-alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`,
-`DIMINISHING` (its value of information fell below `--voi-eps`; model C, §3
-"Sensitivity and value of information"), `STOPPED`, `FAILED`, and — a
-question root only, reached from `QUEUED` in place of `JUDGING` — `FRAMED`
+The wire status vocabulary is exactly `QUEUED`, `JUDGING`, `EXPLORING`,
+`FRAMED`, `DONE`, `STOPPED`, `FAILED`. Normal automatic completion is
+`QUEUED → JUDGING → EXPLORING → DONE`; a `DONE` claim carries exactly one
+reason from `SATURATED`, `ROUND_LIMIT`, `PRUNED`, `DEPTH_LIMIT`, `BUDGET`,
+`DIMINISHING`. `reason` is null for every non-`DONE` status. `STOPPED` and
+`FAILED` remain distinct terminal statuses. `FRAMED` is also terminal and is
+used only for a question root reached from `QUEUED` in place of `JUDGING`
 (model A, §3 "Framing"): the root was split into readings or positions, each
-explored as a root of its own; the root itself never runs a round.
-Every status change is broadcast.
+explored as a root of its own; the root itself never runs a round. Therefore
+the engine's finished set is exactly `{DONE, STOPPED, FAILED, FRAMED}`. Every
+status or reason change is broadcast.
 
 ## 6. HTTP surface (the UI contract)
 
@@ -549,12 +558,15 @@ Every status change is broadcast.
   (CTL-05); 400 on a malformed ref or flag, 404 on a ref that is not a question
 - `GET  /graph` → `GraphDto` (see `Dto.kt`): every node carries its
   `credences` per layer, its `consensus`, `spreadLow` and `spreadHigh`, and its
-  `sensitivity` (model C, §3, null until the sensitivity layer reaches it); an
+  model D `argumentsFirstCredences` per layer and
+  `argumentsFirstConsensus` (equal to the ordinary vector/consensus when the
+  node has no incoming arguments), and its wire-compatible `sensitivity`
+  (the exact signed sway `R(node=1)−R(node=0)`, §3); an
   undercutting claim carries `undercuts` (the edge it attacks, which is also
   its edge's `target`) and every argument about a link carries `onLink` (that
   edge); a claim carries `evidence` (model B REFINE outcomes) when it has any;
   an EDGE carries its link's claim-like fields (`text`, `depth`,
-  `status`, `override`, `reach`, `contribution`, `proSaturation`,
+  `status`, nullable `reason`, `override`, `reach`, `contribution`, `proSaturation`,
   `conSaturation`, `rounds`, `duplicatesDropped`, `triage`, `error`); every
   claim and link carries `activity` while it is being explored, judged or
   assessed; the graph carries `consensusMembers`; every question
@@ -575,7 +587,9 @@ Every status change is broadcast.
   the model D fields above are the question's own; when set they are null/false
   on the question and each `PositionDto { ref, text, credence, firstImpression?,
   neutralCredence?, verdictsDisagree?, share? }` carries its own — `share`
-  only for `POSITIONS`, absent for `READINGS`). A node's `positionOf` (set
+  only for `POSITIONS`, absent for `READINGS`; listed shares may sum below 1,
+  and the remainder is the derived none-of-the-listed share). A node's
+  `positionOf` (set
   only on a reading/position, to its question's root ref) marks it as one.
 - `GET  /events` → SSE, each message a full `GraphDto` (coalesced, ≤ 10/s)
 - `GET  /` → the built UI (`ui/dist`) when present.
@@ -605,10 +619,10 @@ Every status change is broadcast.
 - **UI-06** Under each question a "now" line names what the deliberation is
   doing this moment: which claims and links are being explored or judged.
 - **UI-07** Under each question's tree, a "what would change the answer"
-  panel (model C, §3 "Sensitivity and value of information") lists its
+  panel (§3 "Exact value of information") lists its
   `cruxes` — the claims and links whose settling could move the answer most —
-  each with its sway (`|sensitivity|`), how settled it is (its plausibility or,
-  for a link, its strength) and, when its sensitivity is signed, which way it
+  each with its exact secant sway (`|sensitivity|`), how settled it is (its
+  plausibility or, for a link, its strength) and which way resolving it true
   would pull the answer. Nothing is shown until the backend names a crux.
 - **UI-08 (model D).** All eight layers are still computed for every node, but
   only the consensus is shown by default: no spread band on a claim's or the
@@ -617,8 +631,11 @@ Every status change is broadcast.
   the *research view* on for the session; `?research` in the URL starts it on
   (like `?debug`), and it is not otherwise persisted. In the research view the
   spread band, the "rules: a–b%" caption and each rule's own credence (facts
-  panel "By rule") reappear exactly as before model D. The question's hero
-  caption reads "first impression F% · arguments alone N%" (`firstImpression`,
+  panel "By rule") reappear exactly as before model D. Every claim and link's
+  facts also compare "first impression" with its `argumentsFirstConsensus`
+  and list `argumentsFirstCredences` under "Arguments first by rule"; this is
+  the local diagnostic view and does not replace its ordinary credence. The
+  question's hero caption reads "first impression F% · arguments alone N%" (`firstImpression`,
   `neutralCredence`; either half is left out until known), with " · rules
   a–b%" appended in the research view; when `verdictsDisagree` is true a note
   (`role="note"`) says the first impression decides the side, naming which way
@@ -633,8 +650,10 @@ Every status change is broadcast.
   "depends on the reading" (`READINGS`, no term) or "several possible
   answers" (`POSITIONS`); `POSITIONS` additionally shows a distribution, one
   row per position in `framing.positions` order with its share as a
-  percentage and a bar proportional to it. Below the hero, one reading/
-  position section follows per position, in the same order: its text as a
+  percentage and a bar proportional to it; when the listed shares sum below
+  1 it appends a "None of the listed answers" row for the residual. Below the
+  hero, one reading/position section follows per position, in the same order:
+  its text as a
   heading, its own credence gauge (the same markup and research-view band as
   the question's, driven by its own node), its own model D caption built from
   its `PositionDto` (and, when its verdicts disagree, the same disagreement
@@ -683,12 +702,53 @@ real claims at depths 0–3 with 0–6 arguments per side, recorded in
 `demo/deliberate/CALIBRATION.md`, must show that with the defaults a side
 typically saturates by 3–4 arguments. (`minInfluence`, the EXP-10 yield-stop
 parameters and `maxDepth` as a stop rule are removed by model C — §3
-"Sensitivity and value of information" — and appear only as history.
+"Exact value of information" — and appear only as history.
 `--voi-eps`'s default is a starting value from a one-off scratch model
-review, not a calibration run.)
+review, still uncalibrated after the live runs below.)
 
 The measurements, the history of each default, and what remains to
 recalibrate live in `CALIBRATION.md`; this section states only the criteria.
+
+The 2026-10-03 bounded CRED-01 recalibration paired question-context and
+claim-only requests, both with the model D `knowledge` Choice, on 24 claims
+from the existing three-question live corpus. One first impression (4.2%)
+changed side of 0.5. The mean signed shift was +0.002; 4/24 crossed the 0.8
+bearing boundary (three down, one up). This does not justify moving
+`BEARING_PLAUSIBILITY` from 0.8, and CRED-01 does not change the separate
+saturation request, so `saturation` remains 0.22. Sampling and caveats are in
+`CALIBRATION.md`.
+
+The 2026-10-04 exact-VoI calibration grew three fresh bounded trees with
+current Jev judgments and one Sonnet proposer, then replayed the recorded
+answers through epsilon candidates 0, 0.0025, 0.005, 0.01, 0.02 and 0.04.
+The live generation made 170 external calls and cost $0.373648
+API-equivalent/assumed in total. Under the deliberately small 11-claim replay
+cap, every candidate explored the same number of claims in every tree and all
+three trees stopped at the budget; 0.01 stopped two of 60 non-root nodes by
+VoI, at exact values 0.0025 and 0.0051, both claims the budget left
+unexplored at epsilon 0. Epsilon only relabelled budget stops, so the sample
+cannot distinguish the candidates: `DEFAULT_VOI_EPSILON` stays 0.01,
+uncalibrated, and the run says nothing about it under the production limits. The same invocation remeasured
+saturation on 24 cached node-sides with current Jev: at 0.22, 47.9% saturated
+by three arguments and 62.5% by four, with no empty side saturated, so
+`DEFAULT_SATURATION` remains 0.22. Full distributions, per-tree exploration,
+cost and the experimental limits are in `CALIBRATION.md`. The model-C yield
+stop remains removed; this calibration does not reintroduce it.
+
+A same-day production-shape follow-up used three rounds, unbounded depth,
+links enabled and a 110-claim cap selected from a $5.60 pre-run estimate for
+three trees at the production 180-claim cap. Two epsilon-zero trees completed,
+at 110 claims and $1.583804/$1.573629; both stopped at the budget. Timeout and
+process-recovery attempts consumed the remaining allowance before the third
+question could complete (total API-equivalent/assumed spend $5.011981). The
+persisted call tape also exposed a first-writer defect: repeated identical
+requests had been collapsed, so candidate replays diverged even at epsilon 0.
+The writer now retains each occurrence, but the two-tree artefact cannot
+honestly be used for the planned 0–0.16 epsilon sweep. Therefore the
+three-question criterion was not met, no VoI-ended question was observed, and
+`DEFAULT_VOI_EPSILON` remains 0.01 and explicitly uncalibrated. The raw tape,
+offline render command, costs and terminal-VoI distributions are in
+`CALIBRATION.md`.
 
 ## 11. Durability (requirements DUR-*)
 
@@ -698,19 +758,24 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   by topology records in the one write-ahead host journal (`host.journal`),
   together with the engine's metadata, which includes the `jev` stances.
   Nothing derived —
-  no credence vector, influence, hub update, or sensitivity vector or frame
-  (model C, §3 "Sensitivity and value of information") — is ever written: the
-  metadata cell is the only journaled cell on the host (a per-cell journal
-  selector), every credence and sensitivity cell is volatile, and on boot the
-  graph recomputes every credence and every sensitivity from the structure and
-  the re-applied stances, with catch-up baselines enabled. A restart
-  reproduces every layer's credence and every consensus (within 1e-9), restart
-  after restart.
-- **DUR-02** The engine's per-claim metadata (question membership, status,
+  no ordinary or arguments-first credence vector, influence, hub update, or
+  exact-VoI evaluation (§3 "Exact value of information") — is ever written:
+  the metadata cell is the only journaled cell on the host (a per-cell journal
+  selector), every credence cell is volatile, and on boot the graph recomputes
+  every credence from the structure and re-applied stances; exact VoI is then
+  evaluated on demand. Topology journals written by the retired model-C build
+  may contain `SensitivityFactory` spawns and links: their legacy types and hub
+  endpoint remain loadable, but their derivative output is ignored, while new
+  topology deltas create no sensitivity cells. A restart
+  reproduces every layer's ordinary and arguments-first credence and every
+  consensus (within 1e-9), restart after restart. Arguments-first evaluation
+  makes no model call and therefore adds no cost record.
+- **DUR-02** The engine's per-claim metadata (question membership, status and
+  nullable completion reason,
   override, proposer, rewritten text, Jev judgments — plausibility and edge
   strength are the `jev` stances —, saturation, triage counts, rounds,
   errors) is one record per claim of named fields — and one per link (§3
-  "Links as claims": status, override, rounds, saturation, triage, reach,
+  "Links as claims": status, completion reason, override, rounds, saturation, triage, reach,
   contribution…), keyed `l:<edge ref>` — written as routed
   invocations into a hosted observation cell (a last-writer-wins fold per
   field). Only the fields that changed are written (a field back at its
@@ -735,15 +800,23 @@ recalibrate live in `CALIBRATION.md`; this section states only the criteria.
   construction, so the process cannot leave a half-created framing. Each question's EXP-10
   record (its non-root round yields, for reference only — its stop is
   computed live from restored claim status, not journaled) is one more
-  record of the same store; a record written before model C may also carry
+  record of the same store. Before enum decoding, restore applies this literal
+  legacy field map: `SATURATED → DONE/SATURATED`, `ROUND_LIMIT →
+  DONE/ROUND_LIMIT`, `PRUNED → DONE/PRUNED`, `DEPTH_LIMIT →
+  DONE/DEPTH_LIMIT`, `BUDGET → DONE/BUDGET`, and `DIMINISHING →
+  DONE/DIMINISHING`. The historical pair `status=ROUND_LIMIT` and
+  `error="budget exhausted"` restores as `DONE/BUDGET` with the obsolete error
+  removed. New-vocabulary records decode directly, and a restored legacy
+  record is rewritten with `status=DONE` plus `reason` on the next metadata
+  write. A record written before model C may also carry
   `diminished` (the removed yield stop), which decodes and is dropped on the
   next write. Every argument's link is rebuilt with it and its `l:` record
   re-applied; an edge targeting an edge places its source under that edge's
   link. A link whose `l:` record never reached the journal is rebuilt from
   the structure alone and queued afresh, like any other such claim. With
   `--explore-links off` a restored link — whatever status its record holds,
-  an interrupted `EXPLORING` one included — ends `PRUNED` at the LINK-04 gate
-  and runs no round unless expanded. Every known stance is
+  an interrupted `EXPLORING` one included — ends `DONE` with reason `PRUNED`
+  at the LINK-04 gate and runs no round unless expanded. Every known stance is
   re-applied (the graph skips a stance a node already holds). Every claim
   that was `QUEUED`, `JUDGING` or `EXPLORING` is re-queued — an interrupted
   round simply runs again — and an argument whose attach-time assessment

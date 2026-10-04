@@ -635,8 +635,7 @@ class TwoNodeRig private constructor(
             check(app.pollerFailure == null) { "$role's poll loop died: ${app.pollerFailure}" }
         }
 
-        private fun checkpoint(): String? =
-            runDir.resolve("checkpoint").takeIf { Files.exists(it) }?.let { Files.readString(it).trim() }
+        private fun checkpoint(): String? = app.mirrors.single().committedCheckpoint()
 
         /**
          * Everything about this node that ADVANCES when one of its two loops

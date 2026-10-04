@@ -46,12 +46,12 @@ const graph: GraphDto = {
   ],
   nodes: [
     { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'Do fish sleep?', depth: 0, status: 'FRAMED', proposer: 'question' },
-    { ref: 'p1', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Do fish rest with lowered responsiveness?', depth: 0, positionOf: 'q', status: 'SATURATED', override: 'AUTO', proposer: 'reading' },
-    { ref: 'p2', kind: 'CLAIM', credence: 0.4, root: 'q', text: 'Do fish show REM-like activity?', depth: 0, positionOf: 'q', status: 'SATURATED', override: 'AUTO', proposer: 'reading' },
-    { ref: 'a1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'They stop responding at night.', depth: 1, status: 'SATURATED', proposer: 'claude' },
-    { ref: 'a1-p1', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'SUPPORT', source: 'a1', target: 'p1', strength: 0.6, depth: 1, status: 'PRUNED' },
-    { ref: 'a2', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'Zebrafish show a REM-like stage.', depth: 1, status: 'SATURATED', proposer: 'codex', spreadLow: 0.2, spreadHigh: 0.8 },
-    { ref: 'a2-p2', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'ATTACK', source: 'a2', target: 'p2', strength: 0.6, depth: 1, status: 'PRUNED' },
+    { ref: 'p1', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Do fish rest with lowered responsiveness?', depth: 0, positionOf: 'q', status: 'DONE', reason: 'SATURATED', override: 'AUTO', proposer: 'reading' },
+    { ref: 'p2', kind: 'CLAIM', credence: 0.4, root: 'q', text: 'Do fish show REM-like activity?', depth: 0, positionOf: 'q', status: 'DONE', reason: 'SATURATED', override: 'AUTO', proposer: 'reading' },
+    { ref: 'a1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'They stop responding at night.', depth: 1, status: 'DONE', reason: 'SATURATED', proposer: 'claude' },
+    { ref: 'a1-p1', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'SUPPORT', source: 'a1', target: 'p1', strength: 0.6, depth: 1, status: 'DONE', reason: 'PRUNED' },
+    { ref: 'a2', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'Zebrafish show a REM-like stage.', depth: 1, status: 'DONE', reason: 'SATURATED', proposer: 'codex', spreadLow: 0.2, spreadHigh: 0.8 },
+    { ref: 'a2-p2', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'ATTACK', source: 'a2', target: 'p2', strength: 0.6, depth: 1, status: 'DONE', reason: 'PRUNED' },
   ],
 };
 

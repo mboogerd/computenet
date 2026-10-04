@@ -4,16 +4,21 @@ import civictech.agora.cell.Polarity
 import civictech.deliberate.CostLedger.Companion.withCost
 
 /**
- * The UI's view (SPEC §6): the graph's nodes — every credence, the consensus
- * and the spread from the hub fold, where the cells put them (CRED-06) —
- * joined with the engine's exploration metadata. It only reads.
+ * The UI's view (SPEC §6): the graph's nodes — every ordinary and
+ * arguments-first credence, the consensuses and the ordinary spread from the
+ * hub fold, where the cells put them (CRED-06) — joined with the engine's
+ * exploration metadata. It only reads.
  */
-internal class GraphProjection(private val policy: ExplorationPolicy, private val ledger: CostLedger) {
+internal class GraphProjection(
+    private val service: CredenceGraph,
+    private val policy: ExplorationPolicy,
+    private val ledger: CostLedger,
+) {
 
     private companion object {
         /** A node's credence before its first emission reached the hub. */
         const val NEUTRAL = 0.5
-        /** Model C: how many cruxes a question lists. */
+        /** How many exact-VoI cruxes a question lists. */
         const val CRUXES = 3
     }
 
@@ -21,6 +26,19 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
     fun project(graph: List<CredenceGraph.Node>, layers: LayerSet, state: EngineState): GraphDto {
         val neutral = List(layers.ids.size) { NEUTRAL }
         val neutralValues = neutral
+        val answerRoots = state.questions.keys.associateWith { question ->
+            state.claims.values.filter { it.root == question && it.parent == null && it.status != Status.FRAMED }.map { it.ref }
+        }
+        // The DTO keeps its `sensitivity` number for wire compatibility. It now
+        // carries the exact signed secant R(node=1)-R(node=0); crux ranking uses
+        // the exact q-weighted expected movement rather than reconstructing VoI
+        // from that display number.
+        val exact = state.claims.values.associate { c ->
+            c.ref to service.exactValueOf(c.ref, answerRoots[c.root].orEmpty())
+        }
+        // Model D: a root's "arguments alone" verdict before any argument. The neutral
+        // weight leaves no prior in the base (WEAK_PRIOR_WEIGHT = 0), so no stance is needed.
+        val unarguedNeutral = layers.evaluate(emptyList(), emptyList(), emptyList(), LayerSet.WEAK_PRIOR_WEIGHT)
         val nodes = graph.mapNotNull { n ->
             val values = n.credence?.values ?: neutral
             val named = layers.named(values)
@@ -28,16 +46,21 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
             val credence = layers.headlineOf(values, consensus)
             val low = n.credence?.spreadLow ?: NEUTRAL
             val high = n.credence?.spreadHigh ?: NEUTRAL
+            val argumentsFirstValues = n.credence?.neutral ?: values
+            val argumentsFirstNamed = layers.named(argumentsFirstValues)
+            val argumentsFirstConsensus = layers.consensus(argumentsFirstValues)
             state.edges[n.ref]?.let { e ->
                 // SPEC §3 "Links as claims": an edge carries its link's exploration state.
                 val l = state.claims[n.ref]
                 NodeDto(
                     ref = e.ref.id.toString(), kind = "EDGE", credence = credence, root = e.root.id.toString(),
                     credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    argumentsFirstCredences = argumentsFirstNamed, argumentsFirstConsensus = argumentsFirstConsensus,
                     polarity = e.side.name, source = e.source.id.toString(), target = e.target.id.toString(),
                     strength = e.strength,
                     text = l?.text, depth = l?.depth, status = l?.status, override = l?.override,
-                    reach = l?.reach, contribution = l?.contribution, sensitivity = n.sensitivity,
+                    reason = l?.reason.takeIf { l?.status == Status.DONE },
+                    reach = l?.reach, contribution = l?.contribution, sensitivity = exact[n.ref]?.dominantSway,
                     proSaturation = l?.proSaturation, conSaturation = l?.conSaturation, rounds = l?.rounds,
                     duplicatesDropped = l?.duplicatesDropped, error = l?.error,
                     triage = l?.triage?.mapKeys { it.key.name }?.ifEmpty { null },
@@ -48,9 +71,11 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 NodeDto(
                     ref = c.ref.id.toString(), kind = "CLAIM", credence = credence, root = c.root.id.toString(),
                     credences = named, consensus = consensus, spreadLow = low, spreadHigh = high,
+                    argumentsFirstCredences = argumentsFirstNamed, argumentsFirstConsensus = argumentsFirstConsensus,
                     text = c.text, depth = c.depth, status = c.status, override = c.override,
+                    reason = c.reason.takeIf { c.status == Status.DONE },
                     proposer = c.proposer, plausibility = c.plausibility, relevance = c.relevance, reach = c.reach,
-                    quality = c.quality, contribution = c.contribution, sensitivity = n.sensitivity,
+                    quality = c.quality, contribution = c.contribution, sensitivity = exact[n.ref]?.dominantSway,
                     proSaturation = c.proSaturation, conSaturation = c.conSaturation, rounds = c.rounds,
                     duplicatesDropped = c.duplicatesDropped, error = c.error,
                     alsoProposedBy = c.alsoProposedBy.toList().ifEmpty { null },
@@ -65,25 +90,27 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
             }
         }
         val window = DeliberationEngine.Config.YIELD_WINDOW
-        val sensitivity = graph.associate { it.ref to it.sensitivity }
         val credences = graph.associate { it.ref to it.credence }
         val qs = state.questions.map { (root, text) ->
             // Links are part of the question's work (activity, rounds, cost), not of its claim count.
             val tree = state.claims.values.filter { it.root == root }
             val ys = state.yields[root].orEmpty()
             val queued = tree.count { it.status in ExplorationPolicy.ACTIVE }
-            // Model C: "what would change the answer" — best crux score first, ties in creation order.
+            // "What would change the answer" — exact q-weighted VoI, best first;
+            // stable sorting preserves creation order for ties.
             val cruxes = tree.filter { it.parent != null }
                 .mapNotNull { n ->
-                    val p = if (n.isLink) n.argument!!.edge?.strength else n.plausibility
-                    policy.cruxScore(sensitivity[n.ref], p)?.takeIf { it > 0.0 }?.let { n to it }
+                    exact[n.ref]?.expectedRootChange?.takeIf { it > 0.0 }?.let { n to it }
                 }
                 .sortedByDescending { it.second }.take(CRUXES).map { it.first.ref.id.toString() }
             // Model D: the verdict from Jev's first impression against what the arguments say from a neutral prior.
             fun verdicts(ref: civictech.cell.CellRef): Pair<Double?, Double?> {
                 val cr = credences[ref]
+                // An unargued root keeps its arguments-first view at its prior, but its
+                // "arguments alone" verdict stays the neutral ½ evaluation it always was.
                 return cr?.let { layers.headlineOf(it.values, it.consensus) } to
-                    cr?.neutral?.let { layers.headlineOf(it, layers.consensus(it)) }
+                    cr?.let { c -> c.neutral?.takeIf { c.argued } ?: unarguedNeutral }
+                        ?.let { layers.headlineOf(it, layers.consensus(it)) }
             }
             val framing = state.claims[root]?.framing?.takeIf { it.mode != FramingMode.NONE }?.let { f ->
                 val shares = graph.firstOrNull { it.ref == root }?.shares
@@ -113,7 +140,7 @@ internal class GraphProjection(private val policy: ExplorationPolicy, private va
                 yieldEarlier = ys.dropLast(window).takeIf { it.isNotEmpty() }?.average(),
                 stoppedBy = policy.stoppedBy(
                     state.projectionQuestionView(root), active = queued > 0,
-                    anyDiminishing = tree.any { it.status == Status.DIMINISHING },
+                    anyDiminishing = tree.any { it.status == Status.DONE && it.reason == Reason.DIMINISHING },
                 ),
                 paused = root in state.paused,
                 cruxes = cruxes,

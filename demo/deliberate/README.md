@@ -20,7 +20,7 @@ flight finish); Auto on it restarts it. The goal specification is [`SPEC.md`](SP
 4. One cell graph propagates credence: supports raise a claim from its plausibility, attacks lower it, and each argument is weighted by its own credence and the strength of its edge. It does so under **eight semantics at once** — every claim and edge cell computes a credence *vector*, one value per layer: `dfquad` (agora's DF-QuAD), `wlo` (weighted log-odds), `jnb` (Jeffrey / naive-Bayes), `woe` (weight of evidence), `euler`, `qe` (quadratic energy), `mlp` and `glo` (gated log-odds: a doubted argument is inert, support and attack weighed alike). An edge tells its target both its own credence vector (the strength) and its source's, so every semantics computes its own energy from the two — `jnb` conditions on the source's credence exactly as its definition says.
 5. The UI's headline number is the **consensus**: the geometric mean of the odds of the member layers (`wlo`, `jnb`, `woe` by default), with the **spread** (lowest to highest credence over all layers) drawn as a band behind it — visible only in the *research view* (below). Each claim cell derives both from its vector and emits them with it; they only summarise and never feed back into a layer. The deliberation code never propagates credence itself.
 6. The plausibility judgment also asks a **knowledge** question: does judging this claim need knowledge Jev doesn't have? "Outside my knowledge" maps the plausibility to 0.5 — neither believed nor doubted — whatever the five-level score would have said, rather than the low score a model gives what it hasn't heard of. No Jev request carries a current date; that pulled the judgment of claims about recent events.
-7. The question's root also gets a second verdict: the same arguments weighed from a **neutral prior** (½) instead of Jev's own first impression of the question — "what the arguments say" alongside "what Jev thought going in". See *First impression vs. arguments alone* below.
+7. Every argued claim and link also gets an **arguments-first** vector: the same direct inputs weighed with that node starting from a neutral prior (½) instead of its Jev first impression. A node with no incoming arguments keeps its ordinary prior in this view. The view is local, derived and diagnostic — it never feeds the graph — while question and reading roots keep their existing "arguments alone" presentation. See *First impression vs. arguments first* below.
 
 ## Exploration
 
@@ -56,24 +56,23 @@ Every attached argument gets a **contribution**: reach × relevance × quality
 canonical form is asked of the proposers, never scored). It is shown for
 reference; it no longer decides what gets explored.
 
-Alongside credence, a second graph of cells computes each claim's
-**sensitivity** top-down — how much settling it would move the root's answer,
-`d root / d claim` — the root at 1, propagated by chain rule down every path.
-A claim's (or link's) **value of information** is
-`|sensitivity| × 4·p·(1 − p)`, `p` its plausibility (a link's is its own
-strength): 1 for an unsettled claim under a sensitive part of the tree, 0 once
-either its sensitivity or its plausibility is pinned down. Exploration is
-best-first by value of information across one queue, one round per task
-(priorities are re-read when a worker is ready, since the sensitivity cells
-settle asynchronously). A claim with rounds left goes back into the queue at
-its value of information × 0.5 per round it already ran, so a strong claim's
-second round still beats a weak sibling's first. Once a claim's value of
-information falls below `--voi-eps` it gets no further round and ends
-`DIMINISHING` ("not worth exploring"); a question stops once every remaining
+Alongside credence, the backend computes each node's **sway** on demand: the
+signed exact secant `R(node=1) − R(node=0)` for the active answer root to which
+the node has the largest value of information. A claim's (or link's) **value
+of information** is the exact expected root movement
+`2 · (q·|R₁−R| + (1−q)·|R₀−R|)`, where `q` is the node's propagated headline
+credence and `R₀`/`R₁` come from replaying every dependent path with that node
+resolved to 0 or 1. Exploration is best-first by value of information across
+one queue, one round per task. A claim with rounds left goes back into the
+queue at its value of information × 0.5 per round it already ran, so a strong
+claim's second round still beats a weak sibling's first. Once a claim's value
+of information falls below `--voi-eps` it gets no further round and ends
+`DONE` with reason `DIMINISHING` ("not worth exploring"); a question stops once every remaining
 claim is below that threshold, reporting "stopped: nothing left could change
 the answer" (or "stopped: claim budget spent" when `--max-claims` ended it
 first — the hard cap is checked before the value-of-information gate). An
-`EXPAND` still explores a `DIMINISHING` claim, and skips every gate to do it.
+`EXPAND` still explores a claim finished for reason `DIMINISHING`, and skips
+every gate to do it.
 The tree's top-3 claims and links by value of information are its **cruxes**
 — "what would change the answer" (below).
 
@@ -94,14 +93,10 @@ it — the undercutters), with a prompt that forbids disputing A or arguing B on
 other grounds. Their arguments attach to the edge node, so they move the
 edge's credence and with it A's pull on B; Jev sorts them against the link's
 own arguments and judges them with the link as their parent. A link's value of
-information follows the same rule as a claim's, reading its own strength as
-its plausibility and its edge's sensitivity as its sensitivity:
-`|sensitivity| × 4·s·(1 − s)`, with s the link strength — an open link (s near
-½) whose answer is sensitive to it is explored early, a clear-cut one (s near
-0 or 1) is left alone unless you expand it. (Its contribution — argument's
-contribution × 4·s·(1 − s) — is still shown, for reference only.) Links count
-in the question's rounds and cost, not in its claim count. `--explore-links
-off` stops automatic link exploration (`EXPAND` still works).
+information follows the same exact two-point re-evaluation over every path to
+each active answer root. Links count in the question's rounds and cost, not in
+its claim count. `--explore-links off` stops automatic link exploration
+(`EXPAND` still works).
 
 **Pre-model-C** (measured once, 2026-09-27, defaults but `--max-claims 80`, a
 question about motion-activated streetlights, back when links were ordered by
@@ -109,7 +104,7 @@ contribution rather than value of information): 8 of 82 links were explored
 automatically (5 of the 7 root arguments' links, contributions 0.38–0.44, and
 3 at depth 2, 0.30–0.31), gathering 10 reasons a link holds and 13 that it
 fails, before the budget stopped the question at 26 rounds and $1.12;
-expanding one more link by hand (strength 0.5, left at `BUDGET`) added two
+expanding one more link by hand (strength 0.5, left `DONE` for reason `BUDGET`) added two
 undercutters, took its credence from 0.50 to 0.35 and moved the root from
 0.594 to 0.604, for $0.07.
 
@@ -128,10 +123,21 @@ its top-3 cruxes — the claims and links with the highest value of information
 settled it is (plausible/strong, as a percentage) and, when known, which way
 it would pull the answer. Nothing is shown until the backend names a crux.
 
-### First impression vs. arguments alone
+### First impression vs. arguments first
 
-Every question carries two verdicts. **First impression** is Jev's own
-plausibility of the question, judged before any argument exists — the prior
+Every claim and link carries an arguments-first research view. **First
+impression** is Jev's plausibility (or a link's relation strength) before an
+argument about that node exists. **Arguments first** weighs the node's same
+direct argument inputs from ½; an unargued node simply keeps its first
+impression. The ordinary credence, consensus, sensitivity and exploration
+inputs stay unchanged, and this local view never feeds a parent. In the
+research facts, "First impression vs arguments" shows the two consensus
+figures and "Arguments first by rule" lists all eight layer values. The
+cached prior-dominance measurement motivates this diagnostic view; it does
+not show that arguments-first values improve answer accuracy.
+
+Every question also carries the two established hero verdicts. **First
+impression** is Jev's own plausibility of the question, judged before any argument exists — the prior
 the ordinary credence graph starts from and never stops reflecting. **Arguments
 alone** re-weighs the very same arguments, but starting the root from a neutral
 ½ instead of that first impression. The gauge caption reads "first impression
@@ -163,11 +169,13 @@ so does a failed framing call.
 Each reading or position is a claim of the same question, at the question's
 depth, explored exactly like a root — its own first impression, its own
 "arguments alone" verdict, its own cruxes — while the question root itself
-takes no round and finishes **FRAMED**. For POSITIONS, each position's
-share of the answer is a softmax over their credences (temperature 1 is
-plain odds normalisation: credences (0.8, 0.6, 0.2) give shares (0.70, 0.26,
-0.04)); the shares are derived for display only and never feed back into any
-credence.
+takes no round and finishes **FRAMED**. For POSITIONS, each consensus credence
+is an absolute weight: a position's share is its weight divided by
+`max(1, sum(weights))`. Listed shares may therefore sum below 1; the residual
+`1 - sum(shares)` is the share for none of the listed answers. For example,
+credences (0.8, 0.6, 0.2) give shares (0.5, 0.375, 0.125), while three
+credences of 0.1 leave 0.7 for none of the listed answers. The shares are
+derived for display only and never feed back into any credence.
 
 In the UI a framed question's hero keeps its text but, since there is no
 single yes/no verdict to show, replaces the gauge with the framing line
@@ -206,12 +214,12 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--proposers claude,codex` | both | which CLIs propose arguments |
 | `--claude-model <m>` / `--codex-model <m>` | CLI default | model passed to that CLI |
 | `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
-| `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
-| `--max-claims <n>` | 180 | hard cap: claims per question; claims that meet it become `BUDGET` (whether or not they already ran a round). An `EXPAND` still explores past it |
+| `--max-rounds <n>` | 3 | rounds per claim before `DONE` with reason `ROUND_LIMIT` |
+| `--max-claims <n>` | 180 | hard cap: claims per question; claims that meet it become `DONE` with reason `BUDGET` (whether or not they already ran a round). An `EXPAND` still explores past it |
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
-| `--voi-eps <e>` | 0.01 | explore a claim (or link) only while its value of information, `\|d answer/d node\| × 4·p·(1 − p)`, is at least `e`; a question stops once none of its remaining nodes clears it (`0` disables the stop, leaving only `--max-claims`) |
-| `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `PRUNED` unless expanded |
+| `--voi-eps <e>` | 0.01 | explore a claim (or link) only while its exact q-weighted expected root movement is at least `e`; a question stops once none of its remaining nodes clears it (`0` disables the stop, leaving only `--max-claims`) |
+| `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `DONE` with reason `PRUNED` unless expanded |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
 | `--start-paused` | off | every restored question starts paused: nothing runs, not even a Jev call, until you resume a question; new questions run normally (see *Restarting paused*) |
 | `--semantics <id>` | `consensus` | what a node's `credence` reports: the consensus, or one layer id |
@@ -241,10 +249,20 @@ contribution figure. The `--saturation` default was calibrated on
 live Jev judgments of real proposer output; the data and reasoning are in
 [`CALIBRATION.md`](CALIBRATION.md). In short, Jev's saturation reading rises
 only weakly with the number of arguments, so `--max-args-per-side` is the
-dependable stop for a side. `--voi-eps`'s default is a starting value from a
-one-off scratch review, not a calibration run (`minInfluence` and
-`DEPTH_LIMIT`-as-a-stop-rule are gone with model C, so most claims now stop on
-value of information, saturation or the claim budget, not depth).
+dependable stop for a side. `--voi-eps`'s default began as a value from a
+one-off scratch review and is still uncalibrated. A bounded 2026-10-04 live
+run (three fresh trees, exact replays from 0 through 0.04) explored the same
+work at every candidate, because its small claim cap, not epsilon, decided
+every tree. A production-shape follow-up completed two 110-claim epsilon-zero
+trees, both budget-stopped, before timeout/recovery overhead exhausted its $5
+allowance; its first persistent tape format also collapsed repeated requests,
+so it could not honestly replay the planned 0–0.16 sweep. Neither run
+established a candidate that ends a question by VoI, so 0.01 stays explicitly
+uncalibrated. Full distributions, costs and the offline tape-render command are in
+[`CALIBRATION.md`](CALIBRATION.md). (`minInfluence` and
+the `DEPTH_LIMIT` reason as a practical stop is gone with model C, so most
+claims now stop on value of information, saturation or the claim budget, not
+depth).
 
 The budget is spent in value-of-information order (see *Exploration*). With
 the defaults, the per-side caps bound the root to 12 arguments and any other
@@ -256,7 +274,7 @@ chance to stop a side before the cap supplies the dependable stop.
 - `POST /question` with form field `text=…` returns `{"root":"<ref>"}`.
 - `POST /override` with form fields `id=<ref>&mode=AUTO|EXPAND|STOP` returns `ok`. The ref is a claim's, or an edge's to steer its link. Bad input returns 400, and an unknown ref returns 404.
 - `POST /question/pause` with form fields `root=<question ref>&paused=true|false` returns `ok` (SPEC CTL-05). A paused question finishes its rounds in flight and starts no new one; `EXPAND` on one of its claims or links still runs that one. The UI's **Pause/Resume** button sits next to the question's cost figure.
-- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow`, `spreadHigh` and `sensitivity` (model C); an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; a claim carries `evidence` (model B) when it has any; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`; a question carries `cruxes` (model C, up to 3 refs for "what would change the answer") and, model D, `firstImpression` (Jev's plausibility of the question before any argument), `neutralCredence` (the root's headline credence from the same arguments weighed from a neutral prior) and `verdictsDisagree` (the two fall on strictly opposite sides of 50%).
+- `GET /graph` returns a `GraphDto` (see `Dto.kt`). Every node has its `credences` per layer, `consensus`, `spreadLow`, `spreadHigh`, model D `argumentsFirstCredences` and `argumentsFirstConsensus`, and `sensitivity` (model C); an argument about a link has `onLink` (the edge), and an undercutter also `undercuts`; a claim carries `evidence` (model B) when it has any; an edge carries its link's `text`, `status`, `override`, `rounds`, `contribution`, `triage`…; a node being explored, judged or assessed has `activity`; a question carries `cruxes` (model C, up to 3 refs for "what would change the answer") and, model D, `firstImpression` (Jev's plausibility of the question before any argument), `neutralCredence` (the root's headline credence from the same arguments weighed from a neutral prior) and `verdictsDisagree` (the two fall on strictly opposite sides of 50%).
 - `GET /events` is an SSE stream. Every message is a full `GraphDto`, and messages are coalesced to at most about 10 per second.
 
 ## Cost and time
@@ -278,11 +296,11 @@ plus a couple of hundred Jev requests. In a calibration run using a per-side
 cap of 4, 2 arguments per call, `--min-influence 0.35`, and 8 processes, a
 60-claim question took about 1 minute on 2026-09-27. It expanded the root and
 6 of the 8 depth-1 claims, one round each, before the cap saturated them.
-Of the 50 depth-2 claims, 37 were `PRUNED` and 13 were `BUDGET`, and no claim
-hit `DEPTH_LIMIT`. With best-first exploration and triage (defaults, both CLIs,
+Of the 50 depth-2 claims, 37 finished for reason `PRUNED` and 13 for `BUDGET`,
+and no claim finished for `DEPTH_LIMIT`. With best-first exploration and triage (defaults, both CLIs,
 "Should cities ban private cars from their centres?"), a 60-claim tree took
 about 1.5 minutes on 2026-09-27: every depth-1 claim was explored, 6 of 38
-depth-2 claims were `BUDGET`, and Jev's triage merged 8 and nested 10
+depth-2 claims finished for reason `BUDGET`, and Jev's triage merged 8 and nested 10
 proposals as evidence. Jev calls slower than 20 s are logged to stderr.
 
 Iteration 4 (turns, balance, canonical prompts, seven credence layers,
@@ -290,8 +308,8 @@ Iteration 4 (turns, balance, canonical prompts, seven credence layers,
 private cars from their centres?": 140 claims in about 3.5 minutes, when the
 tree stopped growing by itself (below the 180-claim budget). The root ended
 6 pro / 5 con after 3 rounds; 11 of the 140 claims were explored at depth 1–3,
-most depth-2 and depth-3 claims ended `PRUNED`, and 27 claims sit at depth 4–5
-(`DEPTH_LIMIT`). Jev's triage over 149 proposals: 92 added, 39 nested as
+most depth-2 and depth-3 claims finished for reason `PRUNED`, and 27 claims
+sit at depth 4–5 with reason `DEPTH_LIMIT`. Jev's triage over 149 proposals: 92 added, 39 nested as
 evidence, 9 undercuts, 3 duplicates, 2 moved sides, 4 dropped. With the
 proposers taking turns, **no** root argument was a cross-proposer duplicate
 (0 of 11), where before about half of Claude/Codex same-round pairs at the root
@@ -353,13 +371,19 @@ time vs 2% for Sol — Jev does not catch this.
 
 With `--data <dir>` a deliberation survives a restart, `kill -9` included.
 Only **inputs** are kept in the one write-ahead file, `host.journal`: topology
-records capture every claim, edge, sensitivity cell and issue framing in
-creation order, while the journal's metadata fold holds per-claim status,
+records capture every claim, edge and issue framing in creation order, while
+the journal's metadata fold holds per-claim status and completion reason,
 override, proposer, rewritten text, the Jev judgments (which are the `jev`
-stances), triage counts, rounds and errors. Nothing derived is written: every
-credence, influence, consensus and sensitivity (model C) is recomputed from
-those inputs on boot. Each framing is one topology delta, so it is either
-present as a complete graph construction or absent. The journal compacts
+stances), triage counts, rounds and errors. New topology deltas create no
+sensitivity cells. Journals written by the retired model-C build may contain
+`SensitivityFactory` spawns and links; those legacy types remain loadable, but
+their derivative output is ignored. Nothing derived is written: ordinary and
+arguments-first credence, influence and consensus are re-derived from the
+restored inputs, while exact value of information and signed sway are evaluated
+on demand and never journaled. Rebuilding the arguments-first view makes no
+model call and adds no cost record. Each framing is one topology delta, so it
+is either present as a complete graph construction or absent. The journal
+compacts
 itself to one checkpoint at boot, at shutdown, and whenever it has grown by
 more than 64 KB and its own last checkpoint size. On restart the topology is
 rebuilt under its recorded refs before metadata frames replay, the trees are
@@ -394,7 +418,11 @@ build/install/deliberate/bin/deliberate 8091 --data <dir> --start-paused
 ```bash
 ./gradlew :demo:deliberate:test --rerun         # fakes only, no network
 DELIBERATE_LIVE=1 ./gradlew :demo:deliberate:test --tests '*LiveSmokeTest' --rerun
-# re-measure the Jev thresholds (CALIBRATION.md); regenerates material only if its cache is absent
+# Re-render the committed production-shape live-tree table, offline:
+./gradlew :demo:deliberate:test --tests 'civictech.deliberate.CalibrationTest.renderVoiFromPersistedTape' --rerun
+# Opt in to live calibration. A complete sequential tape resumes; the committed
+# interrupted tape is evidence-only. Regeneration is DELIBERATE_CALIBRATE_REGEN=1
+# and may spend several dollars.
 DELIBERATE_CALIBRATE=1 ./gradlew :demo:deliberate:test --tests '*CalibrationTest' --rerun
 cd demo/deliberate/ui && npm run typecheck && npm test
 ```

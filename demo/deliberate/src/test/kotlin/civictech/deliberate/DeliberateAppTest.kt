@@ -94,6 +94,11 @@ class DeliberateAppTest {
         })
 
     private fun GraphDto.idle(root: String) = questions.single { it.root == root }.let { !it.active }
+    private fun NodeDto.isDone(reason: Reason) = status == Status.DONE && this.reason == reason
+    private fun assertDone(node: NodeDto, reason: Reason) {
+        assertEquals(Status.DONE, node.status)
+        assertEquals(reason, node.reason)
+    }
 
     @Test
     fun `a question grows a tree visible in graph`() {
@@ -114,15 +119,15 @@ class DeliberateAppTest {
         val r = claims.single { it.ref == root }
         assertEquals(0, r.depth)
         assertEquals("question", r.proposer)
-        assertEquals(Status.ROUND_LIMIT, r.status)
+        assertDone(r, Reason.ROUND_LIMIT)
         assertEquals(setOf("claude", "codex"), claims.filter { it.depth == 1 }.map { it.proposer }.toSet())
-        assertTrue(claims.filter { it.depth == 2 }.all { it.status == Status.DEPTH_LIMIT })
+        assertTrue(claims.filter { it.depth == 2 }.all { it.isDone(Reason.DEPTH_LIMIT) })
         val edges = g.nodes.filter { it.kind == "EDGE" }
         assertEquals(20, edges.size)
         assertEquals(setOf("SUPPORT", "ATTACK"), edges.map { it.polarity }.toSet())
         assertTrue(edges.all { it.strength == 0.7 })
         assertTrue(claims.all { it.credence in 0.0..1.0 })
-        // Model C: over HTTP every node carries its sensitivity, and the question its top-3 cruxes.
+        // The wire-compatible field carries exact sway, and the question carries its top-3 exact-VoI cruxes.
         val settled = probe.awaitGraph { gr -> gr.nodes.all { it.sensitivity != null } && gr.questions.single().cruxes.size == 3 }
         assertTrue(settled.questions.single().cruxes.all { c -> c != root && settled.nodes.any { it.ref == c } })
         assertTrue(settled.nodes.single { it.ref == root }.sensitivity!! > 0)
@@ -234,14 +239,14 @@ class DeliberateAppTest {
         val (_, probe) = app()
         val root = probe.ask("Should we tax sugar?")
         val g = probe.awaitGraph { it.idle(root) }
-        val leaf = g.nodes.first { it.kind == "CLAIM" && it.status == Status.DEPTH_LIMIT }
+        val leaf = g.nodes.first { it.kind == "CLAIM" && it.isDone(Reason.DEPTH_LIMIT) }
         val child = g.nodes.first { it.kind == "CLAIM" && it.depth == 1 }
 
         assertEquals(200, probe.postForm("id=${child.ref}&mode=STOP", "/override").statusCode())
         val stopped = probe.awaitGraph { gr -> gr.nodes.single { it.ref == child.ref }.status == Status.STOPPED }
         assertEquals(Override.STOP, stopped.nodes.single { it.ref == child.ref }.override)
         assertEquals(200, probe.postForm("id=${child.ref}&mode=AUTO", "/override").statusCode())
-        val automatic = probe.awaitGraph { gr -> gr.nodes.single { it.ref == child.ref }.status == Status.ROUND_LIMIT }
+        val automatic = probe.awaitGraph { gr -> gr.nodes.single { it.ref == child.ref }.isDone(Reason.ROUND_LIMIT) }
         assertEquals(Override.AUTO, automatic.nodes.single { it.ref == child.ref }.override)
 
         // EXPAND bypasses the depth gate: the DEPTH_LIMIT leaf grows children.
@@ -251,7 +256,7 @@ class DeliberateAppTest {
         }
         val l = expanded.nodes.single { it.ref == leaf.ref }
         assertEquals(Override.EXPAND, l.override)
-        assertEquals(Status.ROUND_LIMIT, l.status)
+        assertDone(l, Reason.ROUND_LIMIT)
         assertEquals(4, expanded.nodes.count { it.kind == "EDGE" && it.target == leaf.ref })
     }
 
@@ -287,7 +292,7 @@ class DeliberateAppTest {
         assertTrue(held.questions.single().active, "queued work keeps a paused question active")
         assertEquals(200, probe.postForm("root=$root&paused=false", "/question/pause").statusCode())
         val done = probe.awaitGraph { g -> !g.questions.single().paused && g.idle(root) }
-        assertTrue(done.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.status == Status.ROUND_LIMIT })
+        assertTrue(done.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.isDone(Reason.ROUND_LIMIT) })
         // Bad input.
         assertEquals(405, probe.get("/question/pause").statusCode())
         assertEquals(400, probe.postForm("root=nope&paused=true", "/question/pause").statusCode())
@@ -393,6 +398,8 @@ class DeliberateAppTest {
         assertEquals(0.0, Options(arrayOf("--voi-eps", "0")).config.voiEpsilon)
         assertEquals(Int.MAX_VALUE, Options(emptyArray()).config.maxDepth, "the app sets no depth limit")
         assertTrue("--voi-eps" in Options.USAGE && "--max-claims" in Options.USAGE)
+        assertTrue("(${DeliberationEngine.Config.DEFAULT_VOI_EPSILON})" in Options.USAGE, "help prints the VoI default")
+        assertTrue("(${DeliberationEngine.Config.DEFAULT_SATURATION})" in Options.USAGE, "help prints the calibrated saturation default")
         // Knobs kept in code only (SPEC §3 defaults), no longer command-line flags.
         for (gone in listOf(
             "--args-per-call", "--max-args-per-side-child", "--round-decay", "--yield-window", "--yield-ratio",
@@ -532,7 +539,7 @@ class DeliberateAppTest {
             gate2.countDown()
             val resumed = before.nodes.single { it.kind == "CLAIM" && it.depth == 1 && isTarget(it.text) }.ref
             val done = probe2.awaitGraph { g -> g.idle(root) }
-            assertEquals(Status.ROUND_LIMIT, done.nodes.single { it.ref == resumed }.status)
+            assertDone(done.nodes.single { it.ref == resumed }, Reason.ROUND_LIMIT)
             val kids = done.nodes.filter { it.kind == "EDGE" && it.target == resumed }
             assertEquals(4, kids.size)
             assertTrue(kids.all { k -> done.nodes.single { it.ref == k.source }.text!!.startsWith("resumed") })
@@ -659,6 +666,12 @@ class DeliberateAppTest {
             // Topology factories legitimately encode the agora-owned Polarity enum, so assert
             // against the derived Deliberate payload types rather than the whole agora package.
             val live = File(dir, "host.journal")
+            // Engine idle does not imply that the 100 ms metadata persister has fired.
+            // Fence an explicit flush just as the crash-copy assertion below does.
+            synchronized(first.engine) {
+                first.engine.persistNow()
+                hostOf(first).quiescence().await(60_000, "deliberate metadata lands before inspecting the journal")
+            }
             val journal = live.readBytes().decodeToString()
             assertTrue("deliberate.MetaFields" in journal, "the running journal holds metadata frames")
             for (derived in listOf("deliberate.Credence", "deliberate.Influence", "deliberate.Stance")) {

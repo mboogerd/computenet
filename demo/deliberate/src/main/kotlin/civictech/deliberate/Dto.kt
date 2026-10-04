@@ -36,8 +36,8 @@ data class QuestionDto(
     /**
      * Why the tree stopped growing early: "human" (the human stopped the question:
      * STOP on its root, CTL-03), "budget" (the hard cap, EXP-06), "voi"
-     * (model C: no work left, and at least one node ended DIMINISHING because its
-     * value of information fell below ε), or null. ("diminishing", the removed
+     * (model C: no work left, and at least one node ended DONE for reason
+     * DIMINISHING because its value of information fell below ε), or null. ("diminishing", the removed
      * yield stop, is no longer sent.)
      */
     val stoppedBy: String? = null,
@@ -50,10 +50,9 @@ data class QuestionDto(
     /** SPEC §12: what the figure is made of, per backend. */
     val cost: CostDto = CostDto(),
     /**
-     * Model C, "what would change the answer": up to 3 refs of the question's
-     * nodes (claims below the root, and links as EDGE refs) with the highest
-     * |sensitivity| × 4·p·(1 − p) — p the plausibility, a link's its strength,
-     * unjudged ½ — best first. Nodes whose sensitivity is not known yet are left out.
+     * "What would change the answer": up to 3 refs of the question's nodes
+     * (claims below the root, and links as EDGE refs) with the highest exact,
+     * q-weighted expected root movement, best first.
      */
     val cruxes: List<String> = emptyList(),
     /**
@@ -107,7 +106,10 @@ data class PositionDto(
     val neutralCredence: Double? = null,
     /** Model D: its credence and [neutralCredence] fall strictly on different sides of ½. */
     val verdictsDisagree: Boolean = false,
-    /** POSITIONS: its share of the consensus shares (the shares sum to 1); null for READINGS. */
+    /**
+     * POSITIONS: its absolute consensus share; null for READINGS. Listed shares
+     * may sum below 1, whose remainder means none of the listed answers.
+     */
     val share: Double? = null,
 )
 
@@ -152,16 +154,17 @@ data class BackendCostDto(
     val note: String? = null,
 )
 
-/**
- * SPEC §5. DIMINISHING (model C): its value of information fell below ε before
- * its next round (records written before model C: the removed yield stop).
- * DEPTH_LIMIT arises only from an explicit engine `maxDepth` (no longer a stop rule).
- */
 enum class Status {
-    QUEUED, JUDGING, EXPLORING, SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING, STOPPED, FAILED,
+    QUEUED, JUDGING, EXPLORING,
     /** Model A: a question root that was framed — its readings/positions are explored instead of it. */
     FRAMED,
+    /** Expansion completed; [NodeDto.reason] says why. */
+    DONE,
+    STOPPED, FAILED,
 }
+
+/** SPEC §5: why a [Status.DONE] claim completed its expansion. */
+enum class Reason { SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING }
 
 enum class Override { AUTO, EXPAND, STOP }
 
@@ -180,6 +183,14 @@ data class NodeDto(
     /** Lowest and highest credence over all layers. */
     val spreadLow: Double = credence,
     val spreadHigh: Double = credence,
+    /**
+     * Model D's local arguments-first view per layer: the same direct argument
+     * inputs with this node's prior set to ½. An unargued node keeps
+     * [credences], because there is no argument-driven standing yet.
+     */
+    val argumentsFirstCredences: Map<String, Double> = credences,
+    /** Geometric-odds consensus of [argumentsFirstCredences]. */
+    val argumentsFirstConsensus: Double = consensus,
     // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth, status,
     // override, reach, contribution, saturation, rounds, duplicatesDropped, triage,
     // error, activity) ---
@@ -188,6 +199,8 @@ data class NodeDto(
     /** A link's depth is its argument's depth. */
     val depth: Int? = null,
     val status: Status? = null,
+    /** Present exactly when [status] is [Status.DONE]. */
+    val reason: Reason? = null,
     val override: Override? = null,
     /**
      * What the node is doing right now, for the UI's activity line: "exploring"
@@ -227,14 +240,17 @@ data class NodeDto(
     /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
     val quality: Double? = null,
     /**
-     * Shown only since model C (the queue follows sensitivity × 4·p·(1 − p)): reach × relevance × quality × 4·p·(1 − p),
-     * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
+     * Reference-only legacy contribution: reach × relevance × quality × 4·p·(1 − p),
+     * p its plausibility (root = 1; model B); for a link, its argument's contribution
+     * without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength. Exact VoI,
+     * not this display value, controls the queue and stop gate.
      */
     val contribution: Double? = null,
     /**
-     * Model C: d headline(root) / d this node's credence — how far the question's
-     * headline credence moves per unit move of this node's (every layer at once),
-     * from the sensitivity cells. Root ≈ 1; a link's is its edge's. Null until known.
+     * Wire-compatible "sway" for the crux panel: the exact signed secant
+     * R(node=1) − R(node=0) for the answer root to which this node has the
+     * largest q-weighted value. Positive means resolving it true raises that
+     * answer; negative lowers it. Root = 1. Null until the node is in the graph.
      */
     val sensitivity: Double? = null,
     /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */

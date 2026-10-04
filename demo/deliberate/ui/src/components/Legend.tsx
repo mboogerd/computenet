@@ -52,7 +52,8 @@ export function Legend() {
           <dt>Readings / positions</dt>
           <dd>
             An ambiguous question is split into readings — each explored on its own, with its own verdict. An open
-            question is split into possible answers instead; their shares sum to 100%.
+            question is split into possible answers instead. Their absolute shares plus any <em>none of the listed
+            answers</em> remainder sum to 100%.
           </dd>
           <dt>
             <span class="glyph glyph--stripe glyph--pro" aria-hidden="true" />

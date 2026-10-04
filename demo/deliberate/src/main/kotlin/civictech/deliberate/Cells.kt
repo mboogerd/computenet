@@ -49,11 +49,20 @@ data class Credence(
     val spreadHigh: Double,
     val size: Double,
     /**
-     * Model D, a question root only: the same arguments weighed from a neutral
-     * prior ([LayerSet.WEAK_PRIOR_WEIGHT]) instead of Jev's first impression —
-     * "what the arguments say". Null for every other node.
+     * Model D's arguments-first view: the same direct argument inputs weighed
+     * from a neutral prior ([LayerSet.WEAK_PRIOR_WEIGHT]) instead of this
+     * node's Jev prior. An unargued node keeps [values], so the view never
+     * invents a neutral standing where no argument exists. Nullable only for
+     * additive payload compatibility; new claim and edge cells always emit it.
      */
     val neutral: List<Double>? = null,
+    /**
+     * Model D: true once the node has an incoming argument, so [neutral] is its
+     * own neutral-prior evaluation rather than a copy of [values]. A question
+     * or reading root's "arguments alone" verdict reads it to keep its
+     * unargued value at the neutral ½, exactly as before the view generalised.
+     */
+    val argued: Boolean = false,
 ) : java.io.Serializable, Magnitude {
     override fun size(): Double = size
 }
@@ -93,8 +102,6 @@ private fun maxDelta(a: List<Double>, b: List<Double>): Double =
 open class ClaimNode(
     override val ref: CellRef,
     protected val layers: LayerSet,
-    /** Model D: a question root, which also emits [Credence.neutral]. */
-    private val neutralPrior: Boolean = false,
 ) : Cell {
     val stanceInlet = registerPort("stanceInlet", FanInlet.create<Propagate<Stance>>())
     val influenceInlet = registerPort("influenceInlet", FanInlet.create<Propagate<Influence>>())
@@ -105,12 +112,10 @@ open class ClaimNode(
     /** Ref-sorted so every layer folds its arguments in one fixed order (FP determinism). */
     private val influences = TreeMap<CellRef, Influence>(REF_ORDER)
 
+    private val initial = layers.evaluate(emptyList(), emptyList(), emptyList())
+
     @Volatile
-    var credence: Credence = credenceOf(
-        layers.evaluate(emptyList(), emptyList(), emptyList()),
-        if (neutralPrior) layers.evaluate(emptyList(), emptyList(), emptyList(), LayerSet.WEAK_PRIOR_WEIGHT) else null,
-        size = 0.0,
-    )
+    var credence: Credence = credenceOf(initial, initial, size = 0.0)
         private set
 
     init {
@@ -130,8 +135,8 @@ open class ClaimNode(
         credenceOutlet.catchUpOnLinked { credence.copy(size = 1.0) }
     }
 
-    private fun credenceOf(values: List<Double>, neutral: List<Double>?, size: Double) =
-        Credence(ref, values, layers.consensus(values), values.min(), values.max(), size, neutral)
+    private fun credenceOf(values: List<Double>, neutral: List<Double>, size: Double, argued: Boolean = false) =
+        Credence(ref, values, layers.consensus(values), values.min(), values.max(), size, neutral, argued)
 
     private fun recompute() {
         val attacks = ArrayList<List<Arg>>()
@@ -141,10 +146,15 @@ open class ClaimNode(
             if (i.polarity == Polarity.SUPPORT) supports += args else attacks += args
         }
         val values = layers.evaluate(stances.values, attacks, supports)
-        val neutral = if (neutralPrior) layers.evaluate(stances.values, attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT) else null
-        if (values != credence.values || neutral != credence.neutral) {
-            val size = maxOf(maxDelta(values, credence.values), neutral?.let { maxDelta(it, credence.neutral!!) } ?: 0.0)
-            credence = credenceOf(values, neutral, size)
+        // No arguments means there is nothing to evaluate "arguments first":
+        // keep the ordinary Jev prior. Once argued, change only this node's
+        // base; its argument vectors are the same ordinary inputs as before.
+        val argued = influences.isNotEmpty()
+        val neutral = if (!argued) values else
+            layers.evaluate(stances.values, attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT)
+        if (values != credence.values || neutral != credence.neutral || argued != credence.argued) {
+            val size = maxOf(maxDelta(values, credence.values), maxDelta(neutral, credence.neutral ?: credence.values))
+            credence = credenceOf(values, neutral, size, argued)
             credenceOutlet.call.propagate(credence)
             onCredence()
         }
@@ -211,11 +221,12 @@ class EdgeNode(
 
 /**
  * Model A: the shares of the competing positions of one issue ([source] = the
- * issue's root): [values] per position (in [positions] order) per layer, each
- * layer a [Softmax] over the positions' credences in that layer, and
- * [consensus] per position, a softmax over each position's consensus. Derived
- * and volatile like a credence (SPEC DUR-01). [size] is the largest
- * per-position-per-layer change against the previous emission.
+ * issue's root): [values] per position (in [positions] order) per layer, and
+ * [consensus] per position. [Softmax.shares] treats the credences as absolute
+ * weights: listed shares may sum below one, with the remainder meaning none of
+ * the listed positions. Derived and volatile like a credence (SPEC DUR-01).
+ * [size] is the largest per-position-per-layer change against the previous
+ * emission.
  */
 @Serializable
 @SerialName("deliberate.Shares")
@@ -230,11 +241,11 @@ data class Shares(
 }
 
 /**
- * Model A: the "softmax cell" of a POSITIONS issue. Hears every position's
+ * Model A: the distribution cell of a POSITIONS issue. Hears every position's
  * [Credence] (keyed by [Credence.source]) and emits their [Shares]; a
  * position not heard from yet counts ½ in every layer and in the consensus.
- * Nothing it emits is wired into a credence or sensitivity cell (CRED-03):
- * shares are a read of the positions' credences, never an input to them.
+ * Nothing it emits is wired into a credence cell (CRED-03): shares are a read
+ * of the positions' credences, never an input to them.
  */
 class IssueNode(
     override val ref: CellRef,
@@ -309,7 +320,7 @@ class CredenceHubView(private val onUpdate: () -> Unit = {}) : View<Credence, Ma
     private var credences: Map<CellRef, Credence> = emptyMap()
 
     override fun apply(delta: Credence): Boolean {
-        val changed = credences[delta.source].let { it?.values != delta.values || it.neutral != delta.neutral }
+        val changed = credences[delta.source].let { it?.values != delta.values || it.neutral != delta.neutral || it.argued != delta.argued }
         if (changed) {
             credences = credences + (delta.source to delta)
             onUpdate()

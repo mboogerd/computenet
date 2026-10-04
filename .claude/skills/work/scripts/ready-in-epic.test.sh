@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for ready-in-epic.sh. Stubs `bd`. Expect "18 passed, 0 failed".
+# Tests for ready-in-epic.sh. Stubs `bd`. Expect "23 passed, 0 failed".
 #
 # The load-bearing case is DEPTH: bd ready --parent reaches direct children
 # only, and this script exists because of that (computenet-28vn). Case 3 is the
@@ -19,6 +19,9 @@ echo "Warning: beads.role not set"        # bd prints warnings BEFORE the JSON
 case "$1" in
   ready) cat "$CTRL/ready.json" ;;
   list)  cat "$CTRL/all.json" ;;
+  blocked) cat "$CTRL/blocked.json" 2>/dev/null ;;
+  dep)   cat "$CTRL/deps.$3" 2>/dev/null ;;
+  show)  echo '[{"id":"'"$2"'","parent":null}]' ;;
 esac
 [ -n "${BD_FAIL:-}" ] && exit 1 || exit 0
 EOF
@@ -100,6 +103,34 @@ out=$("$SCRIPT" computenet-e 2>/dev/null); rc=$?
 ck "a crashing walk exits 3, never an empty epic" "3" "$rc"
 nk "and prints nothing that reads as an answer" "computenet" "$out"
 cp "$ROOT/ready.keep" "$ROOT/ready.json"
+
+# --- stale is_blocked (computenet-deb4) ---------------------------------------
+# bd's is_blocked goes stale when a blocker closes, so a NON-empty listing can
+# omit the epic's most important item: one returned four P2/P3 rows while the
+# only P1 feature sat flagged blocked behind three closed blockers.
+cat > "$ROOT/blocked.json" <<'EOF'
+[{"id":"computenet-e.5","status":"open","priority":1,"title":"stale-flagged P1"},
+ {"id":"computenet-e.6","status":"open","priority":2,"title":"really blocked"},
+ {"id":"computenet-other.1","status":"open","priority":2,"title":"another epic"}]
+EOF
+cp "$ROOT/all.json" "$ROOT/all.keep"
+python3 - "$ROOT/all.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d += [{"id":"computenet-e.5","issue_type":"feature","parent":None,"status":"open"},
+      {"id":"computenet-e.6","issue_type":"feature","parent":None,"status":"open"}]
+json.dump(d, open(p, "w"))
+PY2
+printf '  computenet-x1: a [P2] (closed) via blocks\n  computenet-x2: b [P2] (closed) via blocks\n' > "$ROOT/deps.computenet-e.5"
+printf '  computenet-x3: c [P2] (open) via blocks\n' > "$ROOT/deps.computenet-e.6"
+rows=$("$SCRIPT" computenet-e 2>/dev/null); rc=$?
+ck "an is_blocked row whose blockers all closed is emitted" "computenet-e.5	feature	1	stale-flagged P1	stale-blocked" "$rows"
+nk "one with an open blocker is not" "computenet-e.6" "$rows"
+nk "another epic's blocked row is not" "computenet-other.1" "$rows"
+ck "the primary rows still stand, and exit 0" "computenet-e.1.2.3	task	2	" "$rows$rc"
+ids=$("$SCRIPT" computenet-e --ids-only 2>/dev/null)
+ck "--ids-only carries the stale-blocked id bare" $'\ncomputenet-e.5' $'\n'"$ids"
+cp "$ROOT/all.keep" "$ROOT/all.json"; rm -f "$ROOT/blocked.json"
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

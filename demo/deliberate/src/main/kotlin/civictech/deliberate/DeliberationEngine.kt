@@ -18,10 +18,9 @@ import kotlin.time.Duration
  *
  * Threading: claims are expanded by `config.workers` threads pulling from one
  * priority queue (SPEC §3 "Exploration order"). One queue task runs one round:
- * a task's priority is the claim's value of information (model C:
- * |d root / d claim| × 4·p·(1 − p), the sensitivity read from the graph's
- * sensitivity cells when a worker takes its next task, so the order follows
- * the dataflow as it stands then; the root is 1) times
+ * a task's priority is the claim's exact q-weighted value of information,
+ * recomputed on demand from the graph snapshot for every active answer root
+ * when a worker takes its next task (the root is 1), times
  * `roundDecay` per round the claim already ran, so a claim with rounds left
  * re-enters the queue behind stronger fresh work. Within a round the
  * proposers take turns (EXP-02); a turn fans its per-side calls out on a
@@ -95,15 +94,16 @@ class DeliberationEngine(
         val maxClaims: Int = 180,
         val workers: Int = 8,
         /**
-         * Model C: a node whose value of information ([ExplorationPolicy.voiOf]) is
-         * below this gets no further round (DIMINISHING), so a question stops once
-         * the largest value of information over its remaining nodes is below it
+         * A node whose exact value of information ([ExplorationPolicy.voiOf]) is
+         * below this gets no further round (DONE with reason DIMINISHING), so a question stops once
+         * the largest value over its remaining nodes is below it
          * (`--voi-eps`). 0 disables the stop.
          */
         val voiEpsilon: Double = DEFAULT_VOI_EPSILON,
         /**
          * SPEC §3 "Links as claims": links compete in the queue like claims. Off, a
-         * link is never explored automatically (it ends PRUNED); EXPAND still explores it.
+         * link is never explored automatically (it ends DONE with reason PRUNED);
+         * EXPAND still explores it.
          */
         val exploreLinks: Boolean = true,
         /**
@@ -124,9 +124,10 @@ class DeliberationEngine(
         companion object {
             const val DEFAULT_SATURATION = 0.22
             /**
-             * Model C's ε. A starting value, not a calibrated one: a scratch model review
-             * (2026-09-27, not in the repo) found about half of the explored claims could
-             * not move the root by 0.01.
+             * Model C's ε. A starting value, still uncalibrated: the 2026-10-04
+             * bounded run could not distinguish 0..0.04, and its production-shape
+             * follow-up ended two trees at their claim cap without completing the
+             * replayable three-question sample. See CALIBRATION.md.
              */
             const val DEFAULT_VOI_EPSILON = 0.01
             /** EXP-10: the recent-yield window QuestionDto reports (the yield stop itself is gone). */
@@ -148,7 +149,7 @@ class DeliberationEngine(
     private val policy = ExplorationPolicy(config)
     /** Guarded by [lock], like every [state] collection. */
     private val ledger = CostLedger(pricing)
-    private val projection = GraphProjection(policy, ledger)
+    private val projection = GraphProjection(service, policy, ledger)
     private val state = EngineState()
     private val claims = state.claims
     private val edges = state.edges
@@ -160,8 +161,8 @@ class DeliberationEngine(
     private val pending = AtomicInteger()
     private val idle = Object()
     /**
-     * The ready tasks. Not a priority heap: model C's priorities move with the
-     * sensitivity cells, so [take] ranks the tasks when a worker asks ([currentPriority]).
+     * The ready tasks. Not a priority heap: priorities move with the credence
+     * graph, so [take] ranks the tasks when a worker asks ([currentPriority]).
      */
     private val queue = ArrayList<Task>()
     private val seq = AtomicLong()
@@ -253,7 +254,7 @@ class DeliberationEngine(
             if (questionRoot && mode == Override.AUTO && stopped.remove(c.root)) {
                 c.forceRound = false
                 restarted = claims.values.filter { it.root == c.root && it.status == Status.STOPPED && it.override != Override.STOP }
-                restarted.forEach { it.status = Status.QUEUED }
+                restarted.forEach { it.status = Status.QUEUED; it.reason = null }
                 return@synchronized emptyList()
             }
             // STOP cancels queued work; AUTO returns to ordinary gates. Neither keeps an earlier forced round.
@@ -264,10 +265,12 @@ class DeliberationEngine(
                     c.status == Status.EXPLORING && c.waiting -> {
                         c.waiting = false
                         c.status = Status.STOPPED
+                        c.reason = null
                         emptyList()
                     }
                     c.status !in setOf(Status.JUDGING, Status.EXPLORING) -> {
                         c.status = Status.STOPPED
+                        c.reason = null
                         emptyList()
                     }
                     else -> emptyList()
@@ -275,6 +278,7 @@ class DeliberationEngine(
                 // CTL-04: back through the normal gates.
                 Override.AUTO -> if (c.status == Status.STOPPED) {
                     c.status = Status.QUEUED
+                    c.reason = null
                     listOf(c)
                 } else emptyList()
                 // CTL-02: the claim's next round is forced — whatever its status, budget included.
@@ -283,6 +287,7 @@ class DeliberationEngine(
                         c.roundLimit = maxOf(c.roundLimit, c.rounds + 1)
                         c.forceRound = true
                         c.status = Status.QUEUED
+                        c.reason = null
                         listOf(c)
                     }
                     c.status == Status.QUEUED -> {
@@ -339,6 +344,7 @@ class DeliberationEngine(
     /** Caller holds [lock]. Ends [c]'s withheld or queued work as STOPPED; a task already queued goes stale. */
     private fun cancel(c: Claim) {
         c.status = Status.STOPPED
+        c.reason = null
         c.waiting = false
         c.parked = false
         c.needsAssessment = false
@@ -518,8 +524,8 @@ class DeliberationEngine(
     }
 
     /**
-     * Caller holds [lock]. A task's priority now ([ExplorationPolicy.priorityOf] at
-     * the claim's current sensitivity); a stale task ranks first, so it is discarded at once.
+     * Caller holds [lock]. A task's priority now ([ExplorationPolicy.priorityOf]
+     * over exact on-demand VoI); a stale task ranks first, so it is discarded at once.
      */
     private fun currentPriority(t: Task): Double =
         if (t.generation != t.claim.queueGeneration) Double.MAX_VALUE else policy.priorityOf(viewOf(t.claim))
@@ -527,8 +533,24 @@ class DeliberationEngine(
     /** Caller holds [lock]. What [ExplorationPolicy] sees of [c]'s question. */
     private fun questionView(c: Claim) = state.questionView(c.root)
 
-    /** Caller holds [lock]. What [ExplorationPolicy] sees of [c], with its current sensitivity (model C). */
-    private fun viewOf(c: Claim) = c.view(service.sensitivityOf(c.ref))
+    /**
+     * Caller holds [lock]. Answer roots of every question that still has work.
+     * Framed questions contribute their reading/position roots; the disconnected
+     * FRAMED question node itself is excluded. Exact evaluation gives zero to
+     * roots a node cannot reach and sums every root it can reach.
+     */
+    private fun activeAnswerRoots(): Set<CellRef> {
+        val activeQuestions = claims.values.filter { it.status in ExplorationPolicy.ACTIVE }.mapTo(HashSet()) { it.root }
+        return claims.values.asSequence()
+            .filter { it.parent == null && it.status != Status.FRAMED && it.root in activeQuestions }
+            .mapTo(linkedSetOf()) { it.ref }
+    }
+
+    /** Caller holds [lock]. What [ExplorationPolicy] sees of [c], with exact on-demand VoI. */
+    private fun viewOf(c: Claim): ClaimView {
+        val exact = service.exactValueOf(c.ref, activeAnswerRoots())?.expectedRootChange
+        return c.view(exact)
+    }
 
     /** Caller holds [lock]. CTL-05: [c]'s question is paused and its next round is not a forced one (CTL-02). */
     private fun held(c: Claim) = policy.held(c.view(), questionView(c))
@@ -601,7 +623,7 @@ class DeliberationEngine(
             if (c.status != Status.QUEUED) return
             when {
                 // CTL-03 on the root: a stopped question queues nothing (finish records the STOPPED).
-                cancelled(c) -> Status.STOPPED
+                cancelled(c) -> Finish(Status.STOPPED)
                 held(c) -> {
                     c.parked = true
                     return
@@ -655,7 +677,7 @@ class DeliberationEngine(
             if (continuing) step(c) else start(c)
         } catch (t: Throwable) {
             // EXP-08: never let an exception kill a worker or leave a claim stuck.
-            finish(c, Status.FAILED, error = t.toString())
+            finish(c, Finish(Status.FAILED), error = t.toString())
             true
         }
         if (!finished) {
@@ -668,7 +690,7 @@ class DeliberationEngine(
         // still active. The latter must not be lost at the finish boundary.
         val forcedRequeue = synchronized(lock) {
             (c.override == Override.EXPAND && c.forceRound && c.status in FINISHED)
-                .also { if (it) c.status = Status.QUEUED }
+                .also { if (it) { c.status = Status.QUEUED; c.reason = null } }
         }
         if (forcedRequeue) {
             onChange()
@@ -691,7 +713,7 @@ class DeliberationEngine(
         // Model A: a framed root is never explored itself (an EXPAND on it runs no round).
         if (synchronized(lock) { c.framing.let { it != null && it.mode != FramingMode.NONE } }) {
             update { c.forceRound = false }
-            return finish(c, Status.FRAMED)
+            return finish(c, Finish(Status.FRAMED))
         }
         if (frame(c)) return true
         // CRED-01 (a link's stance is its argument's CRED-02 strength, judged at attach time)
@@ -721,7 +743,7 @@ class DeliberationEngine(
             }
             if (budgetGate != null) return finish(c, budgetGate)
         }
-        // Model C: the value of information is re-read now; it may have fallen since the claim was queued.
+        // Exact value of information is re-read now; it may have fallen since the claim was queued.
         val voiGate = synchronized(lock) { policy.startVoiGate(viewOf(c)) }
         if (voiGate != null) return finish(c, voiGate)
         update { c.status = Status.EXPLORING }
@@ -736,7 +758,7 @@ class DeliberationEngine(
     private fun step(c: Claim): Boolean {
         val (sides, forcedRound, terminal) = synchronized(lock) {
             // CTL-03 on the root: the question was stopped while this claim waited for its next round.
-            if (cancelled(c)) return@synchronized Triple(emptyList<Side>(), false, Status.STOPPED)
+            if (cancelled(c)) return@synchronized Triple(emptyList<Side>(), false, Finish(Status.STOPPED))
             if (held(c)) {
                 c.parked = true
                 c.waiting = true
@@ -814,7 +836,7 @@ class DeliberationEngine(
                 Claim(ref, c.root, null, null, item, 0, proposer, config.maxRounds).also { claims[ref] = it }
             }.also { treeSize.merge(c.root, it.size, Int::plus) }
         }
-        finish(c, Status.FRAMED)
+        finish(c, Finish(Status.FRAMED))
         positions.forEach(::schedule)
         return true
     }
@@ -829,12 +851,12 @@ class DeliberationEngine(
         update { ledger.record(root, u, usd) }
     }
 
-    /** Ends [c]'s expansion with [status] as [ExplorationPolicy.finish] rules and returns true. */
-    private fun finish(c: Claim, status: Status, error: String? = null): Boolean = update {
+    /** Ends [c]'s expansion with [outcome] as [ExplorationPolicy.finish] rules and returns true. */
+    private fun finish(c: Claim, outcome: Finish, error: String? = null): Boolean = update {
         c.waiting = false
-        val end = policy.finish(c.view(), status)
+        val end = policy.finish(c.view(), outcome)
         c.status = end.status
-        end.error?.let { c.error = it }
+        c.reason = end.reason.takeIf { end.status == Status.DONE }
         if (error != null) c.error = error
         true
     }

@@ -147,9 +147,9 @@ describe('buildForest', () => {
     ],
     nodes: [
       { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'Do fish sleep?', depth: 0, status: 'FRAMED' },
-      { ref: 'p1', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Do fish enter a rest state?', depth: 0, positionOf: 'q', status: 'SATURATED' },
+      { ref: 'p1', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Do fish enter a rest state?', depth: 0, positionOf: 'q', status: 'DONE', reason: 'SATURATED' },
       { ref: 'p2', kind: 'CLAIM', credence: 0.2, root: 'q', text: 'Do fish show REM-like brain activity?', depth: 0, positionOf: 'q', status: 'QUEUED' },
-      { ref: 'a1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'Fish become unresponsive at night.', depth: 1, status: 'SATURATED' },
+      { ref: 'a1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'Fish become unresponsive at night.', depth: 1, status: 'DONE', reason: 'SATURATED' },
       { ref: 'a1-p1', kind: 'EDGE', credence: 0.7, root: 'q', polarity: 'SUPPORT', source: 'a1', target: 'p1', strength: 0.7 },
     ],
   };

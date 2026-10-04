@@ -28,9 +28,21 @@ class ExplorationPolicyTest {
     private fun near(expected: Double, actual: Double, what: String) =
         assertEquals(expected, actual, 1e-12, what)
 
-    /** Model C: sensitivity 0.5 at p = ½ — value of information 0.5. */
-    private val fresh = ClaimView(depth = 1, contribution = 0.5, sensitivity = 0.5, plausibility = 0.5)
+    /** Exact expected answer movement 0.5 before round decay. */
+    private val fresh = ClaimView(depth = 1, contribution = 0.5, valueOfInformation = 0.5, plausibility = 0.5)
     private val q = QuestionView(treeSize = 10)
+
+    @Test
+    fun `status and reason vocabularies are exact`() {
+        assertEquals(
+            listOf("QUEUED", "JUDGING", "EXPLORING", "FRAMED", "DONE", "STOPPED", "FAILED"),
+            Status.entries.map { it.name },
+        )
+        assertEquals(
+            listOf("SATURATED", "ROUND_LIMIT", "PRUNED", "DEPTH_LIMIT", "BUDGET", "DIMINISHING"),
+            Reason.entries.map { it.name },
+        )
+    }
 
     // ---------------------------------------------------------------- scheduleGate (EXP-05/06, model C, links)
 
@@ -39,32 +51,32 @@ class ExplorationPolicyTest {
         val full = q.copy(treeSize = 180)
         val deep = ExplorationPolicy(Config(maxDepth = 5))
         table(
-            Case("the root is never gated", fresh.copy(isRoot = true, depth = 99, sensitivity = 0.0) to full, null),
+            Case("the root is never gated", fresh.copy(isRoot = true, depth = 99, valueOfInformation = 0.0) to full, null),
             Case("EXPAND skips every gate (CTL-02)", fresh.copy(override = Override.EXPAND, depth = 99) to full, null),
-            Case("a forced round skips every gate (CTL-02)", fresh.copy(forceRound = true, sensitivity = 0.0) to full, null),
+            Case("a forced round skips every gate (CTL-02)", fresh.copy(forceRound = true, valueOfInformation = 0.0) to full, null),
             Case("a link is gated like a claim when link exploration is on", fresh.copy(isLink = true) to q, null),
-            Case("beyond an explicit maxDepth is DEPTH_LIMIT", fresh.copy(depth = 6) to q, Status.DEPTH_LIMIT),
+            Case("beyond an explicit maxDepth is DEPTH_LIMIT", fresh.copy(depth = 6) to q, Finish(Status.DONE, Reason.DEPTH_LIMIT)),
             Case("at maxDepth passes", fresh.copy(depth = 5) to q, null),
-            Case("depth wins over the value of information", fresh.copy(depth = 6, sensitivity = 0.0) to q, Status.DEPTH_LIMIT),
-            Case("a full tree is BUDGET (EXP-06)", fresh to full, Status.BUDGET),
+            Case("depth wins over the value of information", fresh.copy(depth = 6, valueOfInformation = 0.0) to q, Finish(Status.DONE, Reason.DEPTH_LIMIT)),
+            Case("a full tree is BUDGET (EXP-06)", fresh to full, Finish(Status.DONE, Reason.BUDGET)),
             // Changed by model C: the relevance floor (PRUNED below contribution 0.10) is gone; the
             // hard cap now wins over a low value of information.
-            Case("budget wins over the value of information", fresh.copy(sensitivity = 0.0) to full, Status.BUDGET),
-            Case("a value of information below 0.01 is DIMINISHING", fresh.copy(sensitivity = 0.0099) to q, Status.DIMINISHING),
-            Case("at 0.01 it passes", fresh.copy(sensitivity = 0.01) to q, null),
-            Case("a settled premise has no value: p = 0.999", fresh.copy(sensitivity = 1.0, plausibility = 0.999) to q, Status.DIMINISHING),
+            Case("budget wins over the value of information", fresh.copy(valueOfInformation = 0.0) to full, Finish(Status.DONE, Reason.BUDGET)),
+            Case("a value of information below 0.01 is DIMINISHING", fresh.copy(valueOfInformation = 0.0099) to q, Finish(Status.DONE, Reason.DIMINISHING)),
+            Case("at 0.01 it passes", fresh.copy(valueOfInformation = 0.01) to q, null),
+            Case("an exact settled premise has no value", fresh.copy(valueOfInformation = 0.0, plausibility = 0.999) to q, Finish(Status.DONE, Reason.DIMINISHING)),
             Case("a low contribution no longer prunes", fresh.copy(contribution = 0.01) to q, null),
-            Case("unknown sensitivity counts FALLBACK_STRENGTH", fresh.copy(sensitivity = null) to q, null),
+            Case("unknown exact value counts FALLBACK_STRENGTH", fresh.copy(valueOfInformation = null) to q, null),
             Case("pausing is not a gate (the engine holds, CTL-05)", fresh to q.copy(paused = true), null),
         ) { (c, qv) -> deep.scheduleGate(c, qv) }
         assertEquals(null, defaults.scheduleGate(fresh.copy(depth = 99), q), "no depth limit by default")
-        assertEquals(null, ExplorationPolicy(Config(voiEpsilon = 0.0)).scheduleGate(fresh.copy(sensitivity = 0.0), q), "ε = 0 disables the stop")
+        assertEquals(null, ExplorationPolicy(Config(voiEpsilon = 0.0)).scheduleGate(fresh.copy(valueOfInformation = 0.0), q), "ε = 0 disables the stop")
     }
 
     @Test
     fun `schedule gate — link exploration off prunes a link and nothing else`() {
         val off = ExplorationPolicy(Config(exploreLinks = false))
-        assertEquals(Status.PRUNED, off.scheduleGate(fresh.copy(isLink = true), q))
+        assertEquals(Finish(Status.DONE, Reason.PRUNED), off.scheduleGate(fresh.copy(isLink = true), q))
         assertEquals(null, off.scheduleGate(fresh, q))
         assertEquals(null, off.scheduleGate(fresh.copy(isLink = true, override = Override.EXPAND), q), "EXPAND still explores a link")
     }
@@ -75,13 +87,13 @@ class ExplorationPolicyTest {
     fun `start gates — budget, then value of information, and a forced round passes`() {
         table(
             Case("room left", false to 179, null),
-            Case("a full tree", false to 180, Status.BUDGET),
+            Case("a full tree", false to 180, Finish(Status.DONE, Reason.BUDGET)),
             Case("forced passes budget", true to 180, null),
         ) { (forced, size) -> defaults.startBudgetGate(forced, size) }
         table(
             Case("worth a round", fresh, null),
-            Case("below ε", fresh.copy(sensitivity = 0.001), Status.DIMINISHING),
-            Case("forced passes the value of information", fresh.copy(sensitivity = 0.001, forceRound = true), null),
+            Case("below ε", fresh.copy(valueOfInformation = 0.001), Finish(Status.DONE, Reason.DIMINISHING)),
+            Case("forced passes the value of information", fresh.copy(valueOfInformation = 0.001, forceRound = true), null),
         ) { defaults.startVoiGate(it) }
     }
 
@@ -93,24 +105,24 @@ class ExplorationPolicyTest {
         val full = q.copy(treeSize = 180)
         table(
             Case("a round left", fresh to q, null),
-            Case("STOP ends it (CTL-03)", fresh.copy(override = Override.STOP) to q, Status.STOPPED),
-            Case("STOP ends even a forced round", fresh.copy(override = Override.STOP, forceRound = true) to q, Status.STOPPED),
-            Case("STOP wins over saturation", bothSaturated.copy(override = Override.STOP) to q, Status.STOPPED),
-            Case("a stopped question ends it (CTL-03 on the root)", fresh to q.copy(stopped = true), Status.STOPPED),
+            Case("STOP ends it (CTL-03)", fresh.copy(override = Override.STOP) to q, Finish(Status.STOPPED)),
+            Case("STOP ends even a forced round", fresh.copy(override = Override.STOP, forceRound = true) to q, Finish(Status.STOPPED)),
+            Case("STOP wins over saturation", bothSaturated.copy(override = Override.STOP) to q, Finish(Status.STOPPED)),
+            Case("a stopped question ends it (CTL-03 on the root)", fresh to q.copy(stopped = true), Finish(Status.STOPPED)),
             Case("a stopped question still runs a forced round", fresh.copy(forceRound = true) to q.copy(stopped = true), null),
-            Case("both sides saturated", bothSaturated to q, Status.SATURATED),
+            Case("both sides saturated", bothSaturated to q, Finish(Status.DONE, Reason.SATURATED)),
             Case("one side saturated leaves the other", fresh.copy(jevSaturated = setOf(SUPPORT)) to q, null),
             Case("a forced round ignores saturation", bothSaturated.copy(forceRound = true) to q, null),
-            Case("rounds used up", fresh.copy(rounds = 3, roundLimit = 3) to q, Status.ROUND_LIMIT),
+            Case("rounds used up", fresh.copy(rounds = 3, roundLimit = 3) to q, Finish(Status.DONE, Reason.ROUND_LIMIT)),
             Case("a forced round ignores the round limit", fresh.copy(rounds = 3, roundLimit = 3, forceRound = true) to q, null),
-            Case("saturation wins over the round limit", bothSaturated.copy(rounds = 3, roundLimit = 3) to q, Status.SATURATED),
-            Case("round limit wins over the budget", fresh.copy(rounds = 3, roundLimit = 3) to full, Status.ROUND_LIMIT),
-            Case("a full tree", fresh to full, Status.BUDGET),
+            Case("saturation wins over the round limit", bothSaturated.copy(rounds = 3, roundLimit = 3) to q, Finish(Status.DONE, Reason.SATURATED)),
+            Case("round limit wins over the budget", fresh.copy(rounds = 3, roundLimit = 3) to full, Finish(Status.DONE, Reason.ROUND_LIMIT)),
+            Case("a full tree", fresh to full, Finish(Status.DONE, Reason.BUDGET)),
             Case("a forced round ignores the budget", fresh.copy(forceRound = true) to full, null),
             // 0.5 × 0.5^5 = 0.0156 still worth a round; × 0.5^6 = 0.0078 is not.
             Case("round decay keeps a valuable claim going", fresh.copy(rounds = 5, roundLimit = 9) to q, null),
-            Case("round decay takes its value below ε", fresh.copy(rounds = 6, roundLimit = 9) to q, Status.DIMINISHING),
-            Case("a forced round ignores the value of information", fresh.copy(sensitivity = 0.0, forceRound = true) to q, null),
+            Case("round decay takes its value below ε", fresh.copy(rounds = 6, roundLimit = 9) to q, Finish(Status.DONE, Reason.DIMINISHING)),
+            Case("a forced round ignores the value of information", fresh.copy(valueOfInformation = 0.0, forceRound = true) to q, null),
         ) { (c, qv) -> defaults.terminalStatus(c, qv) }
     }
 
@@ -186,48 +198,33 @@ class ExplorationPolicyTest {
     @Test
     fun `finish — STOP wins, BUDGET stands whether or not a round ran`() {
         table(
-            Case("a plain status", fresh to Status.SATURATED, Finish(Status.SATURATED)),
-            Case("STOP wins (CTL-03)", fresh.copy(override = Override.STOP) to Status.ROUND_LIMIT, Finish(Status.STOPPED)),
-            Case("BUDGET before any round", fresh to Status.BUDGET, Finish(Status.BUDGET)),
+            Case("a plain DONE reason", fresh to Finish(Status.DONE, Reason.SATURATED), Finish(Status.DONE, Reason.SATURATED)),
+            Case("STOP wins (CTL-03)", fresh.copy(override = Override.STOP) to Finish(Status.DONE, Reason.ROUND_LIMIT), Finish(Status.STOPPED)),
+            Case("BUDGET before any round", fresh to Finish(Status.DONE, Reason.BUDGET), Finish(Status.DONE, Reason.BUDGET)),
             Case(
                 "BUDGET after a round (EXP-06)",
-                fresh.copy(rounds = 1) to Status.BUDGET,
-                Finish(Status.BUDGET),
+                fresh.copy(rounds = 1) to Finish(Status.DONE, Reason.BUDGET),
+                Finish(Status.DONE, Reason.BUDGET),
             ),
-            Case("FAILED keeps its status", fresh.copy(rounds = 1) to Status.FAILED, Finish(Status.FAILED)),
-        ) { (c, s) -> defaults.finish(c, s) }
+            Case("FAILED keeps its status", fresh.copy(rounds = 1) to Finish(Status.FAILED), Finish(Status.FAILED)),
+        ) { (c, end) -> defaults.finish(c, end) }
     }
 
     // ---------------------------------------------------------------- SPEC §3 "Exploration order", EXP-05
 
-    /**
-     * Model C rewrote this test: the priority was contribution (reach × relevance ×
-     * quality) decayed per round, with reach and FALLBACK_STRENGTH as fallbacks; it is
-     * now |sensitivity| × 4·p·(1 − p) decayed per round. Changed expectations:
-     * contribution and reach no longer enter it at all; an unknown sensitivity (not an
-     * unknown contribution) falls back to FALLBACK_STRENGTH; the root is 1 whatever its
-     * sensitivity or plausibility.
-     */
+    /** Exact q-weighted VoI is already computed by the graph; policy only applies decay and overrides. */
     @Test
-    fun `priority — forced first, else sensitivity times 4p(1-p) decayed per round`() {
+    fun `priority — forced first, else exact value of information decayed per round`() {
         near(Config.FORCED_PRIORITY, defaults.priorityOf(fresh.copy(override = Override.EXPAND, rounds = 5)), "EXPAND")
-        near(0.8, defaults.priorityOf(fresh.copy(sensitivity = 0.8)), "p = ½: the sensitivity itself")
-        near(0.8 * 0.36, defaults.priorityOf(fresh.copy(sensitivity = 0.8, plausibility = 0.9)), "p = 0.9 keeps 0.36")
-        near(0.8 * 0.36, defaults.priorityOf(fresh.copy(sensitivity = -0.8, plausibility = 0.1)), "a con: |d root / d c|")
-        near(0.0, defaults.priorityOf(fresh.copy(sensitivity = 0.8, plausibility = 1.0)), "a settled claim")
-        near(0.8, defaults.priorityOf(fresh.copy(sensitivity = 0.8, plausibility = null)), "unjudged p counts ½")
-        near(0.2, defaults.priorityOf(fresh.copy(sensitivity = 0.8, rounds = 2)), "0.8 × 0.5²")
-        near(0.8, defaults.priorityOf(fresh.copy(sensitivity = 0.8, contribution = 0.01, reach = 0.01)), "contribution and reach play no part")
-        near(Config.FALLBACK_STRENGTH, defaults.priorityOf(fresh.copy(sensitivity = null)), "sensitivity not delivered yet")
-        near(1.0, defaults.priorityOf(ClaimView(isRoot = true, depth = 0, sensitivity = 0.3, plausibility = 0.95)), "the root is 1")
+        near(0.8, defaults.priorityOf(fresh.copy(valueOfInformation = 0.8)), "exact value")
+        near(0.8, defaults.priorityOf(fresh.copy(valueOfInformation = 0.8, plausibility = 0.9)), "plausibility was already incorporated as propagated q")
+        near(0.2, defaults.priorityOf(fresh.copy(valueOfInformation = 0.8, rounds = 2)), "0.8 × 0.5²")
+        near(0.8, defaults.priorityOf(fresh.copy(valueOfInformation = 0.8, contribution = 0.01, reach = 0.01)), "contribution and reach play no part")
+        near(Config.FALLBACK_STRENGTH, defaults.priorityOf(fresh.copy(valueOfInformation = null)), "exact value not available yet")
+        near(1.0, defaults.priorityOf(ClaimView(isRoot = true, depth = 0, valueOfInformation = 0.3, plausibility = 0.95)), "the root is 1")
         near(0.25, defaults.priorityOf(ClaimView(isRoot = true, depth = 0, rounds = 2)), "the root decays per round")
-        near(0.8, ExplorationPolicy(Config(roundDecay = 1.0)).priorityOf(fresh.copy(sensitivity = 0.8, rounds = 3)), "no decay")
-        // A link's p is its strength: an undecided link keeps its edge's sensitivity whole.
-        near(0.4, defaults.priorityOf(fresh.copy(isLink = true, sensitivity = 0.4, plausibility = 0.5)), "an undecided link")
-        near(0.0, defaults.priorityOf(fresh.copy(isLink = true, sensitivity = 0.4, plausibility = 1.0)), "a decisive link")
-        // The crux score is the same product without fallbacks.
-        near(0.8 * 0.36, defaults.cruxScore(-0.8, 0.9)!!, "crux score")
-        assertEquals(null, defaults.cruxScore(null, 0.5), "no crux score without a sensitivity")
+        near(0.8, ExplorationPolicy(Config(roundDecay = 1.0)).priorityOf(fresh.copy(valueOfInformation = 0.8, rounds = 3)), "no decay")
+        near(0.4, defaults.priorityOf(fresh.copy(isLink = true, valueOfInformation = 0.4)), "links use the same exact value")
     }
 
     @Test

@@ -57,7 +57,7 @@ const framed = (c: number): GraphDto => ({
       ref: 'a', kind: 'CLAIM', credence: c, root: 'q', text: 'They stop responding to stimuli at night.', depth: 1,
       status: 'EXPLORING', override: 'AUTO', proposer: 'claude', plausibility: c, sensitivity: c, spreadLow: c - 0.3, spreadHigh: c,
     },
-    { ref: 'a-p1', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'p1', strength: 0.6, depth: 1, status: 'PRUNED', override: 'AUTO' },
+    { ref: 'a-p1', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'p1', strength: 0.6, depth: 1, status: 'DONE', reason: 'PRUNED', override: 'AUTO' },
   ],
 });
 

@@ -253,7 +253,7 @@ class CostTest {
             e.ask("Grow?")
             assertTrue(blocked.await(20, TimeUnit.SECONDS))
             awaitUntil("the root finished its three rounds") {
-                e.snapshot().nodes.any { it.depth == 0 && it.status == Status.ROUND_LIMIT }
+                e.snapshot().nodes.any { it.depth == 0 && it.status == Status.DONE && it.reason == Reason.ROUND_LIMIT }
             }
             val q = e.snapshot().questions.single()
             assertEquals(3, q.cost.rounds)
@@ -281,7 +281,7 @@ class CostTest {
                 .also { engines += it }
             val root = e1.ask("Durable?")
             e1.idle()
-            // Cruxes (model C) come from sensitivity cells a restart rebuilds from scratch; they are not compared.
+            // Exact-VoI cruxes are recomputed on demand after restart; they are not compared here.
             fun durable(q: QuestionDto) = q.copy(cruxes = emptyList())
             // Idle means no claim is pending, not that credence propagation has settled: the model D
             // neutral-prior verdict (derived from the root cell) keeps moving briefly after idle(), and

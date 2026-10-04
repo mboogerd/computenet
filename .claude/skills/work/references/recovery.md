@@ -3,7 +3,6 @@
 The orchestrator reads this when something rare interrupts SKILL.md's normal flow. Read only the section you need. `<scratch>` means your scratch directory's absolute path, spelled out, because shell variables do not survive between Bash calls.
 
 ## Contents
-
 - Resuming after the host died — clock, side effects, reboot, revoked folder access
 - Stalled agents and load — agents past their bound, watchdog stalls, the reviewer ladder, when to stop dispatching
 - Continuation across ticket boundaries — context headroom, relatedness, when to ask Jev
@@ -11,7 +10,6 @@ The orchestrator reads this when something rare interrupts SKILL.md's normal flo
 - Dolt pull conflicts — the one resolvable shape and its exact commands
 - Parks — the bar, how to park, re-triage and unpark
 - Collisions — the signs, and why you never pick a winner
-
 ## Resuming after the host died
 
 | Situation | Do | Why |
@@ -21,7 +19,7 @@ The orchestrator reads this when something rare interrupts SKILL.md's normal flo
 | The host rebooted | As above, after re-creating the scratch dir. If `claim-epic.sh` exits 1 with a LIVE or FOREIGN holder, another session has the epic: leave it and return to SKILL.md "3. Sync and claim one epic" | A reboot also clears `/private/tmp`, and with it your scratch dir |
 | Every file operation in the repository is refused, sandbox or not | Do not retry. Ship only PRs a reviewer certified whose checks are green, working from outside the repository with `--repo mboogerd/computenet`; end by listing the bead writes that did not happen | The host revoked access and only a person can restore it; local tracker state survives for the next session |
 
-Recover the clock from the original slot start, never from now: run `.claude/skills/work/scripts/slot-elapsed.sh <previous session's scratch dir>`. If that directory is gone, create a new one and write `slot-start` (epoch seconds) and `slot-seconds` into it. Take the start from the epic's `started_at`, which the claim set a few minutes after the true start. Read it with `.claude/skills/work/scripts/bead.sh <epic-id> -r '.started_at'`, then convert it to epoch seconds. Take the slot length from the routine that invoked you. If neither can be recovered, write the current time with a length of 3600, and say so in the summary.
+Recover the clock from the original slot start, never from now: run `.claude/skills/work/scripts/slot-elapsed.sh <previous session's scratch dir>`. If that directory is gone, create a new one and write `slot-start` (epoch seconds) and `slot-seconds` into it. Take the start from the epic's `started_at`, which the claim set a few minutes after the true start. Read it with `.claude/skills/work/scripts/bead.sh <epic-id> -r '.started_at'`, then convert it to epoch seconds. The length is SKILL.md step 2's 43200. If the start cannot be recovered, write the current time, and say so in the summary.
 
 Query side effects, then resume rather than restart. A killed breakdown may already have filed its children, and a killed implementer may already have committed. Re-dispatch only the units that left nothing behind, with the resume framing from "Stalled agents and load".
 
@@ -112,12 +110,12 @@ from any route (5b/5c's own task loop); routes 0 and 2 never call this (5f).
 cross-epic item while selecting it, so checking headroom only once acquired
 risks a stale claim abandoned to Finalize.
 
-HANDOFF means Finalize now, same as EXPIRED (SKILL.md 6), except step 2's
-`slot-elapsed.sh` rung is still the hard backstop: EXPIRED always means
-Finalize even when this reads CONTINUE, because the auto-compact floor is a
-soft signal on an estimate and the wall clock is not. CONTINUE means treat
-5f's chosen route as OPEN and proceed, whatever rung `slot-elapsed.sh` names,
-short of EXPIRED.
+HANDOFF means Finalize now, same as EXPIRED (SKILL.md 6). Headroom resets
+after an auto-compaction, so a session whose context was compacted passes
+`--compacted`, which always reads HANDOFF. Step 2's 12h clock is the last
+backstop: EXPIRED always means Finalize, even when this reads CONTINUE.
+CONTINUE means treat 5f's chosen route as OPEN and proceed, whatever rung
+`slot-elapsed.sh` names, short of EXPIRED.
 
 ## A red required check
 
@@ -147,6 +145,8 @@ This section covers a required check that is red in a module the diff does not t
 
    Read each hit. A walker that matches patterns against comment text reads your prose. One that filters on file names does not. State which granularity your attribution stands on.
 
+   Comparing other runs is evidence only from runs that ran the test: a green run that took the module's tests from cache never executed them. A compared run counts only if `.claude/skills/work/scripts/ci-executed.sh <run-id> <check-name> <:task>` shows the failing task EXECUTED.
+
 3. A prior occurrence, found rather than remembered. `bd search` matches titles only, and a flake is usually named in a description, so run both:
 
    ```bash
@@ -162,7 +162,7 @@ This section covers a required check that is red in a module the diff does not t
 
 4. What the prior bead instructs, even when it is closed. A standing "do not re-run" instruction overrides everything below.
 
-With all four in hand, you re-run the failed jobs; reviewers hand the re-run back to you. Re-run at most twice. Comment each occurrence (run id, sha, pass or fail) on the bug bead, because the count is what gets the flake fixed. A reviewer that attributed the failure may write that comment itself (references/review.md "Write scope").
+With all four in hand, you re-run the failed jobs; reviewers hand the re-run back to you. Re-run at most twice. Comment each occurrence (run id, sha, lane, pass or fail) on the bug bead; a reviewer that attributed the failure may write that comment itself (references/review.md "Write scope"). At the bead's 2nd recorded occurrence, raise it to P1 (`bd update <bug-id> --priority 1`) and, after this ship, take it as bounded continuation work: one 45–60 minute box to reproduce, diagnose and fix, ending in a fix PR or in findings and instrumentation commented on the bead. Artifact 4's standing instruction still overrides this.
 
 ```bash
 gh run rerun <run-id> --failed -R mboogerd/computenet
@@ -170,7 +170,7 @@ gh run rerun <run-id> --failed -R mboogerd/computenet
 
 | Outcome | Do |
 |---|---|
-| Green | A DRAFT whose only blocker was this check is now shippable on the reviewer's certification: continue at SKILL.md 5e, Ship step 2 |
+| Green | A READY held on this re-run is shippable (SKILL.md 5e) |
 | Still red, and artifact 2 held | Record on the bug bead that the failure reproduces. The feature is blocked on infrastructure, not defective. Leave the PR as it is. Keep the feature `in_progress`, and keep any `review=passed`. Run `bd update <feature-id> --set-metadata parked_at=$(date +%s)`, then comment "blocked on `<bug-id>`: `<check>`, runs `<ids>`". Go to SKILL.md "5f. Next unit". File no task under the feature |
 | Still red, and artifact 2 did not hold | It is the feature's red work |
 | The re-run command is refused | Take the same infrastructure park. Push no empty commit to trigger a run. Name the refused command verbatim in the session summary |

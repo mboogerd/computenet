@@ -462,7 +462,7 @@ internal class Options(args: Array<String>) {
             "--max-depth" to "--max-depth was removed: $VOI_STOP (--max-claims still caps a question)",
             "--yield-stop" to "--yield-stop was removed: $VOI_STOP",
             "--min-influence" to "--min-influence was removed: exploration follows the value of information " +
-                "(sensitivity x 4p(1-p)); a node below --voi-eps is not explored",
+                "(exact expected answer movement); a node below --voi-eps is not explored",
         )
         private val D = DeliberationEngine.Config()
         val USAGE = """
@@ -475,7 +475,7 @@ internal class Options(args: Array<String>) {
               --max-claims <n>            hard cap: claims per question (${D.maxClaims})
               --max-args-per-side <n>     arguments per side of the root before it is saturated (${D.maxArgsPerSide})
               --saturation <p>            Jev saturation (1 - p(missing)) that saturates a side (${D.saturation})
-              --voi-eps <e>               explore a node only while its value of information, |d answer/d node| x 4p(1-p),
+              --voi-eps <e>               explore a node only while its exact q-weighted expected answer movement
                                           is at least e; a question stops when none is left (${D.voiEpsilon})
               --explore-links on|off      explore links ("A is a reason for B") like claims (on)
               --data <dir>                keep deliberations in <dir> across restarts (default: volatile)

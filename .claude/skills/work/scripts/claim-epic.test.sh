@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "51 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "57 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -422,6 +422,23 @@ out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
   && ok "--release with an unlistable subtree checks and writes nothing (exit 3)" \
   || bad "release list-fail: rc=$rc out=$out"
 
+# m090n: no holder anywhere, but a child touched just now -> KEPT, no write.
+fixture; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '[{"id":"computenet-e.3","parent":"computenet-e","status":"open","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^KEPT" <<<"$out" && grep -q "computenet-e.3" <<<"$out" \
+  && ! grep -qE -- "--status=open|^comment" "$BD_LOG"; } \
+  && ok "--release keeps an epic whose holderless child was touched within the window" \
+  || bad "release hot: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# ...unless that touch was this machine's own sweep (x3f5a discount).
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","status":"open","updated_at":"%s"}]' "$now" > "$CTRL/list.json"
+echo "$(date +%s) computenet-e.3" > "$CTRL/swept"
+out=$(CLAIM_SWEPT_FILE="$CTRL/swept" "$SCRIPT" --release computenet-e 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "--release discounts a child this run's own sweep touched" \
+  || bad "release self-swept: rc=$rc out=$out"
+
 # --- fail closed, and the bounds on FOREIGN ----------------------------------
 # An unlistable subtree is NOT CHECKED: the live-descendant refusal could not
 # run, so the claim does not proceed.
@@ -480,6 +497,39 @@ out=$("$SCRIPT" computenet-e 2>&1); rc=$?
 fixture; touch "$CTRL/update-fail"
 out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
 [ "$rc" = 4 ] && ok "--release with a failed write exits 4" || bad "release write-fail: rc=$rc out=$out"
+
+# --- the slot clock gates the claim (computenet-dfsgn, computenet-fqvhz) -----
+# A startup pull stuck for hours, or a host frozen in DarkWake, reached the
+# claim with the slot long expired and claimed an epic it could only release.
+fixture; mkdir -p "$CTRL/scratch"
+echo 18000 > "$CTRL/scratch/slot-seconds"; echo $(( $(date -u +%s) - 40000 )) > "$CTRL/scratch/slot-start"
+out=$(SCRATCH="$CTRL/scratch" "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^EXPIRED: not claimed" <<<"$out" && ! grep -q "update" "$BD_LOG"; } \
+  && ok "an EXPIRED slot refuses the claim before any bd write" \
+  || bad "expired slot: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+fixture; mkdir -p "$CTRL/scratch"
+echo 18000 > "$CTRL/scratch/slot-seconds"; echo $(( $(date -u +%s) - 600 )) > "$CTRL/scratch/slot-start"
+out=$(SCRATCH="$CTRL/scratch" "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "--claim" "$BD_LOG"; } \
+  && ok "a slot within budget claims as before" \
+  || bad "open slot: rc=$rc out=$out"
+
+# --- --release records what it saw before it clears it (computenet-60f8) -----
+fixture; desc_rows "someone-else:99999:Tue Jan  1 00:00:00 2020"
+out=$("$SCRIPT" --release computenet-e --observed "old:1:x" DEAD 2>&1); rc=$?
+cl=$(grep -n "^comment computenet-e released by .*: observed holder old:1:x, classified DEAD" "$BD_LOG" | cut -d: -f1)
+ul=$(grep -n -- "--status=open --assignee=" "$BD_LOG" | cut -d: -f1)
+{ [ "$rc" = 0 ] && [ -n "$cl" ] && [ -n "$ul" ] && [ "$cl" -lt "$ul" ]; } \
+  && ok "--release comments the observed holder and verdict before clearing" \
+  || bad "release comment: rc=$rc cl=$cl ul=$ul log=$(tr '\n' '|' < "$BD_LOG")"
+
+fixture; desc_rows "someone-else:99999:Tue Jan  1 00:00:00 2020"
+printf '[{"id":"computenet-e","status":"in_progress","assignee":"testbox","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"gone:7:y"}}]' > "$CTRL/show.json"
+out=$("$SCRIPT" --release computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^comment computenet-e released by .*: observed holder gone:7:y, classified unstated" "$BD_LOG"; } \
+  && ok "--release without --observed records the epic's own holder" \
+  || bad "release default holder: rc=$rc log=$(tr '\n' '|' < "$BD_LOG")"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

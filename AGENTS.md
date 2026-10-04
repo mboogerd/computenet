@@ -182,7 +182,7 @@ for documentation maintenance.
   flag (`civictech.inspect.InspectorFlag`) wired into ten demos: agora,
   alignment, backlog-triage, deliberate, dialogue, exchange, shopping,
   skillmatch, slotfinder, tiering. Not wired: `allocator-observe` (no hosted
-  graph yet), `beadsmirror` (hosts only in its two-node `--rig` mode) and
+  graph yet), `beadsmirror` (not wired to `--inspect`) and
   `social` (excluded by its own module gate, `[SOC1-MOD-01]`). Its SolidJS/Vite
   frontend lives in `inspect/ui/` (npm, not Gradle), same as `demo/agora/ui`.
 - `doc/spec/`: the normative design — foundations (`00`), programming model

@@ -7,22 +7,27 @@ Phases (each member sees one decision only — never batch briefs):
   1 ideate   Opus and Sol propose options independently; Opus merges them.
   2 case     each option gets its strongest case, from its proposer.
   3 attack   the OTHER member attacks each case.
-  4 vote     Opus, Sol and Jev each pick one option with a confidence;
-             Jev sees every option with its case for and against.
-  5 verdict  DECIDED iff all three agree and mean confidence >= 70,
-             else NO-CONSENSUS. Written to <out>/verdict.md and verdict.json.
+  4 score    Opus, Sol and Jev each score EVERY option 0-100 for acceptability
+             (Jev: one independent P(acceptable) per option); a score below
+             60 carries an objection.
+  5 verdict  an option passes at mean >= 70 with no score below 60; DECIDED
+             names the passing option with the highest mean (ties: higher
+             minimum), else NO-CONSENSUS listing every objection. Written to
+             <out>/verdict.md and verdict.json.
 
 Every prompt and raw reply is kept in <out>/ so a person can audit the run.
 Env: DELIBERATE_CLAUDE (claude binary), DELIBERATE_OPUS_MODEL
 (claude-opus-5-5), DELIBERATE_SOL_MODEL (gpt-5.6-sol), TYPESAFE_API_KEY.
---dry-run replaces all three members with canned replies (tests the plumbing).
+--dry-run replaces all three members with canned replies (tests the plumbing);
+DELIBERATE_DRY_SCORES sets the canned scores (see dry_scores).
 """
 import argparse, concurrent.futures as cf, glob, json, os, re, subprocess, sys, urllib.request
 
 OPUS_MODEL = os.environ.get("DELIBERATE_OPUS_MODEL", "claude-opus-5-5")
 SOL_MODEL = os.environ.get("DELIBERATE_SOL_MODEL", "gpt-5.6-sol")
 TIMEOUT = 1200
-CONSENSUS_MEAN = 70
+PASS_MEAN = 70  # an option passes at mean score >= 70 ...
+VETO = 60       # ... and no member below 60; a score below 60 is an objection
 DRY = False
 
 
@@ -88,40 +93,92 @@ def ask_json(member, prompt, out, tag):
                                out, tag + ".retry"))
 
 
-def jev_vote(brief, options, out):
-    crit = {o["id"]: {"option": o["title"] + ": " + o["summary"],
-                      "case_for": o.get("case", ""), "case_against": o.get("attack", "")} for o in options}
-    body = {"model": "jev-latest", "state": {"decision_brief": brief},
-            "questions": {"vote": {"type": "choice", "criteria": crit, "instructions":
-                "Read `decision_brief`: the problem, its context and the project's vision and principles. "
-                "Each option carries its strongest case for and an adversarial case against. "
-                "Which option is the right call for this project?"}}}
+def jev_scores(brief, options, out):
+    """Jev's acceptability per option: one independent Noul question each, so
+    P(acceptable) is not diluted by the option count the way a softmax is."""
+    state = {"decision_brief": brief,
+             "options": {o["id"]: {"option": o["title"] + ": " + o["summary"], "case_for": o.get("case", ""),
+                                   "case_against": o.get("attack", "")} for o in options}}
+    qs = {o["id"]: {"type": "noul", "instructions":
+              f"Read `decision_brief`: the problem, its context and the project's vision and principles. "
+              f"`options.{o['id']}` is one option with its strongest case for and an adversarial case against. "
+              f"Would adopting option {o['id']} be an acceptable call for this project — one a careful "
+              f"member could live with, even if it is not their favourite?",
+              "criteria": {"true": "acceptable: no serious conflict with the brief's frame or constraints",
+                           "false": "unacceptable: a serious objection stands"}} for o in options}
+    body = {"model": "jev-latest", "state": state, "questions": qs}
     open(f"{out}/vote.jev.request.json", "w").write(json.dumps(body, indent=1))
     if DRY:
-        ans = {"choice": options[0]["id"], "confidence": 0.9, "probabilities": {options[0]["id"]: 0.95}}
+        fx = dry_scores()
+        ans = {o["id"]: {"noul": (fx["jev"][o["id"]] if fx else 90) / 100} for o in options}
     else:
         req = urllib.request.Request("https://api.typesafe.ai/v1/systemone", data=json.dumps(body).encode(),
                                      headers={"Authorization": "Bearer " + os.environ["TYPESAFE_API_KEY"],
                                               "Content-Type": "application/json"})
         resp = json.loads(urllib.request.urlopen(req, timeout=300).read())
         open(f"{out}/vote.jev.reply.json", "w").write(json.dumps(resp, indent=1))
-        ans = resp["answers"]["vote"]
-    top = sorted(ans.get("probabilities", {}).items(), key=lambda kv: -kv[1])[:3]
-    return {"choice": ans["choice"], "confidence": round(ans["confidence"] * 100),
-            "reason": "distribution " + ", ".join(f"{k} {v:.2f}" for k, v in top)}
+        ans = resp["answers"]
+    got = {}
+    for i, a in ans.items():
+        p = round(float(a["noul"]) * 100)
+        got[i] = {"score": p, "objection": (f"P(acceptable) {p / 100:.2f}; Jev states no reason, so the case "
+                                            f"against {i} stands as its objection") if p < VETO else ""}
+    return {"scores": got}
 
 
-def norm_vote(x, ids):
-    """'a', 'A ', 'Option A', 'B: Change' mean that id. Anything else, such as
-    'A or B' or prose opening with the article 'a', stays as written, so it
-    agrees with no other vote. Confidence is its first number, capped at 100:
-    '80%' and '80-90' are 80, never 8090."""
-    c = str(x["choice"]).strip()
-    hit = [i for i in ids if re.fullmatch(rf"(?:option\s+)?{re.escape(i)}(?:\s*[.):—-].*)?", c, re.I | re.S)]
-    x["choice"] = hit[0] if len(hit) == 1 else c
-    n = re.search(r"\d+(?:\.\d+)?", str(x["confidence"]))
+def number(x):
+    """First number in x, capped at 100: '80%' and '80-90' are 80, never 8090."""
+    n = re.search(r"\d+(?:\.\d+)?", str(x))
     v = min(float(n.group()), 100.0) if n else 0.0
-    x["confidence"] = int(v) if v.is_integer() else v
+    return int(v) if v.is_integer() else v
+
+
+def norm_id(key, ids):
+    """'a', 'A ', 'Option A', 'B: Change' mean that id. Anything else, such as
+    'A or B' or prose opening with the article 'a', maps to no option."""
+    c = str(key).strip()
+    hit = [i for i in ids if re.fullmatch(rf"(?:option\s+)?{re.escape(i)}(?:\s*[.):—-].*)?", c, re.I | re.S)]
+    return hit[0] if len(hit) == 1 else None
+
+
+def norm_scores(member, x, ids):
+    """A member's reply -> {id: {"score", "objection"}}, one entry per option.
+    A score may be a bare number or {"score", "objection"}. An option left
+    unscored aborts the run: a silent gap would read as consent or as veto."""
+    raw, got = x.get("scores", {}), {}
+    for k, v in raw.items():
+        i = norm_id(k, ids)
+        if i is None:
+            continue
+        sc, ob = (v.get("score"), v.get("objection", "")) if isinstance(v, dict) else (v, "")
+        got[i] = {"score": number(sc), "objection": (ob or "").strip()}
+    missing = [i for i in ids if i not in got]
+    if missing:
+        raise RuntimeError(f"{member} scored no option(s) {missing}: {json.dumps(raw)[:300]}")
+    for s in got.values():
+        if s["score"] < VETO and not s["objection"]:
+            s["objection"] = "(no objection stated)"
+    x["scores"] = got
+    return x
+
+
+def tally(scores, ids):
+    """The rule (maintainer decision 2026-09-29, computenet-hngr6). An option
+    PASSES when its mean score is >= PASS_MEAN and no member scores it below
+    VETO. DECIDED names the passing option with the highest mean, ties going
+    to the higher minimum, then to option order. No passing option is
+    NO-CONSENSUS. scores: {member: {id: {"score", "objection"}}}."""
+    rows = []
+    for i in ids:
+        per = {m: s[i]["score"] for m, s in scores.items()}
+        mean = sum(per.values()) / len(per)
+        rows.append({"id": i, "scores": per, "mean": round(mean, 1), "min": min(per.values()),
+                     "passes": mean >= PASS_MEAN and min(per.values()) >= VETO,
+                     "objections": [{"member": m, "score": s[i]["score"], "objection": s[i]["objection"]}
+                                    for m, s in scores.items() if s[i]["score"] < VETO]})
+    passing = sorted((r for r in rows if r["passes"]), key=lambda r: (-r["mean"], -r["min"], ids.index(r["id"])))
+    return {"outcome": "DECIDED" if passing else "NO-CONSENSUS",
+            "choice": passing[0]["id"] if passing else None, "tally": rows}
 
 
 FORMAT_OPTIONS ='[{"title": "<short name>", "summary": "<what it means and its practical consequences, 2-4 sentences>"}]'
@@ -181,27 +238,24 @@ def run(brief, out):
     phase("case", lambda o: o["advocate"])
     phase("attack", lambda o: other[o["advocate"]])
 
-    # 4 vote — independent, parallel, Jev included
+    # 4 score — independent, parallel, Jev included; every member scores EVERY option
     dossier = json.dumps([{k: o.get(k, "") for k in ("id", "title", "summary", "case", "attack")} for o in options], indent=1)
-    vote = ("You are one of three independent voters on the decision below. Each option has its strongest case "
-            "and an adversarial critique. Pick the ONE option that is the right call for this project, and give "
-            "your confidence 0-100 that it is right. Reply with ONLY JSON: "
-            '{"choice": "<id>", "confidence": <0-100>, "reason": "<one sentence>", '
-            '"deciding_factors": ["<the 1-3 considerations that decided it>"]}'
+    vote = ("You are one of three independent members scoring the decision below. Each option has its strongest "
+            "case and an adversarial critique. Score EVERY option 0-100 for how ACCEPTABLE it is as this "
+            "project's call: 100 = clearly right, 70 = good enough to adopt, below 60 = you object to adopting "
+            "it. Several options may be acceptable. For every option you score below 60, state your objection "
+            "in one sentence. Reply with ONLY JSON: "
+            '{"scores": {"<id>": {"score": <0-100>, "objection": "<required if score < 60, else empty>"}, ...}, '
+            '"deciding_factors": ["<the 1-3 considerations that most shaped your scores>"]}'
             f"\n\n--- BRIEF ---\n{brief}\n\n--- OPTIONS ---\n{dossier}")
+    ids = [o["id"] for o in options]
     fut = {m: pool.submit(ask_json, m, vote, out, f"4-vote.{m}") for m in ("opus", "sol")}
-    fut["jev"] = pool.submit(jev_vote, brief, options, out)
-    votes = {m: f.result() for m, f in fut.items()}
-    for x in votes.values():
-        norm_vote(x, [o["id"] for o in options])
+    fut["jev"] = pool.submit(jev_scores, brief, options, out)
+    votes = {m: norm_scores(m, f.result(), ids) for m, f in fut.items()}
 
     # 5 verdict
-    choices = {v["choice"] for v in votes.values()}
-    mean = round(sum(float(v["confidence"]) for v in votes.values()) / 3)
-    decided = len(choices) == 1 and mean >= CONSENSUS_MEAN
-    verdict = {"outcome": "DECIDED" if decided else "NO-CONSENSUS",
-               "choice": next(iter(choices)) if decided else None, "mean_confidence": mean,
-               "votes": votes, "options": options,
+    t = tally({m: x["scores"] for m, x in votes.items()}, ids)
+    verdict = {**t, "votes": votes, "options": options,
                "members": {"opus": OPUS_MODEL, "sol": SOL_MODEL, "jev": "jev-latest"}}
     json.dump(verdict, open(f"{out}/verdict.json", "w"), indent=1)
     open(f"{out}/verdict.md", "w").write(render(verdict))
@@ -210,21 +264,35 @@ def run(brief, out):
 
 def render(v):
     byid = {o["id"]: o for o in v["options"]}
+    members = list(v["votes"])
     head = (f"{v['outcome']}: {v['choice']} — {byid[v['choice']]['title']}" if v["choice"]
             else "NO-CONSENSUS — a person decides")
-    lines = [head, "", f"Mean confidence {v['mean_confidence']} (DECIDED needs all three agreeing and a mean >= {CONSENSUS_MEAN}).", "",
-             "| Member | Choice | Confidence | Reason |", "|---|---|---|---|"]
-    for m, x in v["votes"].items():
-        lines.append(f"| {m} ({v['members'][m]}) | {x['choice']} | {x['confidence']} | {x.get('reason', '')} |")
+    lines = [head, "", f"An option passes at a mean score >= {PASS_MEAN} with no member below {VETO}; "
+             "DECIDED is the passing option with the highest mean (ties: higher minimum).", "",
+             "| Option | " + " | ".join(f"{m} ({v['members'][m]})" for m in members) + " | Mean | Min | Passes |",
+             "|---" * (len(members) + 4) + "|"]
+    for r in v["tally"]:
+        lines.append(f"| {r['id']} | " + " | ".join(str(r["scores"][m]) for m in members)
+                     + f" | {r['mean']} | {r['min']} | {'yes' if r['passes'] else 'no'} |")
+    objs = [(r["id"], o) for r in v["tally"] for o in r["objections"]]
+    if objs:
+        lines += ["", "Objections (every score below %d):" % VETO]
+        lines += [f"- {i}, {o['member']} ({o['score']}): {o['objection']}" for i, o in objs]
     lines += ["", "Options:"] + [f"- {o['id']}. {o['title']}: {o['summary']}" for o in v["options"]]
-    factors = [f for m in ("opus", "sol") for f in v["votes"][m].get("deciding_factors", [])
-               if v["votes"][m]["choice"] == v["choice"]] if v["choice"] else []
-    if factors:
-        lines += ["", "Deciding factors:"] + [f"- {f}" for f in factors]
+    if v["choice"]:
+        factors = [f for m in members for f in v["votes"][m].get("deciding_factors", [])]
+        if factors:
+            lines += ["", "Deciding factors:"] + [f"- {f}" for f in factors]
         att = byid[v["choice"]].get("attack")
         if att:
-            lines += ["", f"Strongest objection to {v['choice']} (weighed and outvoted): {att}"]
+            lines += ["", f"Strongest case against {v['choice']} (weighed; no member objected): {att}"]
     return "\n".join(lines) + "\n"
+
+
+def dry_scores():
+    """DELIBERATE_DRY_SCORES='{"opus": {"A": 80, ...}, "sol": {...}, "jev": {...}}' (jev in 0-100)."""
+    raw = os.environ.get("DELIBERATE_DRY_SCORES")
+    return json.loads(raw) if raw else None
 
 
 def dry_reply(tag):
@@ -238,11 +306,14 @@ def dry_reply(tag):
     if tag.startswith("2-case") or tag.startswith("3-attack"):
         return 'Here: {"A": "text A", "B": "text B"}'
     if tag.startswith("4-vote.sol") and os.environ.get("DELIBERATE_DRY_MESSY"):
-        return '{"choice": "Option a", "confidence": "80%", "reason": "r", "deciding_factors": ["m"]}'
-    if tag.startswith("4-vote.sol") and os.environ.get("DELIBERATE_DRY_SPLIT"):
-        return '{"choice": "B", "confidence": 90, "reason": "r", "deciding_factors": ["g"]}'
+        return '{"scores": {"Option a": "80%", "B: Change": {"score": "80-90"}}, "deciding_factors": ["m"]}'
+    if tag.startswith("4-vote") and os.environ.get("DELIBERATE_DRY_UNSCORED"):
+        return '{"scores": {"A or B": 80}}'
     if tag.startswith("4-vote"):
-        return '```json\n{"choice": "A", "confidence": 80, "reason": "r", "deciding_factors": ["f"]}\n```'
+        m = tag.split(".")[1]
+        fx = dry_scores() or {m: {"A": 80, "B": 50}}
+        return "```json\n" + json.dumps({"scores": {i: {"score": sc, "objection": f"{m} objects to {i}" if sc < VETO else ""}
+                                                   for i, sc in fx[m].items()}, "deciding_factors": ["f"]}) + "\n```"
     raise ValueError(tag)
 
 

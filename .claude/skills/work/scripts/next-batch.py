@@ -438,7 +438,8 @@ def relatedness_for_route(route):
     return ROUTE_RELATEDNESS.get(str(route), "unclear")
 
 
-def continuation_advice(headroom_pct, relatedness, jev_verdict=None, epic_closed=False):
+def continuation_advice(headroom_pct, relatedness, jev_verdict=None, epic_closed=False,
+                        compacted=False):
     """Continue the orchestrator's OWN session into the next ticket, or hand
     off to a fresh one — the happy-path twin of the failure-side per-agent
     bound (computenet-9zzsc / PR #1191's dispatched-<id> bounds, which cover
@@ -503,6 +504,13 @@ def continuation_advice(headroom_pct, relatedness, jev_verdict=None, epic_closed
                            "completion boundary, independent of headroom — hand off "
                            "so the retro and a fresh session's full budget land "
                            "cleanly on the next epic")
+    if compacted:
+        # Headroom is measured against the auto-compact floor and resets after
+        # a compaction, so a compacted session would read CONTINUE forever.
+        # The summary has already lost what made continuing cheap: hand off.
+        return "HANDOFF", ("context was compacted this session: headroom reset, but "
+                           "the loaded context it measured is gone — hand off to a "
+                           "fresh session")
     if relatedness not in RELATEDNESS:
         relatedness = "unclear"
     if headroom_pct <= HEADROOM_LOW:
@@ -1015,6 +1023,7 @@ def main():
         # directly for the same-feature case, which no route reaches. 5g's
         # CLOSE outcome bypasses both via --epic-closed alone.
         epic_closed = "--epic-closed" in sys.argv
+        compacted = "--compacted" in sys.argv
         headroom = _flag_val("--headroom-pct")
         route = _flag_val("--route")
         relatedness = _flag_val("--relatedness")
@@ -1030,7 +1039,8 @@ def main():
         except ValueError:
             sys.exit("next-batch: --headroom-pct takes a number")
         relatedness = relatedness or "unclear"
-        decision, reason = continuation_advice(headroom, relatedness, epic_closed=epic_closed)
+        decision, reason = continuation_advice(headroom, relatedness, epic_closed=epic_closed,
+                                               compacted=compacted)
         if decision == "ESCALATE" and "--ask-jev" in sys.argv:
             dry_reply = _flag_val("--dry-run-jev")
             verdict = jev_continuation(
@@ -1042,7 +1052,8 @@ def main():
                                            "headroom_pct": headroom,
                                            "relatedness": relatedness,
                                            "route": route,
-                                           "epic_closed": epic_closed}}, indent=2))
+                                           "epic_closed": epic_closed,
+                                           "compacted": compacted}}, indent=2))
         return
     if "--capacity" in sys.argv:
         # Capacity alone, no feature id: for a dispatch that has no batch call
@@ -1281,6 +1292,11 @@ def _commit_match(tid, feature):
     SUPPRESSED from no match at all — the two are indistinguishable in the
     flag, and one of them is the cross-machine twin arriving through the door
     the gate left open (computenet-ipp94).
+
+    A `review:` commit CITES an id — a reviewer documenting the follow-up bead
+    it just filed — and never implements it, so it is no witness: computenet-
+    k2cif read as merged on a KDoc-only "review: ... (computenet-k2cif)" commit
+    (computenet-e9gsm).
     """
     for ref in (f"refs/heads/feature/{feature}", f"refs/remotes/origin/feature/{feature}"):
         try:
@@ -1288,10 +1304,11 @@ def _commit_match(tid, feature):
                 # Anchored: `--grep` is an unanchored substring regex, so a bare
                 # id for task .5.1 would match a sibling's `.5.10` commit and
                 # route fresh work to review (the inverse failure).
-                ["git", "log", "--oneline", "-1", "-E",
+                ["git", "log", "--format=%s", "-E",
                  f"--grep={re.escape(tid)}([^0-9.]|$)", ref],
                 capture_output=True, text=True, timeout=10)
-            if out.returncode == 0 and out.stdout.strip():
+            if out.returncode == 0 and any(
+                    s and not s.startswith("review:") for s in out.stdout.splitlines()):
                 return True
         except (OSError, subprocess.SubprocessError):
             return False

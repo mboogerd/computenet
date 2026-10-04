@@ -52,9 +52,207 @@ In the "cross estimate" column, each depth-1 strength (36 claims) is paired with
 
 **`saturation` = 0.22.** Jev's saturation signal responds to argument count, but weakly. It rises monotonically with n, and the samples are very stable, yet it never leaves the bottom third of the scale: even with 6 arguments Jev still gives, on average, a 0.73 probability that something important is missing, and the highest saturation observed was 0.37. So the first run's 0.7 threshold, like any threshold on a "probably saturated" reading, can never fire. At 0.22, no side saturates empty and 2% saturate with one argument. Half of all sides saturate by n=3 and two thirds by n=4, which meets §10(a) on the median. The discrimination between 3 and 6 arguments is shallow (0.22 → 0.27 mean), so the reliable stop is still **`maxArgsPerSide` = 6**. Jev's saturation mainly ends a side early at 2–4 arguments, where its reading is higher than typical.
 
-**`minInfluence` = 0.35.** Relevance alone barely decays with depth (median 0.70 → 0.62 → 0.60), which is why a relevance-only gate never pruned. Reach supplies the decay: 0.64 → 0.51 → 0.32. At 0.35 the gate expands about 72% of depth-1 claims, pruning the weakly connected ones (strength ≤ ~0.5). It expands only 12–25% of depth-2 claims and no depth-3 claim. Most depth-2 claims therefore end `PRUNED`, and `DEPTH_LIMIT` (depth > 3) is practically unreachable, which meets §10(b).
+**`minInfluence` = 0.35.** Relevance alone barely decays with depth (median 0.70 → 0.62 → 0.60), which is why a relevance-only gate never pruned. Reach supplies the decay: 0.64 → 0.51 → 0.32. At 0.35 the gate expands about 72% of depth-1 claims, pruning the weakly connected ones (strength ≤ ~0.5). It expands only 12–25% of depth-2 claims and no depth-3 claim. Most depth-2 claims therefore finish `DONE` for reason `PRUNED`, and the `DEPTH_LIMIT` reason (depth > 3) is practically unreachable, which meets §10(b).
 
 With the defaults of two proposers × `argsPerCall` 1, each round offers up to two new arguments per side. Jev's saturation judgment is therefore consulted at 2 and 4 arguments per side, before the dependable `maxArgsPerSide` cap of 6 ends a side that Jev has not already saturated.
+
+## Exact value of information (2026-10-03)
+
+VoI now uses the propagated credence `q` and exact two-point re-evaluation of
+every path to each active answer root; the retired local derivative and its
+`4p(1-p)` plausibility factor no longer schedule or stop work. The existing
+`--voi-eps` default 0.01 is still a starting value: the bounded live run
+below could not distinguish candidates (see its decision). The shipping regression
+fixture puts a depth-1 support beyond the weight-of-evidence energy clamp: the
+old linear value is 0 while the exact expected root movement is 0.061838. The
+test suite also checks deterministic random trees against an independent
+recursive two-point evaluator; the unavailable scratchpad population figures
+are not treated as reproduced evidence.
+
+## Current exact-VoI stop calibration (2026-10-04)
+
+The calibration harness grew three **fresh** trees on the current code and
+judgments: the policy, empirical and practical questions at the top of this
+file. It used `claude-sonnet-5-5` as the one proposer, current Jev 1.13.0, one
+engine worker and one CLI process at a time. Each node had one round and the
+live tree had a depth-1 bound and 12-claim cap; links were explored. This is a
+bounded shipping sample, not a population estimate or a run at the production
+180-claim cap. The live answers were recorded in memory and replayed through
+the real engine and exact evaluator at every candidate epsilon, so all
+candidates saw identical proposals and judgments and the replays made no model
+calls. Replays used an 11-claim cap so that every call a replay could make was
+on the tape. That cap also let the budget, not epsilon, decide every tree (see
+the decision below).
+
+The fresh generation made 170 external calls: 40 Claude calls (139,609 input,
+3,025 output tokens, $0.369084 API-equivalent cost reported by Claude Code) and
+130 Jev calls (108,680 input, 8,054 output tokens, $0.004565 at the demo's
+assumed Jev rate), **$0.373648 total**. Per question:
+
+| question | live claims | explored claims / links | calls | cost |
+|---|---:|---:|---:|---:|
+| free public transport | 12 | 3 / 4 | 59 | $0.128239 |
+| coffee and type 2 diabetes | 12 | 2 / 5 | 58 | $0.135064 |
+| rent versus buy | 12 | 2 / 4 | 53 | $0.110345 |
+
+Candidate replay results use `claims / explored claims / explored links`:
+
+| `--voi-eps` | transport | coffee | rent/buy | question stops: VoI / budget / round-or-depth limits |
+|---:|---:|---:|---:|---:|
+| 0 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| 0.0025 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| 0.005 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| **0.01** | **11 / 2 / 4** | **11 / 2 / 4** | **11 / 2 / 3** | **0 / 3 / 0** |
+| 0.02 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+| 0.04 | 11 / 2 / 4 | 11 / 2 / 4 | 11 / 2 / 3 | 0 / 3 / 0 |
+
+The harness captured exact propagated-q-weighted VoI when each non-root claim
+or link first became terminal. At the current 0.01 candidate the 60 stop-point
+values were min 0.0003, p25 0.0275, median 0.0482, p75 0.1083, max 0.3615.
+By terminal reason: 2 `DIMINISHING` nodes were 0.0025 and 0.0051; 12 `BUDGET`
+nodes ranged 0.0092–0.1153 (median 0.0615); 32 depth-bound nodes ranged
+0.0003–0.1392 (median 0.0347); and 14 round-limited nodes ranged
+0.0482–0.3615 (median 0.1695). Across candidates, the diminishing-node count
+was 0, 1, 1, 2, 2 and 3 respectively; the overall distribution and the work
+counts above did not change.
+
+**Decision: keep `DEFAULT_VOI_EPSILON` = 0.01, uncalibrated.** This sample
+cannot distinguish the candidates. With one round per node, depth 1 and an
+11-claim cap, the root's children are explored in value order until the cap is
+reached. Every `DIMINISHING` node at any candidate (largest exact VoI 0.037)
+was a claim the budget left unexplored at epsilon 0, so epsilon only
+relabelled budget stops. The explored nodes' stop-point VoI was at least
+0.048, above the largest candidate, 0.04. The data show only that 0 to 0.04
+behave identically under these limits. They show nothing for or against 0.01
+under the production round, depth and 180-claim limits, where the VoI stop can
+end a question. 0.01 stays because nothing here supports a different number.
+A production-representative follow-up should use production limits and persist
+its tape so that candidates can be added without new calls. On this tape, a
+candidate would have to reach past the lowest explored-node VoI (0.048) to
+change explored work.
+
+The old yield stop is **obsolete**: model C removed it in PR #1138. Yield
+history remains diagnostic only, and no yield parameter or stop is
+reintroduced by this calibration.
+
+## Production-limit exact-VoI follow-up (2026-10-04)
+
+The follow-up replaced the one-round/depth-1 experiment with the production
+shape: three rounds, unbounded depth, links enabled, one Sonnet proposer and
+one engine worker. A full three-question run at the production 180-claim cap
+was estimated at about $5.60 from the earlier run, above the $5 allowance, so
+the planned cap was 110 claims per question. The first two completed trees cost $1.583804 and
+$1.573629; that projects all three at $4.736149, leaving about $0.26 for the
+cached-material Jev check and variance. Candidate epsilon values were widened
+past the old 0.048 median to 0, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.10,
+0.12 and 0.16.
+
+Only two questions completed within this run's allowance. Both live trees were
+generated at epsilon 0, reached 110 claims and stopped on the claim budget:
+
+| question | explored claims / links | external calls | useful-tree cost |
+|---|---:|---:|---:|
+| free public transport | 24 / 32 | 639 | $1.583804 |
+| coffee and type 2 diabetes | 19 / 32 | 598 | $1.573629 |
+
+Across their 436 recorded terminal transitions, 417 were `BUDGET` (exact VoI
+0.0001–0.0883, median 0.0092), 14 were `ROUND_LIMIT` (0.0824–0.1737, median
+0.1416), and 5 were `SATURATED` (0.0235–0.2659, median 0.0465). Those are
+epsilon-zero observations, not candidate outcomes: epsilon 0 disables the VoI
+stop, so neither completed question could stop by VoI.
+
+The total API-equivalent/assumed spend was **$5.011981**: $3.157433 for the two
+useful trees, $0.528873 in the first run that hit the repository's five-minute
+test timeout, $1.007464 in a duplicate partial tree left running after its
+Gradle parent was stopped, and $0.318211 in the final aborted recovery. The
+last recovery exceeded the ceiling by $0.011981 because its resume/cap control
+was not forwarded into the test process; it was stopped immediately and no
+further live call was made. The third, practical question therefore has no
+production-shaped sample.
+
+The two completed trees and their raw model/Jev responses are committed as
+`src/test/resources/calibration/voi-tape/voi-tape.json`. The first persistent
+tape writer collapsed repeated identical requests to one response. That made
+the tape diverge when replayed through the engine even at epsilon 0, so it
+cannot honestly produce the planned counterfactual epsilon table. The harness
+now records each repeated response with an occurrence number for a future
+fresh run; this interrupted tape is explicitly marked non-sequential. Its
+live-tree and cost table can be rendered without network or model calls with:
+
+```bash
+./gradlew :demo:deliberate:test \
+  --tests 'civictech.deliberate.CalibrationTest.renderVoiFromPersistedTape' \
+  --rerun --no-daemon --no-build-cache
+```
+
+**Decision: keep `DEFAULT_VOI_EPSILON` = 0.01, uncalibrated.** The follow-up
+did not obtain the required three questions, and its two completed
+epsilon-zero trees ended at the budget. Because the persisted responses cannot
+support exact candidate replay, this run gives no evidence that any candidate
+through 0.16 lets the VoI stop end a question. Moving the default would turn an
+incomplete, non-discriminating run into false precision.
+
+## Current-judgment saturation check (2026-10-04)
+
+The same harness invocation re-asked current Jev on the cached 24 node-sides
+at six argument counts, two samples per side/count: 288 saturation calls. The
+result remains within a few points of the original calibration:
+
+| arguments on side | samples | mean saturation | share at or above 0.22 |
+|---:|---:|---:|---:|
+| 0 | 48 | 0.074 | 0% |
+| 1 | 48 | 0.149 | 4.2% |
+| 2 | 48 | 0.186 | 20.8% |
+| 3 | 48 | 0.212 | 47.9% |
+| 4 | 48 | 0.230 | 62.5% |
+| 6 | 48 | 0.262 | 79.2% |
+
+**Decision: keep `DEFAULT_SATURATION` = 0.22.** On current judgments, roughly
+half of sides saturate by three arguments and nearly two thirds by four; empty
+sides never do. That is the intended early-stop shape, while the cap remains
+the dependable bound. The bounded calibration used only one round per node,
+and the production-shape follow-up did not remeasure this threshold, so
+neither adds a second saturation-threshold sample beyond this depth replay.
+
+## Questionless CRED-01 recalibration (2026-10-03)
+
+The CRED-01 request now holds the claim only; it no longer sends the root
+question. A bounded live run with `jev-latest` paired the old question-context
+request and the new claim-only request on 24 deterministic claims from the
+cached three-question material above (48 calls total, concurrency 4; 33,504
+input and 3,216 output tokens, about $0.0014 at the demo's assumed Jev rate).
+Per question, the sample included the chain claims at depths 1–3, two other
+root pros, two root cons, and one depth-1 pro. Both sides of every pair asked
+the current model D `knowledge` Choice. None of the 48 answers selected
+`OUTSIDE_MY_KNOWLEDGE`.
+
+| measure | result |
+|---|---:|
+| mean absolute plausibility change | 0.055 |
+| mean signed change (claim-only minus question-context) | +0.002 |
+| first impressions crossing 0.5 | **1/24 (4.2%)** |
+| at or above `BEARING_PLAUSIBILITY` 0.8, question-context → claim-only | 9/24 → 7/24 |
+| crossing 0.8 in either direction | 4/24 (16.7%): three down, one up |
+
+This small run is a shipping check, not a new population estimate: one claim
+is 4.2 percentage points, and the corpus has only three root questions. The
+claim-reuse research run is a comparison point, not its baseline: that larger
+configuration omitted the `knowledge` Choice and found 92/1,066 (8.6%) 0.5-side
+flips with mean absolute change 0.066.
+
+**Decision: keep `BEARING_PLAUSIBILITY` = 0.8.** The new context-free scores
+changed individual boundary decisions, as intended, but did not shift the
+sample as a whole (mean signed change +0.002). Lowering the boundary merely to
+preserve the old request's eligibility rate would reintroduce that request as
+the target; 0.8 still expresses the semantic condition that the attacked
+claim is highly plausible. The sample is too small to optimise a replacement.
+
+**Decision: keep `saturation` = 0.22.** Saturation has its own request over the
+question, claim, side, and existing arguments; CRED-01 changes none of its
+state, prompt, or threshold semantics. The live saturation evidence above
+therefore remains the applicable calibration. A future corpus-wide rerun may
+still test selection effects from changed exploration, but this bounded result
+provides no reason to move the threshold.
 
 ## Iteration 4: judgments changed after this calibration
 
@@ -65,7 +263,8 @@ above were calibrated under the old judgments and prompts.
 
 The first live run under the new ones (2026-09-27, "Should cities ban private
 cars from their centres?", defaults with `minInfluence` 0.35) showed the gate
-misbehaving: all 9 depth-1 arguments ended `PRUNED` (contributions 0.09–0.32),
+misbehaving: all 9 depth-1 arguments ended `DONE` for reason `PRUNED`
+(contributions 0.09–0.32),
 so nothing below the root was ever explored. Re-asking Jev for the two factors
 of those 9 arguments separately:
 
@@ -152,7 +351,7 @@ final EXP-10 rule.
 | Is Trump intelligent? | 21 → **55** | diminishing (nothing left to halt) | 1/10/25/13/5/1 | 1/5/1/2 | 5 of 10 | 22, 0.060 vs 0.114 | ~5.4 min |
 | Do animals employ language? | 110 → **64** | diminishing | 1/8/27/20/8/0 | 1/8/5/2 | 8 of 8 | 16, 0.113 vs 0.198 | ~3.4 min |
 
-Status counts: God — 65 `DEPTH_LIMIT`, 50 `PRUNED`, 42 `DIMINISHING`,
+`DONE` reason counts: God — 65 `DEPTH_LIMIT`, 50 `PRUNED`, 42 `DIMINISHING`,
 3 `SATURATED`, 2 `ROUND_LIMIT`; Trump — 40 `PRUNED`, 6 `DEPTH_LIMIT`,
 6 `ROUND_LIMIT`, 3 `SATURATED`; animals — 31 `PRUNED`, 22 `DIMINISHING`,
 8 `DEPTH_LIMIT`, 2 `SATURATED`, 1 `ROUND_LIMIT`. Triage: God 172 proposals
@@ -169,7 +368,8 @@ proposed investigating disinfectant injections into the body as a treatment
 for COVID-19." and "Donald Trump built a real estate and branding business
 that Forbes estimated to be worth billions of dollars as of the 2020s." — each
 a checkable, relevant fact rather than a copy of a prompt example. Its root
-relevance stays low (0.16–0.57, cause 4), so it still ends mostly by `PRUNED`;
+relevance stays low (0.16–0.57, cause 4), so it still ends mostly `DONE` for
+reason `PRUNED`;
 its yield stop fired on its last rounds with no claim left waiting.
 
 **Final correction.** The animals stop exposed a biased comparison: the root's
@@ -213,8 +413,9 @@ to carry, kept here with the measurements it summarises.
   these corrections prevent a high-yield root from depressing the apparent
   return of its children and prevent exhausted trees from claiming they were
   stopped (section "Iteration 5").
-- **Residual.** A full recalibration of `saturation` under the current
-  judgments is still outstanding.
+- **2026-10-04 check.** The current-judgment rerun above kept `saturation` at
+  0.22: 47.9% of sides saturated by three arguments and 62.5% by four, with no
+  empty side saturated.
 
 ## Findings behind individual requirements
 

@@ -9,8 +9,8 @@ import {
   priorText,
   readingsLine,
   shown,
-  STATUS_LABEL,
   statusHint,
+  statusLabel,
 } from '../util/format';
 import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, useCollapse, type Selection, type TreeIndex } from './ClaimCard';
 import { OverrideControl } from './OverrideControl';
@@ -20,10 +20,18 @@ import { OverrideControl } from './OverrideControl';
  * sleep" / "depends on the reading" / "several possible answers") and, for
  * POSITIONS, the distribution over positions — one row per position, in
  * `framing.positions` order, with its share as a percentage and a
- * proportional bar. Replaces the question's yes/no gauge.
+ * proportional bar, followed by the none-of-the-listed residual when nonzero.
+ * Replaces the question's yes/no gauge.
  */
 export function FramingSummary(props: { framing: FramingDto }) {
   const readings = () => (props.framing.mode === 'READINGS' ? props.framing.positions : []);
+  const unlistedShare = () => {
+    if (props.framing.positions.length < 2) return 0;
+    const shares = props.framing.positions.map((p) => p.share);
+    return shares.some((share) => share === undefined)
+      ? 0
+      : Math.max(0, 1 - shares.reduce<number>((sum, share) => sum + (share ?? 0), 0));
+  };
   const credences = () => readings().map((p) => p.credence ?? 0.5);
   const lo = () => Math.min(...credences());
   const hi = () => Math.max(...credences());
@@ -74,6 +82,15 @@ export function FramingSummary(props: { framing: FramingDto }) {
               </li>
             )}
           </For>
+          <Show when={unlistedShare() > 1e-12}>
+            <li class="framing__row">
+              <span class="framing__text">None of the listed answers</span>
+              <span class="framing__bar" aria-hidden="true">
+                <span class="framing__bar-fill" style={{ transform: `scaleX(${unlistedShare()})` }} />
+              </span>
+              <span class="framing__pct">{pct(unlistedShare())}</span>
+            </li>
+          </Show>
         </ul>
       </Show>
     </div>
@@ -146,11 +163,9 @@ export function Reading(props: { position: PositionDto; tree: TreeNode; sel: Sel
 
             <div class="reading__meta">
               <Show when={claim().status}>
-                {(s) => (
-                  <span class={`status status--${phase()}`} title={statusHint(s())}>
-                    {STATUS_LABEL[s()]}
-                  </span>
-                )}
+                <span class={`status status--${phase()}`} title={statusHint(claim())}>
+                  {statusLabel(claim())}
+                </span>
               </Show>
               <button
                 type="button"

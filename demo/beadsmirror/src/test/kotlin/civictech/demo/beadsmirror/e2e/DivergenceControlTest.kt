@@ -3,6 +3,7 @@ package civictech.demo.beadsmirror.e2e
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.demo.beadsmirror.BdScratchWorkspace
+import civictech.demo.beadsmirror.MirrorGraph
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.ExportRow
 import civictech.demo.beadsmirror.equality.Divergence
@@ -10,7 +11,7 @@ import civictech.demo.beadsmirror.equality.FieldMismatch
 import civictech.demo.beadsmirror.equality.MirrorExportEquality
 import civictech.demo.beadsmirror.equality.UnexpectedIssue
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
-import civictech.demo.beadsmirror.feed.FeedCheckpoint
+import civictech.demo.beadsmirror.feed.DurableFeedCursor
 import civictech.demo.beadsmirror.feed.FeedPosition
 import civictech.demo.beadsmirror.feed.DoltFeedPoller
 import civictech.demo.beadsmirror.projector.DotMinter
@@ -47,7 +48,7 @@ import java.util.UUID
  * defect is a test-only switch and deliberately does not exist on
  * [civictech.demo.beadsmirror.BeadsMirrorConfig], so a defective projector
  * cannot be reached through `start`. Everything the app wires is wired here
- * from the same public parts — [DoltCommitFeed], [FeedCheckpoint],
+ * from the same public parts — [DoltCommitFeed], [MirrorGraph],
  * [DoltFeedPoller], [MirrorProjector] — minus the HTTP shell and the start-time
  * re-baseline, neither of which either control is about.
  *
@@ -343,13 +344,23 @@ class DivergenceControlTest {
      */
     private inner class Pipeline(defects: SeededDefects, runDir: Path) : AutoCloseable {
 
-        val projector = MirrorProjector(DotMinter(sanitizedDoltDatabaseName(workspace.root)), defects)
-
+        private val identity = sanitizedDoltDatabaseName(workspace.root)
+        private val graph = MirrorGraph.solo(runDir, identity)
+        val projector = graph.projector(DotMinter(identity)) { minter, cells, mapInlet, edgeInlet ->
+            MirrorProjector(
+                minter = minter,
+                defects = defects,
+                cell = cells.cell,
+                edges = cells.edges,
+                mapInlet = mapInlet,
+                edgeInlet = edgeInlet,
+            )
+        }
         private val feed = DoltCommitFeed(workspace.doltRoot)
-        private val checkpoint = FeedCheckpoint(runDir)
+        private val cursor = DurableFeedCursor(graph.input(), graph.host, "divergence control")
         private val poller = DoltFeedPoller(
             feed = feed,
-            checkpoint = checkpoint,
+            cursor = cursor,
             interval = Duration.ZERO,
             onBatch = { records -> projector.applyAll(records) },
         )
@@ -357,10 +368,13 @@ class DivergenceControlTest {
         /** One tick, then the proof it consumed everything: nothing is left after the checkpoint. */
         fun drain() {
             poller.pollOnce()
-            feed.readFrom(checkpoint.read()) shouldBe emptyList()
+            feed.readFrom(cursor.committed()) shouldBe emptyList()
         }
 
-        override fun close() = poller.close()
+        override fun close() {
+            poller.close()
+            graph.close()
+        }
     }
 
     private fun pipeline(defects: SeededDefects): Pipeline =

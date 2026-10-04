@@ -195,23 +195,21 @@ object Consensus {
 }
 
 /**
- * Model A: the shares competing positions of one issue hold — a softmax over
- * each position's score `logit(clamped credence) / T`. At [TEMPERATURE] 1
- * this is odds normalisation: (0.8, 0.6, 0.2) → odds (4, 1.5, 0.25) →
- * (0.696, 0.261, 0.043). Monotone in every credence, sums to 1; the clamp to
- * [Consensus.LOW]..[Consensus.HIGH] keeps a credence of 0 or 1 finite.
- * T = 1 is a starting value, not calibrated (feature computenet-dq2fy.29, D7).
+ * Model A: absolute shares for the listed positions of one issue. Credences
+ * are used as weights and normalised only when their sum exceeds one. The
+ * remainder `1 - shares.sum()` is the share that none of the listed positions
+ * holds. This makes complementary binary positions reproduce their verdict,
+ * preserves first impressions instead of sharpening their odds, and exposes
+ * jointly implausible positions instead of forcing them to fill the frame.
+ *
+ * The object keeps its original name for source compatibility with the first
+ * model-A implementation; the operation is deliberately no longer a softmax.
  */
 object Softmax {
-    const val TEMPERATURE = 1.0
-
-    fun shares(credences: List<Double>, temperature: Double = TEMPERATURE): List<Double> {
+    fun shares(credences: List<Double>): List<Double> {
         if (credences.isEmpty()) return emptyList()
-        require(temperature > 0) { "softmax temperature must be positive: $temperature" }
-        val scores = credences.map { logit(it.coerceIn(Consensus.LOW, Consensus.HIGH)) / temperature }
-        val top = scores.max()
-        val weights = scores.map { exp(it - top) }
-        val total = weights.sum()
+        val weights = credences.map { it.coerceIn(0.0, 1.0) }
+        val total = maxOf(1.0, weights.sum())
         return weights.map { it / total }
     }
 }
@@ -249,8 +247,8 @@ class LayerSet(
     /**
      * One credence per layer for a node with these [stances] and arguments.
      * [priorWeight] < 1 shrinks each layer's base towards [NEUTRAL_PRIOR] —
-     * `½ + w·(base − ½)` — before the arguments are weighed (model D's second
-     * root verdict); 1 (the default) is the ordinary credence.
+     * `½ + w·(base − ½)` — before the arguments are weighed (model D's local
+     * arguments-first view); 1 (the default) is the ordinary credence.
      */
     fun evaluate(
         stances: Collection<Double>,
@@ -268,33 +266,16 @@ class LayerSet(
     /** Layer id → credence. */
     fun named(values: List<Double>): Map<String, Double> = ids.zip(values).toMap()
 
-    /**
-     * Model C: d [headlineOf] / d values\[l] for a node with these credences —
-     * one-hot for a layer headline; for [CONSENSUS], the gradient of
-     * `sigmoid(mean logit(clamp c_m))` over the members (0 for a layer outside
-     * them, or clamped at [Consensus.LOW]/[Consensus.HIGH]). Turns a per-layer
-     * sensitivity vector into d headline(root) / d node: their dot product.
-     */
-    fun headlineGradient(values: List<Double>): List<Double> {
-        if (headline != CONSENSUS) return ids.indices.map { if (it == headlineIndex) 1.0 else 0.0 }
-        val cons = consensus(values)
-        return ids.indices.map { l ->
-            val c = values[l]
-            if (l !in memberIndex || c <= Consensus.LOW || c >= Consensus.HIGH) 0.0
-            else cons * (1 - cons) / (memberIndex.size * c * (1 - c))
-        }
-    }
-
     companion object {
         /** Headline value meaning "show the consensus" rather than one layer (the default). */
         const val CONSENSUS = "consensus"
 
-        /** Model D: the prior the second root verdict shrinks Jev's first impression towards. */
+        /** Model D: the prior the arguments-first view shrinks Jev's first impression towards. */
         const val NEUTRAL_PRIOR = 0.5
 
         /**
-         * Model D: the weight Jev's first impression keeps in the second root
-         * verdict ("what the arguments say"), `½ + w·(p − ½)`. 0 — a neutral
+         * Model D: the weight Jev's first impression keeps in the local
+         * arguments-first view, `½ + w·(p − ½)`. 0 — a neutral
          * prior — is the smallest choice; a weak prior would be 0 < w < 1.
          */
         const val WEAK_PRIOR_WEIGHT = 0.0

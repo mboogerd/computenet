@@ -143,7 +143,7 @@ class BaselineBuilderTest {
 
         @Test
         fun `building yields presence keys, field values in export JSON form, and edges`() {
-            val projector = builder.build(rows(alpha, beta), "headhash", 7)
+            val projector = applyBaseline(builder, minter, rows(alpha, beta), "headhash", 7)
 
             projector.view() shouldBe mapOf(
                 "ws-a" to mapOf(
@@ -176,7 +176,7 @@ class BaselineBuilderTest {
             val stamped =
                 """{"id":"ws-a","status":"open","metadata":{"cn_dot":"src-9:41","cn_echo":"tok-1"}}"""
 
-            val projector = builder.build(rows(stamped), "headhash", 7)
+            val projector = applyBaseline(builder, minter, rows(stamped), "headhash", 7)
 
             projector.view().getValue("ws-a").keys shouldContainExactly setOf("id", "metadata", "status")
             projector.view().getValue("ws-a")["metadata"] shouldBe
@@ -207,8 +207,8 @@ class BaselineBuilderTest {
 
         @Test
         fun `a different head height mints different dots`() {
-            val atSeven = builder.build(rows(alpha), "headhash", 7).cell.state()
-            val atEight = BaselineBuilder(minter).build(rows(alpha), "headhash", 8).cell.state()
+            val atSeven = applyBaseline(builder, minter, rows(alpha), "headhash", 7).cell.state()
+            val atEight = applyBaseline(BaselineBuilder(minter), minter, rows(alpha), "headhash", 8).cell.state()
 
             (atSeven == atEight) shouldBe false
         }
@@ -247,7 +247,7 @@ class BaselineBuilderTest {
             counters.distinct().size shouldBe counters.size
             counters.sorted() shouldContainExactly counters
 
-            builder.build(rows(*many.toTypedArray()), "headhash", 7).view().size shouldBe 4096
+            applyBaseline(builder, minter, rows(*many.toTypedArray()), "headhash", 7).view().size shouldBe 4096
         }
 
         /**
@@ -317,7 +317,8 @@ class BaselineBuilderTest {
             val (head, height) = BaselineBuilder.captureHead(DoltCommitFeed(workspace.doltRoot))
             val rows = BdExportReader(workspace.root).read()
 
-            val projector = BaselineBuilder(DotMinter("scratch-live")).build(rows, head, height)
+            val liveMinter = DotMinter("scratch-live")
+            val projector = applyBaseline(BaselineBuilder(liveMinter), liveMinter, rows, head, height)
 
             projector.view().keys shouldBe setOf(a, b)
             projector.view().getValue(a)["title"] shouldBe "\"Issue A\""
@@ -352,5 +353,15 @@ class BaselineBuilderTest {
         } catch (e: Exception) {
             false
         }
+    }
+
+    private fun applyBaseline(
+        builder: BaselineBuilder,
+        minter: DotMinter,
+        rows: List<ExportRow>,
+        head: String,
+        height: Long,
+    ): MirrorProjector = MirrorProjector(minter).also {
+        it.applyAll(builder.records(rows, head, height))
     }
 }

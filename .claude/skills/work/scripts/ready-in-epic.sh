@@ -35,6 +35,15 @@
 # ids under --ids-only. The TYPE column is load-bearing — step 5 selects the
 # first `feature` row and falls through to the no-feature-layer shape when
 # there is none, which it cannot do from an untyped listing.
+#
+# STALE-BLOCKED ROWS (computenet-deb4). bd's denormalized is_blocked column
+# goes stale the moment a blocker closes, so the ready listing silently OMITS
+# items — non-empty listings included: one returned four P2/P3 rows while the
+# epic's only P1 feature sat flagged blocked behind three CLOSED blockers. So
+# the epic's `bd blocked` descendants are run through verify-ready.sh, which
+# reads the real edges, and each it reports READY is appended with a fifth
+# column `stale-blocked` (bare id under --ids-only). A verify-ready.sh failure
+# leaves the primary rows standing and says on stderr the check did not run.
 # EMPTY OUTPUT WITH EXIT 0 IS A REAL ANSWER: nothing ready here.
 # Exit 3 = the query itself failed and NOTHING was checked — never read that as
 # an empty epic, because deferring on it hides the epic from both machines.
@@ -68,8 +77,15 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/ready-in-epic.XXXXXX") || exit 3
 trap 'rm -rf "$tmp"' EXIT
 printf '%s' "$allj" > "$tmp/all.json"
 printf '%s' "$raw"  > "$tmp/ready.json"
+# The is_blocked set, for the stale-blocked pass. A failed query is not fatal:
+# it only means that pass cannot run, which is said below.
+blk_ok=1
+blkj=$(bd blocked --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p') || blk_ok=0
+[ -n "$blkj" ] || blk_ok=0
+[ "$blk_ok" = 1 ] && printf '%s' "$blkj" > "$tmp/blocked.json" || echo '[]' > "$tmp/blocked.json"
 
-EPIC="$EPIC" IDS_ONLY="$IDS_ONLY" ALLF="$tmp/all.json" READYF="$tmp/ready.json" python3 -c '
+EPIC="$EPIC" IDS_ONLY="$IDS_ONLY" ALLF="$tmp/all.json" READYF="$tmp/ready.json" \
+  BLOCKEDF="$tmp/blocked.json" CANDF="$tmp/cand.tsv" python3 -c '
 import json, os, sys
 
 def unwrap(raw):
@@ -139,5 +155,37 @@ for r in ready:
         print(bid)
     else:
         print("%s\t%s\t%s\t%s" % (bid, kind.get(bid, ""), r.get("priority", ""), r.get("title", "")))
+
+# Candidates for the stale-blocked pass: the is_blocked descendants
+# that are still open, one tab-separated row each, verified by the shell below.
+ready_ids = {r["id"] for r in ready}
+status = {r["id"]: r.get("status", "") for r in allrows}
+with open(os.environ["CANDF"], "w") as out:
+    try:
+        blocked = unwrap(open(os.environ["BLOCKEDF"]).read() or "[]")
+    except Exception:
+        blocked = []
+        print("ready-in-epic: bd blocked unparseable; the stale-blocked check did NOT run", file=sys.stderr)
+    for r in blocked:
+        bid = r["id"]
+        if bid == epic or bid in ready_ids or epic_of(bid) != epic:
+            continue
+        if status.get(bid, r.get("status", "")) in ("closed", "deferred", "in_progress", "pinned"):
+            continue
+        out.write("%s\t%s\t%s\t%s\n" % (bid, kind.get(bid, ""), r.get("priority", ""), r.get("title", "")))
 ' || { echo "ready-in-epic: the epic walk failed; NOTHING was checked" >&2; exit 3; }
+
+[ "$blk_ok" = 1 ] || echo "ready-in-epic: bd blocked failed; the stale-blocked check did NOT run" >&2
+if [ -s "$tmp/cand.tsv" ]; then
+  # shellcheck disable=SC2046
+  vr=$("$HERE/verify-ready.sh" $(cut -f1 "$tmp/cand.tsv") 2>/dev/null); vrc=$?
+  if [ "$vrc" = 0 ] || [ "$vrc" = 1 ]; then
+    for vid in $(printf '%s\n' "$vr" | sed -n 's/^READY //p'); do
+      if [ "$IDS_ONLY" = 1 ]; then echo "$vid"
+      else awk -F'\t' -v id="$vid" '$1 == id {print $0 "\tstale-blocked"}' "$tmp/cand.tsv"; fi
+    done
+  else
+    echo "ready-in-epic: verify-ready.sh failed (rc=$vrc); the stale-blocked check did NOT run" >&2
+  fi
+fi
 exit 0

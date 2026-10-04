@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "33 passed, 0 failed".
+# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "40 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-files-claim.sh"}
@@ -129,9 +129,40 @@ if [ "$sub_rc" = 0 ]; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: add-only must be CWD-independent (rc=$sub_rc) out=<$sub_out>"
 fi
 
-# A new file in a DIFFERENT package must not trigger the op-package rows.
-bead "add a source cell" "" "kernel/src/main/kotlin/civictech/cell/data/BrandNewSource.kt"
-check "add-only does not fire outside the trigger package" 0 ""
+# A new file in a DIFFERENT package must not trigger the op-package rows. It
+# does trigger the source-cell row now (computenet-ie3ua), so assert on the
+# op rows' absence rather than on a clean exit.
+DATADIR=kernel/src/main/kotlin/civictech/cell/data
+bead "add a source cell" "" "$DATADIR/BrandNewSource.kt"
+out=$("$SCRIPT" computenet-x 2>/dev/null)
+if [[ "$out" != *"operator-inventory.txt"* ]]; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: add-only must not fire op rows outside the trigger package out=<$out>"
+fi
+
+# EXACT-PARENT trigger (`/*`): a new file directly in civictech/cell/data
+# changes the source-cell census; one in data/op must not (computenet-y6zv's
+# false positive, the reason the row was once left out).
+check "new data/Foo.kt implies source-cell-inventory" 1 "REQUIRES oracle/src/test/resources/source-cell-inventory.txt"
+
+bead "add a source cell" "" "$DATADIR/BrandNewSource.kt,oracle/src/test/resources/source-cell-inventory.txt"
+check "source-cell coupling satisfied -> silent" 0 ""
+
+bead "add a new operator" "" "$OPDIR/BrandNewCell.kt,oracle/src/test/resources/operator-inventory.txt,inspect/src/main/kotlin/civictech/inspect/Observations.kt,oracle/src/main/kotlin/civictech/oracle/bind/TaggedOperators.kt"
+check "new data/op/Bar.kt does not imply source-cell-inventory" 0 ""
+
+bead "fix the set cell" "" "$DATADIR/SetCell.kt"
+check "existing data/ file -> source-cell row silent" 0 ""
+
+# A new 24-data-cells scenario must be cross-checked or listed out-of-vocabulary.
+bead "add a scenario" "" "concord/corpus/24-data-cells/brand-new-scenario.yaml"
+check "new 24-data-cells scenario implies CorpusCrossCheckTest" 1 "REQUIRES oracle/src/test/kotlin/civictech/oracle/corpus/CorpusCrossCheckTest.kt"
+
+# The deliberate UI type mirror is pinned by its test.
+bead "mirror the new field" "" "demo/deliberate/ui/src/api/types.ts"
+check "types.ts claim without types.test.ts warns" 1 "REQUIRES demo/deliberate/ui/test/types.test.ts"
+
+bead "mirror the new field" "" "demo/deliberate/ui/src/api/types.ts,demo/deliberate/ui/test/types.test.ts"
+check "types.ts mirror coupling satisfied -> silent" 0 ""
 
 # The OperatorCatalog row is deliberately NOT add-only: registering an operator
 # is an edit to an existing file, so a mention/claim of it is the trigger.

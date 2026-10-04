@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference
  *   (which installs neither binary) runs it green-but-skipped.
  * - [OverSyntheticRows] drives [DoltFeedPoller]'s batching/checkpoint-ordering
  *   and truncation-conversion rules through [DiffQuery] over hand-built rows,
- *   and [FeedCheckpoint] directly against a temp directory. Runs everywhere,
+ *   and [MemoryFeedCursor] directly. Runs everywhere,
  *   CI included, no `bd`/`dolt` involved.
  *
  * Every workspace here is a throwaway `bd --sandbox init` directory; nothing
@@ -69,8 +69,7 @@ class CheckpointResumeTest {
             // ever cares about the LATEST commit hash as a resume point, never a count.
             val afterAAndB = DoltCommitFeed(workspace.doltRoot).history().last()
 
-            val checkpoint = FeedCheckpoint(runDir)
-            checkpoint.write(afterAAndB)
+            val checkpoint = MemoryFeedCursor(afterAAndB)
 
             val c = workspace.createIssue("Issue C")
             val d = workspace.createIssue("Issue D")
@@ -78,7 +77,7 @@ class CheckpointResumeTest {
             val batches = mutableListOf<ChangeRecord>()
             val poller = DoltFeedPoller(
                 feed = DoltCommitFeed(workspace.doltRoot),
-                checkpoint = checkpoint,
+                cursor = checkpoint,
                 interval = Duration.ofMillis(50),
                 onBatch = { batches += it },
             )
@@ -88,44 +87,44 @@ class CheckpointResumeTest {
             batches.map { it.issueId } shouldContainExactly listOf(c, d)
             batches.none { it.issueId == a } shouldBe true
             // None re-emitted, none skipped: the checkpoint has moved to the last emitted commit.
-            checkpoint.read() shouldBe DoltCommitFeed(workspace.doltRoot).history().last()
+            checkpoint.committed() shouldBe DoltCommitFeed(workspace.doltRoot).history().last()
         }
 
         @Test
         fun `polling again with no new commits emits nothing and leaves the checkpoint untouched`() {
             workspace.createIssue("Issue A")
-            val checkpoint = FeedCheckpoint(runDir)
+            val checkpoint = MemoryFeedCursor()
             val batches = mutableListOf<ChangeRecord>()
             val poller = DoltFeedPoller(
                 feed = DoltCommitFeed(workspace.doltRoot),
-                checkpoint = checkpoint,
+                cursor = checkpoint,
                 interval = Duration.ofMillis(50),
                 onBatch = { batches += it },
             )
             poller.pollOnce()
             batches.size shouldBe 1
-            val afterFirstPoll = checkpoint.read()
+            val afterFirstPoll = checkpoint.committed()
 
             poller.pollOnce()
 
             batches.size shouldBe 1
-            checkpoint.read() shouldBe afterFirstPoll
+            checkpoint.committed() shouldBe afterFirstPoll
         }
 
         /** Feature design example: a checkpoint the real dolt_log genuinely does not contain. */
         @Test
         fun `raises the typed condition and emits nothing when the checkpoint commit is absent from dolt_log`() {
             workspace.createIssue("Issue A")
-            val checkpoint = FeedCheckpoint(runDir)
+            val checkpoint = MemoryFeedCursor()
             // Simulate a compacted/truncated history the cheap way (feature design §5):
             // a checkpoint naming a hash dolt_log genuinely does not contain — here, a
             // syntactically plausible commit hash that was never written to this workspace.
             val goneHash = "0".repeat(32)
-            checkpoint.write(goneHash)
+            checkpoint.committed = goneHash
             val batches = mutableListOf<ChangeRecord>()
             val poller = DoltFeedPoller(
                 feed = DoltCommitFeed(workspace.doltRoot),
-                checkpoint = checkpoint,
+                cursor = checkpoint,
                 interval = Duration.ofMillis(50),
                 onBatch = { batches += it },
             )
@@ -134,8 +133,8 @@ class CheckpointResumeTest {
 
             failure.condition shouldBe FeedCondition.CheckpointGone(goneHash)
             batches shouldBe emptyList()
-            // The gap is never silently bridged: the checkpoint file is untouched.
-            checkpoint.read() shouldBe goneHash
+            // The gap is never silently bridged: the committed cursor is untouched.
+            checkpoint.committed() shouldBe goneHash
         }
 
         /**
@@ -149,17 +148,17 @@ class CheckpointResumeTest {
         @Test
         fun `a real bd flatten drops the checkpoint from history and the poller raises CheckpointGone`() {
             workspace.createIssue("Issue A")
-            val checkpoint = FeedCheckpoint(runDir)
+            val checkpoint = MemoryFeedCursor()
             val batches = mutableListOf<ChangeRecord>()
             val poller = DoltFeedPoller(
                 feed = DoltCommitFeed(workspace.doltRoot),
-                checkpoint = checkpoint,
+                cursor = checkpoint,
                 interval = Duration.ofMillis(50),
                 onBatch = { batches += it },
             )
             poller.pollOnce()
             batches.size shouldBe 1
-            val persistedCheckpoint = checkpoint.read()!!
+            val persistedCheckpoint = checkpoint.committed()!!
 
             workspace.createIssue("Issue B")
             workspace.flatten()
@@ -171,20 +170,20 @@ class CheckpointResumeTest {
             val failure = shouldThrow<FeedConditionException> { poller.pollOnce() }
 
             failure.condition shouldBe FeedCondition.CheckpointGone(persistedCheckpoint)
-            // Nothing was emitted for this tick, and the checkpoint file is untouched —
+            // Nothing was emitted for this tick, and the committed cursor is untouched —
             // the gap is never silently bridged.
             batches.size shouldBe 1
-            checkpoint.read() shouldBe persistedCheckpoint
+            checkpoint.committed() shouldBe persistedCheckpoint
         }
 
         @Test
         fun `the poller stops cleanly and releases its polling thread`() {
             workspace.createIssue("Issue A")
-            val checkpoint = FeedCheckpoint(runDir)
+            val checkpoint = MemoryFeedCursor()
             val batchCount = AtomicInteger(0)
             val poller = DoltFeedPoller(
                 feed = DoltCommitFeed(workspace.doltRoot),
-                checkpoint = checkpoint,
+                cursor = checkpoint,
                 interval = Duration.ofMillis(20),
                 onBatch = { batchCount.incrementAndGet() },
             )
@@ -257,8 +256,7 @@ class CheckpointResumeTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
-                checkpoint.write("c1")
+                val checkpoint = MemoryFeedCursor("c1")
                 val batches = mutableListOf<ChangeRecord>()
                 val poller = DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { batches += it })
 
@@ -269,7 +267,7 @@ class CheckpointResumeTest {
         }
 
         @Test
-        fun `the checkpoint is persisted only after the batch has been handed to the consumer`() {
+        fun `the cursor advances only after onBatch returned`() {
             val feed = DoltCommitFeed(
                 DiffQuery { sql ->
                     when (sql) {
@@ -282,13 +280,13 @@ class CheckpointResumeTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
+                val checkpoint = MemoryFeedCursor()
                 val checkpointDuringCallback = AtomicReference<String?>("unset")
                 val poller = DoltFeedPoller(
                     feed,
                     checkpoint,
                     Duration.ofMillis(10),
-                    onBatch = { checkpointDuringCallback.set(checkpoint.read()) },
+                    onBatch = { checkpointDuringCallback.set(checkpoint.committed()) },
                 )
 
                 poller.pollOnce()
@@ -296,7 +294,7 @@ class CheckpointResumeTest {
                 // Nothing was persisted yet while the consumer had the batch...
                 checkpointDuringCallback.get() shouldBe null
                 // ...but it is persisted once pollOnce has returned.
-                checkpoint.read() shouldBe "c1"
+                checkpoint.committed() shouldBe "c1"
             }
         }
 
@@ -314,8 +312,7 @@ class CheckpointResumeTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
-                checkpoint.write("not-a-real-commit")
+                val checkpoint = MemoryFeedCursor("not-a-real-commit")
                 val poller = DoltFeedPoller(feed, checkpoint, Duration.ofMillis(10), onBatch = { error("must not be called") })
 
                 val failure = shouldThrow<FeedConditionException> { poller.pollOnce() }
@@ -348,7 +345,7 @@ class CheckpointResumeTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
+                val checkpoint = MemoryFeedCursor()
                 // No checkpoint written: readFrom(null) starts at genesis, so any
                 // IllegalArgumentException reaching pollOnce here can only have come
                 // from the query fake, not from a history-truncation precondition.
@@ -383,8 +380,7 @@ class CheckpointResumeTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
-                checkpoint.write("not-a-real-commit")
+                val checkpoint = MemoryFeedCursor("not-a-real-commit")
                 val conditions = mutableListOf<FeedCondition>()
                 val poller = DoltFeedPoller(
                     feed,
@@ -418,8 +414,7 @@ class CheckpointResumeTest {
             )
 
             withTempRunDir { runDir ->
-                val checkpoint = FeedCheckpoint(runDir)
-                checkpoint.write("not-a-real-commit")
+                val checkpoint = MemoryFeedCursor("not-a-real-commit")
                 // Default onCondition (throws FeedConditionException): unlike pollOnce(), which
                 // lets the caller catch it directly, the background loop has nowhere to propagate
                 // an uncaught exception to except the `failure` property — this is the path that
@@ -453,36 +448,11 @@ class CheckpointResumeTest {
         }
 
         @Test
-        fun `a checkpoint round-trips through a fresh instance, simulating a restart`(@TempDir runDir: Path) {
-            val first = FeedCheckpoint(runDir)
-            first.write("abc123")
-
-            val second = FeedCheckpoint(runDir)
-
-            second.read() shouldBe "abc123"
-        }
-
-        @Test
-        fun `an unwritten checkpoint reads as null, meaning genesis`(@TempDir runDir: Path) {
-            FeedCheckpoint(runDir).read() shouldBe null
-        }
-
-        @Test
-        fun `writing a checkpoint twice leaves only the latest value, never a torn file`(@TempDir runDir: Path) {
-            val checkpoint = FeedCheckpoint(runDir)
-            checkpoint.write("first")
-            checkpoint.write("second")
-
-            checkpoint.read() shouldBe "second"
-            Files.list(runDir).use { entries -> entries.count() } shouldBe 1L // no stray temp files left behind
-        }
-
-        @Test
         fun `the poller rejects a negative interval`(@TempDir runDir: Path) {
             shouldThrow<IllegalArgumentException> {
                 DoltFeedPoller(
                     DoltCommitFeed(DiffQuery { emptyList() }),
-                    FeedCheckpoint(runDir),
+                    MemoryFeedCursor(),
                     Duration.ofMillis(-1),
                     onBatch = {},
                 )

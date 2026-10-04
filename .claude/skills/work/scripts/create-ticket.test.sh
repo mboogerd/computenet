@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "25 passed, 0 failed".
+# Tests for create-ticket.sh. Stubs `bd` and `gh` on PATH. Exits 0 if all cases pass.
+# Expect "31 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -14,6 +14,11 @@ cat > "$ROOT/bin/bd" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$BD_LOG"
 case "$1" in
+  search)
+    [ -f "$CTRL/search-fail" ] && { echo "search exploded" >&2; exit 1; }
+    if [ -f "$CTRL/search-hit" ]; then
+      echo '[{"id":"computenet-dup1","title":"existing flaky widget bug","status":"open"}]'
+    else echo '[]'; fi ;;
   create)
     case "$*" in *--parent*) echo "TEST-VIOLATION: create used --parent" >&2; exit 1 ;; esac
     [ -f "$CTRL/create-garbage" ] && { echo "not json"; exit 0; }
@@ -29,6 +34,13 @@ case "$1" in
 esac
 EOF
 chmod +x "$ROOT/bin/bd"
+cat > "$ROOT/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "gh $*" >> "$BD_LOG"
+[ -f "$CTRL/gh-fail" ] && { echo "gh: not logged in" >&2; exit 1; }
+if [ -f "$CTRL/gh-hit" ]; then echo '[{"number":4242,"title":"fix flaky widget"}]'; else echo '[]'; fi
+EOF
+chmod +x "$ROOT/bin/gh"
 export PATH="$ROOT/bin:$PATH"
 
 pass=0; fail=0
@@ -185,6 +197,45 @@ id=$("$SCRIPT" --type=bug --title="a=b c" --parent=computenet-wpvy --label=x 2>/
   && grep -q -- "update computenet-h4sh --parent=computenet-wpvy" "$BD_LOG" \
   && ok "--flag=value creates like --flag value, splitting at the FIRST =" \
   || bad "= form: exit=$st id=$(printf %q "$id") log=$(cat "$BD_LOG")"
+
+# x28lp: duplicate pre-check. A hit is printed to stderr and the bead is still
+# created; --no-dup-check skips the searches; a failed search warns, never blocks.
+fixture; touch "$CTRL/search-hit" "$CTRL/gh-hit"
+id=$("$SCRIPT" --type bug --title "flaky widget renders twice" --parent computenet-wpvy 2>"$CTRL/err"); st=$?
+[ "$st" = 0 ] && [ "$id" = computenet-h4sh ] \
+  && grep -q '^POSSIBLE-DUPLICATE computenet-dup1 existing flaky widget bug$' "$CTRL/err" \
+  && grep -q '^POSSIBLE-DUPLICATE PR#4242 fix flaky widget$' "$CTRL/err" \
+  && [ "$(grep -c 'POSSIBLE-DUPLICATE computenet-dup1' "$CTRL/err")" = 1 ] \
+  && grep -q '^create' "$BD_LOG" \
+  && ok "a duplicate hit is reported once on stderr, and the bead is still created" \
+  || bad "dup-hit: exit=$st id=$id err=$(cat "$CTRL/err") log=$(cat "$BD_LOG")"
+grep -q '^search flaky widget renders twice ' "$BD_LOG" \
+  && grep -q -- '^gh pr list --search .*widget.* --state open --json number,title' "$BD_LOG" \
+  && ok "searches bd by title and open PRs by its words" || bad "dup-query: log=$(cat "$BD_LOG")"
+[ "$(grep -n '' "$BD_LOG" | grep -m1 -E ':(search|create)' | cut -d: -f2 | cut -d' ' -f1)" = search ] \
+  && ok "the search runs before the create" || bad "dup-order: log=$(cat "$BD_LOG")"
+
+fixture; touch "$CTRL/search-hit" "$CTRL/gh-hit"
+out=$("$SCRIPT" --type bug --title "flaky widget renders twice" --parent computenet-wpvy --no-dup-check 2>&1); st=$?
+[ "$st" = 0 ] && [ "$(tail -1 <<<"$out")" = computenet-h4sh ] \
+  && ! grep -q POSSIBLE-DUPLICATE <<<"$out" \
+  && ! grep -qE '^(search|gh)' "$BD_LOG" \
+  && ok "--no-dup-check searches nothing and prints nothing" \
+  || bad "no-dup-check: exit=$st out=$out log=$(cat "$BD_LOG")"
+
+fixture; touch "$CTRL/search-fail" "$CTRL/gh-fail"
+id=$("$SCRIPT" --type bug --title "flaky widget renders twice" --parent computenet-wpvy 2>"$CTRL/err"); st=$?
+[ "$st" = 0 ] && [ "$id" = computenet-h4sh ] \
+  && grep -q 'warning: dup-check: bd search failed' "$CTRL/err" \
+  && grep -q 'warning: dup-check: gh pr list failed' "$CTRL/err" \
+  && grep -q '^create' "$BD_LOG" \
+  && ok "a failed search warns and still creates" \
+  || bad "dup-fail: exit=$st id=$id err=$(cat "$CTRL/err")"
+
+fixture
+out=$("$SCRIPT" --type bug --title "flaky widget renders twice" --top-level 2>&1); st=$?
+[ "$out" = computenet-h4sh ] \
+  && ok "no candidates: no dup-check output at all" || bad "dup-quiet: out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

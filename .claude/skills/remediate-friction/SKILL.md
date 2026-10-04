@@ -130,10 +130,10 @@ ruby .claude/skills/remediate-friction/scripts/validate-skills.rb     # frontmat
 .claude/skills/work/scripts/usage-table.test.sh                       # work/SKILL.md script table
 ```
 
-The caps are SKILL.md ≤ 600 lines (this file ≤ 150), each reference ≤ 300,
-and `AGENTS.md` ≤ 700. Over a cap means rewrite, not justify; raising a cap
-is a reviewed edit to `validate-skills.rb`. The commit message is where a
-change explains itself.
+Caps: SKILL.md ≤ 600 lines (this file ≤ 150), references ≤ 300, `AGENTS.md`
+≤ 700; over one means rewrite, not justify, and raising one is a reviewed edit
+to `validate-skills.rb`. Removing a trap means removing its
+`pinned-traps.tsv` row in the same diff. The commit message explains a change.
 
 ## 6. Finalize
 

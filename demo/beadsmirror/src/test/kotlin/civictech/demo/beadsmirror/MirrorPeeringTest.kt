@@ -1,6 +1,8 @@
 package civictech.demo.beadsmirror
 
 import civictech.cell.wire.PeerAddress
+import civictech.cell.graph.DespawnStep
+import civictech.cell.graph.GraphSpec
 import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffType
 import civictech.demo.beadsmirror.feed.FeedPosition
@@ -8,7 +10,6 @@ import civictech.demo.beadsmirror.feed.FieldDiff
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorProjector
-import io.kotest.assertions.throwables.shouldNotThrowAny
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -18,7 +19,10 @@ import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Task computenet-7em.1.2: [BeadsMirrorApp]'s opt-in two-node mode — the
@@ -32,20 +36,15 @@ import java.net.URI
  * JUnit assumption — so it is a real CI gate rather than a
  * green-but-skipped one, exactly like [BeadsMirrorAppTest.Refusal].
  *
- * **Why [RebaselineSwap] is not vacuous.** `Replication.rebind` refuses a
- * candidate whose `CellRef` differs from the incumbent's, so
- * [RebaselineSwap]'s "different refs is refused by Replication" case fails
- * loudly *only* when the swap really travels through
- * `Replication.rebind`. Delete [MirrorPeering.rebind]'s body, or the
- * `onSwap` hook that calls it, and that test goes green-by-silence — which
- * is what makes it a check on the wiring rather than on the kernel.
+ * [RebaselineSwap] pins the replacement path that superseded the old
+ * application-level rebind: one journaled topology delta respawns both hosted
+ * cells under the same refs, and the runtime registry retains exactly one
+ * local replica for each logical id.
  */
 class MirrorPeeringTest {
 
-    private fun projector(refs: MirrorCellRefs?) = when (refs) {
-        null -> MirrorProjector(DotMinter("beads-scratch-solo"))
-        else -> MirrorProjector(DotMinter("beads-scratch-solo"), refs)
-    }
+    @TempDir
+    lateinit var runDir: Path
 
     /** A one-issue create record, so a projector can be given observable state. */
     private fun createRecord(height: Long, issue: String) = ChangeRecord(
@@ -235,99 +234,35 @@ class MirrorPeeringTest {
 
         private val settings = MirrorPeeringSettings("bds2-swap", MirrorWire.Listen(0))
 
-        /**
-         * The whole of this task's swap clause: a re-baseline builds a fresh
-         * projector under the SAME refs and [MirrorState.swap] hands it to
-         * [MirrorPeering.rebind], which re-points the mesh at the new cells.
-         *
-         * No socket is opened — [MirrorPeering.connect] is never called — so
-         * this exercises the replication half alone, which is the half the
-         * swap touches.
-         */
         @Test
-        fun `swapping a same-refs projector re-points the mesh at the new cells`() {
-            MirrorPeering(settings).use { peering ->
-                val initial = projector(peering.refs)
-                peering.attach(initial)
-                val state = MirrorState(initial, onSwap = peering::rebind)
-
-                val rebuilt = projector(peering.refs)
-                shouldNotThrowAny { state.swap(rebuilt) }
-
-                peering.attachedProjector shouldBe rebuilt
-                state.current shouldBe rebuilt
-                state.rebaselineCount shouldBe 1
-            }
-        }
-
-        /**
-         * The negative control that makes the test above a check on the
-         * *wiring*: `Replication.rebind` requires the candidate to reuse the
-         * incumbent's `CellRef`, so a swap to a differently-ref'd projector
-         * throws — and it can only throw if the swap really reaches
-         * `Replication.rebind`. With the `onSwap` hook removed (or
-         * [MirrorPeering.rebind] emptied) this swap succeeds silently.
-         */
-        @Test
-        fun `a swap to a projector under different refs is refused by Replication`() {
-            MirrorPeering(settings).use { peering ->
-                val initial = projector(peering.refs)
-                peering.attach(initial)
-                val state = MirrorState(initial, onSwap = peering::rebind)
-
-                // what a rebuild that forgot to thread the refs through produces
-                val strayRefs = MirrorCellRefs("a-different-rig", MirrorCellRefs.LISTENER)
-                val failure = shouldThrow<IllegalArgumentException> { state.swap(projector(strayRefs)) }
-                failure.message!! shouldContain "CellRef"
-            }
-        }
-
-        /**
-         * The observable half of the rebind clause, and the check on
-         * [MirrorPeering.rebind]'s `carryTagState = false`: a re-baseline
-         * exists to *discard* the projector it replaces, so the cells the mesh
-         * is re-pointed at must still hold the fresh baseline alone.
-         *
-         * `Replication.rebind`'s default (`carryTagState = true`) restores the
-         * incumbent's [civictech.cell.Stateful] snapshot into the candidate,
-         * and `OrMapCell.restore` *clears and replaces* rather than merging —
-         * so with the default this swap would leave the mesh serving the
-         * discarded projector's issue and lose the rebuilt one. Flip either
-         * call in [MirrorPeering.rebind] to the default and this test goes red
-         * on exactly that substitution.
-         */
-        @Test
-        fun `the rebound cells hold the fresh baseline, not the discarded projector's state`() {
-            MirrorPeering(settings).use { peering ->
-                val incumbent = projector(peering.refs)
+        fun `one topology delta respawns fresh cells under the same refs and one local replica remains`() {
+            MirrorPeering(settings, runDir).use { peering ->
+                val graph = peering.graph
+                Files.exists(runDir.resolve("main/host.journal")) shouldBe true
+                val incumbent = graph.projector(DotMinter("beads-scratch-solo"))
                 incumbent.apply(createRecord(1, "ZOMBIE"))
-                peering.attach(incumbent)
-                val state = MirrorState(incumbent, onSwap = peering::rebind)
+                graph.host.quiescence().await(30_000, "incumbent write")
+                val state = MirrorState(incumbent)
 
-                val rebuilt = projector(peering.refs)
+                val applied = graph.apply(
+                    GraphSpec(
+                        listOf(
+                            DespawnStep(MirrorGraph.MAP_HANDLE),
+                            DespawnStep(MirrorGraph.EDGES_HANDLE),
+                        ) + graph.spec().steps,
+                    ),
+                )
+                val rebuilt = graph.projector(DotMinter("beads-scratch-solo"), applied)
                 rebuilt.apply(createRecord(2, "FRESH"))
-
+                graph.host.quiescence().await(30_000, "rebuilt write")
                 state.swap(rebuilt)
 
+                rebuilt.cell.ref shouldBe incumbent.cell.ref
+                rebuilt.edges.ref shouldBe incumbent.edges.ref
                 rebuilt.view().keys shouldBe setOf("FRESH")
-            }
-        }
-
-        /** [MirrorPeering.attach] is one-shot: a second attach is a wiring bug, not a rebind. */
-        @Test
-        fun `attaching twice is refused`() {
-            MirrorPeering(settings).use { peering ->
-                peering.attach(projector(peering.refs))
-                shouldThrow<IllegalStateException> { peering.attach(projector(peering.refs)) }
-            }
-        }
-
-        /** Nothing has been attached yet, so there is no incumbent to re-point. */
-        @Test
-        fun `rebind before attach is a no-op`() {
-            MirrorPeering(settings).use { peering ->
-                shouldNotThrowAny { peering.rebind(projector(peering.refs)) }
-                peering.attachedProjector shouldBe null
+                peering.registry.replicasOf(peering.refs.mapRef.id) shouldBe setOf(peering.refs.mapRef)
+                peering.registry.replicasOf(peering.refs.edgeRef.id) shouldBe setOf(peering.refs.edgeRef)
+                state.rebaselineCount shouldBe 1
             }
         }
     }
@@ -346,7 +281,7 @@ class MirrorPeeringTest {
          */
         @Test
         fun `--listen 0 reports the bound port, not the requested one`() {
-            MirrorPeering(MirrorPeeringSettings("bds2-port", MirrorWire.Listen(0))).use { peering ->
+            MirrorPeering(MirrorPeeringSettings("bds2-port", MirrorWire.Listen(0)), runDir).use { peering ->
                 peering.boundAddress shouldBe null // nothing is bound before connect()
 
                 peering.connect()
@@ -360,7 +295,10 @@ class MirrorPeeringTest {
         /** A dialer has no listener of its own, so it has no port to announce. */
         @Test
         fun `a dialer has no bound ws port`() {
-            MirrorPeering(MirrorPeeringSettings("bds2-port", MirrorWire.Dial("ws://localhost:1"))).use { peering ->
+            MirrorPeering(
+                MirrorPeeringSettings("bds2-port", MirrorWire.Dial("ws://localhost:1")),
+                runDir,
+            ).use { peering ->
                 peering.boundAddress shouldBe null
             }
         }
@@ -387,9 +325,9 @@ class MirrorPeeringTest {
          */
         @Test
         fun `a MirrorState built without a swap hook just swaps`() {
-            val initial = projector(null)
+            val initial = MirrorProjector(DotMinter("beads-scratch-solo"))
             val state = MirrorState(initial)
-            val rebuilt = projector(null)
+            val rebuilt = MirrorProjector(DotMinter("beads-scratch-solo"))
 
             state.swap(rebuilt)
 

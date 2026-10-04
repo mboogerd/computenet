@@ -1,7 +1,6 @@
 ---
 name: work-unsupervised
 description: Runs the `work` skill in autonomous mode — no human is available, so hard calls get parked in Beads rather than guessed at. Use when a cron job, scheduled task, or routine starts an unattended work slot, or the user says "/work-unsupervised".
-disable-model-invocation: true
 ---
 
 You are running **unsupervised**. Read this file, then invoke the `work` skill with the

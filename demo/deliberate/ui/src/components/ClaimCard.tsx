@@ -3,6 +3,8 @@ import type { NodeDto } from '../api/types';
 import type { ArgumentNode, TreeNode } from '../tree/buildTree';
 import {
   agreementText,
+  argumentsFirstLayerLines,
+  argumentsFirstText,
   isDebug,
   layerLines,
   LEAF_AGREEMENT,
@@ -13,9 +15,9 @@ import {
   spreadOf,
   reachTier,
   statusHint,
+  statusLabel,
   triageText,
   reachWeight,
-  STATUS_LABEL,
   strengthWord,
   verdict,
 } from '../util/format';
@@ -247,11 +249,9 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
                   {(ed) => <LinkChip edge={ed()} side={side()} args={e().linkArgs} open={linkOpen()} onToggle={() => setLinkOpen(!linkOpen())} />}
                 </Show>
                 <Show when={claim().status}>
-                  {(s) => (
-                    <span class={`status status--${phase()}`} title={statusHint(s())}>
-                      {STATUS_LABEL[s()]}
-                    </span>
-                  )}
+                  <span class={`status status--${phase()}`} title={statusHint(claim())}>
+                    {statusLabel(claim())}
+                  </span>
                 </Show>
                 <Show when={callFailed(claim()) && phase() !== 'failed'}>
                   <span class="status status--failed" title={claim().error}>a call failed</span>
@@ -399,7 +399,7 @@ function LinkChip(props: {
           <LinkSentence text={props.edge.text} />
           <span class="linkchip__peek-meta">
             {linkHoldsText(props.edge)}
-            <Show when={props.edge.status}>{(st) => <> · {STATUS_LABEL[st()]}</>}</Show>
+            <Show when={props.edge.status}> · {statusLabel(props.edge)}</Show>
             <Show when={props.args.length > 0}>
               {' · '}
               {counts().holds} for · {counts().fails} against
@@ -507,11 +507,9 @@ export function LinkPanel(props: {
           </div>
           <div class="card__meta linkpanel__meta">
             <Show when={props.edge.status}>
-              {(s) => (
-                <span class={`status status--${phase()}`} title={statusHint(s(), true)}>
-                  {STATUS_LABEL[s()]}
-                </span>
-              )}
+              <span class={`status status--${phase()}`} title={statusHint(props.edge, true)}>
+                {statusLabel(props.edge)}
+              </span>
             </Show>
             <Show when={callFailed(props.edge) && phase() !== 'failed'}>
               <span class="status status--failed" title={props.edge.error}>a call failed</span>
@@ -580,6 +578,11 @@ export function Facts(props: {
           : 'The consensus of the credence rules: how likely this is true, after weighing its arguments',
       )}
       {row(
+        'First impression vs arguments',
+        props.research ? argumentsFirstText(c()) : undefined,
+        'The same direct arguments weighed with this node starting from a neutral ½ instead of Jev\'s first impression',
+      )}
+      {row(
         'Rules',
         props.research && c().credences ? agreementText(c(), props.leaf) : undefined,
         props.leaf ? `How far the credence rules agree — ${LEAF_AGREEMENT}` : 'How far the credence rules (ways of weighing arguments) agree on this claim',
@@ -589,6 +592,14 @@ export function Facts(props: {
         <dd>
           <ul class="facts__layers">
             <For each={layerLines(c(), props.members ?? [])}>{(line) => <li>{line}</li>}</For>
+          </ul>
+        </dd>
+      </Show>
+      <Show when={props.research && c().argumentsFirstCredences}>
+        <dt title="Each rule weighs the same direct arguments with this node starting from a neutral ½">Arguments first by rule</dt>
+        <dd>
+          <ul class="facts__layers">
+            <For each={argumentsFirstLayerLines(c(), props.members ?? [])}>{(line) => <li>{line}</li>}</For>
           </ul>
         </dd>
       </Show>

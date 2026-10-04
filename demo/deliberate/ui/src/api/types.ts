@@ -27,7 +27,7 @@ export interface QuestionDto {
   /**
    * Why the tree stopped growing early: the human stopped the question (STOP on
    * its root, CTL-03), the claim budget (the hard cap), or — no work left — model
-   * C's value-of-information stop, when it left a node DIMINISHING.
+   * C's value-of-information stop, when it left a node DONE/DIMINISHING.
    */
   stoppedBy?: StoppedBy;
   /**
@@ -45,8 +45,9 @@ export interface QuestionDto {
   cost?: CostDto;
   /**
    * Model C, "what would change the answer": up to 3 node refs (claims below the
-   * root, links as EDGE refs) with the highest |sensitivity| × 4·p·(1 − p), best
-   * first. Has a Kotlin default and is always sent; optional so older fixtures stay valid.
+   * root, links as EDGE refs) with the highest exact q-weighted expected root
+   * movement, best first. Has a Kotlin default and is always sent; optional so
+   * older fixtures stay valid.
    */
   cruxes?: string[];
   /**
@@ -93,7 +94,10 @@ export interface PositionDto {
   neutralCredence?: number;
   /** Model D: its credence and neutralCredence fall on different sides of ½. */
   verdictsDisagree?: boolean;
-  /** POSITIONS: its share of the consensus shares (they sum to 1); absent for READINGS. */
+  /**
+   * POSITIONS: its absolute consensus share; absent for READINGS. Listed shares
+   * may sum below 1, whose remainder means none of the listed answers.
+   */
   share?: number;
 }
 
@@ -142,15 +146,12 @@ export type Status =
   | 'QUEUED'
   | 'JUDGING'
   | 'EXPLORING'
-  | 'SATURATED'
-  | 'ROUND_LIMIT'
-  | 'PRUNED'
-  | 'DEPTH_LIMIT'
-  | 'BUDGET'
-  | 'DIMINISHING'
+  | 'FRAMED'
+  | 'DONE'
   | 'STOPPED'
-  | 'FAILED'
-  | 'FRAMED';
+  | 'FAILED';
+
+export type Reason = 'SATURATED' | 'ROUND_LIMIT' | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'DIMINISHING';
 
 export type Override = 'AUTO' | 'EXPAND' | 'STOP';
 
@@ -165,7 +166,7 @@ export interface NodeDto {
   credence: number;
   /** The question tree this node belongs to (its root claim ref). */
   root: string;
-  // The four fields below have Kotlin defaults and the backend always sends
+  // The six fields below have Kotlin defaults and the backend always sends
   // them (encodeDefaults); they are optional here only so hand-written
   // fixtures without them stay valid. Read them through `shown()`/`spreadOf()`.
   /** SPEC §2 "Credence layers and consensus": propagated credence per semantics layer id. */
@@ -175,6 +176,10 @@ export interface NodeDto {
   /** Lowest and highest credence over all layers. */
   spreadLow?: number;
   spreadHigh?: number;
+  /** Model D: local arguments-first credence per layer; equal to `credences` without incoming arguments. */
+  argumentsFirstCredences?: Record<string, number>;
+  /** Geometric-odds consensus of `argumentsFirstCredences`. */
+  argumentsFirstConsensus?: number;
   // --- CLAIM, and EDGE as a link (SPEC §3 "Links as claims": text, depth,
   // status, override, reach, contribution, saturation, rounds,
   // duplicatesDropped, triage, error, activity) ---
@@ -183,6 +188,8 @@ export interface NodeDto {
   /** A link's depth is its argument's depth. */
   depth?: number;
   status?: Status;
+  /** Present exactly when status is DONE. */
+  reason?: Reason;
   override?: Override;
   /**
    * What the node is doing right now, for the activity line: "exploring" (a
@@ -221,15 +228,12 @@ export interface NodeDto {
   relevance?: number;
   /** Jev quality probability (EXP-05): a well-constructed argument bearing on its parent (construction only). */
   quality?: number;
-  /**
-   * Shown only since model C (the queue follows sensitivity × 4·p·(1 − p)): reach × relevance × quality × 4·p·(1 − p),
-   * p its plausibility (root = 1; model B); for a link, its argument's contribution without the 4·p·(1 − p) factor × 4·s·(1 − s), s its strength.
-   */
+  /** Reference-only contribution metric; it does not determine exploration order or stopping. */
   contribution?: number;
   /**
-   * Model C: d headline(root) / d this node's credence — how far the question's
-   * answer moves per unit move of this node (root ≈ 1; a link's is its edge's).
-   * Absent until the sensitivity cells reached it.
+   * Model C: the signed exact secant `R(node=1) − R(node=0)` ("sway") for the
+   * active answer root to which this node has the largest exact value of
+   * information. Absent until the backend computes it.
    */
   sensitivity?: number;
   /** EXP-05 reach: product of Jev relation strengths along the path from the root (root = 1; a link: its argument's). */

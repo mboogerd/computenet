@@ -52,9 +52,9 @@ class JevJudge(
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
 
     /**
-     * CRED-01: judged on `root_question` and `claim` alone — no path, parent or
-     * direction, which pulled the judgment towards the claim's role in the
-     * argument (measured live; SPEC CRED-01).
+     * CRED-01: judged on `claim` alone — no question, path, parent or direction.
+     * The question biased a reusable claim's first impression (measured live;
+     * SPEC CRED-01).
      *
      * Model D: beside the five-level score, one request asks a `knowledge`
      * Choice — does judging `claim` need knowledge Jev does not have? — and
@@ -64,7 +64,6 @@ class JevJudge(
      */
     override fun plausibility(question: String, claim: String): Double {
         val state = buildJsonObject {
-            put("root_question", question)
             put("claim", claim)
         }
         val answers = evaluate(state, mapOf("plausibility" to plausibilityQuestion(), "knowledge" to knowledgeQuestion()))
@@ -442,9 +441,8 @@ class JevJudge(
 
         fun plausibilityQuestion() = score(
             "How likely is `claim` to be true? Judge only what `claim` itself asserts, using your general " +
-                "knowledge. `root_question` only tells you what topic the claim is about: do not reward or " +
-                "penalise `claim` for which answer to `root_question` it favours, and do not assume any other " +
-                "claim is true or false. If `claim` is phrased as a question, judge how likely its answer is yes.",
+                "knowledge, and do not assume any other claim is true or false. If `claim` is phrased as a " +
+                "question, judge how likely its answer is yes.",
             PLAUSIBILITY_LEVELS,
         )
 

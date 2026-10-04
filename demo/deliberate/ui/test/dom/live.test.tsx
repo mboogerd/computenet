@@ -110,11 +110,11 @@ describe('link preview', () => {
   const graph: GraphDto = {
     questions: [{ root: 'q', text: 'Should we?', claims: 2, active: false }],
     nodes: [
-      { ref: 'q', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Should we?', depth: 0, status: 'SATURATED' },
-      { ref: 'a', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'It would help.', depth: 1, status: 'SATURATED' },
+      { ref: 'q', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Should we?', depth: 0, status: 'DONE', reason: 'SATURATED' },
+      { ref: 'a', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'It would help.', depth: 1, status: 'DONE', reason: 'SATURATED' },
       {
         ref: 'a-q', kind: 'EDGE', credence: 0.65, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'q', strength: 0.72,
-        text: '“It would help.” is a reason for “Should we?”', depth: 1, status: 'PRUNED',
+        text: '“It would help.” is a reason for “Should we?”', depth: 1, status: 'DONE', reason: 'PRUNED',
       },
     ],
   };
