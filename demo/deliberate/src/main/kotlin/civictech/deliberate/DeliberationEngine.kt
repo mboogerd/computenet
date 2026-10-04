@@ -124,9 +124,10 @@ class DeliberationEngine(
         companion object {
             const val DEFAULT_SATURATION = 0.22
             /**
-             * Model C's ε. A starting value, still uncalibrated: the 2026-10-04 bounded
-             * live run could not distinguish candidates 0..0.04 (its claim cap decided
-             * every tree), so it gives no reason to move it. See CALIBRATION.md.
+             * Model C's ε. A starting value, still uncalibrated: the 2026-10-04
+             * bounded run could not distinguish 0..0.04, and its production-shape
+             * follow-up ended two trees at their claim cap without completing the
+             * replayable three-question sample. See CALIBRATION.md.
              */
             const val DEFAULT_VOI_EPSILON = 0.01
             /** EXP-10: the recent-yield window QuestionDto reports (the yield stop itself is gone). */

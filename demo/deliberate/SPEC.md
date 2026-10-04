@@ -324,8 +324,8 @@ This value, decayed by `roundDecay^(rounds already run)`, **is the
 claim's priority in the exploration queue** (below), replacing the earlier
 reach × relevance ordering; and once it falls below `--voi-eps`
 (`DEFAULT_VOI_EPSILON` = 0.01 — a starting value from a one-off scratch
-review, still uncalibrated: the bounded 2026-10-04 run in §10 could not
-distinguish candidates) the claim
+review, still uncalibrated: neither 2026-10-04 run in §10 established a
+candidate that ends a production-shaped question by VoI) the claim
 gets no (further) round and ends
 `DONE` with reason `DIMINISHING`; the UI wording is "not worth exploring" /
 "nothing left could change the answer". A question therefore stops once the
@@ -704,7 +704,7 @@ typically saturates by 3–4 arguments. (`minInfluence`, the EXP-10 yield-stop
 parameters and `maxDepth` as a stop rule are removed by model C — §3
 "Exact value of information" — and appear only as history.
 `--voi-eps`'s default is a starting value from a one-off scratch model
-review, still uncalibrated after the bounded live run below.)
+review, still uncalibrated after the live runs below.)
 
 The measurements, the history of each default, and what remains to
 recalibrate live in `CALIBRATION.md`; this section states only the criteria.
@@ -734,6 +734,21 @@ by three arguments and 62.5% by four, with no empty side saturated, so
 `DEFAULT_SATURATION` remains 0.22. Full distributions, per-tree exploration,
 cost and the experimental limits are in `CALIBRATION.md`. The model-C yield
 stop remains removed; this calibration does not reintroduce it.
+
+A same-day production-shape follow-up used three rounds, unbounded depth,
+links enabled and a 110-claim cap selected from a $5.60 pre-run estimate for
+three trees at the production 180-claim cap. Two epsilon-zero trees completed,
+at 110 claims and $1.583804/$1.573629; both stopped at the budget. Timeout and
+process-recovery attempts consumed the remaining allowance before the third
+question could complete (total API-equivalent/assumed spend $5.011981). The
+persisted call tape also exposed a first-writer defect: repeated identical
+requests had been collapsed, so candidate replays diverged even at epsilon 0.
+The writer now retains each occurrence, but the two-tree artefact cannot
+honestly be used for the planned 0–0.16 epsilon sweep. Therefore the
+three-question criterion was not met, no VoI-ended question was observed, and
+`DEFAULT_VOI_EPSILON` remains 0.01 and explicitly uncalibrated. The raw tape,
+offline render command, costs and terminal-VoI distributions are in
+`CALIBRATION.md`.
 
 ## 11. Durability (requirements DUR-*)
 

@@ -253,7 +253,12 @@ dependable stop for a side. `--voi-eps`'s default began as a value from a
 one-off scratch review and is still uncalibrated. A bounded 2026-10-04 live
 run (three fresh trees, exact replays from 0 through 0.04) explored the same
 work at every candidate, because its small claim cap, not epsilon, decided
-every tree. It could not distinguish values, so 0.01 stays. Full distributions and costs are in
+every tree. A production-shape follow-up completed two 110-claim epsilon-zero
+trees, both budget-stopped, before timeout/recovery overhead exhausted its $5
+allowance; its first persistent tape format also collapsed repeated requests,
+so it could not honestly replay the planned 0–0.16 sweep. Neither run
+established a candidate that ends a question by VoI, so 0.01 stays explicitly
+uncalibrated. Full distributions, costs and the offline tape-render command are in
 [`CALIBRATION.md`](CALIBRATION.md). (`minInfluence` and
 the `DEPTH_LIMIT` reason as a practical stop is gone with model C, so most
 claims now stop on value of information, saturation or the claim budget, not
@@ -413,8 +418,11 @@ build/install/deliberate/bin/deliberate 8091 --data <dir> --start-paused
 ```bash
 ./gradlew :demo:deliberate:test --rerun         # fakes only, no network
 DELIBERATE_LIVE=1 ./gradlew :demo:deliberate:test --tests '*LiveSmokeTest' --rerun
-# re-measure Jev thresholds and grow/replay three fresh bounded exact-VoI trees
-# (the older saturation material regenerates only if its cache is absent)
+# Re-render the committed production-shape live-tree table, offline:
+./gradlew :demo:deliberate:test --tests 'civictech.deliberate.CalibrationTest.renderVoiFromPersistedTape' --rerun
+# Opt in to live calibration. A complete sequential tape resumes; the committed
+# interrupted tape is evidence-only. Regeneration is DELIBERATE_CALIBRATE_REGEN=1
+# and may spend several dollars.
 DELIBERATE_CALIBRATE=1 ./gradlew :demo:deliberate:test --tests '*CalibrationTest' --rerun
 cd demo/deliberate/ui && npm run typecheck && npm test
 ```
