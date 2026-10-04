@@ -25,7 +25,7 @@
 | Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Partitioning | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Durability / recovery | USED | USED | USED | USED | USED | USED | USED | USED | - | - | - | USED | USED | 10 |
-| Replication | - | - | - | - | - | - | - | - | USED | - | - | - | USED | 2 |
+| Replication | - | - | - | - | USED | - | - | - | USED | - | - | - | USED | 3 |
 | Wire transport (ws / iroh) | - | - | - | - | USED | - | - | USED | USED | - | - | - | USED | 4 |
 | Identity / authority | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Invariants / verify | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -33,7 +33,7 @@
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
 | Demograph | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| **headline count** | 4 | 4 | 3 | 4 | 4 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
+| **headline count** | 4 | 4 | 3 | 4 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
@@ -102,6 +102,7 @@
 - durability / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - durability / social: demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
 - durability / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
+- replication / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorGraph.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
 - replication / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - replication / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - wire / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/DiscoveredIrohPeerTransport.kt

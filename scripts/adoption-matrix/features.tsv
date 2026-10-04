@@ -31,7 +31,7 @@ interest	Interest-driven execution	yes	import:civictech.cell.link.Interest
 owned-leased	Owned / Leased payloads	yes	import:civictech.cell.Owned|import:civictech.cell.Leased|regex:\bOwned<|regex:\bLeased<
 partitioning	Partitioning	yes	import:civictech.cell.partition.
 durability	Durability / recovery	yes	import:civictech.cell.durability.|regex:\bhostJournal\b
-replication	Replication	yes	import:civictech.cell.replication.
+replication	Replication	yes	import:civictech.cell.replication.|regex:\breplicated\s*=\s*true\b
 wire	Wire transport (ws / iroh)	yes	import:civictech.wire.|import:civictech.iroh.|import:civictech.cell.wire.Peering
 identity	Identity / authority	yes	import:civictech.identity.|import:civictech.cell.membrane.BoundaryPolicy
 invariants	Invariants / verify	yes	import:civictech.cell.verify.

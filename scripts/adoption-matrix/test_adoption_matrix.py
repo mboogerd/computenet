@@ -97,6 +97,48 @@ class CommentStrippingTest(AdoptionMatrixTestCase):
         self.assertEqual(evidence[("thing", "foo")], [])
 
 
+class GraphSpecReplicationTest(AdoptionMatrixTestCase):
+    """GraphSpec replication is detected only in uncommented main sources."""
+
+    def test_production_replication_row_uses_graphspec_pattern(self) -> None:
+        features = am.parse_features(Path(__file__).with_name("features.tsv"))
+        replication = next(feature for feature in features if feature.id == "replication")
+
+        self.assertIn(("regex", r"\breplicated\s*=\s*true\b"), replication.patterns)
+
+    def test_replicated_spawn_main_source_used_test_and_comments_ignored(self) -> None:
+        self.write_settings(["foo", "bar"])
+        features_path = self.write_features(r"regex:\breplicated\s*=\s*true\b")
+        self.write(
+            "demo/foo/src/main/kotlin/Graph.kt",
+            "val step = SpawnStep(replicated = true)\n"
+            "// replicated = true\n"
+            "/* replicated = true */\n",
+        )
+        self.write(
+            "demo/foo/src/test/kotlin/GraphTest.kt",
+            "val step = SpawnStep(replicated = true)\n",
+        )
+        self.write(
+            "demo/bar/src/main/kotlin/Graph.kt",
+            "// SpawnStep(replicated = true)\n"
+            "/* SpawnStep(replicated = true) */\n",
+        )
+        self.write(
+            "demo/bar/src/test/kotlin/GraphTest.kt",
+            "val step = SpawnStep(replicated = true)\n",
+        )
+
+        demos = am.discover_demos(self.repo)
+        features = am.parse_features(features_path)
+        used, evidence = am.build_matrix(self.repo, features, demos)
+
+        self.assertTrue(used[("thing", "foo")])
+        self.assertEqual(evidence[("thing", "foo")], ["demo/foo/src/main/kotlin/Graph.kt"])
+        self.assertFalse(used[("thing", "bar")])
+        self.assertEqual(evidence[("thing", "bar")], [])
+
+
 class DemoDiscoveryTest(AdoptionMatrixTestCase):
     """:demo:shell is never a column; the rest are, sorted alphabetically."""
 
