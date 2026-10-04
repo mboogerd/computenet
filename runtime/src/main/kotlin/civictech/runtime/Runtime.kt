@@ -1,13 +1,10 @@
 package civictech.runtime
 
 import civictech.cell.BudgetLedger
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.durability.Journal
 import civictech.cell.graph.AppliedGraph
 import civictech.cell.graph.ApplyContext
-import civictech.cell.graph.CellFactory
-import civictech.cell.graph.DespawnStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DurableInput
@@ -20,7 +17,6 @@ import civictech.cell.link.PeerId
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
-import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.replication.Replication
@@ -49,32 +45,34 @@ object Runtime {
      * cross-node edge. A bridged edge is deliberately not an [ApplyContext]
      * topology link: local cycle admission and the Inspector's declared-link
      * view cannot see it (8k723-D6; spec 41 G-41).
+     *
+     * Reinstalling halves after recovery does not reproduce identical edge-event
+     * observations: a rebooted consumer sees no fresh `EdgeOpen` from a surviving
+     * producer, while a rebooted producer sends a second `EdgeOpen` to a surviving
+     * consumer. Cells whose state keys on edge events across a recovered bridge are
+     * outside this recovery guarantee (8i1m6.2-D5).
      */
     private fun applyPlacement(
         plan: PlacementPlan,
         context: ApplyContext,
         mainHost: ManagedHost,
         registry: LocationRegistry,
-        cells: MutableMap<String, Cell>,
     ): AppliedGraph {
-        val wrapped = plan.localSpec.copy(
-            steps = plan.localSpec.steps.map { step ->
-                if (step is SpawnStep && step.family == null) {
-                    step.copy(
-                        factory = CellFactory { ref ->
-                            step.factory.create(ref).also { cells[step.handle] = it }
-                        },
-                    )
-                } else {
-                    step
-                }
-            },
-        )
-        val applied = wrapped.apply(context)
+        val applied = plan.localSpec.apply(context)
+        installHalves(plan, mainHost, registry)
+        return applied
+    }
+
+    /** Install the unjournaled data-path and handshake half for every cross-node edge. */
+    private fun installHalves(
+        plan: PlacementPlan,
+        mainHost: ManagedHost,
+        registry: LocationRegistry,
+    ) {
         val sink = InvocationSink(registry::deliver)
 
         plan.producerHalves.forEach { edge ->
-            val outlet = producerPort(cells, edge)
+            val outlet = producerPort(mainHost, edge)
             mainHost.managementInlet.call.connect(
                 edge.fromRef,
                 edge.outlet,
@@ -95,7 +93,7 @@ object Runtime {
             }
         }
         plan.consumerHalves.forEach { edge ->
-            val inlet = consumerPort(cells, edge)
+            val inlet = consumerPort(mainHost, edge)
             val result = inlet.bridgeFrom(
                 selfAddr = PortAddress(edge.toRef, edge.inlet),
                 fromAddr = PortAddress(edge.fromRef, edge.outlet),
@@ -107,17 +105,10 @@ object Runtime {
                 )
             }
         }
-        plan.localSpec.steps.filterIsInstance<DespawnStep>().forEach { cells.remove(it.handle) }
-        return applied
     }
 
-    private fun producerPort(cells: Map<String, Cell>, edge: CrossEdge): FanOutlet<*> {
-        val cell = cells[edge.fromHandle]
-            ?: throw IllegalStateException(
-                "bridging ${edge.key()} across nodes on the producer half has no local cell " +
-                    "for handle '${edge.fromHandle}'",
-            )
-        val port = PortRegistry.of(cell)[edge.outlet]
+    private fun producerPort(mainHost: ManagedHost, edge: CrossEdge): FanOutlet<*> {
+        val port = mainHost.portAt(edge.fromRef, edge.outlet)
         return port as? FanOutlet<*>
             ?: throw IllegalStateException(
                 "bridging ${edge.key()} across nodes on the producer half requires " +
@@ -126,13 +117,8 @@ object Runtime {
             )
     }
 
-    private fun consumerPort(cells: Map<String, Cell>, edge: CrossEdge): FanInlet<*> {
-        val cell = cells[edge.toHandle]
-            ?: throw IllegalStateException(
-                "bridging ${edge.key()} across nodes on the consumer half has no local cell " +
-                    "for handle '${edge.toHandle}'",
-            )
-        val port = PortRegistry.of(cell)[edge.inlet]
+    private fun consumerPort(mainHost: ManagedHost, edge: CrossEdge): FanInlet<*> {
+        val port = mainHost.portAt(edge.toRef, edge.inlet)
         return port as? FanInlet<*>
             ?: throw IllegalStateException(
                 "bridging ${edge.key()} across nodes on the consumer half requires " +
@@ -174,6 +160,8 @@ object Runtime {
      * Construct the node-local graph. Network endpoints and the inspector are deferred to [Node.open].
      * A node with [NodeSpec.journalTopology] recovers its graph from the main host journal when
      * that journal is non-empty; otherwise its spec is applied and journaled as the first topology.
+     * A recovered placed node reinstalls its bridge halves before [Node.open], with the asymmetric
+     * `EdgeOpen` limitation documented on [applyPlacement] (8i1m6.2-D5).
      */
     fun boot(
         manifest: Manifest,
@@ -222,19 +210,21 @@ object Runtime {
                 topology = topology,
             )
             val placement = PlacementPlan.of(spec, manifest, node)
-            val placedCells = linkedMapOf<String, Cell>()
             val recovered = topology?.replay()?.isNotEmpty() == true
             val families: Map<String, KeyedCells<*>>
             val inputs: Map<String, Map<String, DurableInput>>
             if (recovered) {
                 applyContext.recover(topology).awaitApplied(30_000)
-                val declaredSpawns = spec.lowered().filterIsInstance<SpawnStep>().filter { it.family == null }
+                val declaredSpawns = (placement?.localSpec?.steps ?: spec.lowered())
+                    .filterIsInstance<SpawnStep>()
+                    .filter { it.family == null }
                 declaredSpawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
                     throw IllegalStateException(
                         "recovered topology is missing handle '${missing.handle}' declared by the GraphSpec " +
                             "in journal directory '${journalDirs.getValue(mainHostName)}'",
                     )
                 }
+                if (placement != null) installHalves(placement, mainHost, registry)
                 inputs = declaredSpawns
                     .filter { it.inputs.isNotEmpty() }
                     .associate { step ->
@@ -250,7 +240,7 @@ object Runtime {
                 val applied = if (placement == null) {
                     spec.apply(applyContext)
                 } else {
-                    applyPlacement(placement, applyContext, mainHost, registry, placedCells)
+                    applyPlacement(placement, applyContext, mainHost, registry)
                 }
                 families = applied.families
                 inputs = applied.inputs
@@ -274,7 +264,6 @@ object Runtime {
                 inspectorOptions = inspector,
                 transportOverride = transport,
                 initialPlacement = placement,
-                placedCells = placedCells,
             )
         } catch (failure: Throwable) {
             closeFailedBootHosts(hosts.values, failure)
@@ -318,7 +307,6 @@ object Runtime {
         private val inspectorOptions: InspectorFlag.Options?,
         private val transportOverride: PeerTransport?,
         initialPlacement: PlacementPlan?,
-        private val placedCells: MutableMap<String, Cell>,
     ) : AutoCloseable {
 
         private var opened = false
@@ -347,7 +335,7 @@ object Runtime {
         fun apply(spec: GraphSpec): AppliedGraph {
             val previous = placement ?: return spec.apply(applyContext)
             val next = requireNotNull(PlacementPlan.of(spec, manifest, name, previous))
-            val applied = applyPlacement(next, applyContext, mainHost, registry, placedCells)
+            val applied = applyPlacement(next, applyContext, mainHost, registry)
             placement = next
             return applied
         }
