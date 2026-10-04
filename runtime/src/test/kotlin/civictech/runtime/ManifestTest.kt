@@ -28,9 +28,9 @@ class ManifestTest {
                     replica = 7,
                     peerName = "peer-a",
                     budget = "policy.json",
-                    journalTopology = true,
                 ),
             ),
+            placements = mapOf("source" to "a", "sink" to "a"),
         )
         val encoded = Json.encodeToString(manifest)
 
@@ -38,6 +38,36 @@ class ManifestTest {
         val file = tempDir.resolve("manifest.json")
         Files.writeString(file, encoded)
         assertEquals(manifest, Manifest.load(file.toFile()))
+    }
+
+    @Test
+    fun `placements parse as selector to node entries and default to empty`() {
+        val parsed = Manifest.parse(
+            """{"nodes":{"a":{},"b":{}},"placements":{"source":"a","sink":"b"}}""",
+        )
+
+        assertEquals(mapOf("source" to "a", "sink" to "b"), parsed.placements)
+        assertEquals(emptyMap<String, String>(), Manifest.parse("""{"nodes":{"a":{}}}""").placements)
+    }
+
+    @Test
+    fun `a placement naming no node is refused`() {
+        val failure = invalid(
+            """{"nodes":{"a":{"hosts":[]}},"placements":{"source":"missing"}}""",
+        )
+
+        assertViolation(failure, "nodes[a].hosts", "at least one host")
+        assertViolation(failure, "placements[source]", "unknown node 'missing'")
+    }
+
+    @Test
+    fun `topology journalling is refused when placements are active`() {
+        val failure = invalid(
+            """{"nodes":{"a":{"journalTopology":true}},"placements":{"source":"a"}}""",
+        )
+
+        assertViolation(failure, "nodes[a].journalTopology", "requires journalDir")
+        assertViolation(failure, "nodes[a].journalTopology", "not supported with placements")
     }
 
     @Test
