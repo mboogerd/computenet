@@ -32,14 +32,14 @@
 | Evolution / promotion | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
-| Demograph | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| **headline count** | 4 | 4 | 3 | 4 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
+| Demograph | - | - | - | USED | - | - | - | - | - | - | - | - | - | 1 |
+| **headline count** | 4 | 4 | 3 | 5 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
 | Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | tiering | demos |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Generated @Contract/@CellBase cells | - | USED | - | USED | - | - | - | - | - | - | - | - | - | 2 |
+| Generated @Contract/@CellBase cells | - | USED | - | - | - | - | - | - | - | - | - | - | - | 1 |
 | Hosted execution (ManagedHost) | USED | USED | USED | USED | USED | USED | USED | USED | - | USED | USED | USED | USED | 12 |
 | Colors (Blocking/Suspending) | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Time-travel | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -53,14 +53,13 @@
 - Invariants / verify (`invariants`)
 - Evolution / promotion (`evolution`)
 - Budgets (`budgets`)
-- Demograph (`demograph`)
 
 ## Evidence
 
 - typed-links / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt, demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt, demo/agora/src/main/kotlin/civictech/agora/cell/ClaimCell.kt, demo/agora/src/main/kotlin/civictech/agora/cell/EdgeCell.kt
 - typed-links / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - typed-links / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt
-- typed-links / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/RankingCells.kt, demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
+- typed-links / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - typed-links / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorGraph.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/baseline/Rebaseline.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/projector/MirrorCellFactory.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt
 - typed-links / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/Cells.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Sensitivity.kt
 - typed-links / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/BindingTable.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
@@ -72,7 +71,7 @@
 - typed-links / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - delta-operators / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - delta-operators / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/declaration/DeclarationIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/ingest/SpendLogIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/SessionLedger.kt
-- delta-operators / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/Ranking.kt, demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/RankingCells.kt, demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
+- delta-operators / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - delta-operators / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorGraph.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/projector/MirrorCellFactory.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/projector/MirrorProjector.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/writeback/Provenance.kt
 - delta-operators / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/TranscriptSource.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/ClaimMint.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/RelationMint.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/StanceProject.kt
 - delta-operators / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
@@ -119,8 +118,8 @@
 - inspector / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
 - inspector / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
 - inspector / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
+- demograph / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - gen-cells / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
-- gen-cells / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/RankingCells.kt
 - hosts / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt, demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
 - hosts / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - hosts / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt
