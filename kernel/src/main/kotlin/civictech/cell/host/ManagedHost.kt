@@ -2388,6 +2388,10 @@ open class ManagedHost(
             }
 
             override fun drainHost() {
+                synchronized(dataLock) {
+                    requireRecoveryIdleLocked("host drain")
+                    require(state == State.RUNNING) { "drain requires a RUNNING host (was $state)" }
+                }
                 // shutdown cascade (G-28, M8.1): children drain first — a child
                 // must not outlive (or keep accepting after) its parent
                 childHosts.forEach { it.managementInlet.call.drainHost() }

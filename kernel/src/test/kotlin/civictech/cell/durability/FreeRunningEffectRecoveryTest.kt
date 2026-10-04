@@ -329,6 +329,35 @@ class FreeRunningEffectRecoveryTest {
 
     @Test
     @Timeout(60)
+    fun `recovering parent refuses drain before cascading to child hosts`() {
+        val parentScheduler = VirtualThreadScheduler("recovering-parent-drain")
+        val childScheduler = VirtualThreadScheduler("recovering-parent-child")
+        val parent = ManagedHost(scheduler = parentScheduler)
+        val child = ManagedHost(scheduler = childScheduler)
+        parent.managementInlet.call.spawn(child)
+
+        val journal = PauseOnReplay()
+        val executor = Executors.newVirtualThreadPerTaskExecutor()
+        val recovery = executor.submit<Recovery> { parent.recoverFrom(journal) }
+        try {
+            journal.awaitPaused()
+            parent.managementInlet.call.drainHost()
+            parentScheduler.quiescence().await(30_000, "parent drain refusal during recovery")
+            childScheduler.quiescence().await(30_000, "child after refused parent drain")
+
+            child.isDrained shouldBe false
+            parent.isDrained shouldBe false
+        } finally {
+            journal.releaseReplay()
+            recovery.get(30, TimeUnit.SECONDS)
+            executor.close()
+            parentScheduler.shutdown()
+            childScheduler.shutdown()
+        }
+    }
+
+    @Test
+    @Timeout(60)
     fun `recovery cannot overtake a pending host drain phase two`() {
         val scheduler = VirtualThreadScheduler("recovery-pending-host-drain")
         val registry = LocationRegistry()
