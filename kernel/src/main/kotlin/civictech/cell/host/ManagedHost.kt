@@ -754,25 +754,34 @@ open class ManagedHost(
      * scheduler thread before dispatch resumes.
      *
      * Recovery is exclusive with externally requested queue fences and drains: [quiescence],
-     * host drain/migration, and [drainCellThenDespawn] reject while this is positive. A
+     * host drain/migration, and [drainCellThenDespawn] reject while this is positive. The
+     * exclusion is two-sided: [externalBarriersInFlight] also makes recovery reject while a
+     * fence or drain is pending. Both directions claim their side under [dataLock], so a
+     * caller cannot pass a check and submit a barrier while recovery raises its gate. A
      * gated frame may temporarily have no pending data task, so allowing any priority-30 or
      * lower fence through would falsely report it flushed. [Recovery.awaitApplied]'s fence is
-     * taken after the gate lifts and is unaffected (computenet-lnr6u).
-     *
-     * Limit: the rejection is a call-time check ([requireRecoveryIdle] throws
-     * [IllegalStateException]; through the [managementInlet] proxy, whose drain and migrate
-     * are fire-and-forget, that surfaces as a dead letter, not to the caller). A fence or
-     * drain barrier already submitted when recovery raises this gate, including one whose
-     * check raced the raise, is not rejected and can still complete with frames staged.
-     * Exclusivity in that direction is the caller's contract (see [Quiescence]).
+     * taken after the gate lifts and is unaffected (computenet-lnr6u, computenet-quf22).
      */
     private var recoveryRecordLoops = 0
 
-    private fun requireRecoveryIdle(operation: String) {
-        check(synchronized(dataLock) { recoveryRecordLoops == 0 }) {
+    /** External fences/drains claimed atomically against [recoveryRecordLoops]. Guarded by [dataLock]. */
+    private var externalBarriersInFlight = 0
+
+    private fun requireRecoveryIdleLocked(operation: String) {
+        check(recoveryRecordLoops == 0) {
             "$operation is unavailable while journal recovery is restoring records; " +
                 "wait for recoverFrom to return and use Recovery.awaitApplied"
         }
+    }
+
+    private fun beginExternalBarrier(operation: String) = synchronized(dataLock) {
+        requireRecoveryIdleLocked(operation)
+        externalBarriersInFlight++
+    }
+
+    private fun endExternalBarrier() = synchronized(dataLock) {
+        check(externalBarriersInFlight > 0) { "external barrier count underflow" }
+        externalBarriersInFlight--
     }
 
     /**
@@ -997,30 +1006,43 @@ open class ManagedHost(
      * cells and captures snapshots. G-16's ordering remainder: deactivation
      * provably follows the drained queue.
      */
-    private fun beginDrain(andThen: () -> Unit = {}) {
-        require(state == State.RUNNING) { "drain requires a RUNNING host (was $state)" }
-        state = State.DRAINING
+    private fun beginDrain(operation: String, andThen: () -> Unit = {}) {
+        synchronized(dataLock) {
+            requireRecoveryIdleLocked(operation)
+            require(state == State.RUNNING) { "drain requires a RUNNING host (was $state)" }
+            externalBarriersInFlight++
+            state = State.DRAINING
+        }
         closeIntake()
-        enqueue(30) {
-            // attention-parked traffic is accepted work: flush it before
-            // deactivation, same guarantee as the ordinary queue (spec 33/34)
-            val parked = synchronized(dataLock) {
-                attentionScheduler.attentionParked.values.flatten().map { it.second }
-                    .also { attentionScheduler.attentionParked.clear() }
+        try {
+            enqueue(30) {
+                try {
+                    // attention-parked traffic is accepted work: flush it before
+                    // deactivation, same guarantee as the ordinary queue (spec 33/34)
+                    val parked = synchronized(dataLock) {
+                        attentionScheduler.attentionParked.values.flatten().map { it.second }
+                            .also { attentionScheduler.attentionParked.clear() }
+                    }
+                    parked.forEach { deliver(it) }
+                    snapshots.clear()
+                    cells.forEach { (cellRef, cell) ->
+                        cell.onDeactivate(ctx)
+                        if (cell is Stateful) snapshots[cellRef] = cell.snapshot()
+                    }
+                    state = State.DRAINED
+                    // V2-KERNEL: per cell, after [isDrained] is true and *before*
+                    // [andThen] — migrate's continuation clears [cells], so the set this
+                    // drain actually deactivated is only nameable here. Scheduler
+                    // thread, drain band (priority 30).
+                    cells.keys.forEach { notifyLifecycle(it, LifecycleTransition.DRAINED) }
+                    andThen()
+                } finally {
+                    endExternalBarrier()
+                }
             }
-            parked.forEach { deliver(it) }
-            snapshots.clear()
-            cells.forEach { (cellRef, cell) ->
-                cell.onDeactivate(ctx)
-                if (cell is Stateful) snapshots[cellRef] = cell.snapshot()
-            }
-            state = State.DRAINED
-            // V2-KERNEL: per cell, after [isDrained] is true and *before*
-            // [andThen] — migrate's continuation clears [cells], so the set this
-            // drain actually deactivated is only nameable here. Scheduler
-            // thread, drain band (priority 30).
-            cells.keys.forEach { notifyLifecycle(it, LifecycleTransition.DRAINED) }
-            andThen()
+        } catch (t: Throwable) {
+            endExternalBarrier()
+            throw t
         }
     }
 
@@ -1471,7 +1493,10 @@ open class ManagedHost(
      * [Recovery.awaitApplied] fences on their delivery and on every same-host
      * frame those deliveries cascade into (computenet-q5jzk). The fence is
      * taken AFTER the replay's last submit — the order is what makes it sound.
-     * A failed replay throws [RecoveryIncomplete] and returns no handle.
+     * A failed replay throws [RecoveryIncomplete] and returns no handle. Recovery also
+     * throws [IllegalStateException] while this host is draining or an external fence or
+     * cell-drain barrier is in flight; that refusal is claimed atomically against those
+     * operations under the host's data lock.
      */
     fun recoverFrom(journal: Journal): Recovery = recoverFrom(journal, ApplyContext(this))
 
@@ -1491,7 +1516,13 @@ open class ManagedHost(
      * the scheduler, so topology replay can still make awaited management calls.
      */
     private fun <T> withRecoveryRecordLoop(action: () -> T): T {
-        synchronized(dataLock) { recoveryRecordLoops++ }
+        synchronized(dataLock) {
+            check(state != State.DRAINING && externalBarriersInFlight == 0) {
+                "journal recovery is unavailable while an external fence or drain is in flight; " +
+                    "wait for that operation to complete"
+            }
+            recoveryRecordLoops++
+        }
         try {
             enqueueAwaiting(0) { }
             return action()
@@ -1575,8 +1606,18 @@ open class ManagedHost(
      * see [Quiescence] for that exclusivity limit and the general fence argument.
      */
     fun quiescence(): Quiescence {
-        requireRecoveryIdle("quiescence")
-        return scheduler.quiescence()
+        beginExternalBarrier("quiescence")
+        val future = CompletableFuture<Unit>()
+        try {
+            scheduler.submit(Int.MAX_VALUE) {
+                endExternalBarrier()
+                future.complete(Unit)
+            }
+        } catch (t: Throwable) {
+            endExternalBarrier()
+            throw t
+        }
+        return Quiescence(future)
     }
 
     /**
@@ -2086,20 +2127,32 @@ open class ManagedHost(
      *
      */
     internal fun drainCellThenDespawn(ref: CellRef, beforeDespawn: () -> Unit = {}) {
-        requireRecoveryIdle("cell drain")
-        // Phase 1+2 barrier, drain band (priority 30). An empty task at 30 cannot
-        // run until nothing at 0/10/20 is pending, so when this returns every
-        // invocation this host had already accepted has been dispatched to its
-        // cell — spec 33 step 2, obtained by exactly the device [beginDrain] uses
-        // at host granularity, and the only thing this method adds.
-        enqueueAwaiting(30) { }
-        // Phase 3 — the teardown, on the management band exactly as before, so a
-        // caller that evicts and immediately re-spawns the same ref still sees
-        // the despawn first (a deferred despawn breaks depart-then-rejoin:
-        // `spawn` is priority 0 and would overtake it — "Cell already spawned").
-        enqueue(0) { internalApi.suspend(ref) }
-        beforeDespawn()
-        enqueue(0) { internalApi.despawn(ref) }
+        beginExternalBarrier("cell drain")
+        var completionOwnsBarrier = false
+        try {
+            // Phase 1+2 barrier, drain band (priority 30). An empty task at 30 cannot
+            // run until nothing at 0/10/20 is pending, so when this returns every
+            // invocation this host had already accepted has been dispatched to its
+            // cell — spec 33 step 2, obtained by exactly the device [beginDrain] uses
+            // at host granularity, and the only thing this method adds.
+            enqueueAwaiting(30) { }
+            // Phase 3 — the teardown, on the management band exactly as before, so a
+            // caller that evicts and immediately re-spawns the same ref still sees
+            // the despawn first (a deferred despawn breaks depart-then-rejoin:
+            // `spawn` is priority 0 and would overtake it — "Cell already spawned").
+            enqueue(0) { internalApi.suspend(ref) }
+            beforeDespawn()
+            enqueue(0) {
+                try {
+                    internalApi.despawn(ref)
+                } finally {
+                    endExternalBarrier()
+                }
+            }
+            completionOwnsBarrier = true
+        } finally {
+            if (!completionOwnsBarrier) endExternalBarrier()
+        }
     }
 
     init {
@@ -2335,11 +2388,10 @@ open class ManagedHost(
             }
 
             override fun drainHost() {
-                requireRecoveryIdle("host drain")
                 // shutdown cascade (G-28, M8.1): children drain first — a child
                 // must not outlive (or keep accepting after) its parent
                 childHosts.forEach { it.managementInlet.call.drainHost() }
-                beginDrain()
+                beginDrain("host drain")
             }
 
             override fun resumeHost() {
@@ -2356,8 +2408,7 @@ open class ManagedHost(
             }
 
             override fun migrate(to: Use<HostManagementApi>) {
-                requireRecoveryIdle("host migration")
-                beginDrain {
+                beginDrain("host migration") {
                     val moving = cells.toList()
                     cells.clear()
                     moving.forEach { (cellRef, cell) ->
