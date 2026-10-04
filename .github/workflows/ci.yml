@@ -463,8 +463,9 @@ jobs:
       # passes (observed, run 32004218853 job 95310345107 — computenet-7em.5).
       - uses: ./.github/actions/install-bd-dolt
 
-      # The multi-jvm classes live only in :demo:alignment, :demo:backlog-triage,
-      # :demo:exchange, :demo:shopping, :demo:beadsmirror and :demo:tiering, yet
+      # The multi-jvm classes live only in :runtime, :demo:alignment,
+      # :demo:backlog-triage, :demo:exchange, :demo:shopping, :demo:beadsmirror
+      # and :demo:tiering, yet
       # this lane used to run repo-wide `check` under
       # --max-workers=1: every module compiled serially plus ten empty
       # test-JVM forks, ~190s of overhead for ~16s of actual multi-jvm testing
@@ -482,7 +483,7 @@ jobs:
       # skip red rather than green.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
-          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(alignment|backlog-triage|shopping|exchange|beadsmirror|tiering)/' || true)
+          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./(demo/(alignment|backlog-triage|shopping|exchange|beadsmirror|tiering)|runtime)/' || true)
           if [ -n "$stray" ]; then
             echo "multi-jvm-tagged tests outside the serial lane's scoped modules — widen the module list in this job:"
             echo "$stray"
@@ -490,15 +491,15 @@ jobs:
           fi
 
       # Two phases: compile the dependency closure with full parallelism, then
-      # run only the six owning modules' tests at one worker — the quiet-VM
+      # run only the seven owning modules' tests at one worker — the quiet-VM
       # property T13 asked for applies to the process-forking tests themselves,
       # not to compilation.
       - name: Compile the multi-jvm closure (parallel)
-        run: ./gradlew :demo:alignment:testClasses :demo:backlog-triage:testClasses :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses :demo:tiering:testClasses
+        run: ./gradlew :runtime:testClasses :demo:alignment:testClasses :demo:backlog-triage:testClasses :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses :demo:tiering:testClasses
 
       # `--rerun` binds to the task immediately before it, so it is repeated
-      # after EACH task that needs it — :demo:beadsmirror:test and
-      # :demo:tiering:test — and exchange/shopping keep their cache. Repeating
+      # after EACH task that needs it — :runtime:test, :demo:beadsmirror:test
+      # and :demo:tiering:test — and exchange/shopping keep their cache. Repeating
       # it is not hygiene: a single trailing `--rerun` would bind to the LAST
       # task alone, silently returning :demo:beadsmirror:test to the cached
       # replay computenet-7em.5 exists to forbid (caught at review of
@@ -514,7 +515,7 @@ jobs:
       # computenet-7em.5 exists to remove, so this lane executes the class every
       # time (~30s locally) rather than trusting a replay of it.
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
-        run: ./gradlew :demo:alignment:test :demo:backlog-triage:test :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test --rerun :demo:tiering:test --rerun -PmultiJvmOnly=true --max-workers=1
+        run: ./gradlew :runtime:test --rerun :demo:alignment:test :demo:backlog-triage:test :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test --rerun :demo:tiering:test --rerun -PmultiJvmOnly=true --max-workers=1
 
       # computenet-7em.5. Same three checks as build-test-fast's copy of this
       # step — both now call `.github/actions/assert-beadsmirror-e2e`, read
