@@ -7,7 +7,7 @@ import { useByRef } from '../util/byRef';
 export interface Crux {
   ref: string;
   text: string;
-  /** d answer / d node: its sign says which way it pulls. */
+  /** Signed exact secant R(node=1) − R(node=0), called the node's sway. */
   sensitivity?: number;
   /** Its plausibility; for a link, its strength. */
   p?: number;
@@ -50,11 +50,11 @@ export function onActivateKey(fn: () => void): (ev: KeyboardEvent) => void {
 
 /**
  * Model C, "what would change the answer": the question's top cruxes — the
- * claims and links whose settling could move the answer most, |sensitivity| ×
- * 4·p·(1 − p). Nothing is shown until the backend names one. Activating an
- * entry (click, or Enter/Space when focused) focuses that claim or link in
- * the tree — computenet-lmfg8, ClaimCard.focusInTree, shared with
- * DisagreementPanel.
+ * claims and links whose settling has the highest exact q-weighted expected
+ * root movement. Their signed exact secant is shown as sway. Nothing is shown
+ * until the backend names one. Activating an entry (click, or Enter/Space when
+ * focused) focuses that claim or link in the tree — computenet-lmfg8,
+ * ClaimCard.focusInTree, shared with DisagreementPanel.
  */
 export function CruxesPanel(props: { graph: GraphDto; root: string; onFocus?: (ref: string) => void }) {
   const cruxes = createMemo(() => cruxesOf(props.graph, props.root));
@@ -84,7 +84,7 @@ export function CruxesPanel(props: { graph: GraphDto; root: string; onFocus?: (r
                       </span>
                       <span
                         class="crux__meta"
-                        title="Sway: how far the answer moves per unit change in this claim (d answer / d claim); certainty: how settled it is now"
+                        title="Sway: the signed exact answer change between this node resolving false and true; certainty: how settled it is now"
                       >
                         sway {num(c().sensitivity === undefined ? undefined : Math.abs(c().sensitivity as number))} · {pct(c().p)} {c().link ? 'strong' : 'plausible'}
                         <Show when={pullOf(c().sensitivity)}>{(w) => <> · {w()}</>}</Show>
