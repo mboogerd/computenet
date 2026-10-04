@@ -37,6 +37,54 @@
       "file": "payloads/WV-PAYLOAD-WATERLINEDELTA-01.json"
     },
     {
+      "id": "WV-PAYLOAD-ASSIGNMENT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-ASSIGNMENT-01.json"
+    },
+    {
+      "id": "WV-INTEREST-TOTAL-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-TOTAL-01.json"
+    },
+    {
+      "id": "WV-INTEREST-EMPTY-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-EMPTY-01.json"
+    },
+    {
+      "id": "WV-INTEREST-UNION-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-UNION-01.json"
+    },
+    {
+      "id": "WV-INTEREST-INTERSECT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-INTERSECT-01.json"
+    },
+    {
+      "id": "WV-INTEREST-COMPLEMENT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-COMPLEMENT-01.json"
+    },
+    {
+      "id": "WV-INTEREST-RANGES-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-RANGES-01.json"
+    },
+    {
+      "id": "WV-INTEREST-SLOTS-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-INTEREST-SLOTS-01.json"
+    },
+    {
       "id": "WV-NEG-LEASED-AT-ENCODE-01",
       "category": "negative",
       "kind": "negative",
@@ -164,14 +212,6 @@
     {"discriminator": "SaturationSignal", "owedBy": "computenet-ncz.4"},
     {"discriminator": "EdgeOpen", "owedBy": "computenet-ncz.4"},
     {"discriminator": "EdgeClose", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "StateRequest", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "Assignment", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Total", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Empty", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Union", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Intersect", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Complement", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Ranges", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Interest.Slots", "owedBy": "computenet-ncz.3"}
+    {"discriminator": "StateRequest", "owedBy": "computenet-ncz.4"}
   ]
 }
