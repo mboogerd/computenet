@@ -49,7 +49,10 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  *    `labels`-only commit: none of those tables feed the fold) is passed over
  *    rather than pinning the checkpoint below head until some later commit
  *    happens to carry a record (bug computenet-btt30). An empty read
- *    therefore still advances the checkpoint, to that head.
+ *    therefore still advances the checkpoint, to that head. After either a
+ *    normal read or a handled feed condition completes, [FeedCursor.pollCompleted]
+ *    runs on this same poller thread. Live elapsed-time checkpointing hangs
+ *    from that boundary, so it cannot split a condition handler's rebaseline.
  *
  * ## Why step 4 is sound, and why one read is enough
  *
@@ -182,9 +185,11 @@ class DoltFeedPoller(
             feed.readFromWithHead(after)
         } catch (e: CheckpointNotInHistoryException) {
             onCondition(FeedCondition.CheckpointGone(e.checkpoint))
+            cursor.pollCompleted()
             return
         } catch (e: HistoryMergedException) {
             onCondition(FeedCondition.HistoryMerged(e.mergeCommit))
+            cursor.pollCompleted()
             return
         }
         val advanceTo = read.head
@@ -194,6 +199,7 @@ class DoltFeedPoller(
                 if (read.records.isNotEmpty()) onBatch(read.records)
             }
         }
+        cursor.pollCompleted()
     }
 
     /**
