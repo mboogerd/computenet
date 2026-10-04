@@ -9,6 +9,7 @@ import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DurableInput
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -97,13 +98,17 @@ class MirrorGraph internal constructor(
         internal const val FEED_INPUT = "feed"
 
         /** Solo composition: the same journal layout and recovery order as [Runtime.boot]. */
-        fun solo(runDir: Path, identity: String): MirrorGraph {
+        fun solo(runDir: Path, identity: String): MirrorGraph = solo(runDir, identity, scheduler = null)
+
+        /** Test seam for controlling the recovery scheduler without changing production startup. */
+        internal fun solo(runDir: Path, identity: String, scheduler: HostScheduler?): MirrorGraph {
             Files.createDirectories(runDir)
             val refs = MirrorCellRefs(identity, MirrorCellRefs.LISTENER)
             val journal = checkNotNull(KeyedCells.hostJournal(runDir.resolve(JOURNAL_ID).toFile()))
             val registry = LocationRegistry()
             lateinit var context: ApplyContext
             val host = ManagedHost(
+                scheduler = scheduler,
                 registry = registry,
                 journalFor = { ref -> context.journalFor(ref) },
             )
@@ -127,7 +132,7 @@ class MirrorGraph internal constructor(
                 recovered = recovered,
                 applyGraph = { it.apply(context) },
                 checkpointGraph = { host.checkpoint(journal) },
-                closeGraph = {},
+                closeGraph = { scheduler?.shutdown() },
             )
         }
 

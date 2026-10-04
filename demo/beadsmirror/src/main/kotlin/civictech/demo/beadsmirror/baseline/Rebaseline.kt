@@ -210,6 +210,13 @@ class Rebaseline(
         val target = if (reason is RebaselineReason.FirstStart) {
             state.current
         } else {
+            // Recovery stages durable-input frames asynchronously but applies topology records
+            // synchronously. Without this boundary, incumbent input frames can remain before the
+            // despawn+respawn tail and then resolve these reused refs only after the replacement
+            // cells exist. Pre-compaction dots can consequently outrank the post-compaction
+            // baseline. A checkpoint restores the incumbent state synchronously on recovery, so
+            // the later despawn discards it before the replacement input tail is staged.
+            graph.checkpoint()
             val applied = graph.apply(
                 GraphSpec(
                     listOf(
