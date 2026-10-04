@@ -173,9 +173,12 @@ class EmptyExportRefused(
  * `applyAll`; first-start initialization applies its baseline before the
  * poller starts. HTTP readers access the projector through the volatile
  * [MirrorState.current] reference and observe the old or new projector.
- * Replacement commit, quiescence and publication share [MirrorState.withPublicationLock]
- * with `WorkspaceMirror.committedCheckpoint`, so the new durable cursor cannot be exposed
- * while [MirrorState.current] still names the incumbent. Fold-only readers remain lock-free.
+ * On the successful replacement path, commit, quiescence and publication share
+ * [MirrorState.withPublicationLock] with `WorkspaceMirror.committedCheckpoint`, so the new
+ * durable cursor cannot be exposed while [MirrorState.current] still names the incumbent.
+ * Fold-only readers remain lock-free. If quiescence fails after the durable commit, publication
+ * does not run: releasing the lock then leaves the durable cursor ahead of the incumbent
+ * projector until restart recovery rebuilds their pairing from the journal.
  */
 class Rebaseline(
     private val export: () -> List<ExportRow>,
