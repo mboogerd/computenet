@@ -181,7 +181,8 @@ class ThreeJvmPlacementTest {
     private fun irohTransportConfig(binary: Path): Map<String, String> = buildMap {
         put("binary", binary.toString())
         val sidecarArgs = buildList {
-            System.getProperty("iroh.relay.url")?.let { addAll(listOf("--relay-url", it)) }
+            val relayUrl = System.getProperty("iroh.relay.url")
+            relayUrl?.let { addAll(listOf("--relay-url", it)) }
             val pkarrUrl = System.getProperty("iroh.pkarr.url")
             val dnsOrigin = System.getProperty("iroh.dns.origin")
             require((pkarrUrl == null) == (dnsOrigin == null)) {
@@ -191,6 +192,7 @@ class ThreeJvmPlacementTest {
                 addAll(listOf("--pkarr-relay-url", pkarrUrl, "--dns-origin", dnsOrigin))
                 System.getProperty("iroh.dns.nameserver")?.let { addAll(listOf("--dns-nameserver", it)) }
             }
+            if (relayUrl == null && pkarrUrl == null) add("--offline")
         }
         if (sidecarArgs.isNotEmpty()) put("sidecarArgs", sidecarArgs.joinToString(" "))
     }
