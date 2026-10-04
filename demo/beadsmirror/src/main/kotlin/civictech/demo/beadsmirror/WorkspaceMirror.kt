@@ -148,7 +148,10 @@ class WorkspaceMirror private constructor(
 
     /**
      * The last Dolt head whose batch is durably committed and settled in the published hosted
-     * fold. A replacement head is not exposed until [state] publishes its rebuilt projector.
+     * fold. On a successful re-baseline path, a replacement head is not exposed until [state]
+     * publishes its rebuilt projector. If quiescence fails after the replacement commit, the
+     * durable cursor can be ahead of the still-published incumbent projector; restart recovery
+     * re-establishes the cursor/fold pairing from the journal.
      */
     fun committedCheckpoint(): String? = state.withPublicationLock(cursor::committed)
 

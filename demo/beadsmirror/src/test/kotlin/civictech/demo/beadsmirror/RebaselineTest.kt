@@ -24,6 +24,7 @@ import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.feed.FeedPosition
 import civictech.demo.beadsmirror.feed.FieldDiff
 import civictech.demo.beadsmirror.projector.DotMinter
+import civictech.demo.beadsmirror.projector.EchoGate
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import civictech.testkit.awaitUntil
@@ -149,12 +150,13 @@ class RebaselineTest {
     }
 
     @Test
-    fun `a settled replacement cursor cannot outrun publication of its fold`() {
+    fun `the public checkpoint reader cannot outrun publication of a replacement fold`() {
         val rig = rig()
         rig.initial.apply(createRecord(11, "B", "status", "open"))
         rig.graph.host.quiescence().await(30_000, "pre-gap records")
         val rawInput = rig.graph.input()
         val cursor = DurableFeedCursor(rawInput, rig.graph.host, "publication race")
+        val mirror = workspaceMirror(rig, cursor)
         val commitLanded = CountDownLatch(1)
         val allowCommitReturn = CountDownLatch(1)
         val readCommitted: () -> Serializable? = rawInput::committed
@@ -192,16 +194,17 @@ class RebaselineTest {
         val reader = thread(name = "checkpoint-reader") {
             readerStarted.countDown()
             readResult.set(
-                rig.state.withPublicationLock(cursor::committed) to rig.state.current.view(),
+                mirror.committedCheckpoint() to mirror.state.current.view(),
             )
             readerDone.countDown()
         }
         check(readerStarted.await(30, TimeUnit.SECONDS)) { "checkpoint reader did not start" }
 
-        try {
+        val readerStayedBehindPublication = try {
             awaitUntil("checkpoint reader waits for replacement publication") {
                 reader.state == Thread.State.BLOCKED || readerDone.count == 0L
             }
+            readerDone.count == 1L
         } finally {
             allowCommitReturn.countDown()
         }
@@ -211,6 +214,7 @@ class RebaselineTest {
         rebuild.isAlive shouldBe false
         reader.isAlive shouldBe false
         rebuildFailure.get() shouldBe null
+        readerStayedBehindPublication shouldBe true
         readResult.get() shouldBe (
             "flat1" to mapOf(
                 "B" to mapOf("id" to "\"B\"", "status" to "\"closed\""),
@@ -447,6 +451,37 @@ class RebaselineTest {
         check(!graph.recovered)
         val initial = graph.projector(DotMinter(IDENTITY))
         return Rig(graph, initial, MirrorState(initial), graph.input())
+    }
+
+    /**
+     * Builds the production read surface around this test's real graph and cursor. The private
+     * constructor is intentional application wiring; reflection keeps the concurrency probe on
+     * [WorkspaceMirror.committedCheckpoint] without adding a production-only test seam.
+     */
+    private fun workspaceMirror(rig: Rig, cursor: DurableFeedCursor): WorkspaceMirror {
+        val idlePoller = DoltFeedPoller(
+            feed = DoltCommitFeed(fakeLog(listOf("flat1"))),
+            cursor = cursor,
+            interval = Duration.ofDays(1),
+            onBatch = {},
+        )
+        return WorkspaceMirror::class.java.declaredConstructors.single().let { constructor ->
+            constructor.isAccessible = true
+            constructor.newInstance(
+                IDENTITY,
+                runDir,
+                runDir,
+                DotMinter(IDENTITY),
+                rig.state,
+                rig.graph,
+                cursor,
+                idlePoller,
+                null,
+                null,
+                null,
+                EchoGate(IDENTITY, events::add),
+            ) as WorkspaceMirror
+        }
     }
 
     private fun createRecord(
