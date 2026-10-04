@@ -1,11 +1,15 @@
 package civictech.demo.beadsmirror.e2e
 
 import civictech.cell.Timestamp
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
+import civictech.cell.host.KeyedCells
 import civictech.cell.wire.PeerTransport
 import civictech.cell.wire.PeerTransports
 import civictech.demo.beadsmirror.BdScratchWorkspace
 import civictech.demo.beadsmirror.BeadsMirrorApp
 import civictech.demo.beadsmirror.BeadsMirrorConfig
+import civictech.demo.beadsmirror.MirrorGraph
 import civictech.demo.beadsmirror.MirrorPeeringSettings
 import civictech.demo.beadsmirror.MirrorWire
 import civictech.demo.beadsmirror.baseline.ExportRow
@@ -127,8 +131,37 @@ class TwoNodeRig private constructor(
         return node
     }
 
-    private fun start(role: String, workspace: BdScratchWorkspace, wire: MirrorWire, writeBack: Boolean = false): Node {
-        val runDir = tempDir("beadsmirror-tworig-$role-run-")
+    /**
+     * Restarts the dialing node against its existing workspace and run directory. Recovery therefore
+     * has only the idle node's journal (including peer-gossip frames) from which to rebuild its fold.
+     */
+    fun restartDialer(writeBack: Boolean = false): Node {
+        val previous = dialer
+        val runDir = previous.runDir
+        previous.close()
+        dialerNode = null
+        return startDialer(writeBack, runDir)
+    }
+
+    private fun startDialer(writeBack: Boolean, runDir: Path): Node {
+        check(dialerNode == null) { "the dialer is already started" }
+        val address = checkNotNull(listener.app.boundAddress) { "the listener has no bound address" }
+        return start(
+            MirrorCellRefs.DIALER,
+            dialerWorkspace,
+            MirrorWire.Dial(address.text),
+            writeBack,
+            runDir,
+        ).also { dialerNode = it }
+    }
+
+    private fun start(
+        role: String,
+        workspace: BdScratchWorkspace,
+        wire: MirrorWire,
+        writeBack: Boolean = false,
+        runDir: Path = tempDir("beadsmirror-tworig-$role-run-"),
+    ): Node {
         // Captured per node, and created BEFORE the app starts: a start always
         // re-baselines, so the FirstStart event is emitted inside
         // BeadsMirrorApp.start and a list installed afterwards would miss it.
@@ -468,7 +501,7 @@ class TwoNodeRig private constructor(
         /** The `bd` workspace this node — and ONLY this node — mirrors. */
         val workspace: BdScratchWorkspace,
         val app: BeadsMirrorApp,
-        private val runDir: Path,
+        internal val runDir: Path,
         private val capturedEvents: MutableList<MirrorEvent>,
         private val capturedWriteBackEvents: MutableList<WriteBackEvent> = Collections.synchronizedList(mutableListOf()),
     ) : AutoCloseable {
@@ -516,6 +549,12 @@ class TwoNodeRig private constructor(
         fun view(): Map<String, Map<String, String>> = projector.view()
 
         fun edgeView(): Set<MirrorEdge> = projector.edgeView()
+
+        /** Decoded records in this node's own hosted graph journal, in replay order. */
+        fun journalRecords(): List<DecodedJournalRecord> =
+            checkNotNull(KeyedCells.hostJournal(runDir.resolve(MirrorGraph.JOURNAL_ID).toFile()))
+                .replay()
+                .map(JournalRecords::decode)
 
         /** The fold **as served**, verbatim: the response body of `GET /beads/issues`. */
         fun servedFold(): String = probe.get("/beads/issues").body()
@@ -635,7 +674,9 @@ class TwoNodeRig private constructor(
             check(app.pollerFailure == null) { "$role's poll loop died: ${app.pollerFailure}" }
         }
 
-        private fun checkpoint(): String? = app.mirrors.single().committedCheckpoint()
+        fun committedCheckpoint(): String? = app.mirrors.single().committedCheckpoint()
+
+        private fun checkpoint(): String? = committedCheckpoint()
 
         /**
          * Everything about this node that ADVANCES when one of its two loops

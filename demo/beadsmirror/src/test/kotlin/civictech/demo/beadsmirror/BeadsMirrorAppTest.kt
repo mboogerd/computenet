@@ -8,8 +8,11 @@ import civictech.demo.beadsmirror.dolt.DoltSqlException
 import civictech.demo.beadsmirror.equality.MirrorExportEquality
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.MirrorEdge
+import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.HostColor
 import civictech.cell.host.HostScheduler
+import civictech.cell.host.JournalRecords
+import civictech.cell.host.KeyedCells
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import io.kotest.assertions.throwables.shouldNotThrowAny
@@ -490,6 +493,73 @@ class BeadsMirrorAppTest {
                 events.filterIsInstance<MirrorEvent.Rebaselined>() shouldBe emptyList()
             } finally {
                 recovered.stop()
+            }
+        }
+
+        @Test
+        fun `a live record cadence checkpoints and restart preserves the exported fold and cursor`() {
+            val id = workspace.createIssue("Issue A")
+            val live = WorkspaceMirror.start(
+                workspace = workspace.root,
+                runDir = runDir,
+                pollInterval = Duration.ofMillis(10),
+                onEvent = events::add,
+                checkpointEveryRecords = 2,
+            )
+            live.startPolling()
+            try {
+                repeat(2) { update ->
+                    val title = "Issue A live update $update"
+                    workspace.run("update", id, "--title", title)
+                    awaitUntil("live journal update $update reaches the fold") {
+                        live.state.current.view()[id]?.get("title") == "\"$title\""
+                    }
+                }
+
+                val checkpoint = DoltCommitFeed(workspace.doltRoot).history().last()
+                awaitUntil("the live cursor reaches the checkpoint cadence boundary") {
+                    live.committedCheckpoint() == checkpoint
+                }
+                val liveView = live.state.current.view()
+                val liveEdges = live.state.current.edgeView()
+                MirrorExportEquality.compare(
+                    liveView,
+                    liveEdges,
+                    BdExportReader(workspace.root).read(),
+                ) shouldBe emptyList()
+
+                val journal = checkNotNull(
+                    KeyedCells.hostJournal(runDir.resolve(MirrorGraph.JOURNAL_ID).toFile()),
+                )
+                val records = journal.replay().map(JournalRecords::decode)
+                records.filterIsInstance<DecodedJournalRecord.Checkpoint>().size shouldBe 1
+                records.filterIsInstance<DecodedJournalRecord.Input>().single().let { input ->
+                    input.cursor shouldBe checkpoint
+                    input.frames shouldBe emptyList()
+                }
+
+                live.stop()
+
+                val recovered = WorkspaceMirror.start(
+                    workspace = workspace.root,
+                    runDir = runDir,
+                    pollInterval = Duration.ofSeconds(30),
+                    onEvent = events::add,
+                )
+                try {
+                    recovered.committedCheckpoint() shouldBe checkpoint
+                    recovered.state.current.view() shouldBe liveView
+                    recovered.state.current.edgeView() shouldBe liveEdges
+                    MirrorExportEquality.compare(
+                        recovered.state.current.view(),
+                        recovered.state.current.edgeView(),
+                        BdExportReader(workspace.root).read(),
+                    ) shouldBe emptyList()
+                } finally {
+                    recovered.stop()
+                }
+            } finally {
+                live.stop()
             }
         }
 

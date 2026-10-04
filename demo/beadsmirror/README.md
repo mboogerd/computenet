@@ -52,16 +52,25 @@ does not emit `MirrorEvent.Rebaselined`. A new journal applies the graph first,
 then `FirstStart` folds the export into the live empty projector and commits the
 batch and its head through one durable-input record. During normal polling, a
 non-empty batch or a moved head likewise commits the batch and cursor together;
-an idle tick appends nothing.
+an idle tick appends no durable-input record.
 
 When the cursor is gone from history (`CheckpointGone`) or a history merge
 requires a snapshot, the poller applies one topology delta that despawns and
 respawns both cells under the same refs. It then builds the hosted projector on
 the fresh cells and commits the baseline and head through one durable-input
 record. To intentionally reset a mirror, delete `<runDir>/main/`; the next
-start is a first start and accepts an empty export. There is no journal
-compaction during a live run; the journal grows with durable-input records until
-recovery allows the host checkpoint step.
+start is a first start and accepts an empty export. During a live run, every 64
+local durable-input records trigger a host checkpoint after that record has
+drained. A second, elapsed-time bound checkpoints after 64 configured poll
+intervals (with a one-second floor), checked at the end of the next successful
+poll. That second trigger bounds a two-node mirror whose own workspace is idle
+while peer gossip appends frames to its journal; it can also checkpoint a fully
+idle solo mirror, although an idle poll itself still appends no input record.
+Both triggers run on the poller thread, after a condition-triggered rebaseline
+has completed its pre-swap checkpoint, despawn/respawn topology record and
+replacement input. The two 64-unit cadences are safety bounds rather than
+throughput-derived optima: realistic non-idle volume and replay cost have not
+yet been measured.
 
 ## `--write-back`: opt-in, imposes the fold's winner onto `bd`
 

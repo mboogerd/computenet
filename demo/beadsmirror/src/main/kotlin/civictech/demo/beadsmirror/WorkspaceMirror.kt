@@ -295,6 +295,31 @@ class WorkspaceMirror private constructor(
              * vocabularies stay separate. Ignored when [writeBack] is false.
              */
             onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
+        ): WorkspaceMirror = start(
+            workspace = workspace,
+            runDir = runDir,
+            pollInterval = pollInterval,
+            onEvent = onEvent,
+            checkpointEveryRecords = LIVE_CHECKPOINT_EVERY_RECORDS,
+            checkpointInterval = liveCheckpointInterval(pollInterval),
+            peeringSettings = peeringSettings,
+            peeringTransport = peeringTransport,
+            writeBack = writeBack,
+            onWriteBackEvent = onWriteBackEvent,
+        )
+
+        /** The production construction path, with a smaller cadence available to restart tests. */
+        internal fun start(
+            workspace: Path,
+            runDir: Path,
+            pollInterval: Duration,
+            onEvent: (MirrorEvent) -> Unit,
+            checkpointEveryRecords: Int,
+            checkpointInterval: Duration? = null,
+            peeringSettings: MirrorPeeringSettings? = null,
+            peeringTransport: PeerTransport? = null,
+            writeBack: Boolean = false,
+            onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
         ): WorkspaceMirror {
             val doltRoot = doltRootFor(workspace)
             val identity = sanitizedDoltDatabaseName(workspace)
@@ -368,6 +393,9 @@ class WorkspaceMirror private constructor(
                 input = graph.input(),
                 host = graph.host,
                 label = "beadsmirror $identity poll",
+                checkpointEveryRecords = checkpointEveryRecords,
+                checkpointInterval = checkpointInterval,
+                checkpoint = graph::checkpoint,
             )
 
             val poller = DoltFeedPoller(
@@ -429,5 +457,25 @@ class WorkspaceMirror private constructor(
                 echoGate,
             )
         }
+
+        /**
+         * Maximum local durable-input records appended between live checkpoints. This is a safety
+         * bound, not a throughput-derived optimum: realistic non-idle volume and replay cost remain
+         * unmeasured. In both solo and two-node mode it bounds locally produced input records; in
+         * two-node mode [liveCheckpointInterval] separately bounds peer-only frame growth while the
+         * local workspace is idle.
+         */
+        private const val LIVE_CHECKPOINT_EVERY_RECORDS = 64
+
+        /**
+         * The peer-only bound is elapsed time: 64 configured poll intervals, with a one-second
+         * floor, checked after each successful poll. Because the check is on the poller thread, a
+         * condition-triggered rebaseline finishes its pre-swap checkpoint, topology replacement and
+         * replacement input before this cadence can checkpoint the new graph.
+         */
+        private fun liveCheckpointInterval(pollInterval: Duration): Duration =
+            maxOf(Duration.ofSeconds(1), pollInterval.multipliedBy(LIVE_CHECKPOINT_INTERVAL_POLLS))
+
+        private const val LIVE_CHECKPOINT_INTERVAL_POLLS = 64L
     }
 }

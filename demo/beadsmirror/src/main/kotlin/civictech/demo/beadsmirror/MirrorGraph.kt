@@ -48,7 +48,7 @@ class MirrorGraph internal constructor(
     /** Apply one topology delta through this graph's topology journal. */
     fun apply(spec: GraphSpec): AppliedGraph = applyGraph(spec)
 
-    /** Compact the recovered journal only after replay has completely applied. */
+    /** Compact the journal at a host checkpoint boundary, after any caller-required settling. */
     fun checkpoint() = checkpointGraph()
 
     /**
