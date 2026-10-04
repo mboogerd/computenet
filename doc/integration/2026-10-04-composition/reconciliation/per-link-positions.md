@@ -168,3 +168,23 @@ Also changed here while aligning:
 - `[KBLK-12]` (moved here from COH) now cites `BatchedFileJournal.kt:45`.
 
 No genuine design conflict remained after this alignment.
+
+## Round 2 review response
+
+Second adversarial review (`PLP` = this note, `COH` = the companion). Each scenario was walked
+step by step, with a crash between each pair of protocol steps and the permitted reorders.
+
+| Finding | Disposition | Location |
+|---|---|---|
+| B1 — `Retained` at `APPENDED` lost on a batched sender | **Fixed.** A frame is transmitted only after its determining record (the `Retained` record, or for an F9 sender the input that re-derives it) is `STABLE`; a `BATCHED` sender waits for its group sync. Opt-out (`APPENDED` transmit) is a declared ceiling (L7), refused into enforcing inlets | §5.8 "Retention"; L7; §9; tests `batchedSenderTransmitsOnlyStableRetained`, `deterministicSenderWaitsForStableInput`; COH §3.6, §6 |
+| B2 — release cursor and drain marker not tied to disposition | **Fixed.** R6 advances only on the shard's `STABLE` ack per `(lane, shard, R)`; `FlipFence`/`FlipDrained` are barriers over prior dispositions, defined once in §5.8 "In-band markers" (not management band; COH H8 refers); router keeps R2 until both shards ack the drain; release waits for B's `Committed` | §5.6 steps 2, 4, 6; §5.8 "In-band markers"; §9; COH §3.2 R6, R7, steps 3, 7, 8, recovery table |
+| B3 — cumulative ack on a shared, filtered lane | **Fixed.** Acks and retention keyed `(epoch, lane, recipient, scope)`; cumulative only on lanes dense for that recipient, explicit intervals elsewhere | §5.8 "Acknowledgement levels"; §3.2; §9; test `filteredLaneAckReleasesOnlyThatRecipient`; COH capsule `outbox` key |
+| M4 — pull-merge moved a live lane to `closed` | **Fixed.** `supersede=false` leaves entries live until the lane's own `EdgeClose` or a declared bound (L6 duplicate ceiling) | §5.7; §7 reconnect row; §9; test `supersedeFalseLaneStaysLive` |
+| M6 — pre-`Begin` frames stranded | **Fixed.** Pre-`Begin` frames are allocated and retained by the sender; the receiver's hold is scoped to one transport session and resolved at its end (discard at enforcing inlets, legacy disposal at mergeable ones) before a new session is admitted | §5.8 wire negotiation; §7 reconnect row; test `sessionEndsBeforeBeginResolvesHold` |
+| M3 (cross-note) — promotion frontier has no holder before `X` exists | **Fixed.** `applied`, tracked at every positioned inlet, is the starting frontier; COH vetoes when it is missing | §5.1 `applied` row; §7 T2 row; COH §3.4 |
+| M5 (cross-note) — partial-overlap takeover | **Demoted to refusal** in COH §3.1 | §3.2 "Replica-set lanes" |
+| M1 (cross-note) | RESTART row follows COH's narrowed M11 (c) | §7 durable RESTART row; §10 M11 |
+| §1 partials PLP 1, 3, 4, 8 | Resolved by B2, B1, M4, M6 respectively | as above |
+| §3 scheduling vocabulary | One definition (§5.8), COH H8 and §3.2 step 3 refer to it | §5.8 |
+| §3 recipient dimension | B3 | §5.8; COH §2.3 capsule |
+| §3 conditional labels | §5.3 header and §5.9 row conditional on M16; §5.6 already on M6 | §5.3, §5.9 |

@@ -105,3 +105,19 @@ check open; §3.4 uses `applied` for the leaf's frontier; §7 lists M12-M16 with
 recommendations; migration steps 7, 8, 10, 12 cross-reference PLP's steps.
 
 No genuine design conflict remained after this alignment.
+
+## Round 2 review response
+
+| Finding | Disposition | Location |
+|---|---|---|
+| B1 — write-before-transmit not durable on a batched sender | **Fixed in PLP §5.8** (stable before transmit); summary updated here | §3.6; §6 refusals |
+| B2 — R6/R7 record release, not disposition; fence/drain band contradiction | **Fixed.** R6 = shard-acknowledged `STABLE` cursor; R7 after both shards ack `FlipDrained`; R2 kept until then; release starts after B acks `Committed`; fence and drain are barriers over prior dispositions, scheduled as PLP §5.8 defines (H8 now says in-band markers are not management band) | §3.2 records, steps 3, 7, 8, recovery table; §5.1 H8; tests in `PartitionSetFlipRecoveryTest` |
+| B3 — ack/capsule keyed by lane only | **Fixed in PLP §5.8**; capsule `outbox` keyed `(epoch, lane, recipient, scope)` | §2.3; §3.6 |
+| B4 — volatile relocation loses the capsule at steps 2-3 | **Fixed.** The synced `Departing` and `Prepared` records carry the opaque capsule for a term without `D`; abort resumes from it; the target deletes its staged copy before first admission. Added to H1 precisely | §5.1 H1, H4 text and crash table; tests `volatileSourceCrashAfterDepartingResumesFromStagedCapsule`, `volatileTargetDeletesStagedCopyBeforeFirstAdmission` |
+| M1 — exclusive barrier after the irreversible act | **Demoted to limitation.** The barrier is withdrawn; M11 (c) now makes durable RESTART a continuation only for terms that accept no `Owned`/`Leased` (and declare no `LeaseHolding`); every other durable RESTART stays a succession | §2.4; §6 ceilings and open; §7 M11; tests |
+| M2 — charge id from an ordinal | **Fixed.** `(term ref, position, declared claim site)`, charged at acceptance before the leaf runs; unpositioned frames charged unkeyed under the ceiling; order marked conditional on the keyed ledger | §3.7; §6; test `chargeIdUnchangedWhenReplayTakesOtherBranch` |
+| M3 — added `X` reads a frontier that does not exist; F11 strings prove nothing | **Fixed.** Starting frontier = incumbent's captured `applied` (PLP §5.1) logged in the COMMIT record, veto if any incident lane lacks it; kept history requires a per-version effect-compatibility assertion | §3.4 text and table; §6; M8 text; tests |
+| M5 — partial-interest takeover claimed "no omission" | **Demoted to refusal.** Takeover requires Total coverage; partial overlap refused (coverage certificate **open**); "no omission" now conditional on M9 and scoped to Total coverage | §3.1; §6; §7 M9; test `takeoverRefusedUnderPartialOverlap` |
+| §1 partials COH 1, 4, 5, 6, 7, 8 | Resolved by M5, B2, B4, M2, M3, M1 respectively | as above |
+| §3 conditional labels | Headings now name the pending decision: §2.3, §2.6, §5.1 (M3/M4), §2.4 `S` (M5), H4 (M2), §3.3 (M7), §3.4 logging (M8), §3.1 takeover (M9); §3.2 already M6 | headings listed |
+| Rejected | None. M1's reviewer-preferred alternative (one recoverable consume-and-dispose step) was not designed: no sound form was found within scope, so the refusal branch was taken | — |

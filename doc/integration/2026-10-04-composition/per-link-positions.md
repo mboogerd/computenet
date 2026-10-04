@@ -15,7 +15,7 @@ layer vocabulary used here: `Durable` (`D`), `Outbox` (`O`), `Suspendable` (`P`)
 **Division of ownership between the two notes.** This note owns, and COH refers to:
 delivery positions, lanes (including replica-set lanes), the receiver cursors
 (`received`, `applied`, `disposed`, `acted`, `pullDischarged`, scopes), acknowledgement
-levels, and `O`'s retention rules (persist-before-transmit, the unlink/death table). COH
+levels, and `O`'s retention rules (stable-before-transmit, the unlink/death table). COH
 owns, and this note refers to: the layers and their order, the formation rules (F1-F11),
 the composites, the flip and relocation *transactions* (records, prepare/commit, crash
 recovery), and the host contract (H1-H9, exceptions E1-E3). Maintainer decisions use one
@@ -190,9 +190,10 @@ a *forwarding* fan-out of that one position. I-L1 already permits one position a
 inlets. Allocation is serialized with acceptance at every covering instance under the one
 lane lock (§5.2 rule 2); if some instance's acceptance fails after another accepted, the
 `seq` is kept, and the frame stays in the sender's custody (`O`, §5.8) for that instance
-only. A set lane is **dense** at an instance only when the instance covers the set's whole
-interest (Total); under partial overlap the router-style slicing makes it non-dense at each
-instance, and the takeover gap check of COH §3.1 cannot rely on density there **[open]**.
+only — retention and acknowledgement are per recipient (§5.8). A set lane is **dense** at an
+instance only when the instance covers the set's whole interest (Total); under partial
+overlap it is non-dense there, so no gap check can prove a follower's retention complete, and
+COH §3.1 refuses effect-authority takeover by such an instance.
 
 **Volatile lanes [decided].** A target with no derivable address (a null-ref consumer,
 an anonymous observer tap) gets a volatile lane: no P2 across recovery. It may feed a
@@ -271,7 +272,7 @@ what (layer names from COH §2.5). This is the one cursor vocabulary for both no
 | Component | Content | Held by |
 |---|---|---|
 | `received` | `(epoch, lane) → seq`: highest position present in the term's custody. Proves nothing about the world; never used for dedup. Its one consumer is a replica follower's warm progress and retention (COH §3.1) | the custody-holding layer (`D`, or `P` without `D`) |
-| `applied` | `(epoch, lane) → seq`: contiguous cursor of deliveries whose disposition is reflected in the inner cell's state (absorbed, or refused by the cell) | inner cell (inside `S`); rolled back with its state |
+| `applied` | `(epoch, lane) → seq`: contiguous cursor of deliveries whose disposition is reflected in the inner cell's state (absorbed, or refused by the cell; at an inlet without `X`, also dropped or dead-lettered ahead of it, §5.3). Every positioned inlet tracks it, enforcing or not; it is the starting frontier when a promotion adds `X` (COH §3.4) | inner cell (inside `S`); rolled back with its state |
 | `disposed` | `(epoch, lane) → seq`: contiguous cursor of deliveries with **any** terminal disposition — acted, absorbed, refused, admission-dropped, dead-lettered | `X`; survives anything that rolls inner state back |
 | `pullDischarged` | exact capped set of `(epoch, lane, pull)` already disposed of | `X` (today's `[24-DUR-08]` set, re-keyed) |
 | `scoped` | `(epoch, lane, scope) → seq` while a repartition flip is open; scopes `stable` and `R` | `X` at keyed shard inlets only (§5.6) |
@@ -341,7 +342,7 @@ differ only after a RESTART that rolls the inner state back (§7).
 `position` names the delivery; `timestamp` names the wave. Neither is derived from the
 other.
 
-### 5.3 Disposing of a delivery [decided]
+### 5.3 Disposing of a delivery [decided; at `Effectful` inlets conditional — M16]
 
 Let `p` be the position and `hw` the inlet's cursor for `(p.epoch, p.lane)` — `disposed`
 at an `Effectful` inlet, `applied` elsewhere.
@@ -357,6 +358,9 @@ at an `Effectful` inlet, `applied` elsewhere.
   gap-checked.
 - **Pull position**: an `Effectful` inlet acts unless `(epoch, lane, pull) ∈
   pullDischarged`, records the id, and advances no live cursor. Others absorb, as today.
+
+Replacing the wave-keyed `[24-DUR-05]`/`[24-DUR-08]` test with this one is M16 (§10); until
+it is decided, an `Effectful` inlet tracks positions and keeps today's wave rule.
 
 **Which inlets enforce** (drop duplicates): every `Effectful` inlet (on `disposed`); every
 inlet of a durable cell **not declared idempotent** (on `applied`) — new, closing the
@@ -469,9 +473,12 @@ require of that transaction; step numbers in brackets are COH §3.2's.
    `FlipFence(tx, {lane → p_begin})` on each router-to-A path. It must be in band: A's
    boundary lanes are filtered (non-dense), so A cannot tell from `p_begin` alone whether it
    has seen every R-frame at or below it, whereas by FIFO the fence follows every R-frame A
-   will ever receive. A answers `FlipSettled(tx)` once everything ahead of the fence has a
-   `STABLE` terminal disposition, writing `SettledFor(tx)` to its `D` first. Disposal
-   includes an act repeated once after a crash inside `[24-DUR-09]` (L5).
+   will ever receive. The fence is a **barrier** (§5.8, "In-band markers"): A processes it —
+   freezes its `R` scope, writes `SettledFor(tx)` to its `D`, answers `FlipSettled(tx)` — only
+   once everything accepted ahead of it on that lane has a `STABLE` terminal disposition.
+   Processing it earlier would check a queued R-slice at or below `p_begin` against the frozen
+   scope and drop it. Disposal includes an act repeated once after a crash inside
+   `[24-DUR-09]` (L5).
 3. **Transfer, not catch-up [COH 4 and 6].** R's state moves to B as a **range-handoff
    record** `(R, state slice, {boundary lane → p_begin}, tx)` on B's control plane
    (`assignInlet`), staged at `PREPARE` and installed at `COMMIT`. B **does not act** on the
@@ -485,7 +492,7 @@ require of that transaction; step numbers in brackets are COH §3.2's.
    - *Gainer B*, at `COMMIT`: `scoped[(lane, R)] = p_begin`; its existing cursor becomes
      `scoped[(lane, stable)]`. So B's stable slice of frame 11 advances `stable` to 11, and
      B's later R-slice of frame 11 is checked against `R` (`p_begin < 11`, so new).
-   - *Loser A*, at the fence: `scoped[(lane, R)] = p_begin` (frozen: A receives no further
+   - *Loser A*, on processing the fence: `scoped[(lane, R)] = p_begin` (frozen: A receives no further
      R-slice unless the flip aborts); its existing cursor becomes `scoped[(lane, stable)]`.
      A's single cursor may already exceed `p_begin` from stable slices routed between begin
      and fence, which is why the R scope is set to `p_begin` and not to it. On abort
@@ -498,14 +505,18 @@ require of that transaction; step numbers in brackets are COH §3.2's.
    it. An R-slice above `p_begin` was parked and is new to B. The cursor must be `p_begin`,
    **not A's high-water**: A kept receiving stable traffic during the window, so its
    high-water exceeds R-frames it never saw.
-6. **Merge at drain [COH 7, R7].** The router releases the flip buffer, with contexts and
-   in order, before any new traffic, then sends an in-band `FlipDrained(tx)` to each shard.
-   On the marker each shard sets its unscoped cursor to `max(scoped[R], scoped[stable])` and
-   drops the scoped entries. This is exact: every boundary frame the shard receives after
-   the marker has a higher `seq` (router FIFO); a re-delivery at or below the maximum is
-   either an R-frame at or below `p_begin` (disposed by A), an R-frame above it (parked,
-   released and disposed by its new owner before the marker), or a stable frame (disposed
-   before the marker).
+6. **Release and merge at drain [COH 7, R6-R7].** The router releases the flip buffer, with
+   contexts and in order, before any new traffic on the lane, through its `O`: a released
+   slice stays retained (its R2 record) until the shard acknowledges it at `STABLE` for
+   `(lane, shard, R)` (§5.8), and only that acknowledgement advances R6. It then sends an
+   in-band `FlipDrained(tx)` to each shard. `FlipDrained` is a barrier like the fence: the
+   shard processes it only once everything accepted ahead of it on the lane has a `STABLE`
+   disposition, then sets its unscoped cursor to `max(scoped[R], scoped[stable])`, drops the
+   scoped entries, logs `DrainedFor(tx)` and acknowledges. This is exact: every boundary frame
+   the shard receives after the marker has a higher `seq` (router FIFO), and every frame ahead
+   of it is disposed (barrier); a re-delivery at or below the maximum is an R-frame at or
+   below `p_begin` (disposed by A), a released R-frame (disposed by its new owner), or a
+   stable frame. The router keeps R2 until both shards have acknowledged `FlipDrained`.
 7. **Veto [COH 1, PRECHECK]** the move of an `Effectful` range when A cannot settle (dead,
    unreachable, or inside `[24-DUR-09]` with no durable disposition), or when only an
    aggregate state-as-delta is available (`partition/PartitionedCell.kt:143`). The exception
@@ -526,8 +537,10 @@ require of that transaction; step numbers in brackets are COH §3.2's.
   `supersede = false` (pull-merge, derived and replicated producers; 93:8397-8401,
   `MessageContext.kt:75-91`) nothing is fenced: a delayed old-epoch frame may carry
   information absent from the catch-up and must still be taken, as the tag path merges it.
-  Its entries move to `closed` instead, so a straggler at or below the cursor is still a
-  duplicate and one above it is disposed.
+  Its entries **stay live**: a straggler at or below the cursor is still a duplicate and one
+  above it is disposed. They leave the live set only on that lane's own `EdgeClose`, or under
+  a declared per-inlet bound on superseded-but-unfenced epochs whose eviction is L6's
+  duplicate ceiling, never a suppression.
   - `dead` is the dead-lane set 93 I-22 already needs; it shares computenet-kxdjx's snapshot
     gap and G-42's unbounded growth (22:116-122). **[declared]** It is capped, oldest first;
     an evicted dead epoch's straggler is then disposed, not fenced — a duplicate, never an
@@ -538,15 +551,16 @@ require of that transaction; step numbers in brackets are COH §3.2's.
   evicted while an old sender can still retransmit may be re-disposed once — a duplicate,
   the direction `[24-DUR-08]`'s cap chose (24:1450-1456).
 - **Pull ids** keep today's cap and loss mode (§5.4).
-- **Live entries are never evicted**; they are bounded by live upstream lanes.
+- **Live entries are never evicted** except under the declared bound above; they are bounded
+  by live upstream lanes plus unfenced superseded epochs.
 - **Retained output** is released only by acknowledgement or by an explicit, reported
   disposition (§5.8).
 
 ### 5.8 Acceptance, acknowledgement, retention and the wire
 
-**Acknowledgement levels [decided].** A `DeliveryAck(epoch, lane, seq, level, pulls)` is a
-protocol-plane message (null context, outside the wave domain, 22:36-38) flowing upstream.
-It reports the highest level the receiver has reached for every position up to `seq`, on
+**Acknowledgement levels [decided].** A `DeliveryAck(epoch, lane, recipient, scope, seqs,
+level, pulls)` is a protocol-plane message (null context, outside the wave domain, 22:36-38)
+flowing upstream. It reports a level the receiver has reached for the listed positions, on
 one ordered scale (this is the one scale for both notes; COH's `accept` returns it):
 
 - `HELD` — in the receiver's volatile custody. Survives the sender's crash, not the
@@ -559,8 +573,15 @@ one ordered scale (this is the one scale for both notes; COH's `accept` returns 
   will dispose of it. For a `SYNCHRONOUS` stream, `APPENDED = STABLE`.
 - `DISPOSED` — its terminal disposition (§5.3) is `STABLE`; `disposed` has passed it.
 
-On a dense lane the receiver never acknowledges past a gap. `pulls` lists accepted pull ids
-individually.
+**Acknowledgement and retention are keyed by `(epoch, lane, recipient, scope)`** — recipient
+the receiving inlet's address (an instance, for a replica set; a shard, behind a router),
+scope `stable`/`R` during a flip (§5.6), otherwise none. One lane can feed several recipients
+(an ingress lane, a set lane, a boundary lane), so a lane-wide cursor would let one
+recipient's ack release another's frame. `seqs` is a cumulative high-water (`≤ s`) only on a
+lane **dense for that recipient** (every `seq` of the lane goes to it: an unfiltered lane, or a
+set lane at a Total-coverage instance), and there the receiver never acknowledges past a gap.
+Everywhere else `seqs` is an explicit list of intervals, each naming positions the recipient
+actually holds; `O` releases exactly those. `pulls` lists accepted pull ids individually.
 
 **Required level, negotiated per link [decided].** At link time the sender declares the
 level it requires and the receiver the maximum it can give (`PositionsAccept` carries it on
@@ -582,22 +603,28 @@ required level.
   unless the required level exceeds the returned one; it then retains until the receiver's
   stream reports `stableThrough` past the record.
 
-**Retention: persist before transmit [decided].** On an asynchronous segment the sender's
-`O` layer retains every positioned frame above the acknowledged position, and every
-unacknowledged pull frame:
+**Retention: stable before transmit [decided].** On an asynchronous segment the sender's
+`O` layer retains, per recipient, every positioned frame and pull frame that recipient has
+not yet acknowledged at the required level:
 
-- **Before handing a frame to the transport**, `O` appends `Retained(position, frame)` to
-  the sender's `D` (at least `APPENDED`). That one append also carries the lane counter's
-  advance, so recovery restores the counter as the maximum of the checkpointed counter and
-  the highest retained `seq`. On a `SYNCHRONOUS` stream a crash after transmit therefore
-  never leaves a frame that neither side holds. On a `BATCHED` stream the record may be lost
-  in an unsynced tail; the sender is then re-created with a `TAIL` gap and takes succession
-  (COH §3.8), minting a fresh epoch, so the lost position is never re-issued for different
-  content under its old epoch.
+- **A frame is transmitted only once its determining record is `STABLE`.** `O` appends
+  `Retained(position, frame)` to the sender's `D` and hands the frame to the transport only
+  after `stableThrough` has passed that record. On a `SYNCHRONOUS` stream that is at once; on
+  a `BATCHED` stream the frame waits for the next group sync (latency up to the sync
+  interval, no extra sync). The record also carries the lane counter's advance, so recovery
+  restores the counter as the maximum of the checkpointed counter and the highest retained
+  `seq`. A crash at any point therefore never leaves a transmitted frame that neither side
+  holds; a `TAIL` gap (COH §3.8) loses only frames no receiver has seen, and the sender's
+  upstreams still retain the inputs behind them, which they released only at `STABLE`.
 - **Exception**: a sender that declares replay determinism (COH F9) may skip the per-frame
-  append. Its `D` checkpoint captures the retained set, and between checkpoints its journal
-  tail re-derives the same frames with the same positions (P2). This is per-cell
-  durability's condition 3 (93 R8): deterministic, or log the output.
+  append. Its determining record is then the input record whose replay re-derives the frame
+  with the same position (P2), and the same gate applies: no transmit before that input is
+  `STABLE`. Otherwise a `TAIL`-gap succession would re-derive the frame under a fresh epoch
+  that the receiver takes as new. This is per-cell durability's condition 3 (93 R8):
+  deterministic, or log the output.
+- **Declared opt-out**: a link may transmit at `APPENDED` for latency. It then carries the
+  ceiling *a frame transmitted before the sender's sync is lost if both sides crash before
+  syncing* (L7), and it is refused into an enforcing inlet (§5.3).
 - A volatile sender's retention is volatile; its output dies with it, and its successor is a
   succession (fresh epoch), so no receiver can mistake a re-issued position for an old one.
 - On reconnect or relocation, `O` resends retained frames in order (I-P2), then resumes.
@@ -651,10 +678,20 @@ index it does not know (`nature/…/ContractDescriptor.kt:242-254`).
 - **Begin** (sender → receiver, in-band FIFO): a new protocol message
   `PositionsBegin(sourcePort, target, epoch, lane, firstSeq, preBeginCount)`, sent only after
   an Accept. From the next frame on, positions are populated.
-- Frames sent before `PositionsBegin` are unpositioned but carry the Offer. A new receiver
-  **holds** them (accepted, not disposed). The lane is FIFO and dense, so on `Begin` it
-  assigns them `firstSeq − preBeginCount … firstSeq − 1` and disposes of them in order. The
-  hold lasts one round trip.
+- Frames sent before `PositionsBegin` are unpositioned on the wire but carry the Offer. The
+  sender has already allocated their positions and retains them in `O` under the rule above;
+  only the field is unpopulated. A new receiver **holds** them (`HELD`, never acknowledged,
+  not disposed). The lane is FIFO and dense, so on `Begin` it assigns them
+  `firstSeq − preBeginCount … firstSeq − 1` and disposes of them in order. The hold lasts
+  one round trip.
+- **The hold is scoped to one transport session.** If that session ends before `Begin` —
+  sender death after `Accept`, disconnect, or a new session for the same `(sourcePort,
+  target)` arriving, which closes the old one first — the receiver resolves the hold before
+  admitting anything from a new session: at an enforcing inlet it **discards** the held
+  frames (the link was admitted only because the sender retains them, so they return,
+  positioned, by resend); at a mergeable inlet it disposes of them as legacy frames, and a
+  later positioned resend is absorbed as a convergent duplicate. Nothing held is ever
+  assigned a position it was not given by a `Begin` of its own session.
 
 The first frames in each upgrade direction:
 
@@ -673,10 +710,16 @@ is never emitted (`WC:53-67`).
 announces `(epoch, lane)` once per lane; sending only `seq` or `pull` per frame afterwards
 would cut most of the cost. To be justified by measurement.
 
-**In-band markers.** `EdgeOpen`, `EdgeClose`, `Progress`, `Stall`, `FlipFence`,
-`FlipDrained` and the negotiation messages are protocol plane and consume no `seq`;
-numbering them would bring back §5.4's hazard. They ride the lane's FIFO channel
-(13:194-198).
+**In-band markers [decided; the one definition both notes use].** `EdgeOpen`, `EdgeClose`,
+`Progress`, `Stall`, `FlipFence`, `FlipDrained` and the negotiation messages are protocol plane
+and consume no `seq`; numbering them would bring back §5.4's hazard. They are **not** on the
+management band (COH §2.4, H7): they ride the lane's FIFO channel (13:194-198) and are
+scheduled in lane order with its data (COH H8). FIFO orders acceptance only, so `FlipFence`
+and `FlipDrained` are additionally **barriers over dispositions**: the receiving term holds
+the marker in its custody behind the frames accepted ahead of it on that lane, and processes
+it only once each of them has a `STABLE` terminal disposition (§5.3); nothing behind it on
+that lane is processed first. The stall is at most one sync of the receiver's stream. The other
+markers carry no cursor change and need no barrier.
 
 ### 5.9 Relation to waves [decided]
 
@@ -687,7 +730,7 @@ Positions are strictly a second plane.
 | glitch-free completeness, per-edge watermarks | wave (unchanged) |
 | `ReBaseline` supersession, dead-lane identity | wave epoch, shared with positions |
 | merge-tag frontiers, `StateRequest.since`, gossip multipath safety | tag (unchanged) |
-| `Effectful` already-acted test (`[24-DUR-05]`) | **position**: replaces the wave-keyed `processedFrontier` for positioned frames |
+| `Effectful` already-acted test (`[24-DUR-05]`) | **position**: replaces the wave-keyed `processedFrontier` for positioned frames (conditional — M16) |
 | baseline discharge (`[24-DUR-07]`/`[24-DUR-08]`) | **position** (`pull` id) |
 | duplicate absorption at non-idempotent durable inlets; acknowledgement, retention, handoff | **position** (new) |
 
@@ -723,19 +766,19 @@ enforcing inlets, never reordering a lane, carrying every merged position.
 | suspend / resume, drain | C | unchanged; parked frames keep positions | unchanged; nothing advances while parked | nothing |
 | migrate | C | lane counters and `O`'s retained frames ride the capsule | rides with the inlet (I-P4); fixes the 8g7kg migrate half; the source is durably fenced before the target activates, so two locations never admit at once (COH H4) | nothing |
 | durable recovery | C (`OutletWaveState.kt`) | restored; replay re-issues the same `seq`; retained output restored | restored; own log first (I-P2) | nothing |
-| RESTART, durable | **conditional — M11.** 31:127-130 and 93 R9 (93:2867-2870) restore the checkpoint and replay the tail (C); 23:209-213 and 93 I-22 R6 (93:8416) forbid re-driving the invocations that produced state. Under M11's recommendation (c, exclusive-barrier checkpoints) it is C; **until M11 is decided it is S**, as the code does today (`MH:2006-2014` mints fresh on every RESTART) | C: as durable recovery, the tail replayed with its original positions. S: as non-durable RESTART | C: as durable recovery; the failing frame is skipped by a logged `Skipped(position)`, which advances `disposed`. S: as non-durable RESTART | C: nothing. S: `ReBaseline` |
+| RESTART, durable | **conditional — M11.** 31:127-130 and 93 R9 (93:2867-2870) restore the checkpoint and replay the tail (C); 23:209-213 and 93 I-22 R6 (93:8416) forbid re-driving the invocations that produced state. Under M11's recommendation (c) it is C only for a term with no inlet that accepts an exclusive payload (COH §2.4), S otherwise; **until M11 is decided it is S**, as the code does today (`MH:2006-2014` mints fresh on every RESTART) | C: as durable recovery, the tail replayed with its original positions. S: as non-durable RESTART | C: as durable recovery; the failing frame is skipped by a logged `Skipped(position)`, which advances `disposed`. S: as non-durable RESTART | C: nothing. S: `ReBaseline` |
 | RESTART, non-durable | S (`MH:2006-2020`) | fresh epoch | `applied` reset with inner state; `disposed`, `pullDischarged` kept (outer `X`) | `ReBaseline`. Re-running the inbound handshake: M14 |
 | replica spawn | S (new instance, new refs) | fresh | inbound: joins the set lanes (§3.2) at the next position it receives; `received` and follower retention start there (COH §3.1); catch-up as today | `EdgeOpen` |
 | replica leave | — | lanes closed | entries closed, then LRU | `EdgeClose`; a crash is reported, and retained output follows §5.8 |
 | T0/T1 promotion | C | promotion replaces only the leaf inside `S` (COH §3.4); `S` owns the lane counters, so they continue with no adoption and no relink | `applied` continues with the captured state; `X` (outside the swap) keeps `disposed`, `pullDischarged`, `acted` | nothing (93 I-11) |
-| T2 promotion | S | `S` mints a fresh epoch and supersedes the term's own (incumbent's) lanes, which fixes computenet-lzfr0 by construction (COH §3.4) | fresh `applied`. `disposed`, `pullDischarged`, `acted` follow COH's effect-identity check (F11, §3.4): kept for equal declared identities; for a different or undeclared identity of an `Effectful` side, the swap is vetoed unless the request declares `effectFrom = COMMIT`, and then `X` restarts at the current `disposed` frontier, never empty | `ReBaseline` |
+| T2 promotion | S | `S` mints a fresh epoch and supersedes the term's own (incumbent's) lanes, which fixes computenet-lzfr0 by construction (COH §3.4) | fresh `applied`. `disposed`, `pullDischarged`, `acted` follow COH's effect-identity check (F11, §3.4): kept for equal declared identities backed by the candidate's compatibility assertion; for a different or undeclared identity of an `Effectful` side, the swap is vetoed unless the request declares `effectFrom = COMMIT`, and then `X` restarts at the current `disposed` frontier, never empty | `ReBaseline` |
 | repartition | per-range C | router: none (forwarder) | §5.6: scoped cursors at both shards, merge at `FlipDrained` [conditional — M6]; transaction per COH §3.2 | `FlipFence`, `FlipDrained` |
 | link / late join | new lane | starts above `laneFloor` | new entry on first frame; catch-up is a pull baseline | `EdgeOpen` |
 | unlink | — | counter kept; retention per §5.8 | entry closed | `EdgeClose` |
 | relink of the same pair | C of the lane | resumes | resumes | `EdgeOpen` |
 | compacted-recovery re-handshake (`ApplyContext.kt:138-149`) | C | restored, never re-created | restored | today: catch-up on every link (computenet-n2jwi); M12 |
-| wire reconnect, epochs unchanged | C | negotiation re-runs (§5.8), then resend above the ack | duplicates dropped | `PositionsAccept`/`PositionsBegin` |
-| wire reconnect after volatile peer loss | S | fresh epoch | old epoch retired on `supersede=true`, or closed (§5.7) | `ReBaseline` / death report |
+| wire reconnect, epochs unchanged | C | negotiation re-runs (§5.8), then resend of every retained, unacknowledged frame per recipient | an unresolved pre-`Begin` hold is resolved first (§5.8); duplicates dropped | `PositionsAccept`/`PositionsBegin` |
+| wire reconnect after volatile peer loss | S | fresh epoch | old epoch retired on `supersede=true`; kept live on `supersede=false` (§5.7) | `ReBaseline` / death report |
 
 ---
 
@@ -749,7 +792,7 @@ enforcing inlets, never reordering a lane, carrying every merged position.
 | L4 | `Effectful` + `Stateful` in one cell (`concord/corpus/DISPUTES.md:1232`) | **Not solved.** `applied` and `disposed` state the problem precisely; a wrapper cannot separate an effect buried in a handler. Splitting the cell remains the recommendation. |
 | L5 | Act→advance window (`[24-DUR-09]`); external-idempotency ceiling (93 I-7) | **[declared]** At most one duplicate act per crash. |
 | L6 | Bounded GC (`dead`, `closed`, `pullDischarged` caps) | **[declared]** The loss mode is a duplicate, never a suppression. |
-| L7 | Async segments without durable acknowledgement; volatile receivers | **[declared]** Convergence-only (93 R7); refused for non-idempotent durable inlets. A volatile receiver can lose `HELD` frames on its own crash. |
+| L7 | Async segments without durable acknowledgement; volatile receivers; links that transmit at `APPENDED` | **[declared]** Convergence-only (93 R7); refused for enforcing inlets. A volatile receiver can lose `HELD` frames on its own crash; an `APPENDED`-transmit link loses a frame if both ends crash before syncing. |
 | L8 | Repartition of an `Effectful` range across a crash inside the flip | **[declared]** Unsupported until the router's flip state is durable (computenet-d2lue; M6). |
 | L9 | No consistent cut | **[declared]** Positions make "downstream input ≤ upstream output" checkable per link; they do not enforce it. |
 | L10 | Gaps on non-dense lanes (filtered, ingress) | **[declared]** Not detectable; loss detection there relies on a reliable, ordered transport. |
@@ -791,15 +834,21 @@ enforcing inlets, never reordering a lane, carrying every merged position.
   shall not dispose of the delivery, shall report the gap, and shall not acknowledge past it.
 - When a cell recovers by continuation, the cell shall admit no delivery other than its own
   logged tail until that tail has been replayed.
-- Before an asynchronous sender that does not declare replay determinism transmits a
-  positioned delivery, the sender shall durably record it as retained.
+- Before an asynchronous sender transmits a positioned delivery toward an enforcing inlet,
+  the sender shall have stably recorded either the delivery as retained or, if it declares
+  replay determinism, the input whose replay re-derives it.
+- When a receiver acknowledges deliveries, the acknowledgement shall name the recipient and
+  frontier scope, and shall be cumulative only on a lane on which every position goes to that
+  recipient.
 - While a retained delivery is unacknowledged at the link's required level, the sender
   shall keep it across unlink, reconnect, relocation and the receiver's death, and shall
   release it only on such an acknowledgement or by a reported dead-letter when the receiver
   ref is retired or the link is unlinked with `discard`.
 - If an inlet receives a `ReBaseline` with `supersede = true` naming an epoch, then the inlet
   shall fence that epoch's later deliveries; a `ReBaseline` with `supersede = false` shall
-  fence nothing.
+  fence nothing and shall leave that epoch's entries live.
+- When a lane delivers a `FlipFence` or `FlipDrained` marker, the receiver shall not process
+  it until every delivery accepted ahead of it on that lane has a stable terminal disposition.
 - While the host or a `Suspendable` layer coalesces queued deliveries, it shall coalesce
   only into inlets that do not enforce dedup, shall not reorder any lane, and shall carry every merged position.
 
@@ -821,7 +870,8 @@ this design works under either answer to each, except where noted.
   ordinary catch-up for mergeable ones; fallback (a): keep both rules and refuse
   repartition of `Effectful` ranges. §5.6 and §5.8 "Router segments" assume (c).
 - **M11 — durable RESTART** (93 R9 versus 23 / 93 I-22 R6). §7's durable-RESTART row is
-  continuation only under M11 (c); until decided it is succession.
+  continuation only under M11 (c), and then only for terms that accept no exclusive payload;
+  until decided it is succession.
 - **M9 — PN-17's exactly-once claim.** The replica-set lanes of §3.2 are its precondition.
 - **M1** (`Effectful` × `Stateful`) is L4 here; **M2**, **M5** (per-term mobility and
   supervision) are why the frontier rides the capsule (§5.6 "Whole transfer").
@@ -912,7 +962,7 @@ idempotency marker beside it.
 8. **Dense-lane gap discipline** and diagnostics.
 9. **Wire**: the `natures` Offer, `PositionsAccept`, `PositionsBegin` and retroactive
    positioning; legacy policy (M13); `DeliveryAck` with the four levels and per-link required
-   level; `O` retention with persist-before-transmit and the unlink/death dispositions;
+   level; `O` retention with stable-before-transmit and the unlink/death dispositions;
    link-time refusals. Lands with COH migration step 12 (`O`) and needs its step 3 (H1
    levels).
 10. **Partitioned handoff**, after computenet-d2lue and M6, as part of COH migration step 8
@@ -973,11 +1023,13 @@ proves and the failure it must catch.
 | `EffectfulRepartitionRefireTest.fenceSettlesOldOwnerBeforeShed` | step 2 | a flip completes with A still holding undisposed R-frames |
 | `EffectfulRepartitionRefireTest.transferRecordDoesNotAct` / `.flipBufferKeepsContext` / `.scopedEntriesMergeAtFlipDrained` | steps 3, 4, 6 | moved-in state fires; slice loses its position; scoped entries outlive the flip |
 | `EffectfulRepartitionRefireTest.abortReleasesParkedToLoserAgainstRScope` (A's stable cursor already above `p_begin`) | step 4, loser side | a released R-slice dropped against A's stable cursor |
+| `EffectfulRepartitionRefireTest.fenceWaitsForQueuedRSlice` / `.drainMarkerWaitsForQueuedReleasedSlice` (marker accepted while a slice is still queued) | barrier markers | a queued slice dropped against a frozen or folded cursor |
+| `EffectfulRepartitionRefireTest.releaseCursorAdvancesOnlyOnStableAck` (both crash after release, before B syncs) | step 6 | the released slice lost; release resumes past it |
 | `EffectfulRepartitionCrashMidFlipTest` (with d2lue; COH's `PartitionSetFlipRecoveryTest` drives the crash points) | step 8 | parked loss or double act |
 | `ReplicaSetLaneTest.instancesShareOnePositionPerLogicalDelivery` / `.partialAcceptanceKeepsSeqAndRetainsForRefusedInstance` | §3.2 set lanes | instances' positions differ; a `seq` returned after another instance accepted it |
 | `RestartFrontierSplitTest.nonDurableRestartKeepsDisposedResetsApplied` | §5.1 split | re-fire after RESTART, or no catch-up |
 | `PromotionPositionTest.t1CandidateContinuesLanes` / `.t2DifferentEffectIdentityVetoes` | §7 | dedup break across the swap; inherited acts for a different sink |
-| `PullMergeRebaselineTest.oldEpochStragglerStillMerged` | §5.7 | a `supersede=false` straggler fenced |
+| `PullMergeRebaselineTest.oldEpochStragglerStillMerged` / `.supersedeFalseLaneStaysLive` | §5.7 | a `supersede=false` straggler fenced; its entry evicted as closed and a retransmit re-acted |
 | `DeliveryFrontierGcTest.supersedeTrueFencesDeadEpoch` / `.evictionOnlyDuplicatesNeverSuppresses` | §5.7 | straggler acted; eviction suppresses |
 
 **Wire, acknowledgement and retention**
@@ -987,9 +1039,12 @@ proves and the failure it must catch.
 | `WirePositionCompatTest.newSenderOldReceiverDecodesOffer` (pattern of `StallNoticeWireCompatTest`, old codec build) | §5.8 new → old | old decode throws |
 | `WirePositionCompatTest.oldSenderNewReceiverNeverReceivesNewType` | §5.8 old → new | a `PositionsAccept` sent to a peer that did not offer |
 | `WirePositionCompatTest.preBeginFramesPositionedRetroactively` | §5.8 new → new | held frames disposed out of order or with wrong positions |
+| `WirePositionCompatTest.sessionEndsBeforeBeginResolvesHold` (sender dies after `Accept`; reordered reconnect) | §5.8 session-scoped hold | held frames stranded, or positioned by another session's `Begin` |
 | `WirePositionCompatTest.nonIdempotentDurableRefusedToLegacySender` | §5.8 | silent fallback claiming dedup |
 | `WirePositionParityTest` (in-process vs two-host `:wire`) | P10 | divergent suppression counts |
-| `DeliveryAckRetentionTest.crashAfterTransmitBeforeCheckpointResends` (non-deterministic sender) | persist-before-transmit | a frame neither side holds |
+| `DeliveryAckRetentionTest.crashAfterTransmitBeforeCheckpointResends` (non-deterministic sender) | stable-before-transmit | a frame neither side holds |
+| `DeliveryAckRetentionTest.batchedSenderTransmitsOnlyStableRetained` / `.deterministicSenderWaitsForStableInput` (both ends killed before sync) | STABLE-gated transmit | a transmitted frame lost; one re-derived under a fresh epoch acted twice |
+| `DeliveryAckRetentionTest.filteredLaneAckReleasesOnlyThatRecipient` (one ingress lane, seq 1 and 3 to A, 2 to B) | ack keyed by recipient | B's seq 2 released by A's ack |
 | `DeliveryAckRetentionTest.heldAckDoesNotReleaseDurableLink` / `.appendedAckReleasesOnlyWithDeclaredBatchedCeiling` | ack levels | release on a volatile or unsynced acceptance |
 | `DeliveryAckRetentionTest.deadReceiverRecreatedBySuccessionStillReceivesRetained` / `.succeedingSenderResendsRetainedBeforeReBaseline` | §5.8 dispositions | retained frames dead-lettered at a receiver succession; resent frames fenced as dead-epoch stragglers |
 | `DeliveryAckRetentionTest.unlinkUnreachableKeepsRetention` / `.retiredReceiverDeadLettersWithReport` | §5.8 dispositions | retained frames dropped at unlink or death |

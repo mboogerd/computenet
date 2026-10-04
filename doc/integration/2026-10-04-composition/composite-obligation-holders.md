@@ -29,7 +29,7 @@ this directory.
 and their order, the formation rules (F1-F11), the composites, the flip and relocation
 *transactions* (records, prepare/commit, crash recovery), and the host contract (H1-H9, E1-E3).
 PLP owns, and this note refers to: delivery positions, lanes (including replica-set lanes), the
-receiver cursors, acknowledgement levels, and `O`'s retention rules (persist-before-transmit and
+receiver cursors, acknowledgement levels, and `O`'s retention rules (stable-before-transmit and
 the unlink/death table). Maintainer decisions use one numbering across both notes, **M1-M16**:
 M1-M11 are argued in §7 here, M12-M16 in PLP §10.
 
@@ -88,7 +88,7 @@ unchanged:
   a flip, `scoped` (PLP §5.1). Dedup is against `disposed` (at `X`) or `applied` (inner). A
   follower's authority-suppressed delivery advances `received` only (PLP §2);
 - the acknowledgement levels `HELD < APPENDED < STABLE < DISPOSED`, the per-link required
-  level, persist-before-transmit and the unlink/death table (PLP §5.8);
+  level, stable-before-transmit and the unlink/death table (PLP §5.8);
 - the frontier **scopes** `stable` and `R` kept while a repartition is open, starting the `R`
   scope at the router's recorded `p_begin` and folded at `FlipDrained` (PLP §5.6).
 
@@ -142,7 +142,7 @@ rules are stated over properties, not class names.
 - **G-17** (MH:2260-2272) checks at spawn that every declared port is registered under its property
   name.
 
-### 2.3 The `Term` seam (decided)
+### 2.3 The `Term` seam (decided; a term-owned `Durable` layer is conditional on M3/M4)
 
 ```kotlin
 interface Term : Cell {
@@ -182,7 +182,7 @@ data class Capsule(
     val frontiers: Map<PortName, DeliveryFrontier>?,  // X, per inlet: keyed (epoch, lane), plus scope during a flip (PLP §5.1)
     val fence: Fence?,                                // F: (epoch, writer)
     val cursors: Map<String, Serializable>,           // durable-input cursors
-    val outbox: Map<LaneKey, List<Held>>,             // O: retained outbound frames per lane, with required ack level
+    val outbox: Map<RetentionKey, List<Held>>,        // O: retained frames per (epoch, lane, recipient, scope), PLP §5.8
     val charges: Map<ChargeId, ChargeState>,          // open budget charges (§3.7)
     val layerPrivate: Map<LayerId, Serializable>,
     val children: Map<CellRef, Capsule>,              // composites only
@@ -224,7 +224,7 @@ forwarding a derived signal inward) or forwards it unchanged; a signal unhandled
 refused with `UnhandledControl(signal, termStack)`. Signals are management-band frames, as
 `SuspensionProtocol` (`control/Suspension.kt`) already is: "host control is just ports" (31:443-445).
 
-**Faults travel outward (decided).** `Supervised` catches a leaf fault and applies its policy. For
+**Faults travel outward (decided; `S` as a layer that travels with the term is conditional on M5).** `Supervised` catches a leaf fault and applies its policy. For
 RESTART it sends `RESTART` to its own term's `control` inlet, so the outermost restorer handles it.
 
 - **Without `Durable`, RESTART is a succession**, as MH:1997-2022 performs it: bump the generation,
@@ -237,14 +237,17 @@ RESTART it sends `RESTART` to its own term's `control` inlet, so the outermost r
   restore the latest checkpoint and replay the journal tail (31:127-130; 93:2867-2870); 23 and 93
   I-22 R6 require that RESTART "never re-drives the invocations that produced" state, so an `Owned`
   or `Leased` payload is never re-consumed (23:209-213; 93:8416; MH:1998-2000). Checkpoint-plus-tail
-  replay re-drives exactly those invocations. The recommended rule (M11): `D` takes an *exclusive
-  barrier* checkpoint after every delivery that consumed or released an exclusive payload, so a
-  RESTART tail never contains a consumed exclusive. The tail is replayed with its original positions
-  (downstream dedup by position absorbs re-emissions; F9 keeps them identical); the failing frame is
-  skipped by a logged `Skipped(position)` and its exclusive payload dead-lettered and discharged. A
-  second fault within the policy window escalates to succession. Until M11 is decided, durable
-  RESTART is a succession like the non-durable one, which keeps R6 and loses the tail's state
-  (declared in §6).
+  replay re-drives exactly those invocations. The recommended rule (M11 (c)): a durable RESTART
+  is a continuation **only for a term no inlet of which can accept an `Owned` or `Leased` payload
+  and which declares no `LeaseHolding` (F10)**, read from the manifest. Its tail holds no exclusive
+  to re-consume, so R6's purpose holds while R9 replays. The tail is replayed with its original
+  positions (downstream dedup by position absorbs re-emissions; F9 keeps them identical) and the
+  failing frame is skipped by a logged `Skipped(position)`. A second fault within the policy
+  window escalates to succession. A term that can consume an exclusive keeps durable RESTART as a
+  succession: a checkpoint taken after the consuming delivery leaves a window in which the tail
+  still holds it, and nothing makes consumption and its durable disposition one recoverable step
+  (**limitation**, §6). Until M11 is decided, every durable RESTART is a succession like the
+  non-durable one, which keeps R6 and loses the tail's state (§6).
 
 **Who sends signals (decided).** The management system sends `SUSPEND`, `DRAIN`, `CAPTURE`,
 `PROMOTE`, `REPARTITION` and `DESIGNATE` (the spec names "the placement/economic layer (or an
@@ -268,7 +271,7 @@ the host may decline to run a term, but the inbox is the term's custody.
 `P < A` mirrors the `ADMIT < ALIGN` tier order (`port/InletPolicy.kt:34`): the canonical stack is the
 per-port chain lifted to the term.
 
-### 2.6 Formation rules (decided)
+### 2.6 Formation rules (decided; where a rule places `D` per term, conditional on M3/M4 — under their fallback `D` adapts `journalFor(cellRef)` and the rules still apply)
 
 A formation check runs over `TermManifest` at instantiate, at link time and at every stack edit. It
 refuses with `RefusedComposition(rule, stack)`, records which layer holds each obligation, and
@@ -399,15 +402,16 @@ same position. Without this, instances' lanes differ and no frontier can be comp
 - Each follower **retains** every suppressed frame above the folded disposed frontier: its `D` does
   not truncate them, and its capsule carries them. Retention is released as the leader's published
   frontier passes them.
-- **Takeover.** A member may be designated, or have its claim admitted, only if its retention is
-  gapless from the folded disposed frontier upward on every logical lane (dense-lane check, PLP
-  §5.3; a set lane is dense at an instance only under Total interest, so under partial overlap
-  this check is **open**, PLP §3.2); otherwise it first fetches the missing frames from a peer's retention, or the set reports
-  and waits. The new leader then acts, in lane order, on every retained frame above the folded
-  frontier.
+- **Takeover.** A member may be designated, or have its claim admitted, only if it covers the
+  effect inlet's whole interest (Total), so every set lane is dense at it (PLP §3.2), and its
+  retention is gapless from the folded disposed frontier upward on every logical lane (PLP §5.3);
+  otherwise it first fetches the missing frames from a peer's retention, or the set reports and
+  waits. **Under partial overlap takeover is refused**: a follower that saw seq 5 and 8 cannot
+  tell whether 6-7 lay outside its interest or were lost, and no coverage certificate exists
+  (**open**). The new leader acts, in lane order, on every retained frame above the folded frontier.
 
-This yields no omission: a position the old leader did not provably dispose of is acted by the
-successor. It does not yield exactly-once: a position the old leader acted on but had not yet
+**Conditional on M9.** For a Total-coverage successor this yields no omission: a position the old
+leader did not provably dispose of is acted by the successor. It does not yield exactly-once: a position the old leader acted on but had not yet
 published is acted again. **Limitation:** at most one duplicate per unpublished position per
 failover, the same direction 24:1503-1510 decides (a duplicate is loud and bounded; a suppression is
 silent). PN-17's "exactly once per logical delta across a handoff" (31:408-410) is therefore not met
@@ -451,7 +455,7 @@ so a re-created member cannot regress its fence.
 | Member SUSPEND, migrate, durable RESTART (M11) | continuation: `instanceId`, leadership, fence, frontiers and retention travel in the capsule (93:9744-9745); the old execution is fenced before the new one is released (H4) |
 | Member RESTART without `D` | succession of data, rebuilt by catch-up from the most advanced reachable peer (42:873-880); a leader's unshipped writes are lost (42:878-880). Its disposed frontier is re-learned from the fold; its retention is gone, so it is not eligible for takeover until re-filled. |
 | Member dies | survivors report: the row freezes, a recoverable `Stall` is raised at link ends (§3.8), the set waits for `DESIGNATE` or an admitted claim |
-| Member joins | adopts the fold, starts retaining from its first received position, announces a fresh lane; eligible for takeover once its retention is gapless above the folded frontier |
+| Member joins | adopts the fold, starts retaining from its first received position, announces a fresh lane; eligible for takeover once it covers the whole interest and its retention is gapless above the folded frontier |
 | Set-wide promotion | rolling, one instance at a time, each with its own `Swap` (§3.4); T2 refused (§2.6) |
 
 **Routing to the leader.** The fold publishes a versioned route entry (logical id → instance ref, at
@@ -494,8 +498,8 @@ transaction that carries those cursors; PLP §5.6 gives the exactness argument.
 | R3 | `Settled(tx)` | when the losing shard A has answered `FlipSettled(tx)` (A logs `SettledFor(tx)` in its own `D` first) |
 | R4 | `Prepared(tx)` (in B's `D`) | the gaining shard B has staged the range-handoff record |
 | R5 | `FlipDecision(tx, COMMIT \| ABORT)` | the commit point; persisted before any `COMMIT` or `SHED` is sent |
-| R6 | `Released(tx, n)` | the per-command release cursor, advanced as parked frames are released in order |
-| R7 | `FlipEnd(tx)` | after release and the `FlipDrained(tx)` marker; parked records are then truncatable |
+| R6 | `Released(tx, n)` | the release cursor: advanced to `n` only when the receiving shard has acknowledged every released frame through `n` at `STABLE` for its `(lane, shard, R)` key (PLP §5.8), not when a frame is sent |
+| R7 | `FlipEnd(tx)` | when both shards have acknowledged `FlipDrained(tx)` (each logged `DrainedFor(tx)`); only then are the R2 records truncatable |
 
 **The flip, step by step.**
 1. **PRECHECK.** Veto if A or B is suspended or mid-transfer, if A is unreachable, or (for an
@@ -504,10 +508,12 @@ transaction that carries those cursors; PLP §5.6 gives the exactness argument.
 3. **Settle.** Send `SETTLE(tx, R, {lane → p_begin})` to A **in band**, as the `FlipFence(tx)`
    marker on each router-to-A path: FIFO places it behind every R-delivery A will ever receive.
    (It cannot travel on the management band, which preempts data, and A cannot settle from
-   `p_begin` alone, because its boundary lanes are filtered and non-dense; PLP §5.6 step 2.) On
-   the fence A freezes its `R` scope at `p_begin`, and answers `FlipSettled(tx)` once everything
-   ahead of the fence has a `STABLE` terminal disposition in A's `D` (acted, absorbed, refused or
-   dead-lettered). Idempotent: a repeat is answered from `SettledFor(tx)`. Log R3.
+   `p_begin` alone, because its boundary lanes are filtered and non-dense; PLP §5.6 step 2.) The
+   fence is a barrier over dispositions, scheduled as PLP §5.8 "In-band markers" defines: A
+   processes it only once everything accepted ahead of it on the lane has a `STABLE` terminal
+   disposition in A's `D` (acted, absorbed, refused or dead-lettered); then it freezes its `R`
+   scope at `p_begin`, logs `SettledFor(tx)` and answers `FlipSettled(tx)`. Idempotent: a repeat
+   is answered from `SettledFor(tx)`. Log R3.
 4. **Prepare.** Send `PREPARE(tx, handoff)` to B, with `handoff = (R, state slice, {lane →
    p_begin}, routingEpoch)`, on B's control plane (`assignInlet`), never as a catch-up into a data
    inlet. B logs `Prepared(tx)` and stages; it does not act. For a replicated B, PREPARE needs the
@@ -516,13 +522,16 @@ transaction that carries those cursors; PLP §5.6 gives the exactness argument.
 6. **Commit.** Send `COMMIT(tx)` to B: B logs `Committed(tx)`, installs its `R` scope at `p_begin` per
    lane (its existing cursor becomes the `stable` scope), and merges the state slice **without acting on it** (it continues A's acts; it
    is not new input). Send `SHED(tx)` to A: A logs it and narrows its interest. Both idempotent.
-7. **Flip and release.** Flip the table (derived from R1+R5), then release parked frames in order to
-   B, advancing R6. B checks each against its `R` scope. Then send `FlipDrained(tx)` on each
-   router-to-shard path; FIFO places it after the parked tail. On it, each shard folds its scopes
-   into the per-lane frontier as `max` (exact by PLP §5.6 step 6). Log R7.
+7. **Flip and release.** Once B has acknowledged `Committed(tx)` — so its `R` scope exists before any
+   R-slice reaches it — flip the table (derived from R1+R5), then release parked frames in order to
+   B through the router's `O`, before new traffic on each lane; B checks each against its `R`
+   scope; R6 advances on B's `STABLE` acknowledgement. Then send `FlipDrained(tx)` on each
+   router-to-shard path. It is a barrier like the fence: each shard processes it only after every
+   frame accepted ahead of it is stably disposed, folds its scopes into the per-lane frontier as
+   `max` (exact by PLP §5.6 step 6), logs `DrainedFor(tx)` and acknowledges. Log R7 when both have.
 8. **Abort** (decision ABORT, only before R5): `ABORT(tx)` to B (no-op if unknown), `UNSETTLE(tx)` to
    A, then release parked frames in order to A under the old table, A checking them against its
-   `R` scope (frozen at `p_begin`), then `FlipDrained(tx)` and R7.
+   `R` scope (frozen at `p_begin`), with R6 and `FlipDrained(tx)` acknowledged as in step 7, then R7.
 9. **Failure while undecided.** If A cannot settle or B cannot prepare, the range stays parked and a
    stall is reported for that range; unrelated ranges flow. Management chooses abort or wait.
 
@@ -534,8 +543,9 @@ transaction that carries those cursors; PLP §5.6 gives the exactness argument.
 | R1/R2 | re-sending the in-band `SETTLE` as `FlipFence(tx)` (idempotent); parked frames recovered from R2 | A answers from `SettledFor(tx)` if present |
 | R3 | re-sending `PREPARE` | B answers from `Prepared(tx)` if present |
 | R4, before R5 | deciding afresh (commit or abort), then R5 | B is in doubt: holds the staged handoff, acts on nothing in R |
-| R5 | re-sending `COMMIT`/`SHED` (or `ABORT`/`UNSETTLE`), then releasing from the R6 cursor | each answers from its record; a re-released frame is a duplicate in its scope and is dropped where enforced, re-absorbed where idempotent |
-| R6(n) | releasing from n+1 | as above |
+| R5 | re-sending `COMMIT`/`SHED` (or `ABORT`/`UNSETTLE`), then, once `Committed` is acknowledged, releasing from the R6 cursor | each answers from its record; a re-released frame is a duplicate in its scope and is dropped where enforced, re-absorbed where idempotent |
+| R6(n) | releasing from n+1 (frames sent but not yet stably acknowledged are re-sent) | as above; a frame B lost in its own unsynced tail is received again |
+| release complete, before R7 | re-sending `FlipDrained(tx)` | a shard that logged `DrainedFor(tx)` answers from it; R2 is still held |
 | R7 | nothing | – |
 
 **Mode changes.** Composite migrate: one capture (router capsule with its ledger, plus children's
@@ -564,7 +574,7 @@ dedup still applies but cannot suppress anything those shards need.
 join's capsule (the fix for computenet-5jhg3). (2) Region-atomic suspension (34:163-169). (3) The
 contagious veto (34:169-171). The region holds (2), (3) and its membership.
 
-**Realisation (decided).** The graph applier declares the region at formation: the join plus its
+**Realisation (conditional on M7).** The graph applier declares the region at formation: the join plus its
 transitive upstream contributors, bounded by further glitch-free joins (34:164-166). The coordinator
 runs on the join's host; a topology edit that changes the cone re-forms the region in the same
 management turn. This replaces `suspensionRegionOf` and its `hasFrontierPolicy`/`is NonSuspendable`
@@ -591,7 +601,7 @@ and re-established by frontier discovery and catch-up.
 
 ### 3.4 Promotion swap (`Swap`, a transient two-leaf composite)
 
-**Realisation (decided). Promotion replaces only the leaf.** `PROMOTE(candidate, tier)` is handled by
+**Realisation (decided; logging the swap window is conditional on M8). Promotion replaces only the leaf.** `PROMOTE(candidate, tier)` is handled by
 `S`, which inserts `Swap(incumbent, candidate)` between itself and the leaf. `D`'s stream continues,
 `F` keeps its epoch, `P` provides the gate, and the term's ports do not change, so there is no relink
 (today's `rebind` loop, `evolve/Evolution.kt:252-255`, disappears). For a `PartitionedCell`, each
@@ -603,16 +613,19 @@ two parts with different fates:
 - **`applied`** (what the leaf has absorbed, PLP §5.1) belongs to the leaf: under T0/T1 it
   continues with the captured state; under T2 the candidate's state is rebuilt, so it starts
   fresh.
-- **The acted history** (`disposed` and `acted` in `X`) is a fact about the world. It applies to the candidate only if the
-  candidate's declared effect identity (F11) equals the incumbent's.
+- **The acted history** (`disposed` and `acted` in `X`) is a fact about the world. It applies to the
+  candidate only if the candidate's declared effect identity (F11) equals the incumbent's **and**
+  the candidate's version carries an *effect-compatibility assertion* naming the incumbent's
+  descriptor version. Equal identity strings alone do not show that revised code performs the
+  same act; the assertion makes the author state it, per version.
 
 PRECHECK compares effect identities:
 
 | Incumbent | Candidate | Disposition |
 |---|---|---|
-| same effect identity | same | `acted` and `disposed` stay in `X`; nothing is re-acted, nothing omitted |
+| same effect identity, with the compatibility assertion | same | `acted` and `disposed` stay in `X`; nothing is re-acted, nothing omitted. Without the assertion: as "different identity" |
 | `Effectful` | different identity | **veto**, unless the request declares `effectFrom = COMMIT`: the new effect applies only to deliveries after the commit, and `X` is re-initialised to the term's current `disposed` frontier, labelled with the new identity, so no historical input is re-acted |
-| not `Effectful` | `Effectful` (adds `X`) | the new `X` starts at the term's current `disposed` frontier (never empty, which would re-act replayed history), with `effectFrom = COMMIT` implied |
+| not `Effectful` | `Effectful` (adds `X`) | the incumbent has no `X`, so no `disposed` exists. PRECHECK requires an explicit starting frontier: the incumbent's `applied` cursor (PLP §5.1; every positioned inlet tracks it) for every incident lane, captured after the drain of PREPARE and logged in the COMMIT record; the new `X` starts there, with `effectFrom = COMMIT` implied. **Veto** if any incident lane has no captured entry — an empty `X` would re-act replayed history, a guessed one would suppress unproved work |
 | `Effectful` | not `Effectful` (removes `X`) | allowed only if the candidate declares no effect; `X`'s record is retired with a logged `Discharged` |
 | either side undeclared | – | **veto** for an `Effectful` side |
 
@@ -680,9 +693,11 @@ logic" (33:42). So its holder is the **sender**: not the host, not the future ta
 **What O does with an entry is PLP §5.8's, not restated here:** the acknowledgement levels
 `HELD < APPENDED < STABLE < DISPOSED` and the per-link required level (a durable sender requires
 `STABLE` by default; a volatile receiver is admitted only with a declared per-link ceiling, the
-`ALL` gap of §3.8); synchronous acknowledgement on in-process links; **persist before transmit**
-(a `Retained` record in the sender's stream before the transport sees the frame, unless the leaf
-declares replay determinism, F9; a `TAIL`-gap loss of that record forces succession, §3.8); and
+`ALL` gap of §3.8); synchronous acknowledgement on in-process links; **stable before transmit**
+(the transport sees a frame only after its `Retained` record — or, for an F9 leaf, the input that
+re-derives it — is `STABLE`; a `BATCHED` sender waits for its group sync); acknowledgement and
+retention keyed by `(epoch, lane, recipient, scope)`, cumulative only on lanes dense for that
+recipient; and
 the **disposition table at unlink, peer death, sender relocation, retirement, `discard` and storage
 exhaustion**. In short: closing a link or a peer-death report never releases a retained frame;
 only an acknowledgement at the required level does, or a reported dead-letter (with discharge
@@ -703,9 +718,13 @@ holder's merge domain, so it needs a holder and a crash protocol.
 - **Holder.** The term layer that charges (a boundary policy at its acceptance seam, as
   `CompositeCell` charges today, `CompositeCell.kt:97`). The host hands it a ledger handle at
   instantiate (H2) and nothing else.
-- **Charge id.** `ChargeId = (term ref, delivery position, claim class, index within the handling)`.
-  It is replay-stable because positions are (PLP P2), and it is the claim's `key`.
-- **Order.** `D` appends the frame (`APPENDED`); the layer logs `ChargeIntent(id)`; calls `charge`;
+- **Charge id.** `ChargeId = (term ref, delivery position, claim site)`, where the claim site is a
+  static id the charging layer declares in its manifest and charges at most once per delivery. The
+  layer charges at acceptance, before the leaf runs, so no replay-dependent branch can change which
+  sites charge; an ordinal "index within the handling" was rejected for that reason. It is
+  replay-stable because positions are (PLP P2), and it is the claim's `key`. A frame without a
+  position (PLP §5.2 rule 8) has no stable id: it is charged unkeyed under the ceiling below.
+- **Order** (conditional on the keyed ledger below). `D` appends the frame (`APPENDED`); the layer logs `ChargeIntent(id)`; calls `charge`;
   logs `ChargeOutcome(id, Admitted | Refused)` in the same record as the delivery's outcome.
 - **Replay.** `ChargeOutcome` present: reuse it, never re-charge. `ChargeIntent` without outcome:
   re-charge with the same key. The ledger dedups if its window covers the term's replay horizon
@@ -785,21 +804,21 @@ frontier, an effect decision or a replica closure.
 
 ## 5. The host contract
 
-### 5.1 Primitives (decided)
+### 5.1 Primitives (decided; H1's per-scope streams conditional on M3/M4, H4's per-term relocation on M2)
 
 | # | Primitive | Exact behaviour |
 |---|---|---|
-| H1 | **Storage** | `open(streamId, class)` returns a stream: `append(bytes) → Pos` acknowledges *ordered acceptance* (`APPENDED`), not stability; `sync()` and `stableThrough(): Pos` report stability; `checkpoint(bytes)` truncates the tail; `read()` returns checkpoint plus tail, a prefix of the appends. Class `SYNCHRONOUS`: `append` returns after sync, so `APPENDED = STABLE`. Class `BATCHED`: `append` returns before sync (`durability/BatchedFileJournal.kt:13-16`); under a process kill, at most `syncEvery − 1` records are unsynced, but **no physical loss bound is claimed**, since page-cache loss on power failure is outside the class's control (`BatchedFileJournal.kt:37-42, 69-73`, `[KBLK-26]`). One physical log per host, logical streams per `D` scope. A **residency manifest** maps ref → (recipe, streamId, fence). |
+| H1 | **Storage** | `open(streamId, class)` returns a stream: `append(bytes) → Pos` acknowledges *ordered acceptance* (`APPENDED`), not stability; `sync()` and `stableThrough(): Pos` report stability; `checkpoint(bytes)` truncates the tail; `read()` returns checkpoint plus tail, a prefix of the appends. Class `SYNCHRONOUS`: `append` returns after sync, so `APPENDED = STABLE`. Class `BATCHED`: `append` returns before sync (`durability/BatchedFileJournal.kt:13-16`); under a process kill, at most `syncEvery − 1` records are unsynced, but **no physical loss bound is claimed**, since page-cache loss on power failure is outside the class's control (`BatchedFileJournal.kt:37-42, 69-73`, `[KBLK-26]`). One physical log per host, logical streams per `D` scope. A **residency manifest** maps ref → (recipe, streamId, fence); a synced residency record may carry opaque capsule bytes for a volatile term's relocation (H4). |
 | H2 | **Instantiate** | `instantiate(recipe, stream?)`: structural admission only (G-17 names, color, quota, spawn budget); hands the term a ledger handle and report sink; activates it; publishes its location. |
 | H3 | **Re-create** | on host restart, or for a term the host can no longer run: `recreate(ref)` from the manifest, handing back the stream and `Recreated(gap)`. A fenced entry is not re-created as a live term (H4). |
 | H4 | **Relocate** | the transfer protocol below. |
 | H5 | **Destroy** | `destroy(ref)`, only after the term has captured or refused. |
 | H6 | **Route** | deliver a frame to (ref, port) by location, local or remote, FIFO per link, by calling `accept` synchronously and returning its `Ack`. Keep versioned route entries (highest wins; republishing a version is a no-op). Refuse retired refs (`LocationRegistry.kt:794-801`) and closed or saturated intakes, leaving custody with the sender. Run structural link admission (cycle-head barrier, `FeedbackPort`). Hold no frame. |
 | H7 | **Deliver control** | deliver management-band frames to `control`, uninterpreted. |
-| H8 | **Schedule** | run terms with a non-empty inbox, on bands (management > router > data, 34:66-68) and by color; attention may decline to run a term, whose inbox stays its own. |
+| H8 | **Schedule** | run terms with a non-empty inbox, on bands (management > router > data, 34:66-68) and by color; attention may decline to run a term, whose inbox stays its own. In-band protocol markers (`FlipFence`, `FlipDrained`, `EdgeClose`, …) are not management band: they are scheduled in their lane's order with its data, and the flip markers are barriers over prior dispositions (PLP §5.8, "In-band markers"). |
 | H9 | **Report** | `Recreated(gap)` to the term; link-down to link ends. |
 
-**H4, relocation (decided).** `[33-MOVE-01]` requires no loss, no duplication and per-link FIFO
+**H4, relocation (conditional on M2; fallback: the same protocol moves a host's terms as one batch).** `[33-MOVE-01]` requires no loss, no duplication and per-link FIFO
 (33:85-88). Two live holders must be impossible across a crash of either host at any point. The
 source host coordinates; `tx` is a `TransferId` and `v` the term's next location version.
 
@@ -826,10 +845,18 @@ source host coordinates; `tx` is a `TransferId` and `v` the term's next location
 | target | 3, before `Committed` | re-created in `Prepared` state, not live; awaits the decision |
 | target | 5 | resumes as the live holder; re-publishing `v` is a no-op |
 | either | 6 | retirement and route publication are idempotent; a stale route to the source hits a closed intake, and senders re-resolve to `v` |
+| source, volatile term | 2 or 3, before 4 | fenced stub with the staged capsule; aborts by resuming from it, or proceeds to 4 — never `ALL` |
 
-A volatile term (no `D`) relocates the same way: its fence is the residency entry, so a host crash
-after step 2 cannot re-create a second live copy; a crash before step 1 completes loses the volatile
-capsule (`ALL`).
+**A volatile term (no `D`)** has no stream for step 1, so its capsule is staged in the host's
+residency storage: step 2's synced `Departing(tx, target, capsule)` record carries the capsule bytes,
+opaque to the host, and the target's synced `Prepared(tx)` carries them too. A source crash before
+that record is an ordinary volatile crash (`ALL`, nothing departed). After it, the fenced stub holds
+the capsule: on abort it resumes the term in place *from the staged capsule* (admission was fenced
+since capture, so the capsule is complete), clearing fence and bytes in one synced record before admitting, otherwise it proceeds to step 4. The target deletes
+its staged copy, synced, before admitting its first frame — a copy that outlived admission would
+resurrect a stale state under live epochs — so a target crash after that is an ordinary volatile
+crash (`ALL`, succession). The source deletes its copy at step 6. This adds one host duty to H1: a
+synced residency record may carry opaque bytes.
 
 ### 5.2 Proposed requirements
 
@@ -870,11 +897,15 @@ couplings without a disposition. T2 for `NonIdempotentCatchUp` candidates and re
 whose destinations have no witness or declared ceiling. Promotion across differing or undeclared
 effect identities without `effectFrom = COMMIT`. Removing an obligation-holding layer without
 discharge. A non-idempotent durable term downstream of a volatile term rebuilt by catch-up (a
-baseline is a state, not an event sequence).
+baseline is a state, not an event sequence). An `APPENDED`-transmit link into an enforcing inlet
+(PLP §5.8).
 
 **Vetoed dynamically.** Relocation while a lease is held. Region suspension while a member cannot
 suspend. Repartition while A or B is suspended, mid-transfer or unreachable, or for an `Effectful`
-range with only aggregate state. Takeover by a member whose retention has a gap. Continuation after
+range with only aggregate state. Takeover by a member whose retention has a gap, or that does not
+cover the effect inlet's whole interest (§3.1). Promotion that adds `X` without a captured starting
+frontier for every incident lane, or keeps acted history without the candidate's
+effect-compatibility assertion (§3.4). Continuation after
 `Recreated(UNKNOWN)`.
 
 **Declared ceilings.**
@@ -889,8 +920,8 @@ range with only aggregate state. Takeover by a member whose retention has a gap.
 | Follower retention | bounded by storage; exhaustion stalls, never drops |
 | Volatile-acknowledged links | frames acknowledged `HELD` are lost if the receiver crashes before a surviving disposition |
 | Volatile custody at a host crash | client-stub frames and unsnapshotted `Owned` are lost at most once (G-46, 31:276-280) |
-| Budget charges, until the ledger is keyed and durable | one duplicate debit per crash per in-flight charge; refunds reported, not automatic |
-| Durable RESTART until M11 | succession: the post-checkpoint tail's state is lost and rebuilt by catch-up |
+| Budget charges, until the ledger is keyed and durable; unpositioned frames always | one duplicate debit per crash per in-flight charge; refunds reported, not automatic |
+| Durable RESTART until M11, and after it for terms that can accept an exclusive payload | succession: the post-checkpoint tail's state is lost and rebuilt by catch-up |
 | Volatile producer's dead lanes | convergence-only (93:11507-11511) |
 | Independent per-term recovery | convergence, not a global cut (93:2849-2854) |
 | Cross-host region | WAIT (unbounded latency) or DEGRADE (reduced frontier) |
@@ -904,6 +935,8 @@ range with only aggregate state. Takeover by a member whose retention has a gap.
 - Re-forming a region while it is suspended.
 - Storage failure semantics for a failed group commit after `APPENDED` was returned.
 - `BudgetLedger` keyed refund and dedup horizon (§3.7).
+- A coverage certificate that would let a partial-overlap replica take over effect authority (§3.1).
+- Making exclusive consumption and its durable disposition one recoverable step (§2.4, M11).
 - **Cost.** One `accept` per mediating layer per frame is the per-message tax 93:4151-4157 warned
   against. A layer with no per-message claim should compile to a delegate inside its `D` scope (the
   I-10 green-light rule, per layer).
@@ -988,12 +1021,14 @@ semantics.
 
 **M8. The swap window is unlogged (`[53-SWAP-05]`, 53:152; 93:4584-4590).** **Recommend:** *"The swap
 is a `Swap` composite under the term's `Supervised` layer; its phases are logged by the term's Durable
-layer, if present; effect history transfers only between equal declared effect identities."*
+layer, if present; effect history transfers only between equal declared effect identities that the
+candidate asserts compatible."*
 `[53-SWAP-05]`'s atomicity argument is kept.
 
 **M9. PN-17's "exactly once per logical delta across a handoff" (31:408-410).** Options: (a) keep the
-claim; (b) restate as: no omission (followers retain; takeover acts above the leader's published
-disposed frontier), at most one duplicate per unpublished position per failover, and exactly-once
+claim; (b) restate as: no omission for a Total-coverage successor (followers retain; takeover acts
+above the leader's published disposed frontier), takeover refused under partial overlap, at most
+one duplicate per unpublished position per failover, and exactly-once
 only at an exact witness. **Recommend (b).** Reason: neither the epoch fence nor a fence-only witness
 stops re-acting a position the old leader acted on but had not published **[inference]**.
 
@@ -1007,16 +1042,18 @@ state, so that an `Owned`/`Leased` is never re-consumed. They collide whenever t
 exclusive payload that was consumed. Options:
 - (a) R9 wins: replay the whole tail, and accept re-consumption of exclusive payloads.
 - (b) R6 wins: a durable RESTART is a succession (restore the checkpoint, no tail replay, catch-up).
-- (c) **Exclusive barrier**: `D` checkpoints after every delivery that consumed or released an
-  exclusive payload, so the tail never holds a consumed exclusive. Replay the tail with original
-  positions (downstream dedup absorbs re-emissions); skip the failing frame by `Skipped(position)` and
-  dead-letter its exclusive payload with discharge.
+- (c) **Split by exclusivity**: (a)'s replay, with original positions and the failing frame
+  skipped by `Skipped(position)`, for a term that can accept no exclusive payload; (b) for every
+  other durable term.
 
-**Recommend (c).** Reason: it keeps both rules exactly, and its cost (a checkpoint per exclusive
-delivery) falls only on cells that consume exclusives. PLP §7's durable-RESTART row follows this
+**Recommend (c).** Reason: it keeps R6's stated purpose — no `Owned`/`Leased` is re-consumed
+(23:209-213) — while relaxing its letter (no re-drive at all) only where no exclusive can be in the
+tail, and keeps R9 for every other durable cell. An earlier draft placed a checkpoint after each
+exclusive-consuming delivery; a fault or crash between the consumption and that checkpoint still
+re-drives it, so the barrier was withdrawn. PLP §7's durable-RESTART row follows this
 decision (continuation under (c), succession until decided). (a) breaks SPSC exactly-once; (b) loses the
-tail's state for every durable cell. Fallback until decided: (b). Required test:
-`restartUnderDurableWithOwnedBeforeFailingFrame`.
+tail's state for every durable cell. Fallback until decided: (b). Required tests:
+`durableRestartWithoutExclusiveInletsReplaysTail`, `durableRestartOfExclusiveConsumingTermIsSuccession`.
 
 **Factual spec corrections** (not decisions): 93:3639 records `HELD_LEASE`, `CONSTRUCTION_LEASE`,
 `MGMT_ACTIVITY` as landed, but none exists in `kernel/src/main` (computenet-wkopk); the 24:1631-1633
@@ -1044,10 +1081,10 @@ a prerequisite for steps 4, 8, 10 and 12.
 | 9 | `Swap` replaces `Promotion.promote`'s body; effect identity in the manifest (F11) | crash-safe window; lzfr0 |
 | 10 | `ReplicaSet`: `F` from `Stamped.applyTo`, set-keyed inbound lanes (PLP §3.2, stamped from PLP migration step 2), disposed-frontier publication, follower retention, takeover eligibility, claim-formation rule | PN-17 handoff gap (M9) |
 | 11 | `Region` replaces `suspensionRegionOf`; `NonSuspendable` becomes `canSuspend()` | host walk removed |
-| 12 | `O` with PLP §5.8's acknowledgement levels, required-level negotiation, persist-before-transmit and disposition table (with PLP migration step 9); client stubs; route park non-custodial | async send→log handoff |
+| 12 | `O` with PLP §5.8's acknowledgement levels, required-level negotiation, stable-before-transmit and disposition table (with PLP migration step 9); client stubs; route park non-custodial | async send→log handoff |
 | 13 | Budget charge protocol (§3.7); keyed ledger refund if ECO1 accepts it | charge obligations |
 | 14 | `Coupling` (after G-52's proxy generation) | G-53 swap half |
-| 15 | M11 option (c) if decided | durable RESTART as continuation |
+| 15 | M11 option (c) if decided | durable RESTART as continuation for terms with no exclusive inlet |
 | 16 | Remove remaining semantic branches; an architecture test fails on `is <cell marker>` under `host/`, allow-listing E1/E2 (E3 is gone after step 7); spec revisions per §7 in a separate documentation ticket | the host contract |
 
 ---
@@ -1068,8 +1105,9 @@ modules, `:concord:test` (with `dur` and `dist`), and `./gradlew test`; from ste
   `mismatchedReexposedManifestRefused`, `rawLinkIntoInnerPortRefused`.
 - **`ControlRoutingTest`**: `unhandledSignalRefusedWithStack`, `restartRequestTravelsOutward`,
   `restartWithoutDurableIsSuccessionWithReBaseline`, `restartKeepsDisposedFrontier` **(F)**,
-  `durableRestartIsSuccessionUntilM11` **(F)**, `restartUnderDurableWithOwnedBeforeFailingFrame`
-  **(F)** (M11 (c): the `Owned` is not re-consumed, the tail state survives),
+  `durableRestartIsSuccessionUntilM11` **(F)**, `durableRestartWithoutExclusiveInletsReplaysTail`
+  **(F)** (M11 (c)), `durableRestartOfExclusiveConsumingTermIsSuccession` **(F)** (the `Owned` is
+  never re-consumed),
   `repeatedRestartFaultEscalatesToSuccession` **(F)**.
 - **Capsule**: `CapsuleTest.capturesParkAlignAndOutboxInAcceptanceOrder`,
   `.ownedPayloadSurvivesRoundTrip`, `.incompleteCapsuleRefusedAtPrepare` **(F)**;
@@ -1088,11 +1126,16 @@ modules, `:concord:test` (with `dur` and `dist`), and `./gradlew test`; from ste
 - **`RelocationTest`** (H4), crash injected at each step on each side **(F)**:
   `sourceCrashBeforeDecisionAbortsAndResumesInPlace`, `sourceCrashAfterDecisionRetiresNeverResumes`,
   `targetCrashWhilePreparedStaysInactive`, `targetCrashAfterCommitResumesAsSoleHolder`,
+  `volatileSourceCrashAfterDepartingResumesFromStagedCapsule`,
+  `volatileTargetDeletesStagedCopyBeforeFirstAdmission`,
   `neverTwoLiveHolders` (property, crash points × seeds), `routePublicationIdempotent`,
   `suspendedTermMigratesWithParkInOrder` (g5tr6), `relocationVetoedWhileLeaseHeld`,
   `volatileTermFencedByResidencyEntry`.
 - **`PartitionSetFlipRecoveryTest`**: `crashAfterEachRecordResumesOrAborts` **(F)** (R1-R7, both
   sides), `releaseResumesFromCursorWithoutDoubleTake` **(F)**,
+  `releaseCursorWaitsForStableShardAck` **(F)** (router and B crash after send, before B syncs),
+  `fenceProcessedAfterQueuedRSliceDisposed` **(F)**, `drainedProcessedAfterQueuedReleasedSlice`
+  **(F)**, `parkedRecordsKeptUntilBothShardsAckDrain` **(F)**,
   `boundaryFrameSplitAcrossRangesBothPartsTaken` **(F)**, `parkedFrameBelowOldOwnerHighWaterActs`
   **(F)** (`p_begin`, not A's high-water), `gainerDoesNotActOnHandoffState` **(F)** (8g7kg),
   `commitWaitsForOldOwnerSettlement` **(F)**, `settleFenceTravelsInBandBehindRoutedFrames` **(F)**, `preparedGainerInDoubtActsOnNothing` **(F)**,
@@ -1102,13 +1145,14 @@ modules, `:concord:test` (with `dur` and `dist`), and `./gradlew test`; from ste
 - **`SwapLayerTest`**: `t1PromotionContinuesLaneWithoutReBaseline`,
   `t2AnnouncesIncumbentLaneSuperseded` (lzfr0), `crashBeforeCommitRollsBack` **(F)**,
   `crashAfterCommitRollsForward` **(F)**, `sameEffectIdentityKeepsActedHistory` **(F)**,
-  `differentEffectIdentityVetoed` **(F)**, `addedDedupStartsAtDisposedNotEmpty` **(F)**,
+  `differentEffectIdentityVetoed` **(F)**, `sameIdentityWithoutCompatibilityAssertionVetoed` **(F)**,
+  `addedDedupStartsAtCapturedAppliedFrontier` **(F)**, `addedDedupWithoutCapturedFrontierVetoed` **(F)**,
   `rollbackAfterRetireIsNewSwapFromExport` **(F)**.
 - **`ReplicaSetAuthorityTest`**: `staleLeaderDeltasFencedAtEveryRecipient` **(F)**,
   `followerSuppressionDoesNotAdvanceDisposed` **(F)**, `positionOnlyFollowerSawIsActedAfterTakeover`
-  **(F)** (no omission), `unpublishedActedPositionDuplicatedAtMostOnce` **(F)**,
+  **(F)** (no omission, Total coverage), `unpublishedActedPositionDuplicatedAtMostOnce` **(F)**,
   `exactWitnessDedupsAcrossEpochs` **(F)**, `fenceOnlyWitnessKeepsDuplicateCeiling` **(F)**,
-  `takeoverRefusedWithRetentionGap` **(F)**, `retentionExhaustionStallsNotDrops` **(F)**,
+  `takeoverRefusedWithRetentionGap` **(F)**, `takeoverRefusedUnderPartialOverlap` **(F)**, `retentionExhaustionStallsNotDrops` **(F)**,
   `effectfulAutoClaimWithoutWitnessOrCeilingRefused`.
 - **`ReplicaDepartureSettlementTest`**: `cleanLeaveClosesRow`, `unreachableSuspendsRow` **(F)**,
   `uncleanDeathFreezesRowAndReports` **(F)**.
@@ -1118,14 +1162,14 @@ modules, `:concord:test` (with `dur` and `dist`), and `./gradlew test`; from ste
 - **`CouplingLayerTest`**: `partialUnitSurvivesSwapWindow` **(F)**, `partialUnitSurvivesCrash`
   **(F)**, `releasedGroupReplaysOnce` **(F)**, `abortedPartialUnitDeadLettersAndDischargesOwned`
   **(F)**, `crossHostCouplingRefused`.
-- **`OutboxTest`** (custody only; acknowledgement, persist-before-transmit and the disposition
+- **`OutboxTest`** (custody only; acknowledgement, stable-before-transmit and the disposition
   table are PLP's `DeliveryAckRetentionTest`): `frameToUnlocatedTargetRetainedUntilRequiredLevel`
   **(F)**, `outboxTravelsInRelocatedSenderCapsule` **(F)**, `externalStubHoldsUnlocatedFrames`,
   `hostRouteHoldsNoFrame`.
 - **`BudgetChargeTest`**: `crashAfterDebitBeforeOutcomeRechargesWithSameKey` **(F)**,
   `crashAfterOutcomeNeverRecharges` **(F)**, `crashBeforeDebitChargesOnce` **(F)**,
   `refusedChargeRefusesFrameAndDischarges` **(F)**, `refundOwedRetriedAfterCrash` **(F)**,
-  `chargeIdStableAcrossReplay`.
+  `chargeIdStableAcrossReplay`, `chargeIdUnchangedWhenReplayTakesOtherBranch` **(F)**.
 - **`DeathReportingTest`**: `linkEndRaisesRecoverableStallOnPeerLoss` **(F)**,
   `recreatedTermAnnouncesResumeOrReBaseline` **(F)**.
 - **`HostContractArchTest`**: `noCellMarkerChecksUnderHostPackage` (allow-list E1, E2; E3 until step 7),
