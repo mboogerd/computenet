@@ -738,9 +738,11 @@ class BeadsMirrorAppTest {
     }
 
     /**
-     * A deterministic scheduler that preserves host priority/FIFO but drains only when a
-     * management API awaits. During journal recovery this holds data-band frames while later
-     * topology records despawn and respawn their refs, forcing the CI race's losing ordering.
+     * A deterministic scheduler that preserves host priority/FIFO, drains management-band
+     * (priority 0) tasks eagerly, and holds every other band until the first quiescence fence
+     * (an [Int.MAX_VALUE] submission) arrives. During journal recovery this holds data-band
+     * frames while later topology records despawn and respawn their refs, forcing the CI
+     * race's losing ordering.
      */
     private class ReplayAfterTopologyScheduler : HostScheduler {
         override val color: HostColor = HostColor.BLOCKING
