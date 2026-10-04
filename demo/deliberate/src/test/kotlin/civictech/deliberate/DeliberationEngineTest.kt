@@ -530,6 +530,7 @@ class DeliberationEngineTest {
         val before = e1.snapshot()
         val child = before.claims().first { it.depth == 1 }
         val link = before.edges().single { it.source == child.ref }
+        val budgetChild = before.claims().first { it.depth == 1 && it.ref != child.ref }
         e1.close()
 
         val seeded = firstStore.load().mapValues { (_, fields) -> fields.toMutableMap() }.toMutableMap()
@@ -542,6 +543,9 @@ class DeliberationEngineTest {
         legacy("c:${root.id}", "ROUND_LIMIT")
         legacy("c:${child.ref}", "PRUNED")
         legacy("l:${link.ref}", "SATURATED")
+        // The pre-computenet-dq2fy.24.1 budget encoding: ROUND_LIMIT + "budget exhausted".
+        legacy("c:${budgetChild.ref}", "ROUND_LIMIT")
+        seeded.getValue("c:${budgetChild.ref}")["error"] = "\"budget exhausted\""
         val store = RecordingMetaStore(seeded)
         val restartJudge = FakeJudge()
         val restartProposer = FakeProposer("claude")
@@ -553,6 +557,8 @@ class DeliberationEngineTest {
             assertDone(after.node(root), Reason.ROUND_LIMIT)
             assertDone(after.claim(child.ref), Reason.PRUNED)
             assertDone(after.nodes.single { it.ref == link.ref }, Reason.SATURATED)
+            assertDone(after.claim(budgetChild.ref), Reason.BUDGET)
+            assertNull(after.claim(budgetChild.ref).error, "the legacy budget pair restores with no error")
 
             fun preserved(n: NodeDto) = listOf(
                 n.root, n.depth, n.override, n.rounds, n.proposer,
@@ -561,6 +567,7 @@ class DeliberationEngineTest {
             )
             assertEquals(preserved(before.node(root)), preserved(after.node(root)))
             assertEquals(preserved(child), preserved(after.claim(child.ref)))
+            assertEquals(preserved(budgetChild), preserved(after.claim(budgetChild.ref)))
             assertEquals(preserved(link), preserved(after.nodes.single { it.ref == link.ref }))
             assertTrue(restartProposer.contexts.isEmpty(), "legacy terminal records must not re-run a round")
             assertTrue(
@@ -577,6 +584,9 @@ class DeliberationEngineTest {
             assertEquals("\"PRUNED\"", rewritten.getValue("c:${child.ref}")["reason"])
             assertEquals("\"DONE\"", rewritten.getValue("l:${link.ref}")["status"])
             assertEquals("\"SATURATED\"", rewritten.getValue("l:${link.ref}")["reason"])
+            assertEquals("\"DONE\"", rewritten.getValue("c:${budgetChild.ref}")["status"])
+            assertEquals("\"BUDGET\"", rewritten.getValue("c:${budgetChild.ref}")["reason"])
+            assertNull(rewritten.getValue("c:${budgetChild.ref}")["error"], "the obsolete budget error is removed on rewrite")
         } finally {
             dir.deleteRecursively()
         }
