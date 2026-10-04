@@ -56,19 +56,17 @@ Every attached argument gets a **contribution**: reach × relevance × quality
 canonical form is asked of the proposers, never scored). It is shown for
 reference; it no longer decides what gets explored.
 
-Alongside credence, a second graph of cells computes each claim's
-**sensitivity** top-down — how much settling it would move the root's answer,
-`d root / d claim` — the root at 1, propagated by chain rule down every path.
-A claim's (or link's) **value of information** is
-`|sensitivity| × 4·p·(1 − p)`, `p` its plausibility (a link's is its own
-strength): 1 for an unsettled claim under a sensitive part of the tree, 0 once
-either its sensitivity or its plausibility is pinned down. Exploration is
-best-first by value of information across one queue, one round per task
-(priorities are re-read when a worker is ready, since the sensitivity cells
-settle asynchronously). A claim with rounds left goes back into the queue at
-its value of information × 0.5 per round it already ran, so a strong claim's
-second round still beats a weak sibling's first. Once a claim's value of
-information falls below `--voi-eps` it gets no further round and ends
+Alongside credence, the backend computes each node's **sway** on demand: the
+signed exact secant `R(node=1) − R(node=0)` for the active answer root to which
+the node has the largest value of information. A claim's (or link's) **value
+of information** is the exact expected root movement
+`2 · (q·|R₁−R| + (1−q)·|R₀−R|)`, where `q` is the node's propagated headline
+credence and `R₀`/`R₁` come from replaying every dependent path with that node
+resolved to 0 or 1. Exploration is best-first by value of information across
+one queue, one round per task. A claim with rounds left goes back into the
+queue at its value of information × 0.5 per round it already ran, so a strong
+claim's second round still beats a weak sibling's first. Once a claim's value
+of information falls below `--voi-eps` it gets no further round and ends
 `DIMINISHING` ("not worth exploring"); a question stops once every remaining
 claim is below that threshold, reporting "stopped: nothing left could change
 the answer" (or "stopped: claim budget spent" when `--max-claims` ended it
@@ -94,14 +92,10 @@ it — the undercutters), with a prompt that forbids disputing A or arguing B on
 other grounds. Their arguments attach to the edge node, so they move the
 edge's credence and with it A's pull on B; Jev sorts them against the link's
 own arguments and judges them with the link as their parent. A link's value of
-information follows the same rule as a claim's, reading its own strength as
-its plausibility and its edge's sensitivity as its sensitivity:
-`|sensitivity| × 4·s·(1 − s)`, with s the link strength — an open link (s near
-½) whose answer is sensitive to it is explored early, a clear-cut one (s near
-0 or 1) is left alone unless you expand it. (Its contribution — argument's
-contribution × 4·s·(1 − s) — is still shown, for reference only.) Links count
-in the question's rounds and cost, not in its claim count. `--explore-links
-off` stops automatic link exploration (`EXPAND` still works).
+information follows the same exact two-point re-evaluation over every path to
+each active answer root. Links count in the question's rounds and cost, not in
+its claim count. `--explore-links off` stops automatic link exploration
+(`EXPAND` still works).
 
 **Pre-model-C** (measured once, 2026-09-27, defaults but `--max-claims 80`, a
 question about motion-activated streetlights, back when links were ordered by
@@ -174,11 +168,13 @@ so does a failed framing call.
 Each reading or position is a claim of the same question, at the question's
 depth, explored exactly like a root — its own first impression, its own
 "arguments alone" verdict, its own cruxes — while the question root itself
-takes no round and finishes **FRAMED**. For POSITIONS, each position's
-share of the answer is a softmax over their credences (temperature 1 is
-plain odds normalisation: credences (0.8, 0.6, 0.2) give shares (0.70, 0.26,
-0.04)); the shares are derived for display only and never feed back into any
-credence.
+takes no round and finishes **FRAMED**. For POSITIONS, each consensus credence
+is an absolute weight: a position's share is its weight divided by
+`max(1, sum(weights))`. Listed shares may therefore sum below 1; the residual
+`1 - sum(shares)` is the share for none of the listed answers. For example,
+credences (0.8, 0.6, 0.2) give shares (0.5, 0.375, 0.125), while three
+credences of 0.1 leave 0.7 for none of the listed answers. The shares are
+derived for display only and never feed back into any credence.
 
 In the UI a framed question's hero keeps its text but, since there is no
 single yes/no verdict to show, replaces the gauge with the framing line
@@ -221,7 +217,7 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--max-claims <n>` | 180 | hard cap: claims per question; claims that meet it become `BUDGET` (whether or not they already ran a round). An `EXPAND` still explores past it |
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
-| `--voi-eps <e>` | 0.01 | explore a claim (or link) only while its value of information, `\|d answer/d node\| × 4·p·(1 − p)`, is at least `e`; a question stops once none of its remaining nodes clears it (`0` disables the stop, leaving only `--max-claims`) |
+| `--voi-eps <e>` | 0.01 | explore a claim (or link) only while its exact q-weighted expected root movement is at least `e`; a question stops once none of its remaining nodes clears it (`0` disables the stop, leaving only `--max-claims`) |
 | `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `PRUNED` unless expanded |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
 | `--start-paused` | off | every restored question starts paused: nothing runs, not even a Jev call, until you resume a question; new questions run normally (see *Restarting paused*) |
