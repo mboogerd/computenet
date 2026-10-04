@@ -28,9 +28,9 @@ class ManifestTest {
                     replica = 7,
                     peerName = "peer-a",
                     budget = "policy.json",
+                    journalTopology = true,
                 ),
             ),
-            placements = mapOf("source" to "a", "sink" to "a"),
         )
         val encoded = Json.encodeToString(manifest)
 
@@ -47,6 +47,7 @@ class ManifestTest {
         )
 
         assertEquals(mapOf("source" to "a", "sink" to "b"), parsed.placements)
+        assertEquals(parsed, Manifest.parse(Json.encodeToString(parsed)))
         assertEquals(emptyMap<String, String>(), Manifest.parse("""{"nodes":{"a":{}}}""").placements)
     }
 
