@@ -1,0 +1,37 @@
+{
+  "id": "WV-PORT-API-SETDELTA-01",
+  "title": "SetDelta with ordered adds and observed-remove tags crosses as PORT_API",
+  "category": "frames/port-api",
+  "kind": "frame",
+  "covers": ["WIR1-C04", "WIR1-C05", "WIR1-C09", "WIR1-C11", "WIR1-I01", "WIR1-I02", "WIR1-I03", "41 point 1"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{
+        "type": "SetDelta",
+        "fields": {
+          "adds": {
+            "entries": [
+              {"key": {"type": "kotlin.String", "value": "alpha"}, "value": [{"sourceId": "00000000-0000-0000-0000-0000000000b1", "counter": 1}]},
+              {"key": {"type": "kotlin.String", "value": "beta"}, "value": [{"sourceId": "00000000-0000-0000-0000-0000000000b1", "counter": 2}, {"sourceId": "00000000-0000-0000-0000-0000000000b2", "counter": 5}]}
+            ]
+          },
+          "dels": {
+            "entries": [
+              {"key": {"type": "kotlin.String", "value": "gamma"}, "value": [{"sourceId": "00000000-0000-0000-0000-0000000000b2", "counter": 3}]}
+            ]
+          }
+        }
+      }]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"SetDelta\",{\"adds\":[[\"kotlin.String\",\"alpha\"],[{\"sourceId\":\"00000000-0000-0000-0000-0000000000b1\",\"counter\":1}],[\"kotlin.String\",\"beta\"],[{\"sourceId\":\"00000000-0000-0000-0000-0000000000b1\",\"counter\":2},{\"sourceId\":\"00000000-0000-0000-0000-0000000000b2\",\"counter\":5}]],\"dels\":[[\"kotlin.String\",\"gamma\"],[{\"sourceId\":\"00000000-0000-0000-0000-0000000000b2\",\"counter\":3}]]}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU2V0RGVsdGEiLHsiYWRkcyI6W1sia290bGluLlN0cmluZyIsImFscGhhIl0sW3sic291cmNlSWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYjEiLCJjb3VudGVyIjoxfV0sWyJrb3RsaW4uU3RyaW5nIiwiYmV0YSJdLFt7InNvdXJjZUlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGIxIiwiY291bnRlciI6Mn0seyJzb3VyY2VJZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBiMiIsImNvdW50ZXIiOjV9XV0sImRlbHMiOltbImtvdGxpbi5TdHJpbmciLCJnYW1tYSJdLFt7InNvdXJjZUlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGIyIiwiY291bnRlciI6M31dXX1dXX0="},
+  "notes": "Generated from the literal decoded value by ./gradlew :wire:wireVectors -Pwire.vectors.write=true and read back afterward. OBSERVED: the structured-key adds entry order is alpha then beta, dels contains gamma, each Timestamp tag is a plain typed-position object, and the integer counters retain JSON number spelling. The two-entry adds map pins order rather than sorting it; all UUIDs and the Propagate contract/method ids are literal."
+}
