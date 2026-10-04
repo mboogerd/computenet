@@ -87,8 +87,7 @@ checkpoint, because a frame staged at that intermediate cell's volatile inlet
 may no longer be derivable after compaction (24 §Durability spectrum;
 computenet-4fpyy, computenet-dshry). A checkpoint is therefore not
 unconditionally safe at every inter-invocation boundary for those topologies.
-Not yet covered are frames retained in an inlet policy tier or released into a
-cold inlet outside that inlet's hosted offer (computenet-amgre). `recoverFrom`
+`recoverFrom`
 (after the graph is rebuilt) restores the checkpoint and replays the tail
 through the ordinary decode path. Replay only stages frames, so `recoverFrom`
 returns a `Recovery` handle whose

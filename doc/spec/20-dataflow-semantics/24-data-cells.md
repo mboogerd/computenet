@@ -1289,8 +1289,6 @@ volatile inlet is not selected for J's carry and may no longer be derivable
 after compaction (computenet-dshry). A checkpoint is therefore not
 unconditionally safe at every inter-invocation boundary for those topologies
 (93 I-7 R7);
-not yet covered are frames retained in an inlet policy tier or released into a
-cold inlet outside that inlet's hosted offer (computenet-amgre);
 tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the
 per-cell scoping; its control shows a constant selector restores every cell).
 Cells stay oblivious — with one honest exception:
