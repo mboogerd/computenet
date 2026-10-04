@@ -6,6 +6,7 @@ import civictech.testkit.awaitUntil
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
@@ -23,11 +24,28 @@ class ThreeJvmPlacementTest {
 
     @Test
     fun `one graph produces the same output on one host and three JVMs`() {
-        val singleHost = runSingleHost()
-        val threeJvm = runThreeJvm()
+        val singleHost = runSingleHost(PlacementFixture.singleHost())
+        val threeJvm = runThreeJvm(PlacementFixture.threeJvm())
 
         assertEquals(setOf("pear"), singleHost, "single-host observable output")
         assertEquals(singleHost, threeJvm, "single-host and three-JVM observable outputs")
+    }
+
+    @Test
+    fun `one graph produces the same output on one host and three JVMs over iroh`() {
+        val configured = System.getProperty(SIDECAR_PROPERTY)
+        val binary = configured?.let(Path::of)
+        assumeTrue(
+            binary != null && Files.isRegularFile(binary),
+            "no $SIDECAR_PROPERTY: run with -Piroh.enabled=true to build and configure the sidecar",
+        )
+        val transportConfig = irohTransportConfig(binary!!)
+
+        val singleHost = runSingleHost(PlacementFixture.singleHost("iroh", transportConfig))
+        val threeJvm = runThreeJvm(PlacementFixture.threeJvm("iroh", transportConfig))
+
+        assertEquals(setOf("pear"), singleHost, "single-host observable output over iroh")
+        assertEquals(singleHost, threeJvm, "single-host and three-JVM observable outputs over iroh")
     }
 
     @Test
@@ -69,10 +87,10 @@ class ThreeJvmPlacementTest {
         }
     }
 
-    private fun runSingleHost(): Set<String> {
+    private fun runSingleHost(manifest: Manifest): Set<String> {
         PlacementFixture.resetCaptures()
         val node = Runtime.boot(
-            PlacementFixture.singleHost(),
+            manifest,
             "a",
             PlacementFixture.spec(),
         )
@@ -87,12 +105,11 @@ class ThreeJvmPlacementTest {
         }
     }
 
-    private fun runThreeJvm(): Set<String> {
+    private fun runThreeJvm(manifest: Manifest): Set<String> {
         val peers = mutableListOf<JvmPeer.Peer>()
         var node: Runtime.Node? = null
         var view: PlacementFixture.SetFoldCell? = null
         try {
-            val manifest = PlacementFixture.threeJvm()
             val manifestFile = writeManifest(manifest)
             PlacementFixture.resetCaptures()
             node = Runtime.boot(
@@ -106,10 +123,10 @@ class ThreeJvmPlacementTest {
 
             val b = launchPeer(manifestFile, "b", "a" to aAddress)
             peers += b
-            val bAddress = "ws://127.0.0.1:${b.port("ws")}"
+            val bAddress = b.address()
             val c = launchPeer(manifestFile, "c", "a" to aAddress, "b" to bAddress)
             peers += c
-            c.port("ws")
+            c.awaitReady("c")
 
             applyOperations(node)
             val fold = requireNotNull(view) { "the test JVM did not capture view" }
@@ -144,6 +161,40 @@ class ThreeJvmPlacementTest {
         *peers.flatMap { listOf("--peer", "${it.first}=${it.second}") }.toTypedArray(),
     )
 
+    private fun JvmPeer.Peer.address(): String {
+        var address: String? = null
+        JvmPeer.await("peer announces its granted transport address", listOf(this)) {
+            address = output().lineSequence()
+                .firstOrNull { it.startsWith(PlacementPeerMain.ADDRESS_LINE_PREFIX) }
+                ?.removePrefix(PlacementPeerMain.ADDRESS_LINE_PREFIX)
+            address != null
+        }
+        return requireNotNull(address)
+    }
+
+    private fun JvmPeer.Peer.awaitReady(node: String) {
+        JvmPeer.await("peer $node opens its runtime", listOf(this)) {
+            output().lineSequence().any { it == PlacementPeerMain.READY_LINE_PREFIX + node }
+        }
+    }
+
+    private fun irohTransportConfig(binary: Path): Map<String, String> = buildMap {
+        put("binary", binary.toString())
+        val sidecarArgs = buildList {
+            System.getProperty("iroh.relay.url")?.let { addAll(listOf("--relay-url", it)) }
+            val pkarrUrl = System.getProperty("iroh.pkarr.url")
+            val dnsOrigin = System.getProperty("iroh.dns.origin")
+            require((pkarrUrl == null) == (dnsOrigin == null)) {
+                "iroh.pkarr.url and iroh.dns.origin must both be set or both unset"
+            }
+            if (pkarrUrl != null && dnsOrigin != null) {
+                addAll(listOf("--pkarr-relay-url", pkarrUrl, "--dns-origin", dnsOrigin))
+                System.getProperty("iroh.dns.nameserver")?.let { addAll(listOf("--dns-nameserver", it)) }
+            }
+        }
+        if (sidecarArgs.isNotEmpty()) put("sidecarArgs", sidecarArgs.joinToString(" "))
+    }
+
     private fun writeManifest(manifest: Manifest): Path = tempDir.resolve("placement.json").also { file ->
         Files.writeString(file, Json.encodeToString(Manifest.serializer(), manifest))
     }
@@ -155,5 +206,9 @@ class ThreeJvmPlacementTest {
             Thread.sleep(10)
         }
         assertFalse(condition(), what)
+    }
+
+    private companion object {
+        const val SIDECAR_PROPERTY = "iroh.sidecar.binary"
     }
 }
