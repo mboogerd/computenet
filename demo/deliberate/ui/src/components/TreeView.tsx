@@ -18,8 +18,8 @@ import {
   priorText,
   questionProgress,
   shown,
-  STATUS_HINT,
-  STATUS_LABEL,
+  statusHint,
+  statusLabel,
   stoppedHint,
   stoppedText,
   verdict,
@@ -247,8 +247,8 @@ function Question(props: { root: string; index: () => TreeIndex; tree: () => Tre
                 </Show>
                 {/* CTL-03: a question the human stopped already reads "stopped by you" above. */}
                 <Show when={claim().status && ((claim().status === 'STOPPED' && question()?.stoppedBy !== 'human') || claim().status === 'FAILED')}>
-                  <span class="status status--halted" title={STATUS_HINT[claim().status!]}>
-                    question {STATUS_LABEL[claim().status!]}
+                  <span class="status status--halted" title={statusHint(claim())}>
+                    question {statusLabel(claim())}
                   </span>
                 </Show>
                 <span class="card__spacer" />

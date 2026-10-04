@@ -39,18 +39,18 @@ const flush = () => new Promise<void>((resolve) => queueMicrotask(resolve));
 // question's one crux.
 const nodes: NodeDto[] = [
   { ref: 'q', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'Should we?', depth: 0, status: 'EXPLORING' },
-  { ref: 'a', kind: 'CLAIM', credence: 0.55, root: 'q', text: 'It would help.', depth: 1, status: 'SATURATED' },
+  { ref: 'a', kind: 'CLAIM', credence: 0.55, root: 'q', text: 'It would help.', depth: 1, status: 'DONE', reason: 'SATURATED' },
   {
     ref: 'a-q', kind: 'EDGE', credence: 0.7, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'q',
-    strength: 0.7, sensitivity: 0.4, text: '“It would help.” is a reason for “Should we?”', depth: 1, status: 'PRUNED',
+    strength: 0.7, sensitivity: 0.4, text: '“It would help.” is a reason for “Should we?”', depth: 1, status: 'DONE', reason: 'PRUNED',
   },
   {
-    ref: 'b', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'It has a real cost.', depth: 2, status: 'SATURATED',
+    ref: 'b', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'It has a real cost.', depth: 2, status: 'DONE', reason: 'SATURATED',
     spreadLow: 0.2, spreadHigh: 0.9,
   },
   {
     ref: 'b-a', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'SUPPORT', source: 'b', target: 'a',
-    strength: 0.6, text: '“It has a real cost.” is a reason for “It would help.”', depth: 2, status: 'PRUNED',
+    strength: 0.6, text: '“It has a real cost.” is a reason for “It would help.”', depth: 2, status: 'DONE', reason: 'PRUNED',
   },
 ];
 

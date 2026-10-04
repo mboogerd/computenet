@@ -32,6 +32,18 @@ class ExplorationPolicyTest {
     private val fresh = ClaimView(depth = 1, contribution = 0.5, valueOfInformation = 0.5, plausibility = 0.5)
     private val q = QuestionView(treeSize = 10)
 
+    @Test
+    fun `status and reason vocabularies are exact`() {
+        assertEquals(
+            listOf("QUEUED", "JUDGING", "EXPLORING", "FRAMED", "DONE", "STOPPED", "FAILED"),
+            Status.entries.map { it.name },
+        )
+        assertEquals(
+            listOf("SATURATED", "ROUND_LIMIT", "PRUNED", "DEPTH_LIMIT", "BUDGET", "DIMINISHING"),
+            Reason.entries.map { it.name },
+        )
+    }
+
     // ---------------------------------------------------------------- scheduleGate (EXP-05/06, model C, links)
 
     @Test
@@ -43,16 +55,16 @@ class ExplorationPolicyTest {
             Case("EXPAND skips every gate (CTL-02)", fresh.copy(override = Override.EXPAND, depth = 99) to full, null),
             Case("a forced round skips every gate (CTL-02)", fresh.copy(forceRound = true, valueOfInformation = 0.0) to full, null),
             Case("a link is gated like a claim when link exploration is on", fresh.copy(isLink = true) to q, null),
-            Case("beyond an explicit maxDepth is DEPTH_LIMIT", fresh.copy(depth = 6) to q, Status.DEPTH_LIMIT),
+            Case("beyond an explicit maxDepth is DEPTH_LIMIT", fresh.copy(depth = 6) to q, Finish(Status.DONE, Reason.DEPTH_LIMIT)),
             Case("at maxDepth passes", fresh.copy(depth = 5) to q, null),
-            Case("depth wins over the value of information", fresh.copy(depth = 6, valueOfInformation = 0.0) to q, Status.DEPTH_LIMIT),
-            Case("a full tree is BUDGET (EXP-06)", fresh to full, Status.BUDGET),
+            Case("depth wins over the value of information", fresh.copy(depth = 6, valueOfInformation = 0.0) to q, Finish(Status.DONE, Reason.DEPTH_LIMIT)),
+            Case("a full tree is BUDGET (EXP-06)", fresh to full, Finish(Status.DONE, Reason.BUDGET)),
             // Changed by model C: the relevance floor (PRUNED below contribution 0.10) is gone; the
             // hard cap now wins over a low value of information.
-            Case("budget wins over the value of information", fresh.copy(valueOfInformation = 0.0) to full, Status.BUDGET),
-            Case("a value of information below 0.01 is DIMINISHING", fresh.copy(valueOfInformation = 0.0099) to q, Status.DIMINISHING),
+            Case("budget wins over the value of information", fresh.copy(valueOfInformation = 0.0) to full, Finish(Status.DONE, Reason.BUDGET)),
+            Case("a value of information below 0.01 is DIMINISHING", fresh.copy(valueOfInformation = 0.0099) to q, Finish(Status.DONE, Reason.DIMINISHING)),
             Case("at 0.01 it passes", fresh.copy(valueOfInformation = 0.01) to q, null),
-            Case("an exact settled premise has no value", fresh.copy(valueOfInformation = 0.0, plausibility = 0.999) to q, Status.DIMINISHING),
+            Case("an exact settled premise has no value", fresh.copy(valueOfInformation = 0.0, plausibility = 0.999) to q, Finish(Status.DONE, Reason.DIMINISHING)),
             Case("a low contribution no longer prunes", fresh.copy(contribution = 0.01) to q, null),
             Case("unknown exact value counts FALLBACK_STRENGTH", fresh.copy(valueOfInformation = null) to q, null),
             Case("pausing is not a gate (the engine holds, CTL-05)", fresh to q.copy(paused = true), null),
@@ -64,7 +76,7 @@ class ExplorationPolicyTest {
     @Test
     fun `schedule gate — link exploration off prunes a link and nothing else`() {
         val off = ExplorationPolicy(Config(exploreLinks = false))
-        assertEquals(Status.PRUNED, off.scheduleGate(fresh.copy(isLink = true), q))
+        assertEquals(Finish(Status.DONE, Reason.PRUNED), off.scheduleGate(fresh.copy(isLink = true), q))
         assertEquals(null, off.scheduleGate(fresh, q))
         assertEquals(null, off.scheduleGate(fresh.copy(isLink = true, override = Override.EXPAND), q), "EXPAND still explores a link")
     }
@@ -75,12 +87,12 @@ class ExplorationPolicyTest {
     fun `start gates — budget, then value of information, and a forced round passes`() {
         table(
             Case("room left", false to 179, null),
-            Case("a full tree", false to 180, Status.BUDGET),
+            Case("a full tree", false to 180, Finish(Status.DONE, Reason.BUDGET)),
             Case("forced passes budget", true to 180, null),
         ) { (forced, size) -> defaults.startBudgetGate(forced, size) }
         table(
             Case("worth a round", fresh, null),
-            Case("below ε", fresh.copy(valueOfInformation = 0.001), Status.DIMINISHING),
+            Case("below ε", fresh.copy(valueOfInformation = 0.001), Finish(Status.DONE, Reason.DIMINISHING)),
             Case("forced passes the value of information", fresh.copy(valueOfInformation = 0.001, forceRound = true), null),
         ) { defaults.startVoiGate(it) }
     }
@@ -93,23 +105,23 @@ class ExplorationPolicyTest {
         val full = q.copy(treeSize = 180)
         table(
             Case("a round left", fresh to q, null),
-            Case("STOP ends it (CTL-03)", fresh.copy(override = Override.STOP) to q, Status.STOPPED),
-            Case("STOP ends even a forced round", fresh.copy(override = Override.STOP, forceRound = true) to q, Status.STOPPED),
-            Case("STOP wins over saturation", bothSaturated.copy(override = Override.STOP) to q, Status.STOPPED),
-            Case("a stopped question ends it (CTL-03 on the root)", fresh to q.copy(stopped = true), Status.STOPPED),
+            Case("STOP ends it (CTL-03)", fresh.copy(override = Override.STOP) to q, Finish(Status.STOPPED)),
+            Case("STOP ends even a forced round", fresh.copy(override = Override.STOP, forceRound = true) to q, Finish(Status.STOPPED)),
+            Case("STOP wins over saturation", bothSaturated.copy(override = Override.STOP) to q, Finish(Status.STOPPED)),
+            Case("a stopped question ends it (CTL-03 on the root)", fresh to q.copy(stopped = true), Finish(Status.STOPPED)),
             Case("a stopped question still runs a forced round", fresh.copy(forceRound = true) to q.copy(stopped = true), null),
-            Case("both sides saturated", bothSaturated to q, Status.SATURATED),
+            Case("both sides saturated", bothSaturated to q, Finish(Status.DONE, Reason.SATURATED)),
             Case("one side saturated leaves the other", fresh.copy(jevSaturated = setOf(SUPPORT)) to q, null),
             Case("a forced round ignores saturation", bothSaturated.copy(forceRound = true) to q, null),
-            Case("rounds used up", fresh.copy(rounds = 3, roundLimit = 3) to q, Status.ROUND_LIMIT),
+            Case("rounds used up", fresh.copy(rounds = 3, roundLimit = 3) to q, Finish(Status.DONE, Reason.ROUND_LIMIT)),
             Case("a forced round ignores the round limit", fresh.copy(rounds = 3, roundLimit = 3, forceRound = true) to q, null),
-            Case("saturation wins over the round limit", bothSaturated.copy(rounds = 3, roundLimit = 3) to q, Status.SATURATED),
-            Case("round limit wins over the budget", fresh.copy(rounds = 3, roundLimit = 3) to full, Status.ROUND_LIMIT),
-            Case("a full tree", fresh to full, Status.BUDGET),
+            Case("saturation wins over the round limit", bothSaturated.copy(rounds = 3, roundLimit = 3) to q, Finish(Status.DONE, Reason.SATURATED)),
+            Case("round limit wins over the budget", fresh.copy(rounds = 3, roundLimit = 3) to full, Finish(Status.DONE, Reason.ROUND_LIMIT)),
+            Case("a full tree", fresh to full, Finish(Status.DONE, Reason.BUDGET)),
             Case("a forced round ignores the budget", fresh.copy(forceRound = true) to full, null),
             // 0.5 × 0.5^5 = 0.0156 still worth a round; × 0.5^6 = 0.0078 is not.
             Case("round decay keeps a valuable claim going", fresh.copy(rounds = 5, roundLimit = 9) to q, null),
-            Case("round decay takes its value below ε", fresh.copy(rounds = 6, roundLimit = 9) to q, Status.DIMINISHING),
+            Case("round decay takes its value below ε", fresh.copy(rounds = 6, roundLimit = 9) to q, Finish(Status.DONE, Reason.DIMINISHING)),
             Case("a forced round ignores the value of information", fresh.copy(valueOfInformation = 0.0, forceRound = true) to q, null),
         ) { (c, qv) -> defaults.terminalStatus(c, qv) }
     }
@@ -186,16 +198,16 @@ class ExplorationPolicyTest {
     @Test
     fun `finish — STOP wins, BUDGET stands whether or not a round ran`() {
         table(
-            Case("a plain status", fresh to Status.SATURATED, Finish(Status.SATURATED)),
-            Case("STOP wins (CTL-03)", fresh.copy(override = Override.STOP) to Status.ROUND_LIMIT, Finish(Status.STOPPED)),
-            Case("BUDGET before any round", fresh to Status.BUDGET, Finish(Status.BUDGET)),
+            Case("a plain DONE reason", fresh to Finish(Status.DONE, Reason.SATURATED), Finish(Status.DONE, Reason.SATURATED)),
+            Case("STOP wins (CTL-03)", fresh.copy(override = Override.STOP) to Finish(Status.DONE, Reason.ROUND_LIMIT), Finish(Status.STOPPED)),
+            Case("BUDGET before any round", fresh to Finish(Status.DONE, Reason.BUDGET), Finish(Status.DONE, Reason.BUDGET)),
             Case(
                 "BUDGET after a round (EXP-06)",
-                fresh.copy(rounds = 1) to Status.BUDGET,
-                Finish(Status.BUDGET),
+                fresh.copy(rounds = 1) to Finish(Status.DONE, Reason.BUDGET),
+                Finish(Status.DONE, Reason.BUDGET),
             ),
-            Case("FAILED keeps its status", fresh.copy(rounds = 1) to Status.FAILED, Finish(Status.FAILED)),
-        ) { (c, s) -> defaults.finish(c, s) }
+            Case("FAILED keeps its status", fresh.copy(rounds = 1) to Finish(Status.FAILED), Finish(Status.FAILED)),
+        ) { (c, end) -> defaults.finish(c, end) }
     }
 
     // ---------------------------------------------------------------- SPEC §3 "Exploration order", EXP-05

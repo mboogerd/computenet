@@ -253,7 +253,7 @@ class CostTest {
             e.ask("Grow?")
             assertTrue(blocked.await(20, TimeUnit.SECONDS))
             awaitUntil("the root finished its three rounds") {
-                e.snapshot().nodes.any { it.depth == 0 && it.status == Status.ROUND_LIMIT }
+                e.snapshot().nodes.any { it.depth == 0 && it.status == Status.DONE && it.reason == Reason.ROUND_LIMIT }
             }
             val q = e.snapshot().questions.single()
             assertEquals(3, q.cost.rounds)

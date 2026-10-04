@@ -67,11 +67,12 @@ one queue, one round per task. A claim with rounds left goes back into the
 queue at its value of information × 0.5 per round it already ran, so a strong
 claim's second round still beats a weak sibling's first. Once a claim's value
 of information falls below `--voi-eps` it gets no further round and ends
-`DIMINISHING` ("not worth exploring"); a question stops once every remaining
+`DONE` with reason `DIMINISHING` ("not worth exploring"); a question stops once every remaining
 claim is below that threshold, reporting "stopped: nothing left could change
 the answer" (or "stopped: claim budget spent" when `--max-claims` ended it
 first — the hard cap is checked before the value-of-information gate). An
-`EXPAND` still explores a `DIMINISHING` claim, and skips every gate to do it.
+`EXPAND` still explores a claim finished for reason `DIMINISHING`, and skips
+every gate to do it.
 The tree's top-3 claims and links by value of information are its **cruxes**
 — "what would change the answer" (below).
 
@@ -103,7 +104,7 @@ contribution rather than value of information): 8 of 82 links were explored
 automatically (5 of the 7 root arguments' links, contributions 0.38–0.44, and
 3 at depth 2, 0.30–0.31), gathering 10 reasons a link holds and 13 that it
 fails, before the budget stopped the question at 26 rounds and $1.12;
-expanding one more link by hand (strength 0.5, left at `BUDGET`) added two
+expanding one more link by hand (strength 0.5, left `DONE` for reason `BUDGET`) added two
 undercutters, took its credence from 0.50 to 0.35 and moved the root from
 0.594 to 0.604, for $0.07.
 
@@ -213,12 +214,12 @@ Gradle's `run` task uses `demo/deliberate` as its working directory, and the bac
 | `--proposers claude,codex` | both | which CLIs propose arguments |
 | `--claude-model <m>` / `--codex-model <m>` | CLI default | model passed to that CLI |
 | `--max-processes <n>` | 8 | concurrent CLI processes, app-wide (EXP-07) |
-| `--max-rounds <n>` | 3 | rounds per claim before `ROUND_LIMIT` |
-| `--max-claims <n>` | 180 | hard cap: claims per question; claims that meet it become `BUDGET` (whether or not they already ran a round). An `EXPAND` still explores past it |
+| `--max-rounds <n>` | 3 | rounds per claim before `DONE` with reason `ROUND_LIMIT` |
+| `--max-claims <n>` | 180 | hard cap: claims per question; claims that meet it become `DONE` with reason `BUDGET` (whether or not they already ran a round). An `EXPAND` still explores past it |
 | `--max-args-per-side <n>` | 6 | a side of the root holding n arguments is saturated; a round never attaches beyond it |
 | `--saturation <p>` | 0.22 | a side whose Jev saturation (1 − p(an important consideration is still missing)) is ≥ p gets no more proposals |
 | `--voi-eps <e>` | 0.01 | explore a claim (or link) only while its exact q-weighted expected root movement is at least `e`; a question stops once none of its remaining nodes clears it (`0` disables the stop, leaving only `--max-claims`) |
-| `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `PRUNED` unless expanded |
+| `--explore-links on\|off` | on | explore links ("A is a reason for B") like claims; `off` leaves them `DONE` with reason `PRUNED` unless expanded |
 | `--data <dir>` | volatile | keep deliberations in `<dir>`: they survive restarts, including `kill -9` |
 | `--start-paused` | off | every restored question starts paused: nothing runs, not even a Jev call, until you resume a question; new questions run normally (see *Restarting paused*) |
 | `--semantics <id>` | `consensus` | what a node's `credence` reports: the consensus, or one layer id |
@@ -250,8 +251,9 @@ live Jev judgments of real proposer output; the data and reasoning are in
 only weakly with the number of arguments, so `--max-args-per-side` is the
 dependable stop for a side. `--voi-eps`'s default is a starting value from a
 one-off scratch review, not a calibration run (`minInfluence` and
-`DEPTH_LIMIT`-as-a-stop-rule are gone with model C, so most claims now stop on
-value of information, saturation or the claim budget, not depth).
+the `DEPTH_LIMIT` reason as a practical stop is gone with model C, so most
+claims now stop on value of information, saturation or the claim budget, not
+depth).
 
 The budget is spent in value-of-information order (see *Exploration*). With
 the defaults, the per-side caps bound the root to 12 arguments and any other
@@ -285,11 +287,11 @@ plus a couple of hundred Jev requests. In a calibration run using a per-side
 cap of 4, 2 arguments per call, `--min-influence 0.35`, and 8 processes, a
 60-claim question took about 1 minute on 2026-09-27. It expanded the root and
 6 of the 8 depth-1 claims, one round each, before the cap saturated them.
-Of the 50 depth-2 claims, 37 were `PRUNED` and 13 were `BUDGET`, and no claim
-hit `DEPTH_LIMIT`. With best-first exploration and triage (defaults, both CLIs,
+Of the 50 depth-2 claims, 37 finished for reason `PRUNED` and 13 for `BUDGET`,
+and no claim finished for `DEPTH_LIMIT`. With best-first exploration and triage (defaults, both CLIs,
 "Should cities ban private cars from their centres?"), a 60-claim tree took
 about 1.5 minutes on 2026-09-27: every depth-1 claim was explored, 6 of 38
-depth-2 claims were `BUDGET`, and Jev's triage merged 8 and nested 10
+depth-2 claims finished for reason `BUDGET`, and Jev's triage merged 8 and nested 10
 proposals as evidence. Jev calls slower than 20 s are logged to stderr.
 
 Iteration 4 (turns, balance, canonical prompts, seven credence layers,
@@ -297,8 +299,8 @@ Iteration 4 (turns, balance, canonical prompts, seven credence layers,
 private cars from their centres?": 140 claims in about 3.5 minutes, when the
 tree stopped growing by itself (below the 180-claim budget). The root ended
 6 pro / 5 con after 3 rounds; 11 of the 140 claims were explored at depth 1–3,
-most depth-2 and depth-3 claims ended `PRUNED`, and 27 claims sit at depth 4–5
-(`DEPTH_LIMIT`). Jev's triage over 149 proposals: 92 added, 39 nested as
+most depth-2 and depth-3 claims finished for reason `PRUNED`, and 27 claims
+sit at depth 4–5 with reason `DEPTH_LIMIT`. Jev's triage over 149 proposals: 92 added, 39 nested as
 evidence, 9 undercuts, 3 duplicates, 2 moved sides, 4 dropped. With the
 proposers taking turns, **no** root argument was a cross-proposer duplicate
 (0 of 11), where before about half of Claude/Codex same-round pairs at the root
@@ -361,7 +363,8 @@ time vs 2% for Sol — Jev does not catch this.
 With `--data <dir>` a deliberation survives a restart, `kill -9` included.
 Only **inputs** are kept in the one write-ahead file, `host.journal`: topology
 records capture every claim, edge, sensitivity cell and issue framing in
-creation order, while the journal's metadata fold holds per-claim status,
+creation order, while the journal's metadata fold holds per-claim status and
+completion reason,
 override, proposer, rewritten text, the Jev judgments (which are the `jev`
 stances), triage counts, rounds and errors. Nothing derived is written: every
 ordinary and arguments-first credence, influence, consensus and sensitivity

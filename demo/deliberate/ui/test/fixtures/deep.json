@@ -4,11 +4,11 @@
     { "root": "other", "text": "Unrelated question", "claims": 1, "active": false }
   ],
   "nodes": [
-    { "ref": "q", "kind": "CLAIM", "credence": 0.55, "root": "q", "text": "Is remote work better for productivity?", "depth": 0, "status": "SATURATED", "proposer": "question" },
-    { "ref": "a", "kind": "CLAIM", "credence": 0.6, "root": "q", "text": "Fewer interruptions at home.", "depth": 1, "status": "SATURATED", "proposer": "claude" },
-    { "ref": "b", "kind": "CLAIM", "credence": 0.45, "root": "q", "text": "Collaboration suffers remotely.", "depth": 1, "status": "ROUND_LIMIT", "proposer": "codex" },
-    { "ref": "a1", "kind": "CLAIM", "credence": 0.3, "root": "q", "text": "Home has its own distractions.", "depth": 2, "status": "PRUNED", "proposer": "codex" },
-    { "ref": "a1x", "kind": "CLAIM", "credence": 0.2, "root": "q", "text": "Children at home interrupt constantly.", "depth": 3, "status": "DEPTH_LIMIT", "proposer": "claude" },
+    { "ref": "q", "kind": "CLAIM", "credence": 0.55, "root": "q", "text": "Is remote work better for productivity?", "depth": 0, "status": "DONE", "reason": "SATURATED", "proposer": "question" },
+    { "ref": "a", "kind": "CLAIM", "credence": 0.6, "root": "q", "text": "Fewer interruptions at home.", "depth": 1, "status": "DONE", "reason": "SATURATED", "proposer": "claude" },
+    { "ref": "b", "kind": "CLAIM", "credence": 0.45, "root": "q", "text": "Collaboration suffers remotely.", "depth": 1, "status": "DONE", "reason": "ROUND_LIMIT", "proposer": "codex" },
+    { "ref": "a1", "kind": "CLAIM", "credence": 0.3, "root": "q", "text": "Home has its own distractions.", "depth": 2, "status": "DONE", "reason": "PRUNED", "proposer": "codex" },
+    { "ref": "a1x", "kind": "CLAIM", "credence": 0.2, "root": "q", "text": "Children at home interrupt constantly.", "depth": 3, "status": "DONE", "reason": "DEPTH_LIMIT", "proposer": "claude" },
     { "ref": "b1", "kind": "CLAIM", "credence": 0.65, "root": "q", "text": "Async tools substitute for hallway talk.", "depth": 2, "status": "STOPPED", "override": "STOP", "proposer": "claude" },
     { "ref": "other", "kind": "CLAIM", "credence": 0.5, "root": "other", "text": "Unrelated question", "depth": 0, "status": "QUEUED", "proposer": "question" },
     { "ref": "q-a", "kind": "EDGE", "credence": 0.7, "root": "q", "polarity": "SUPPORT", "source": "a", "target": "q", "strength": 0.7 },

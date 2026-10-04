@@ -253,21 +253,22 @@ names that model.)
   a rhetorical question?"). Its **contribution** is
   `reach × relevance × quality`, shown for reference only — since model C
   (§3 "Exact value of information") it does not gate or order
-  exploration; there is no contribution floor and no `PRUNED`-by-contribution
-  outcome (the `minInfluence` flag is removed). An undercutter's reach is
+  exploration; there is no contribution floor and no `DONE`/`PRUNED`
+  outcome from contribution (the `minInfluence` flag is removed). An undercutter's reach is
   `reach(parent) × strength(its edge) × strength(the undercut edge)`. Quality
   carries no canonical-form factor: canonical form is asked of the proposers
   only (EXP-02; why, in `CALIBRATION.md`). If the assessment fails, strength
   0.5 is used and relevance and quality count as 1. The root is always
   expanded. `maxDepth` survives only as an internal engine bound (unbounded by
   default) that tests use to keep a fake-driven tree small; it has no CLI flag
-  and a `DEPTH_LIMIT` claim beyond it does not otherwise arise in practice.
+  and a claim finished with reason `DEPTH_LIMIT` does not otherwise arise in
+  practice.
 - **EXP-06** A global `maxClaims` budget (default 180 per question) is enforced:
   no argument is attached once the tree holds that many claims. The budget is
   spent in exploration order (below), so it goes to the highest
   value-of-information claims first. Gates run in the order links-off → depth
   → budget → value of information (below); a claim that meets the cap ends
-  `BUDGET` whether or not it already ran a round — `rounds` still tells the
+  `DONE` with reason `BUDGET` whether or not it already ran a round — `rounds` still tells the
   two cases apart. A question at its budget reports `stoppedBy = "budget"`. The budget is a
   hard ceiling that stands beside the value-of-information stop below; it is
   checked first, so it wins over a claim whose value of information is still
@@ -324,9 +325,8 @@ claim's priority in the exploration queue** (below), replacing the earlier
 reach × relevance ordering; and once it falls below `--voi-eps`
 (`DEFAULT_VOI_EPSILON` = 0.01 — a starting value from a one-off scratch
 review, not a calibration run) the claim gets no (further) round and ends
-`DIMINISHING` (the status name is kept so pre-model-C records still restore;
-its meaning and the UI wording changed to "not worth exploring" /
-"nothing left could change the answer"). A question therefore stops once the
+`DONE` with reason `DIMINISHING`; the UI wording is "not worth exploring" /
+"nothing left could change the answer". A question therefore stops once the
 largest value of information over its remaining nodes falls below `--voi-eps`
 — reported `stoppedBy = "voi"` — with `maxClaims` (EXP-06) still standing as
 a hard cap checked first. `--voi-eps 0` disables the value-of-information
@@ -393,7 +393,7 @@ child rewords its link), and explores the link exactly like a claim:
   at its value of information; the links-off, depth, budget and
   value-of-information gates (§3) apply as to a claim. `--explore-links off`
   (default on) keeps links from being explored automatically — they end
-  `PRUNED` — while `EXPAND` still explores one.
+  `DONE` with reason `PRUNED` — while `EXPAND` still explores one.
 - **LINK-05 Rounds.** A link's round is EXP-02..04 with the link as the claim:
   per-side cap `maxArgsPerSideChild`, triage against the link's own
   arguments (EXP-03, so duplicates are caught against them; the claim-level
@@ -482,7 +482,7 @@ open question, each explored as a root of its own.
   claims"; the `/override` id is then the edge ref) — override to `AUTO`,
   `EXPAND` or `STOP` at any time. CTL-02..04 apply to a link unchanged.
 - **CTL-02** `EXPAND` always explores: whatever the claim's status —
-  queued, running, or finished for any reason including `BUDGET` and
+  queued, running, or `DONE` for any reason including `BUDGET` and
   `DIMINISHING` — its next
   round is **forced**, and it runs at least that round. It skips every
   scheduling gate (links-off, depth, budget and value of information), is
@@ -535,14 +535,17 @@ open question, each explored as a root of its own.
 
 ## 5. Claim status (the state machine the UI renders)
 
-`QUEUED → JUDGING → EXPLORING → SATURATED | ROUND_LIMIT`, with terminal
-alternatives `PRUNED`, `DEPTH_LIMIT`, `BUDGET`,
-`DIMINISHING` (its value of information fell below `--voi-eps`; model C, §3
-"Exact value of information"), `STOPPED`, `FAILED`, and — a
-question root only, reached from `QUEUED` in place of `JUDGING` — `FRAMED`
+The wire status vocabulary is exactly `QUEUED`, `JUDGING`, `EXPLORING`,
+`FRAMED`, `DONE`, `STOPPED`, `FAILED`. Normal automatic completion is
+`QUEUED → JUDGING → EXPLORING → DONE`; a `DONE` claim carries exactly one
+reason from `SATURATED`, `ROUND_LIMIT`, `PRUNED`, `DEPTH_LIMIT`, `BUDGET`,
+`DIMINISHING`. `reason` is null for every non-`DONE` status. `STOPPED` and
+`FAILED` remain distinct terminal statuses. `FRAMED` is also terminal and is
+used only for a question root reached from `QUEUED` in place of `JUDGING`
 (model A, §3 "Framing"): the root was split into readings or positions, each
-explored as a root of its own; the root itself never runs a round.
-Every status change is broadcast.
+explored as a root of its own; the root itself never runs a round. Therefore
+the engine's finished set is exactly `{DONE, STOPPED, FAILED, FRAMED}`. Every
+status or reason change is broadcast.
 
 ## 6. HTTP surface (the UI contract)
 
@@ -561,7 +564,7 @@ Every status change is broadcast.
   its edge's `target`) and every argument about a link carries `onLink` (that
   edge); a claim carries `evidence` (model B REFINE outcomes) when it has any;
   an EDGE carries its link's claim-like fields (`text`, `depth`,
-  `status`, `override`, `reach`, `contribution`, `proSaturation`,
+  `status`, nullable `reason`, `override`, `reach`, `contribution`, `proSaturation`,
   `conSaturation`, `rounds`, `duplicatesDropped`, `triage`, `error`); every
   claim and link carries `activity` while it is being explored, judged or
   assessed; the graph carries `consensusMembers`; every question
@@ -733,11 +736,12 @@ saturation request, so `saturation` remains 0.22. Sampling and caveats are in
   reproduces every layer's ordinary and arguments-first credence and every
   consensus (within 1e-9), restart after restart. Arguments-first evaluation
   makes no model call and therefore adds no cost record.
-- **DUR-02** The engine's per-claim metadata (question membership, status,
+- **DUR-02** The engine's per-claim metadata (question membership, status and
+  nullable completion reason,
   override, proposer, rewritten text, Jev judgments — plausibility and edge
   strength are the `jev` stances —, saturation, triage counts, rounds,
   errors) is one record per claim of named fields — and one per link (§3
-  "Links as claims": status, override, rounds, saturation, triage, reach,
+  "Links as claims": status, completion reason, override, rounds, saturation, triage, reach,
   contribution…), keyed `l:<edge ref>` — written as routed
   invocations into a hosted observation cell (a last-writer-wins fold per
   field). Only the fields that changed are written (a field back at its
@@ -762,15 +766,23 @@ saturation request, so `saturation` remains 0.22. Sampling and caveats are in
   construction, so the process cannot leave a half-created framing. Each question's EXP-10
   record (its non-root round yields, for reference only — its stop is
   computed live from restored claim status, not journaled) is one more
-  record of the same store; a record written before model C may also carry
+  record of the same store. Before enum decoding, restore applies this literal
+  legacy field map: `SATURATED → DONE/SATURATED`, `ROUND_LIMIT →
+  DONE/ROUND_LIMIT`, `PRUNED → DONE/PRUNED`, `DEPTH_LIMIT →
+  DONE/DEPTH_LIMIT`, `BUDGET → DONE/BUDGET`, and `DIMINISHING →
+  DONE/DIMINISHING`. The historical pair `status=ROUND_LIMIT` and
+  `error="budget exhausted"` restores as `DONE/BUDGET` with the obsolete error
+  removed. New-vocabulary records decode directly, and a restored legacy
+  record is rewritten with `status=DONE` plus `reason` on the next metadata
+  write. A record written before model C may also carry
   `diminished` (the removed yield stop), which decodes and is dropped on the
   next write. Every argument's link is rebuilt with it and its `l:` record
   re-applied; an edge targeting an edge places its source under that edge's
   link. A link whose `l:` record never reached the journal is rebuilt from
   the structure alone and queued afresh, like any other such claim. With
   `--explore-links off` a restored link — whatever status its record holds,
-  an interrupted `EXPLORING` one included — ends `PRUNED` at the LINK-04 gate
-  and runs no round unless expanded. Every known stance is
+  an interrupted `EXPLORING` one included — ends `DONE` with reason `PRUNED`
+  at the LINK-04 gate and runs no round unless expanded. Every known stance is
   re-applied (the graph skips a stance a node already holds). Every claim
   that was `QUEUED`, `JUDGING` or `EXPLORING` is re-queued — an interrupted
   round simply runs again — and an argument whose attach-time assessment

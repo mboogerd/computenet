@@ -24,14 +24,21 @@ internal object EngineRecords {
     const val QUESTION_KEY = "q:"
     /** SPEC §12: a question record's per-backend cost field is `cost.<backend>`. */
     const val COST_FIELD = "cost."
-    /**
-     * DUR-03: before computenet-dq2fy.24.1, a claim that had already run a round
-     * and then met the hard cap (EXP-06) was recorded `ROUND_LIMIT` with this
-     * error text instead of `BUDGET`. [apply] maps that pair back to `BUDGET`
-     * with a null error on restore; a record with this pair from any other
-     * status is left as written.
-     */
+    /** DUR-03: the pre-computenet-dq2fy.24.1 budget encoding. */
     private const val LEGACY_BUDGET_EXHAUSTED = "budget exhausted"
+
+    /**
+     * DUR-03: status values written before the 2026-09-30 DONE(reason)
+     * decision. [recordFrom] rewrites these raw JSON fields before enum decode.
+     */
+    private val LEGACY_STATUS = mapOf(
+        "\"SATURATED\"" to Reason.SATURATED,
+        "\"ROUND_LIMIT\"" to Reason.ROUND_LIMIT,
+        "\"PRUNED\"" to Reason.PRUNED,
+        "\"DEPTH_LIMIT\"" to Reason.DEPTH_LIMIT,
+        "\"BUDGET\"" to Reason.BUDGET,
+        "\"DIMINISHING\"" to Reason.DIMINISHING,
+    )
 
     /**
      * One claim's engine metadata as the store keeps it, one field per
@@ -46,6 +53,7 @@ internal object EngineRecords {
         val text: String? = null,
         val proposer: String? = null,
         val status: Status = Status.QUEUED,
+        val reason: Reason? = null,
         val override: Override = Override.AUTO,
         val roundLimit: Int? = null,
         val rounds: Int = 0,
@@ -96,7 +104,7 @@ internal object EngineRecords {
         question = c.root.id.toString(),
         // A link's text is built from its ends and it has no proposer: neither is stored.
         text = c.text.takeIf { !c.isLink && it != c.structureText }, proposer = c.proposer.takeIf { !c.isLink },
-        status = c.status, override = c.override,
+        status = c.status, reason = c.reason.takeIf { c.status == Status.DONE }, override = c.override,
         roundLimit = c.roundLimit, rounds = c.rounds,
         plausibility = c.plausibility, relevance = c.relevance, quality = c.quality,
         reach = c.reach.takeIf { c.parent != null }, contribution = c.contribution.takeIf { c.parent != null },
@@ -116,6 +124,7 @@ internal object EngineRecords {
         r.proposer?.let { c.proposer = it }
         // SPEC §11: whatever was still active re-enters the queue; an interrupted round re-runs.
         c.status = if (r.status in ExplorationPolicy.ACTIVE) Status.QUEUED else r.status
+        c.reason = r.reason.takeIf { c.status == Status.DONE }
         c.override = r.override
         r.roundLimit?.let { c.roundLimit = it }
         c.rounds = r.rounds
@@ -137,10 +146,6 @@ internal object EngineRecords {
         c.evidence += r.evidence
         c.merged = r.merged
         c.error = r.error
-        if (r.status == Status.ROUND_LIMIT && r.error == LEGACY_BUDGET_EXHAUSTED) {
-            c.status = Status.BUDGET
-            c.error = null
-        }
         c.anyCallSucceeded = r.anyCallSucceeded
         c.edge?.strength = r.edgeStrength
     }
@@ -148,8 +153,19 @@ internal object EngineRecords {
     fun fieldsOf(r: ClaimRecord): Map<String, String> =
         RECORDS.encodeToJsonElement(ClaimRecord.serializer(), r).jsonObject.mapValues { it.value.toString() }
 
-    fun recordFrom(fields: Map<String, String>): ClaimRecord =
-        RECORDS.decodeFromJsonElement(ClaimRecord.serializer(), JsonObject(fields.mapValues { RECORDS.parseToJsonElement(it.value) }))
+    fun recordFrom(fields: Map<String, String>): ClaimRecord {
+        val legacyReason = LEGACY_STATUS[fields["status"]]
+        val migrated = if (legacyReason == null) fields else fields.toMutableMap().apply {
+            val budgetPair = legacyReason == Reason.ROUND_LIMIT && fields["error"] == "\"$LEGACY_BUDGET_EXHAUSTED\""
+            this["status"] = "\"DONE\""
+            this["reason"] = "\"${if (budgetPair) Reason.BUDGET else legacyReason}\""
+            if (budgetPair) remove("error")
+        }
+        return RECORDS.decodeFromJsonElement(
+            ClaimRecord.serializer(),
+            JsonObject(migrated.mapValues { RECORDS.parseToJsonElement(it.value) }),
+        )
+    }
 
     fun questionFieldsOf(q: CellRef, state: EngineState, ledger: CostLedger): Map<String, String> =
         RECORDS.encodeToJsonElement(

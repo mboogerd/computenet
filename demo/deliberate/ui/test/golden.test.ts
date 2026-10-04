@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { GraphDto, Override, Status } from '../src/api/types';
-import { ACTIVITY_VERB, BACKEND_NAMES, STATUS_HINT, STATUS_LABEL } from '../src/util/format';
+import type { GraphDto, Override } from '../src/api/types';
+import { ACTIVITY_VERB, BACKEND_NAMES, REASON_HINT, REASON_LABEL, STATUS_HINT, STATUS_LABEL } from '../src/util/format';
 import { buildForest, countClaims } from '../src/tree/buildTree';
 import golden from './fixtures/golden.json';
 
@@ -23,6 +23,11 @@ describe('golden fixture', () => {
       if (n.status === undefined) continue;
       expect(Object.keys(STATUS_LABEL)).toContain(n.status);
       expect(Object.keys(STATUS_HINT)).toContain(n.status);
+      expect(n.reason === undefined).toBe(n.status !== 'DONE');
+      if (n.reason !== undefined) {
+        expect(Object.keys(REASON_LABEL)).toContain(n.reason);
+        expect(Object.keys(REASON_HINT)).toContain(n.reason);
+      }
     }
   });
 

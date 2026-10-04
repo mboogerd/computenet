@@ -86,13 +86,13 @@ internal class RoundProtocol(
      * One round (EXP-02..05). The proposers take turns in their configured
      * order ([proposeTurn]); each turn sees the claim's arguments as they
      * stand after the previous turn's triage, so a later proposer is asked
-     * for what is still missing. Returns a terminal status when the round
+     * for what is still missing. Returns a terminal outcome when the round
      * ends the expansion early (all calls failed, budget), else null
      * ([closeRound]). A [forced] round (CTL-02) ignores saturation and the
      * budget; its new arguments are bounded by an allowance of one per-side
      * cap per side instead.
      */
-    fun run(c: Claim, sides: List<Side>, forced: Boolean): Status? {
+    fun run(c: Claim, sides: List<Side>, forced: Boolean): Finish? {
         val r = Round(c, sides, forced, capOf(c))
         for (p in proposers) {
             if (r.budgetHit) break
@@ -281,9 +281,9 @@ internal class RoundProtocol(
     /**
      * Ends a round once every proposer had its turn: counts it, assesses and
      * queues its new and reworded arguments, records its yield (EXP-10) and
-     * re-judges saturation (EXP-04). Returns the status that ends the claim, if any.
+     * re-judges saturation (EXP-04). Returns the outcome that ends the claim, if any.
      */
-    private fun closeRound(r: Round): Status? {
+    private fun closeRound(r: Round): Finish? {
         val c = r.claim
         val allProposersFailed = r.failures == r.asked && r.asked > 0
         val noProposerHasEverSucceeded = host.locked {
@@ -299,8 +299,8 @@ internal class RoundProtocol(
         recordYield(c, r.attached, r.counts, r.requested)
         judgeSaturation(c, r.sides)
         return when {
-            r.budgetHit -> Status.BUDGET
-            allProposersFailed && noProposerHasEverSucceeded -> Status.FAILED
+            r.budgetHit -> Finish(Status.DONE, Reason.BUDGET)
+            allProposersFailed && noProposerHasEverSucceeded -> Finish(Status.FAILED)
             else -> null
         }
     }
@@ -541,7 +541,12 @@ internal class RoundProtocol(
             n.contribution = reach
             updateLink(n, reach)
             // The link is re-gated with the new wording's judgments (replaceable() kept it unexplored).
-            n.link?.let { l -> if (l.status in FINISHED && l.override != Override.STOP) l.status = Status.QUEUED }
+            n.link?.let { l ->
+                if (l.status in FINISHED && l.override != Override.STOP) {
+                    l.status = Status.QUEUED
+                    l.reason = null
+                }
+            }
         }
         host.setStances(n.ref to null, edge.ref to null)
     }

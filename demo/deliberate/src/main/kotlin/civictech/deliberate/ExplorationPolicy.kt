@@ -45,8 +45,8 @@ internal data class QuestionView(
 /** EXP-10: one argument a round attached, as its round yield counts it. */
 internal data class AttachedValue(val strength: Double?, val relevance: Double?, val quality: Double?)
 
-/** How [DeliberationEngine] ends a claim's expansion: its final status and, if any, the error to record. */
-internal data class Finish(val status: Status, val error: String? = null)
+/** How [DeliberationEngine] ends a claim's expansion: its final status and DONE reason. */
+internal data class Finish(val status: Status, val reason: Reason? = null)
 
 /**
  * The exploration rules of SPEC §3 (EXP-04..06, EXP-10, CTL-02/03/05) as
@@ -56,18 +56,15 @@ internal data class Finish(val status: Status, val error: String? = null)
  * The queue order and stop use exact, q-weighted two-point re-evaluation from
  * [CredenceGraph.exactValueOf], decayed per round ([voiOf]). It orders the
  * queue ([priorityOf]), and a node below `voiEpsilon` gets no (further) round:
- * it ends DIMINISHING. A question therefore stops once the largest exact value
+ * it ends DONE(DIMINISHING). A question therefore stops once the largest exact value
  * over its remaining nodes falls below ε — with its hard cost cap (`maxClaims`,
  * EXP-06 BUDGET) still standing.
  */
 internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
 
     companion object {
-        /** SPEC §3: statuses that end a claim's expansion. DEPTH_LIMIT only arises from an explicit `maxDepth`. */
-        val FINISHED = setOf(
-            Status.SATURATED, Status.ROUND_LIMIT, Status.PRUNED, Status.DEPTH_LIMIT,
-            Status.BUDGET, Status.DIMINISHING, Status.STOPPED, Status.FAILED, Status.FRAMED,
-        )
+        /** SPEC §5: statuses that end a claim's expansion. */
+        val FINISHED = setOf(Status.DONE, Status.STOPPED, Status.FAILED, Status.FRAMED)
         val ACTIVE = setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING)
         val SIDES = listOf(Polarity.SUPPORT, Polarity.ATTACK)
         val Side.opposite get() = if (this == Polarity.SUPPORT) Polarity.ATTACK else Polarity.SUPPORT
@@ -135,53 +132,53 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
     /**
      * The gate that ends a QUEUED claim before its first round without any
      * judgment (EXP-05; CTL-02 skips them), or null when it is queued: links
-     * off, beyond an explicit `maxDepth` (DEPTH_LIMIT), the hard cap (BUDGET,
-     * EXP-06) and, model C, a value of information below ε (DIMINISHING).
+     * off, beyond an explicit `maxDepth` (DONE/DEPTH_LIMIT), the hard cap
+     * (DONE/BUDGET, EXP-06) and, model C, a value of information below ε
+     * (DONE/DIMINISHING).
      */
-    fun scheduleGate(c: ClaimView, q: QuestionView): Status? =
+    fun scheduleGate(c: ClaimView, q: QuestionView): Finish? =
         if (c.isRoot || c.override == Override.EXPAND || c.forceRound) null
         else when {
-            c.isLink && !config.exploreLinks -> Status.PRUNED
-            c.depth > config.maxDepth -> Status.DEPTH_LIMIT
-            q.treeSize >= config.maxClaims -> Status.BUDGET
-            belowEpsilon(c) -> Status.DIMINISHING
+            c.isLink && !config.exploreLinks -> Finish(Status.DONE, Reason.PRUNED)
+            c.depth > config.maxDepth -> Finish(Status.DONE, Reason.DEPTH_LIMIT)
+            q.treeSize >= config.maxClaims -> Finish(Status.DONE, Reason.BUDGET)
+            belowEpsilon(c) -> Finish(Status.DONE, Reason.DIMINISHING)
             else -> null
         }
 
     /** EXP-06 after EXP-05, once a dequeued claim was judged. A forced round (CTL-02) passes. */
-    fun startBudgetGate(forceRound: Boolean, treeSize: Int): Status? =
-        Status.BUDGET.takeIf { !forceRound && treeSize >= config.maxClaims }
+    fun startBudgetGate(forceRound: Boolean, treeSize: Int): Finish? =
+        Finish(Status.DONE, Reason.BUDGET).takeIf { !forceRound && treeSize >= config.maxClaims }
 
     /**
      * Model C, after the budget gate, once a dequeued claim was judged: its value
      * of information, re-read now, is below ε. A forced round (CTL-02) passes.
      */
-    fun startVoiGate(c: ClaimView): Status? = Status.DIMINISHING.takeIf { !c.forceRound && belowEpsilon(c) }
+    fun startVoiGate(c: ClaimView): Finish? =
+        Finish(Status.DONE, Reason.DIMINISHING).takeIf { !c.forceRound && belowEpsilon(c) }
 
     /**
      * The status that ends [c]'s expansion before its next round, or null if
      * it gets one. A forced round (CTL-02) ignores the round limit, saturation,
      * the budget and the value of information.
      */
-    fun terminalStatus(c: ClaimView, q: QuestionView): Status? = when {
-        c.override == Override.STOP -> Status.STOPPED
-        cancelled(c, q) -> Status.STOPPED
-        nextSides(c).isEmpty() -> Status.SATURATED
-        !c.forceRound && c.rounds >= c.roundLimit -> Status.ROUND_LIMIT
-        !c.forceRound && q.treeSize >= config.maxClaims -> Status.BUDGET
-        !c.forceRound && belowEpsilon(c) -> Status.DIMINISHING
+    fun terminalStatus(c: ClaimView, q: QuestionView): Finish? = when {
+        c.override == Override.STOP -> Finish(Status.STOPPED)
+        cancelled(c, q) -> Finish(Status.STOPPED)
+        nextSides(c).isEmpty() -> Finish(Status.DONE, Reason.SATURATED)
+        !c.forceRound && c.rounds >= c.roundLimit -> Finish(Status.DONE, Reason.ROUND_LIMIT)
+        !c.forceRound && q.treeSize >= config.maxClaims -> Finish(Status.DONE, Reason.BUDGET)
+        !c.forceRound && belowEpsilon(c) -> Finish(Status.DONE, Reason.DIMINISHING)
         else -> null
     }
 
     /**
-     * How a claim ends when its expansion stops with [status]. A STOP that
-     * raced the last round boundary still wins (CTL-03). EXP-06: a claim that
-     * meets the hard cap ends BUDGET whether or not it ran a round; `rounds`
-     * still distinguishes the two cases.
+     * Resolves [end] at the round boundary. A STOP that raced the boundary
+     * still wins (CTL-03); otherwise the DONE reason is preserved.
      */
-    fun finish(c: ClaimView, status: Status): Finish = when {
+    fun finish(c: ClaimView, end: Finish): Finish = when {
         c.override == Override.STOP -> Finish(Status.STOPPED)
-        else -> Finish(status)
+        else -> end
     }
 
     /** EXP-06: whether a question holding [treeSize] claims may take one more; a forced round (CTL-02) always may. */
@@ -191,7 +188,7 @@ internal class ExplorationPolicy(val config: DeliberationEngine.Config) {
      * Why a question stopped growing early, if it did (QuestionDto.stoppedBy):
      * the human stopped it (CTL-03 on its root), its hard cap, or — once no work
      * is left ([active] false) — model C's value-of-information stop, when it
-     * left at least one node DIMINISHING.
+     * left at least one node DONE(DIMINISHING).
      */
     fun stoppedBy(q: QuestionView, active: Boolean, anyDiminishing: Boolean): String? = when {
         q.stopped -> STOPPED_BY_HUMAN
