@@ -135,6 +135,63 @@ The old yield stop is **obsolete**: model C removed it in PR #1138. Yield
 history remains diagnostic only, and no yield parameter or stop is
 reintroduced by this calibration.
 
+## Production-limit exact-VoI follow-up (2026-10-04)
+
+The follow-up replaced the one-round/depth-1 experiment with the production
+shape: three rounds, unbounded depth, links enabled, one Sonnet proposer and
+one engine worker. A full three-question run at the production 180-claim cap
+was estimated at about $5.60 from the earlier run, above the $5 allowance, so
+the planned cap was 110 claims per question. The first two completed trees cost $1.583804 and
+$1.573629; that projects all three at $4.736149, leaving about $0.26 for the
+cached-material Jev check and variance. Candidate epsilon values were widened
+past the old 0.048 median to 0, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.10,
+0.12 and 0.16.
+
+Only two questions completed within this run's allowance. Both live trees were
+generated at epsilon 0, reached 110 claims and stopped on the claim budget:
+
+| question | explored claims / links | external calls | useful-tree cost |
+|---|---:|---:|---:|
+| free public transport | 24 / 32 | 639 | $1.583804 |
+| coffee and type 2 diabetes | 19 / 32 | 598 | $1.573629 |
+
+Across their 436 recorded terminal transitions, 417 were `BUDGET` (exact VoI
+0.0001–0.0883, median 0.0092), 14 were `ROUND_LIMIT` (0.0824–0.1737, median
+0.1416), and 5 were `SATURATED` (0.0235–0.2659, median 0.0465). Those are
+epsilon-zero observations, not candidate outcomes: epsilon 0 disables the VoI
+stop, so neither completed question could stop by VoI.
+
+The total API-equivalent/assumed spend was **$5.011981**: $3.157433 for the two
+useful trees, $0.528873 in the first run that hit the repository's five-minute
+test timeout, $1.007464 in a duplicate partial tree left running after its
+Gradle parent was stopped, and $0.318211 in the final aborted recovery. The
+last recovery exceeded the ceiling by $0.011981 because its resume/cap control
+was not forwarded into the test process; it was stopped immediately and no
+further live call was made. The third, practical question therefore has no
+production-shaped sample.
+
+The two completed trees and their raw model/Jev responses are committed as
+`src/test/resources/calibration/voi-tape/voi-tape.json`. The first persistent
+tape writer collapsed repeated identical requests to one response. That made
+the tape diverge when replayed through the engine even at epsilon 0, so it
+cannot honestly produce the planned counterfactual epsilon table. The harness
+now records each repeated response with an occurrence number for a future
+fresh run; this interrupted tape is explicitly marked non-sequential. Its
+live-tree and cost table can be rendered without network or model calls with:
+
+```bash
+./gradlew :demo:deliberate:test \
+  --tests 'civictech.deliberate.CalibrationTest.renderVoiFromPersistedTape' \
+  --rerun --no-daemon --no-build-cache
+```
+
+**Decision: keep `DEFAULT_VOI_EPSILON` = 0.01, uncalibrated.** The follow-up
+did not obtain the required three questions, and its two completed
+epsilon-zero trees ended at the budget. Because the persisted responses cannot
+support exact candidate replay, this run gives no evidence that any candidate
+through 0.16 lets the VoI stop end a question. Moving the default would turn an
+incomplete, non-discriminating run into false precision.
+
 ## Current-judgment saturation check (2026-10-04)
 
 The same harness invocation re-asked current Jev on the cached 24 node-sides
@@ -153,9 +210,9 @@ result remains within a few points of the original calibration:
 **Decision: keep `DEFAULT_SATURATION` = 0.22.** On current judgments, roughly
 half of sides saturate by three arguments and nearly two thirds by four; empty
 sides never do. That is the intended early-stop shape, while the cap remains
-the dependable bound. The fresh VoI trees above used only one round per node,
-so they do not add a second saturation-threshold sample beyond this depth
-replay.
+the dependable bound. The bounded calibration used only one round per node,
+and the production-shape follow-up did not remeasure this threshold, so
+neither adds a second saturation-threshold sample beyond this depth replay.
 
 ## Questionless CRED-01 recalibration (2026-10-03)
 
