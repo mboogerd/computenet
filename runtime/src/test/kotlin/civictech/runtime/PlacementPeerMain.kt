@@ -43,6 +43,7 @@ object PlacementPeerMain {
 
         val manifest = requireNotNull(manifestFile) { "--manifest is required" }
         val nodeName = requireNotNull(node) { "--node is required" }
+        PlacementFixture.resetCaptures()
         val runtime = Runtime.boot(
             Manifest.load(manifest),
             nodeName,
@@ -50,6 +51,7 @@ object PlacementPeerMain {
             overrides = overrides,
         )
         try {
+            println("computenet-recovered ${runtime.recovered}")
             runtime.open()
             val port = runtime.boundAddress?.let { URI(it.text).port.takeIf { it >= 0 } } ?: 0
             println(JvmPeer.PORT_LINE_PREFIX + "ws " + port)

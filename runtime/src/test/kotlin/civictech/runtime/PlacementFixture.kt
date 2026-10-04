@@ -7,48 +7,39 @@ import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.UnionSetCell
-import civictech.cell.graph.CellFactory
+import civictech.cell.graph.CellFactory as FactoryContract
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
+import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 
 /** The identical graph and manifests used by the in-process and forked placement tests. */
 object PlacementFixture {
 
-    /**
-     * Build the placement pipeline from scratch in every JVM. [capture] is test-only: it
-     * lets the test JVM retain the concrete sink (and source) that its own factories built.
-     */
-    fun spec(capture: (String, Cell) -> Unit = { _, _ -> }): GraphSpec = GraphSpec(
+    /** Build the placement pipeline from scratch in every JVM. */
+    fun spec(): GraphSpec = GraphSpec(
         listOf(
             SpawnStep(
                 handle = "items",
-                factory = CellFactory { ref ->
-                    SetCell<String>(ref).also { capture("items", it) }
-                },
+                factory = SetFactory("items"),
                 placement = "source",
             ),
             SpawnStep(
                 handle = "union",
-                factory = CellFactory { ref ->
-                    UnionSetCell<String>(ref).also { capture("union", it) }
-                },
+                factory = UnionFactory("union"),
                 placement = "op",
             ),
             SpawnStep(
                 handle = "relay",
-                factory = CellFactory { ref ->
-                    UnionSetCell<String>(ref).also { capture("relay", it) }
-                },
+                factory = UnionFactory("relay"),
                 placement = "relay",
             ),
             SpawnStep(
                 handle = "view",
-                factory = CellFactory { ref ->
-                    SetFoldCell(ref).also { capture("view", it) }
-                },
+                factory = FoldFactory("view"),
                 placement = "sink",
             ),
             ConnectStep("items", "outlet", "union", "inlet"),
@@ -56,6 +47,13 @@ object PlacementFixture {
             ConnectStep("relay", "outlet", "view", "inlet"),
         ),
     )
+
+    fun captured(handle: String): Cell =
+        captured[handle] ?: throw IllegalStateException("placement fixture did not capture '$handle'")
+
+    fun resetCaptures() {
+        captured.clear()
+    }
 
     fun singleHost(): Manifest = Manifest(
         nodes = mapOf(
@@ -95,8 +93,36 @@ object PlacementFixture {
         ),
     )
 
+    fun threeJvmDurable(root: Path): Manifest = threeJvm().let { manifest ->
+        manifest.copy(
+            nodes = manifest.nodes.mapValues { (name, node) ->
+                node.copy(
+                    journalDir = root.resolve(name).toString(),
+                    journalTopology = true,
+                )
+            },
+        )
+    }
+
+    private data class SetFactory(private val handle: String) : FactoryContract {
+        override fun create(ref: CellRef): SetCell<String> =
+            SetCell<String>(ref).also { captured[handle] = it }
+    }
+
+    private data class UnionFactory(private val handle: String) : FactoryContract {
+        override fun create(ref: CellRef): UnionSetCell<String> =
+            UnionSetCell<String>(ref).also { captured[handle] = it }
+    }
+
+    private data class FoldFactory(private val handle: String) : FactoryContract {
+        override fun create(ref: CellRef): SetFoldCell =
+            SetFoldCell(ref).also { captured[handle] = it }
+    }
+
     private fun selectorsTo(node: String): Map<String, String> =
         listOf("source", "op", "relay", "sink").associateWith { node }
+
+    private val captured = ConcurrentHashMap<String, Cell>()
 
     /** A minimal sink fold kept local because kernel test helpers are not on :runtime's classpath. */
     class SetFoldCell(override val ref: CellRef) : Cell {
