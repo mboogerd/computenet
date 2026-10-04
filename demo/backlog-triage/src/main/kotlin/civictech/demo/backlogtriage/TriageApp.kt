@@ -20,6 +20,15 @@ import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.flag
 import civictech.demo.shell.respond
+import civictech.demograph.ranking.BradleyTerry
+import civictech.demograph.ranking.Contribution
+import civictech.demograph.ranking.Elo
+import civictech.demograph.ranking.Glicko
+import civictech.demograph.ranking.PairwisePreference
+import civictech.demograph.ranking.TrueSkill
+import civictech.demograph.ranking.WengLin
+import civictech.demograph.ranking.WilsonAggregator
+import civictech.demograph.ranking.contributions
 import civictech.inspect.InspectorFlag
 import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
@@ -60,11 +69,10 @@ import civictech.cell.data.view.MapHubCell
  * ponytail: mean-of-signs, biased when comparison coverage is uneven;
  * upgrade path is Bradley–Terry over the same prefs set.
  */
-data class Pref(val agent: String, val winner: String, val loser: String) : Serializable
+typealias Pref = PairwisePreference
 
-/** One pairwise vote projected onto one feature; carries agent AND opponent
- *  so distinct preferences never collide as set elements. */
-data class Contribution(val item: String, val agent: String, val opponent: String, val sign: Long) : Serializable
+/** The demo calls demograph's [PairwisePreference.actor] an agent. */
+val PairwisePreference.agent: String get() = actor
 
 object TriagePipeline {
     data class Refs(
@@ -91,12 +99,7 @@ object TriagePipeline {
             prefsRef = prefs.refAs()
             featureMetaRef = featureMeta.refAs()
             val contribs = spawn("contribs") {
-                FlatMapSetCell(ref = it, f = { p: Pref ->
-                    listOf(
-                        Contribution(p.winner, p.agent, p.loser, +1),
-                        Contribution(p.loser, p.agent, p.winner, -1),
-                    )
-                })
+                FlatMapSetCell(ref = it, f = { p: Pref -> p.contributions() })
             }
             val score = spawn("score") {
                 GroupByCell(
