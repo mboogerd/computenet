@@ -245,17 +245,61 @@
       "category": "handshake",
       "kind": "handshake-text",
       "file": "handshake/WV-HELLO-UNNAMED-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STAMPED-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STAMPED-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STAMPED-02",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STAMPED-02.json"
+    },
+    {
+      "id": "WV-PAYLOAD-WATERMARKDELTA-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-WATERMARKDELTA-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-WATERMARKDELTA-02",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-WATERMARKDELTA-02.json"
+    },
+    {
+      "id": "WV-PAYLOAD-LEADERMARK-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-LEADERMARK-01.json"
+    },
+    {
+      "id": "WV-PORT-API-SETDELTA-01",
+      "category": "frames/port-api",
+      "kind": "frame",
+      "file": "frames/port-api/WV-PORT-API-SETDELTA-01.json"
+    },
+    {
+      "id": "WV-PORT-MGMT-LINKTO-01",
+      "category": "frames/port-management",
+      "kind": "frame",
+      "file": "frames/port-management/WV-PORT-MGMT-LINKTO-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STAMPED-03",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STAMPED-03.json"
     }
   ],
   "pending": [
     {"discriminator": "CounterDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "PnCounterDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "WatermarkDelta", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "SetDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "ListDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "RoutedCommand", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Stamped", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "LeaderMark", "owedBy": "computenet-ncz.3"},
     {"discriminator": "Owned", "owedBy": "computenet-ncz.3"},
     {"discriminator": "Frozen", "owedBy": "computenet-ncz.3"},
     {"discriminator": "Borrowed", "owedBy": "computenet-ncz.3"},
