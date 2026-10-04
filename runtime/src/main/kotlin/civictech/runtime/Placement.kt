@@ -38,6 +38,9 @@ class PlacementPlan private constructor(
     private val refs: Map<String, CellRef>,
     private val nodes: Map<String, String?>,
     private val replicatedHandles: Set<String>,
+    private val spawns: Map<String, SpawnStep>,
+    private val activeHandles: Set<String>,
+    private val crossEdges: List<CrossEdge>,
 ) {
     /** The mesh-stable identity of a non-replicated spawn handle. */
     fun refOf(handle: String): CellRef {
@@ -60,13 +63,41 @@ class PlacementPlan private constructor(
          */
         fun of(spec: GraphSpec, manifest: Manifest, node: String): PlacementPlan? {
             if (manifest.placements.isEmpty()) return null
+            return plan(spec, manifest, node, previous = null)
+        }
+
+        /**
+         * Plans one graph [spec] delta against [previous]'s cumulative handle,
+         * identity and cross-edge state. The returned halves contain only links
+         * introduced by this delta; its private state carries the cumulative
+         * fold for the next call.
+         */
+        fun of(
+            spec: GraphSpec,
+            manifest: Manifest,
+            node: String,
+            previous: PlacementPlan,
+        ): PlacementPlan? {
+            if (manifest.placements.isEmpty()) return null
+            require(previous.node == node) {
+                "prior placement plan belongs to node '${previous.node}', not '$node'"
+            }
+            return plan(spec, manifest, node, previous)
+        }
+
+        private fun plan(
+            spec: GraphSpec,
+            manifest: Manifest,
+            node: String,
+            previous: PlacementPlan?,
+        ): PlacementPlan {
 
             val lowered = spec.lowered()
-            val spawns = lowered.filterIsInstance<SpawnStep>()
+            val deltaSpawns = lowered.filterIsInstance<SpawnStep>()
 
             // Placement names are a whole-spec precondition. Refuse a missing
             // selector before pinning identities or classifying any later step.
-            spawns.forEach { step ->
+            deltaSpawns.forEach { step ->
                 if (!(step.replicated && step.placement == null)) {
                     val selector = step.placement ?: "default"
                     if (selector !in manifest.placements) {
@@ -78,27 +109,32 @@ class PlacementPlan private constructor(
                 }
             }
 
-            val spawnByHandle = linkedMapOf<String, SpawnStep>()
-            spawns.forEach { step ->
-                check(spawnByHandle.put(step.handle, step) == null) {
+            val spawnByHandle = LinkedHashMap(previous?.spawns.orEmpty())
+            deltaSpawns.forEach { step ->
+                check(step.handle !in spawnByHandle) {
                     "duplicate handle '${step.handle}'"
+                }
+                spawnByHandle[step.handle] = if (step.replicated) {
+                    step
+                } else {
+                    step.copy(identity = pin(step.handle, step.identity))
                 }
             }
 
-            val assignedNodes = spawnByHandle.mapValues { (_, step) ->
-                if (step.replicated && step.placement == null) {
+            val assignedNodes = LinkedHashMap(previous?.nodes.orEmpty())
+            deltaSpawns.forEach { step ->
+                assignedNodes[step.handle] = if (step.replicated && step.placement == null) {
                     null
                 } else {
                     manifest.placements.getValue(step.placement ?: "default")
                 }
             }
-            val pinnedSpawns = spawnByHandle.mapValues { (_, step) ->
-                if (step.replicated) step else step.copy(identity = pin(step.handle, step.identity))
+            val refs = LinkedHashMap(previous?.refs.orEmpty())
+            deltaSpawns.filterNot { it.replicated }.forEach { step ->
+                refs[step.handle] = (spawnByHandle.getValue(step.handle).identity as IdentityBinding.Exact).ref
             }
-            val refs = pinnedSpawns.mapNotNull { (handle, step) ->
-                if (step.replicated) null else handle to (step.identity as IdentityBinding.Exact).ref
-            }.toMap()
-            val replicated = spawnByHandle.filterValues { it.replicated }.keys
+            val replicated = previous?.replicatedHandles.orEmpty().toMutableSet()
+            replicated += deltaSpawns.filter { it.replicated }.map { it.handle }
 
             fun spawn(handle: String): SpawnStep = spawnByHandle[handle]
                 ?: throw IllegalStateException("unknown spawn handle '$handle'")
@@ -136,13 +172,14 @@ class PlacementPlan private constructor(
             val localSteps = mutableListOf<GraphStep>()
             val producerHalves = mutableListOf<CrossEdge>()
             val consumerHalves = mutableListOf<CrossEdge>()
-            val active = mutableSetOf<String>()
+            val active = previous?.activeHandles.orEmpty().toMutableSet()
+            val liveCrossEdges = previous?.crossEdges.orEmpty().toMutableList()
 
             lowered.forEach { step ->
                 when (step) {
                     is SpawnStep -> {
                         check(active.add(step.handle)) { "duplicate handle '${step.handle}'" }
-                        if (local(step.handle)) localSteps += pinnedSpawns.getValue(step.handle)
+                        if (local(step.handle)) localSteps += spawnByHandle.getValue(step.handle)
                     }
 
                     is ConnectStep -> {
@@ -161,6 +198,7 @@ class PlacementPlan private constructor(
                                 }
                                 val edge = crossEdge(step)
                                 if (fromLocal) producerHalves += edge else consumerHalves += edge
+                                liveCrossEdges += edge
                             }
                         }
                     }
@@ -177,15 +215,15 @@ class PlacementPlan private constructor(
 
                     is DespawnStep -> {
                         requireActive(active, step.handle)
+                        val hasCrossEdge = liveCrossEdges.any {
+                            it.fromHandle == step.handle || it.toHandle == step.handle
+                        }
+                        if (hasCrossEdge) {
+                            throw IllegalStateException(
+                                "despawn '${step.handle}': cross-node despawn is not supported",
+                            )
+                        }
                         if (local(step.handle)) {
-                            val hasCrossEdge = (producerHalves + consumerHalves).any {
-                                it.fromHandle == step.handle || it.toHandle == step.handle
-                            }
-                            if (hasCrossEdge) {
-                                throw IllegalStateException(
-                                    "despawn '${step.handle}': cross-node despawn is not supported",
-                                )
-                            }
                             localSteps += step
                         }
                         active.remove(step.handle)
@@ -203,6 +241,9 @@ class PlacementPlan private constructor(
                 refs = refs,
                 nodes = assignedNodes,
                 replicatedHandles = replicated,
+                spawns = spawnByHandle,
+                activeHandles = active,
+                crossEdges = liveCrossEdges,
             )
         }
 
