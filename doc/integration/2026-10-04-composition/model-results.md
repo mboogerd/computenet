@@ -253,6 +253,12 @@ Every control diverges. Minimal traces are in `report.txt`.
 
 ## 6. Coverage gaps, stated precisely
 
+- **Idempotent absorption (L1) is not exercised.** The model routes every data frame through
+  `X`'s exact-position dedup, including mergeable `SET` inputs. The positions note instead lets an
+  idempotent inlet *absorb* duplicates, including different content re-issued at a live position
+  (`per-link-positions.md` §5.3, L1). The mergeable-cell HOLDS results in §2 therefore establish
+  the dedup path only, not the absorb path. Follow-up: computenet-gl2i7.4.
+
 - **Bounds.** Per-cell projections: ≤ 2 lanes, ≤ 2 frames per lane, one fault of each kind.
   Flip: 3 frames with one shard crash, 2 frames with one router crash; both parties crashing in
   one run only under walks (2 + 2 crashes). Promotion: 2 frames exhaustive, 5 under walks.

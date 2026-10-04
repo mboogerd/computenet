@@ -88,7 +88,10 @@ class CellModelTest {
         val sc = Scenario("relay-suspend-restart", Layer.entries.toSet(), LeafKind.RELAY, perLane = 2, budget = Budget(crash = 1, restart = 1, suspend = 1, checkpoint = 1))
         val e = diverges("finding/REPLAY-1", CellModel(sc, canonical), "took one output twice")
         val tr = e.counterexample!!.trace
-        (tr.indexOfFirst { it.startsWith("P releases") } < tr.indexOfFirst { it.startsWith("RESTART") }) shouldBe true
+        val release = tr.indexOfFirst { it.startsWith("P releases") }
+        val restart = tr.indexOfFirst { it.startsWith("RESTART") }
+        // both events must be in the trace, release first — a trace without a release is not REPLAY-1
+        (release >= 0 && restart > release) shouldBe true
         holds("finding/REPLAY-1-logged-release", CellModel(sc, canonical, Variant(logPRelease = true)))
     }
 
