@@ -121,3 +121,20 @@ No genuine design conflict remained after this alignment.
 | §1 partials COH 1, 4, 5, 6, 7, 8 | Resolved by M5, B2, B4, M2, M3, M1 respectively | as above |
 | §3 conditional labels | Headings now name the pending decision: §2.3, §2.6, §5.1 (M3/M4), §2.4 `S` (M5), H4 (M2), §3.3 (M7), §3.4 logging (M8), §3.1 takeover (M9); §3.2 already M6 | headings listed |
 | Rejected | None. M1's reviewer-preferred alternative (one recoverable consume-and-dispose step) was not designed: no sound form was found within scope, so the refusal branch was taken | — |
+
+## Model findings response
+
+Findings of the executable model (`../model-results.md` §4) that its adversarial review judged
+real or a genuine formation question. Each fix is encoded in `:composition-model`, which shows the
+counterexample gone under the revised text and still present in a control that restores the old one.
+
+| Finding | Review verdict | Disposition | Location |
+|---|---|---|---|
+| FLIP-1 — ABORT before A processes `FlipFence` releases the R-slice against A's single cursor, which a stable slice has passed; the slice is dropped | real | **Fixed.** Abort-side release waits for R3: the router (re-)sends the fence and waits for `FlipSettled`, the twin of step 7's wait for `Committed`; recovery row R5 re-sends the fence when R3 is absent | §3.2 step 8, recovery table; test `abortBeforeFenceWaitsForSettled` |
+| SWAP-1 — `Swap`'s held buffer sits below `X`; a resent duplicate passes `X` twice | real under the literal text | **Fixed.** `P` parks during the window (outside `X`, inside `D`), as "`P` provides the gate" already said; `Swap` holds nothing; PRECHECK vetoes a term without `P` | §3.4 realisation, steps 2 and 4; test `duplicateInSwapWindowParkedInPActsOnce` |
+| SWAP-2 — T2 announces supersession at COMMIT, yet rollback before RETIRE resumes the incumbent on the superseded lane | real conflict | **Fixed by refusal.** Rollback only before COMMIT; from COMMIT on it is a new swap from the retained export. Chosen over re-minting inside rollback because COMMIT is the transaction's decision (§3.0, roll forward only), the receivers' fence is irrevocable, and the new-swap path already mints and announces under the effect-identity table | §3.4 Rollback; test `rollbackAfterCommitIsNewSwap` |
+| CELL-1 — a durable non-idempotent inlet without `X` dedups on `applied`, which succession RESTART resets; a retained duplicate is taken twice | real under the succession fallback | **Fixed.** New F12: enforcing inlets keep `disposed` in `X`; such a term without `X` is refused while its RESTART can be a succession | §2.6 F12; §6; PLP §5.3, §7 |
+| F9-X — replay determinism exempted an output that an `X`-suppressed replay never re-derives | formation ambiguity | **Fixed.** The exemption requires re-derivation through the whole composed path; outputs caused through an `X`-suppressed inlet are logged by `O`, or the term is refused | §2.6 F9; §6; PLP §5.8 |
+| REGION-1 — "partial-diamond stall" | artefact | **Withdrawn by the model.** Both members park with the partial wave in `A`'s custody, which §3.3 allows; no text change | — |
+| OV-1, OV-2 — order-validity disagreements | artefact | No text change. The corrected model refutes `P` outside `D` (suspension lost on crash) and `F` inside `X` (stale-then-valid frame); the remaining disagreement (`O` between `X` and `S`) is cost-free and recorded in `../model-results.md` §3 | — |
+| REPLAY-1 (new, surfaced by the corrected model's full-stack check) — `P`'s release of a parked frame is not a `D` record, so a RESTART journaled after a live release replays before it and the frame is re-derived under the fresh epoch | not yet reviewed | **Open.** Candidate fixes: `D` logs each release, or RESUME drains the park within its own turn. Needs a decision on whether every custody layer's internal hand-on is a `D` record | `../model-results.md` §4 |

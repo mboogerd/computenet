@@ -45,6 +45,13 @@ data class Scenario(
     /** Every frame of a lane carries one wave (the double-emit shape of computenet-wlwjw). */
     val sameWave: Boolean = false,
     val ownedFirst: Boolean = false,
+    /**
+     * F5's stated reason (COH §2.6): a set lane on which a deposed writer and the new leader
+     * issue the same logical position (COH §3.1). The DESIGNATE of writer 2 is accepted before
+     * the run; lane 1 then carries the stale unit (writer 1) followed by the valid one (writer 2)
+     * at the SAME position. Requires [staleLane] = 1 and one frame per lane.
+     */
+    val staleThenValid: Boolean = false,
     /** The upstream takes a succession between its two frames (fresh epoch + ReBaseline). */
     val upstreamSuccession: Boolean = false,
     val budget: Budget,
@@ -63,6 +70,12 @@ data class Variant(
     val suppressOnlyAct: Boolean = false,
     /** Control: `S` rotates its epoch on RESTART without journaling it (pre migration step 5). */
     val journalEpochRotation: Boolean = true,
+    /**
+     * Candidate fix for model finding REPLAY-1 (not in the notes): `D` logs each release from
+     * `P`'s park, so replay re-runs the release at its logged point relative to later control
+     * records (RESTART's epoch rotation). The notes log only acceptance and control signals.
+     */
+    val logPRelease: Boolean = false,
 ) {
     companion object { val DESIGN = Variant() }
 }
@@ -112,6 +125,8 @@ sealed interface Rec
 data class RAcc(val msg: Msg) : Rec
 data class RX(val keys: List<Data>) : Rec
 data class RCtl(val ctl: Ctl) : Rec
+/** REPLAY-1 candidate fix: `P` released the head of its park here. */
+data object RRel : Rec
 
 /** Storage that survives a crash: checkpoint plus tail (COH H1 `checkpoint`/`read`). */
 data class Store(val checkpoint: Ls, val tail: List<Rec> = emptyList())
@@ -137,11 +152,21 @@ data class RSt(
 data class World(
     val mint: Int = 100,
     val acts: Map<Key, Int> = emptyMap(),
+    /** Payloads acted on (the effect log by content, so two frames at one position stay apart). */
+    val actedPayloads: Set<Int> = emptySet(),
     val consumed: Map<Key, Int> = emptyMap(),
     /** Crashes that hit a key inside its act → X-record window: the declared [24-DUR-09] ceiling. */
     val ceiling: Map<Key, Int> = emptyMap(),
-    /** Keys refused / dead-lettered WITH a report. */
-    val reported: Set<Key> = emptySet(),
+    /** Payloads refused / dead-lettered WITH a report. */
+    val reported: Set<Int> = emptySet(),
+    /**
+     * Ghost reference (I4): the content of every input T accepted (non-replay acceptance at the
+     * outermost layer), including pull-baseline content. A plain, local, volatile, always-live
+     * cell over the same accepted inputs would hold exactly this minus what was refused.
+     */
+    val acceptedContent: Set<Int> = emptySet(),
+    /** Ghost: management has sent SUSPEND and not yet RESUME (COH §2.4 continuation state). */
+    val mgmtSuspended: Boolean = false,
     val relayed: Set<Int> = emptySet(),
     val designated: Int = 0,
     /** Violations detected inside a transition (gap, stale admitted, partial wave, ...). */
@@ -185,7 +210,13 @@ data class CS(
  *   rotation in `D` when `S` is inside it, announces `ReBaseline(old)` and, for a mergeable
  *   leaf, gets a pull-baseline catch-up from upstream (M14's recommendation).
  * - **Suspension** (`P`): SUSPEND/RESUME are management-band signals entering at the
- *   outermost layer; `D` logs signals that pass it.
+ *   outermost layer; `D` logs signals that pass it. Management sends RESUME because it sent
+ *   SUSPEND, not because `P` remembers it; a frame reaching the leaf in between is a violation
+ *   (COH §2.4 continuation state, F1's monotone-state half). `P`'s release of its park is not
+ *   logged in the notes' text (model finding REPLAY-1; [Variant.logPRelease] is the candidate fix).
+ * - **Refinement** (I4): a ghost reference over the content T accepted; a mergeable leaf may
+ *   never hold content outside it (checked at every state) and equals it, minus refused and
+ *   still-held inputs, at quiescence.
  * - **Fence** (`F`, COH §3.1): DESIGNATE raises the fence; a stale-writer unit is refused
  *   with a report.
  * - **Align** (`A`): holds a wave until one frame per lane is present, releases complete
@@ -221,7 +252,11 @@ class CellModel(
     private val leafIdx = n
 
     val script: List<Data> = buildList {
-        if (scenario.upstreamSuccession) {
+        if (scenario.staleThenValid) {
+            add(Data(Pos(1, 0, 1), payload = 1, writer = 2))
+            add(Data(Pos(1, 1, 1), payload = 11, writer = 1))
+            add(Data(Pos(1, 1, 1), payload = 12, writer = 2))
+        } else if (scenario.upstreamSuccession) {
             add(Data(Pos(1, 0, 1), payload = 1, wave = 1, owned = scenario.ownedFirst))
             add(Data(Pos(2, 0, 1), payload = 2, wave = 2))
         } else {
@@ -240,7 +275,8 @@ class CellModel(
     }
 
     override fun initial(): CS {
-        val ls = Ls(s = SSt(epoch = 50))
+        // staleThenValid: DESIGNATE(2) was accepted (and, with F inside D, checkpointed) before the run.
+        val ls = Ls(s = SSt(epoch = 50), f = FSt(if (scenario.staleThenValid) 2 else 0))
         // Reduction: U has emitted (retained + put on the wire) every frame before T runs;
         // emission order relative to T's steps changes no reachable disposition, only the
         // interleaving count. The succession scenario emits its second frame later.
@@ -252,7 +288,7 @@ class CellModel(
             ),
             store = if (dIdx >= 0) Store(ls) else null,
             ls = ls, pending = emptyList(), outWire = emptyList(), outAcks = emptyList(),
-            r = RSt(), w = World(), b = scenario.budget,
+            r = RSt(), w = World(designated = if (scenario.staleThenValid) 2 else 0), b = scenario.budget,
         )
     }
 
@@ -261,6 +297,8 @@ class CellModel(
         var up = s.up; var store = s.store; var ls = s.ls; var pending = s.pending
         var outWire = s.outWire; var outAcks = s.outAcks; var r = s.r; var w = s.w; var b = s.b
         val handled = ArrayList<Data>()
+        /** True while a crash recovery or RESTART replays `D`'s tail. */
+        var replaying = false
         fun mint(): Int { val e = w.mint; w = w.copy(mint = e + 1); return e }
         fun latch(v: String) { w = w.copy(latched = w.latched + v) }
         fun append(rec: Rec) { store = store!!.copy(tail = store!!.tail + rec) }
@@ -373,7 +411,7 @@ class CellModel(
     }
 
     private fun refuse(c: Ctx, m: Data, at: Int) {
-        c.w = c.w.copy(reported = c.w.reported + m.key)
+        c.w = c.w.copy(reported = c.w.reported + m.payload)
         if (xIdx in 0 until at) {
             xAdvance(c, m)
             if (insideD(xIdx)) c.append(RX(listOf(m)))
@@ -386,6 +424,12 @@ class CellModel(
             else -> false
         }
         c.handled.add(m)
+        if (!c.replaying && c.w.mgmtSuspended) {
+            c.latch("P suspension lost: $m reached the leaf while management holds the term SUSPENDED (no RESUME sent)")
+        }
+        if (scenario.staleThenValid && m.writer in 1 until c.w.designated) {
+            c.latch("I1 stale unit $m (writer ${m.writer}) reached the leaf after DESIGNATE ${c.w.designated} was accepted")
+        }
         xAdvance(c, m)
         if (isDup) return
         val leaf = c.ls.leaf
@@ -408,6 +452,7 @@ class CellModel(
         val k = m.key
         c.w = c.w.copy(
             acts = c.w.acts + (k to (c.w.acts[k] ?: 0) + 1),
+            actedPayloads = c.w.actedPayloads + m.payload,
             consumed = if (m.owned) c.w.consumed + (k to (c.w.consumed[k] ?: 0) + 1) else c.w.consumed,
         )
         if (xIdx >= 0 && insideD(xIdx)) c.pending = c.pending + m
@@ -474,6 +519,8 @@ class CellModel(
     /** Restore every layer inside `D` from its checkpoint, then replay the tail (COH §3.8 `NONE`). */
     private fun recoverInsideD(c: Ctx) {
         val st = c.store ?: return
+        val was = c.replaying
+        c.replaying = true
         var ls = c.ls
         for (i in dIdx + 1 until n) ls = take(ls, st.checkpoint, stack[i])
         ls = ls.copy(leaf = st.checkpoint.leaf)
@@ -484,10 +531,15 @@ class CellModel(
         for (rec in st.tail) when (rec) {
             is RAcc -> inward(c, dIdx + 1, rec.msg, replay = true)
             is RCtl -> control(c, dIdx + 1, rec.ctl, replay = true)
+            RRel -> c.ls.p.queue.firstOrNull()?.let { m ->
+                c.ls = c.ls.copy(p = c.ls.p.copy(queue = c.ls.p.queue.drop(1)))
+                inward(c, pIdx + 1, m, replay = true)
+            }
             is RX -> {}
         }
         // Acts re-run during replay get their X record now.
         if (c.pending.isNotEmpty()) { c.append(RX(c.pending)); c.pending = emptyList() }
+        c.replaying = was
     }
 
     // -- transitions -------------------------------------------------------------------
@@ -520,6 +572,7 @@ class CellModel(
             val m = up.wires[l].first()
             step("T accepts $m (lane $l)") {
                 this.up = this.up.copy(wires = up.wires.mapIndexed { i, w -> if (i == l) w.drop(1) else w })
+                if (m is Data) w = w.copy(acceptedContent = w.acceptedContent + (if (m.pull != null) m.baseline else setOf(m.payload)))
                 inward(this, 0, m, replay = false)
             }
         }
@@ -531,9 +584,11 @@ class CellModel(
         if (pIdx >= 0 && !s.ls.p.suspended && s.ls.p.queue.isNotEmpty()) step("P releases ${s.ls.p.queue.first()}") {
             val m = ls.p.queue.first()
             ls = ls.copy(p = ls.p.copy(queue = ls.p.queue.drop(1)))
+            if (variant.logPRelease && insideD(pIdx)) append(RRel)
             inward(this, pIdx + 1, m, replay = false)
         }
-        if (pIdx >= 0 && s.ls.p.suspended) step("RESUME") { control(this, 0, Resume, false) }
+        // RESUME is management's, sent because it SUSPENDed: it does not depend on P remembering.
+        if (s.w.mgmtSuspended) step("RESUME") { w = w.copy(mgmtSuspended = false); control(this, 0, Resume, false) }
         if (s.outWire.isNotEmpty()) step("R receives ${s.outWire.first()}") {
             val m = outWire.first(); outWire = outWire.drop(1)
             rReceive(this, m); outAcks = outAcks + m
@@ -551,8 +606,8 @@ class CellModel(
         val up = s.up
         // -- optional: management and faults --
         val b = s.b
-        if (b.suspend > 0 && pIdx >= 0 && !s.ls.p.suspended) step("SUSPEND", false) {
-            this.b = b.copy(suspend = b.suspend - 1); control(this, 0, Suspend, false)
+        if (b.suspend > 0 && pIdx >= 0 && !s.w.mgmtSuspended) step("SUSPEND", false) {
+            this.b = b.copy(suspend = b.suspend - 1); w = w.copy(mgmtSuspended = true); control(this, 0, Suspend, false)
         }
         if (b.designate > 0 && fIdx >= 0) step("DESIGNATE writer 2", false) {
             this.b = b.copy(designate = b.designate - 1)
@@ -630,7 +685,7 @@ class CellModel(
     }
 
     private fun disposedTruth(s: CS, m: Data): Boolean = when (scenario.leaf) {
-        LeafKind.EFFECT, LeafKind.EFFECT_STATEFUL -> (s.w.acts[m.key] ?: 0) > 0
+        LeafKind.EFFECT, LeafKind.EFFECT_STATEFUL -> m.payload in s.w.actedPayloads
         LeafKind.SET -> m.payload in s.ls.leaf.set
         LeafKind.COUNTER -> m.key in s.ls.leaf.counted
         LeafKind.RELAY -> m.payload in s.w.relayed
@@ -639,7 +694,7 @@ class CellModel(
     override fun invariants(s: CS): List<String> {
         val v = ArrayList<String>(s.w.latched)
         for (m in script.take(s.up.next)) {
-            if (!disposedTruth(s, m) && m.key !in s.w.reported && !located(s, m)) {
+            if (!disposedTruth(s, m) && m.payload !in s.w.reported && !located(s, m)) {
                 v.add("I3/I1 silent loss: accepted $m is neither disposed, held, nor reported")
             }
         }
@@ -652,8 +707,10 @@ class CellModel(
         }
         val dupCount = s.ls.leaf.counted.groupingBy { it }.eachCount().filterValues { it > 1 }
         if (dupCount.isNotEmpty()) v.add("I5 duplicate taken twice by the counter: $dupCount")
-        val all = script.map { it.payload }.toSet()
-        if (!all.containsAll(s.ls.leaf.set)) v.add("I4 fabrication: leaf set ${s.ls.leaf.set} has content no input carried")
+        // I4, checked when it happens: the leaf never holds content T has not accepted.
+        if (!s.w.acceptedContent.containsAll(s.ls.leaf.set)) {
+            v.add("I4 premature addition: leaf set ${s.ls.leaf.set} holds ${s.ls.leaf.set - s.w.acceptedContent}, which no accepted input carried")
+        }
         val rDup = s.r.taken.groupingBy { it }.eachCount().filterValues { it > 1 }
         if (rDup.isNotEmpty()) v.add("I5/I4 downstream took one output twice under different positions: $rDup")
         if (fIdx >= 0 && s.ls.f.fence < s.w.designated) {
@@ -672,8 +729,11 @@ class CellModel(
     override fun quiescent(s: CS): List<String> {
         val v = ArrayList<String>()
         if (scenario.leaf == LeafKind.SET) {
-            val expect = script.filter { it.key !in s.w.reported && !located(s, it) }.map { it.payload }.toSet()
-            if (!s.ls.leaf.set.containsAll(expect)) v.add("I4 refinement: converged set ${s.ls.leaf.set} != reference $expect")
+            // Exact equality with the ghost reference over accepted, accounted inputs: accepted,
+            // minus refused-with-report, minus what is still held in T's custody.
+            val held = script.filter { m -> s.ls.p.queue.contains(m) || s.ls.a.buf.contains(m) }.map { it.payload }.toSet()
+            val expect = s.w.acceptedContent - s.w.reported - held
+            if (s.ls.leaf.set != expect) v.add("I4 refinement: converged set ${s.ls.leaf.set} != reference $expect")
         }
         if (scenario.leaf == LeafKind.EFFECT_STATEFUL) {
             for (m in script) if ((s.w.acts[m.key] ?: 0) > 0 && m.payload !in s.ls.leaf.set) {

@@ -2,6 +2,7 @@ package civictech.compmodel
 
 import civictech.compmodel.composite.FlipModel
 import civictech.compmodel.composite.FlipVariant
+import civictech.compmodel.composite.IData
 import civictech.compmodel.composite.PromLeaf
 import civictech.compmodel.composite.PromotionModel
 import civictech.compmodel.composite.PromotionVariant
@@ -11,82 +12,143 @@ import civictech.compmodel.composite.RelocationModel
 import civictech.compmodel.composite.RelocationVariant
 import civictech.compmodel.composite.ReplicaSetModel
 import civictech.compmodel.composite.ReplicaVariant
+import civictech.compmodel.check.Explorer
+import civictech.compmodel.check.Report
+import io.kotest.assertions.withClue
+import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 
-/** Repartition flip (COH §3.2, PLP §5.6) with a crash of the router or a shard at every step. */
+/**
+ * Repartition flip (COH §3.2, PLP §5.6) with send, shard acceptance, sync (STABLE), STABLE ack,
+ * R6, drain ack and R7 as separate steps and a crash of the router or a shard between any two.
+ */
 class FlipTest {
-    private val fixed = FlipVariant(abortFencesFirst = true)
+    private val design = FlipVariant()
 
-    @Test fun `FINDING FLIP-1 abort before the fence reaches A drops a parked R-slice at A`() {
-        diverges("finding/FLIP-1", FlipModel(FlipVariant()), "silent loss")
+    /**
+     * Exhaustive configurations. Each covers a crash of one party at every step; crashes of both
+     * parties in one run are covered by seeded walks (`RandomWalkTest`), because the product
+     * space is out of exhaustive reach (> 4 M states at two frames).
+     */
+    private fun shardCrash(v: FlipVariant, frames: Int = 3) = FlipModel(v, routerCrashes = 0, shardCrashes = 1, frames = frames)
+    private fun routerCrash(v: FlipVariant) = FlipModel(v, routerCrashes = 1, shardCrashes = 0, frames = 2)
+
+    @Test fun `flip as revised keeps every invariant with a shard crash at every step (3 frames)`() {
+        holds("flip/design/shard-crash", shardCrash(design))
     }
 
-    @Test fun `flip with fence-first abort keeps every invariant under router and shard crashes at every step`() {
-        holds("flip/design+fix", FlipModel(fixed))
+    @Test fun `flip as revised keeps every invariant with a router crash at every step (2 frames)`() {
+        holds("flip/design/router-crash", routerCrash(design))
     }
 
-    @Test fun `B2 confirmed - releasing before B acknowledges Committed (5820e5c1 text) loses a parked slice`() {
-        diverges("flip/B2-release-before-committed", FlipModel(fixed.copy(releaseAfterCommittedAck = false)), "silent loss")
+    @Test fun `flip as revised keeps every invariant with BATCHED shard streams (crash loses the unsynced tail)`() {
+        val m = shardCrash(design.copy(batched = true), frames = 2)
+        holds("flip/design/batched-shard-crash", m)
+        // Non-vacuity: a shard crash with a released slice accepted but unsynced is explored.
+        val reached = Explorer.reach(m) { s ->
+            s.shardCrash == 1 && listOf(s.a, s.b).any { sh -> sh.log.drop(sh.synced).any { it is IData && it.released } }
+        }
+        withClue("a released slice in a shard's unsynced tail, crash still available, must be reachable") { (reached != null) shouldBe true }
+    }
+
+    @Test fun `flip as revised keeps every invariant with a shard crash inside the act-to-X-record window`() {
+        holds("flip/design/act-window-shard-crash", shardCrash(design.copy(actWindow = true), frames = 2))
+    }
+
+    /** FLIP-1's configuration is explored: ABORT decided before A has processed the fence. */
+    @Test fun `FINDING FLIP-1 fixed - abort before the fence waits for FlipSettled, the old text diverges`() {
+        val reached = Explorer.reach(shardCrash(design)) { s ->
+            s.router.decision == 'A' && !s.a.settledFor && s.router.parked.isNotEmpty() && s.a.mem.highWater > s.router.pBegin
+        }
+        withClue("FLIP-1's configuration (abort before A settles, A's cursor past p_begin) must be reachable") { (reached != null) shouldBe true }
+        Report.line("[finding/FLIP-1-config-reached] ${reached!!.size} steps: ${reached.joinToString(" | ")}")
+        diverges("control/FLIP-1-old-text", shardCrash(design.copy(abortReleasesBeforeSettled = true)), "silent loss")
+    }
+
+    @Test fun `control blocker-1 - R6 advancing on send loses a released slice at a shard crash`() {
+        val e = diverges("control/R6-on-send", shardCrash(design.copy(releaseCursorOnSend = true)), "silent loss")
+        e.counterexample!!.trace.any { it.startsWith("CRASH shard") } shouldBe true
+    }
+
+    @Test fun `B2 - releasing before B acknowledges Committed (5820e5c1 text) loses a parked slice`() {
+        diverges("control/B2-release-before-committed", shardCrash(design.copy(releaseAfterCommittedAck = false)), "silent loss", "I2 effect")
     }
 
     @Test fun `with control on the management band, release right after COMMIT is safe`() {
-        holds("flip/preempting-control", FlipModel(fixed.copy(releaseAfterCommittedAck = false, asyncControl = false)))
+        holds("flip/preempting-control", shardCrash(design.copy(releaseAfterCommittedAck = false, asyncControl = false)))
     }
 
     @Test fun `control d2lue - volatile flip state loses parked frames`() {
-        diverges("control/d2lue", FlipModel(fixed.copy(volatileRouter = true)), "silent loss")
+        diverges("control/d2lue", routerCrash(design.copy(volatileRouter = true)), "silent loss")
     }
 
     @Test fun `control - gainer R scope from the loser's high-water suppresses a parked frame`() {
-        diverges("control/flip-loser-hw", FlipModel(fixed.copy(gainerCursorFromLoserHighWater = true)), "silent loss")
+        diverges("control/flip-loser-hw", shardCrash(design.copy(gainerCursorFromLoserHighWater = true)), "silent loss")
     }
 
     @Test fun `control - one unscoped cursor drops the parked slice of a split boundary frame`() {
-        diverges("control/flip-unscoped", FlipModel(fixed.copy(unscoped = true)), "silent loss")
+        diverges("control/flip-unscoped", shardCrash(design.copy(unscoped = true)), "silent loss")
     }
 
     @Test fun `control 8g7kg - moved-in state as an acting catch-up re-fires the moved range`() {
-        diverges("control/8g7kg", FlipModel(fixed.copy(handoffActs = true)), "I2 effect")
+        diverges("control/8g7kg", shardCrash(design.copy(handoffActs = true)), "I2 effect")
     }
 }
 
-/** Promotion swap (COH §3.4, PLP §7 T0/T1/T2 rows), crash and rollback at every phase. */
+/**
+ * Promotion swap (COH §3.4 as revised, PLP §7 T0/T1/T2 rows): PRECHECK, PREPARE, COMMIT,
+ * green, each release, RETIRE and rollback as separate steps, a crash between any two.
+ */
 class PromotionTest {
-    private val recheck = PromotionVariant(recheckOnRelease = true)
+    private val effect = PromotionVariant(leaf = PromLeaf.EFFECT)
+    private val relay = PromotionVariant(leaf = PromLeaf.RELAY)
+    private val emit = PromotionVariant(leaf = PromLeaf.EFFECT_EMIT)
 
-    @Test fun `FINDING SWAP-1 Swap's held buffer below X lets a duplicate pass X twice`() {
-        diverges("finding/SWAP-1", PromotionModel(PromotionVariant(leaf = PromLeaf.EFFECT)), "I2 effect")
+    /** Two frames exhaustively (three exceed 4 M states for an emitting leaf); five under walks. */
+    private fun prom(v: PromotionVariant) = PromotionModel(v, frames = 2)
+
+    @Test fun `T1 and T2 promotions of an Effectful leaf keep every invariant`() {
+        holds("promotion/effect-T1", prom(effect))
+        holds("promotion/effect-T2-same-identity", prom(effect.copy(tier = 2)))
+        holds("promotion/effect-T2-other-identity-effectFrom-COMMIT", prom(effect.copy(tier = 2, candidateIdentity = 2)))
     }
 
-    @Test fun `with X re-check on release, T1 and T2 promotions of an Effectful leaf keep every invariant`() {
-        holds("promotion/effect-T1", PromotionModel(recheck))
-        holds("promotion/effect-T2-same-identity", PromotionModel(recheck.copy(tier = 2)))
-        holds("promotion/effect-T2-other-identity-effectFrom-COMMIT", PromotionModel(recheck.copy(tier = 2, candidateIdentity = 2)))
+    @Test fun `T1 and T2 promotions of a relay keep positions`() {
+        holds("promotion/relay-T1", prom(relay))
+        holds("promotion/relay-T2", prom(relay.copy(tier = 2)))
     }
 
-    @Test fun `T1 and T2 promotions of a relay keep positions (T2 without rollback after COMMIT)`() {
-        holds("promotion/relay-T1", PromotionModel(recheck.copy(leaf = PromLeaf.RELAY)))
-        holds("promotion/relay-T2", PromotionModel(recheck.copy(leaf = PromLeaf.RELAY, tier = 2, rollbackAfterCommit = false)))
+    @Test fun `T1 and T2 promotions of an emitting Effectful leaf with logged outputs keep every invariant`() {
+        holds("promotion/effect-emit-T1", prom(emit))
+        holds("promotion/effect-emit-T2", prom(emit.copy(tier = 2)))
     }
 
-    @Test fun `FINDING SWAP-2 rollback between COMMIT and RETIRE of a T2 swap resumes the incumbent on a superseded lane`() {
-        diverges("finding/SWAP-2", PromotionModel(recheck.copy(leaf = PromLeaf.RELAY, tier = 2)), "lost downstream")
+    /** SWAP-1's configuration is explored: a duplicate accepted while the original is parked. */
+    @Test fun `FINDING SWAP-1 fixed - P parks outside X, Swap holding below X (old text) diverges`() {
+        val reached = Explorer.reach(prom(effect)) { s -> s.parked.size != s.parked.toSet().size }
+        withClue("a duplicate parked beside its original must be reachable") { (reached != null) shouldBe true }
+        Report.line("[finding/SWAP-1-config-reached] ${reached!!.size} steps: ${reached.joinToString(" | ")}")
+        diverges("control/SWAP-1-old-text", prom(effect.copy(swapHoldsBelowX = true)), "I2 effect")
+    }
+
+    @Test fun `FINDING SWAP-2 fixed - no rollback after COMMIT, the old text resumes the incumbent on a superseded lane`() {
+        diverges("control/SWAP-2-old-text", prom(relay.copy(tier = 2, rollbackAfterCommit = true)), "lost downstream")
+    }
+
+    @Test fun `FINDING F9-X fixed - outputs through an X-suppressed inlet are logged, unlogged (old text) diverges`() {
+        diverges("control/F9-X-old-text", prom(emit.copy(unloggedEffectOutputs = true)), "lost downstream")
     }
 
     @Test fun `control lzfr0 - T2 ReBaseline supersedes the candidate's lane`() {
-        diverges("control/lzfr0", PromotionModel(recheck.copy(leaf = PromLeaf.RELAY, tier = 2, rollbackAfterCommit = false, supersedeCandidateLane = true)), "lost downstream")
+        diverges("control/lzfr0", prom(relay.copy(tier = 2, supersedeCandidateLane = true)), "lost downstream")
     }
 
     @Test fun `control - unlogged swap window`() {
-        diverges("control/unlogged-swap", PromotionModel(recheck.copy(leaf = PromLeaf.RELAY, tier = 2, rollbackAfterCommit = false, unloggedWindow = true)), "lost downstream")
+        diverges("control/unlogged-swap", prom(relay.copy(tier = 2, unloggedWindow = true)), "lost downstream")
     }
 
     @Test fun `control - candidate dedup starting empty`() {
-        diverges("control/dedup-empty", PromotionModel(recheck.copy(tier = 2, candidateIdentity = 2, rollbackAfterCommit = false, candidateDedupStartsEmpty = true)), "I-P3 gap")
-    }
-
-    @Test fun `FINDING F9-X an X-suppressed replay does not re-derive an Effectful leaf's emission`() {
-        diverges("finding/F9-X", PromotionModel(PromotionVariant(leaf = PromLeaf.EFFECT_EMIT, recheckOnRelease = true)), "lost downstream")
+        diverges("control/dedup-empty", prom(effect.copy(tier = 2, candidateIdentity = 2, candidateDedupStartsEmpty = true)), "I-P3 gap")
     }
 }
 
@@ -107,11 +169,21 @@ class ReplicaSetTest {
     }
 }
 
-/** Glitch-free region (COH §3.3, spec 34:163-174). */
+/** Glitch-free region (COH §3.3, spec 34:163-174): no partial region park, no loss of partial-wave custody. */
 class RegionTest {
     @Test fun `atomic region suspend, contagious veto and migrate with captured partial waves`() {
         holds("region/design", RegionModel())
         holds("region/veto", RegionModel(RegionVariant(m2NonSuspendable = true)))
+    }
+
+    /**
+     * REGION-1 withdrawn: the configuration it flagged (whole region parked while J's `A` holds
+     * a partial wave) is reachable and keeps both properties; it is custody, not a stall.
+     */
+    @Test fun `REGION-1 withdrawn - whole-region park with a partial wave in J's custody is explored and holds`() {
+        val reached = Explorer.reach(RegionModel()) { s -> s.s1 && s.s2 && s.joinBuf.isNotEmpty() }
+        withClue("the parked-with-partial-wave configuration must be reachable") { (reached != null) shouldBe true }
+        Report.line("[region/REGION-1-config-reached] ${reached!!.joinToString(" | ")}")
     }
 
     @Test fun `control - member-by-member suspend leaves the region half parked`() {
@@ -120,11 +192,6 @@ class RegionTest {
 
     @Test fun `control 5jhg3 - join drops partial waves on migrate`() {
         diverges("control/5jhg3", RegionModel(RegionVariant(joinDropsPartialOnMigrate = true)), "silent loss")
-    }
-
-    @Test fun `FINDING REGION-1 atomic suspension does not exclude a partial-diamond stall`() {
-        diverges("finding/REGION-1", RegionModel(RegionVariant(checkNoPartialDiamondStall = true)), "partial-diamond stall")
-        holds("finding/REGION-1-wave-boundary", RegionModel(RegionVariant(checkNoPartialDiamondStall = true, suspendAtWaveBoundary = true)))
     }
 }
 

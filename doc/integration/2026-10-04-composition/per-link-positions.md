@@ -16,7 +16,7 @@ layer vocabulary used here: `Durable` (`D`), `Outbox` (`O`), `Suspendable` (`P`)
 delivery positions, lanes (including replica-set lanes), the receiver cursors
 (`received`, `applied`, `disposed`, `acted`, `pullDischarged`, scopes), acknowledgement
 levels, and `O`'s retention rules (stable-before-transmit, the unlink/death table). COH
-owns, and this note refers to: the layers and their order, the formation rules (F1-F11),
+owns, and this note refers to: the layers and their order, the formation rules (F1-F12),
 the composites, the flip and relocation *transactions* (records, prepare/commit, crash
 recovery), and the host contract (H1-H9, exceptions E1-E3). Maintainer decisions use one
 numbering across both notes, **M1-M16**: M1-M11 are argued in COH §7, M12-M16 in §10 here.
@@ -345,7 +345,7 @@ other.
 ### 5.3 Disposing of a delivery [decided; at `Effectful` inlets conditional — M16]
 
 Let `p` be the position and `hw` the inlet's cursor for `(p.epoch, p.lane)` — `disposed`
-at an `Effectful` inlet, `applied` elsewhere.
+(in `X`) at an enforcing inlet, `applied` at a tracking one.
 
 - **Duplicate**: `p.seq ≤ hw` (or, during a flip, `≤` the cursor of the frame's scope,
   §5.6). Dropped, exclusive payloads discharged as today (`MH:1904-1915`), counted.
@@ -362,11 +362,13 @@ at an `Effectful` inlet, `applied` elsewhere.
 Replacing the wave-keyed `[24-DUR-05]`/`[24-DUR-08]` test with this one is M16 (§10); until
 it is decided, an `Effectful` inlet tracks positions and keeps today's wave rule.
 
-**Which inlets enforce** (drop duplicates): every `Effectful` inlet (on `disposed`); every
-inlet of a durable cell **not declared idempotent** (on `applied`) — new, closing the
+**Which inlets enforce** (drop duplicates), always on `disposed` in `X` (COH F12): every
+`Effectful` inlet; every inlet of a durable cell **not declared idempotent** — new, closing the
 double delivery that own-log replay plus upstream re-derivation produces in a shared
 journal (`durability/ReplayProvenanceTest.kt:232-240`, example R-B, harmless there only
-because its fold is a set **[inference]**). Idempotent inlets **track but do not drop**,
+because its fold is a set **[inference]**). Not on `applied`: a succession RESTART resets it
+(§7), after which a retained duplicate would be taken again (model finding CELL-1). Idempotent
+inlets **track** on `applied` **but do not drop**,
 which keeps a non-deterministic upstream's re-issued content convergent rather than lost
 (L1). Who declares idempotency is M15 (§10).
 
@@ -496,8 +498,9 @@ require of that transaction; step numbers in brackets are COH §3.2's.
      R-slice unless the flip aborts); its existing cursor becomes `scoped[(lane, stable)]`.
      A's single cursor may already exceed `p_begin` from stable slices routed between begin
      and fence, which is why the R scope is set to `p_begin` and not to it. On abort
-     [COH 8] the parked R-slices, all above `p_begin`, are released to A and checked
-     against A's `R` scope.
+     [COH 8] the parked R-slices, all above `p_begin`, are released to A only after A has
+     processed the fence (an abort can precede it; COH 8 waits for `FlipSettled`), and are
+     checked against A's `R` scope.
 
    Scoped cursors are part of the frontier, held in `X`, captured and journaled like it; a
    crash between the two slices of one frame loses neither disposition.
@@ -619,7 +622,10 @@ not yet acknowledged at the required level:
 - **Exception**: a sender that declares replay determinism (COH F9) may skip the per-frame
   append. Its determining record is then the input record whose replay re-derives the frame
   with the same position (P2), and the same gate applies: no transmit before that input is
-  `STABLE`. Otherwise a `TAIL`-gap succession would re-derive the frame under a fresh epoch
+  `STABLE`. The replay must re-derive the frame **through the whole composed path**: where a
+  layer of the sender suppresses the replayed input (`X` at an `Effectful` inlet drops it once
+  disposed, §5.3), nothing re-derives the frame, so its output is logged (COH F9; model finding
+  F9-X). Otherwise a `TAIL`-gap succession would re-derive the frame under a fresh epoch
   that the receiver takes as new. This is per-cell durability's condition 3 (93 R8):
   deterministic, or log the output.
 - **Declared opt-out**: a link may transmit at `APPENDED` for latency. It then carries the
@@ -767,7 +773,7 @@ enforcing inlets, never reordering a lane, carrying every merged position.
 | migrate | C | lane counters and `O`'s retained frames ride the capsule | rides with the inlet (I-P4); fixes the 8g7kg migrate half; the source is durably fenced before the target activates, so two locations never admit at once (COH H4) | nothing |
 | durable recovery | C (`OutletWaveState.kt`) | restored; replay re-issues the same `seq`; retained output restored | restored; own log first (I-P2) | nothing |
 | RESTART, durable | **conditional — M11.** 31:127-130 and 93 R9 (93:2867-2870) restore the checkpoint and replay the tail (C); 23:209-213 and 93 I-22 R6 (93:8416) forbid re-driving the invocations that produced state. Under M11's recommendation (c) it is C only for a term with no inlet that accepts an exclusive payload (COH §2.4), S otherwise; **until M11 is decided it is S**, as the code does today (`MH:2006-2014` mints fresh on every RESTART) | C: as durable recovery, the tail replayed with its original positions. S: as non-durable RESTART | C: as durable recovery; the failing frame is skipped by a logged `Skipped(position)`, which advances `disposed`. S: as non-durable RESTART | C: nothing. S: `ReBaseline` |
-| RESTART, non-durable | S (`MH:2006-2020`) | fresh epoch | `applied` reset with inner state; `disposed`, `pullDischarged` kept (outer `X`) | `ReBaseline`. Re-running the inbound handshake: M14 |
+| RESTART, non-durable | S (`MH:2006-2020`) | fresh epoch | `applied` reset with inner state; `disposed`, `pullDischarged` kept (outer `X`), so an enforcing inlet still drops a retained duplicate (COH F12) | `ReBaseline`. Re-running the inbound handshake: M14 |
 | replica spawn | S (new instance, new refs) | fresh | inbound: joins the set lanes (§3.2) at the next position it receives; `received` and follower retention start there (COH §3.1); catch-up as today | `EdgeOpen` |
 | replica leave | — | lanes closed | entries closed, then LRU | `EdgeClose`; a crash is reported, and retained output follows §5.8 |
 | T0/T1 promotion | C | promotion replaces only the leaf inside `S` (COH §3.4); `S` owns the lane counters, so they continue with no adoption and no relink | `applied` continues with the captured state; `X` (outside the swap) keeps `disposed`, `pullDischarged`, `acted` | nothing (93 I-11) |
@@ -827,7 +833,7 @@ enforcing inlets, never reordering a lane, carrying every merged position.
   disposed cursor for its lane, then the inlet shall suppress it and discharge its exclusive
   payloads.
 - If a live-positioned invocation at an inlet of a durable cell not declared idempotent is
-  at or below that inlet's applied cursor for its lane, then the inlet shall drop it.
+  at or below that inlet's disposed cursor for its lane, then the inlet shall drop it.
 - When an inlet refuses, admission-drops or dead-letters a positioned delivery, the inlet
   shall advance its disposed cursor in the same durable record as the report.
 - If a dense lane delivers a sequence number above the next expected one, then the receiver

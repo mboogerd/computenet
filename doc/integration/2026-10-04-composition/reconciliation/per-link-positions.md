@@ -188,3 +188,14 @@ step by step, with a crash between each pair of protocol steps and the permitted
 | §3 scheduling vocabulary | One definition (§5.8), COH H8 and §3.2 step 3 refer to it | §5.8 |
 | §3 recipient dimension | B3 | §5.8; COH §2.3 capsule |
 | §3 conditional labels | §5.3 header and §5.9 row conditional on M16; §5.6 already on M6 | §5.3, §5.9 |
+
+## Model findings response
+
+Findings of the executable model (`../model-results.md` §4) that touch this note; COH's
+reconciliation file has the full table. Each fix is encoded in `:composition-model`.
+
+| Finding | Review verdict | Disposition | Location |
+|---|---|---|---|
+| FLIP-1 — abort released an R-slice to a loser with no `R` scope | real | **Fixed in COH §3.2 step 8.** Here: the loser receives R-slices only after processing the fence | §5.6 step 4, loser side |
+| CELL-1 — enforcing on `applied` does not survive a succession RESTART | real under the succession fallback | **Fixed.** Every enforcing inlet drops on `disposed` in `X` (COH F12); `applied` only tracks | §5.3 cursor and "Which inlets enforce"; §7 non-durable RESTART row; §9 EARS |
+| F9-X — the replay-determinism exception did not say which replay | formation ambiguity | **Fixed.** Re-derivation must hold through the whole composed path; an `X`-suppressed input's output is logged | §5.8 "Retention", exception; COH F9 |

@@ -42,9 +42,10 @@ object OrderValidity {
             budget = Budget(crash = 1, reconnect = 1, restart = 1, designate = 1, checkpoint = 1),
         ),
         Scenario(
+            // F5's "outside X" half: a stale unit followed by a valid one at the same position.
             "fence-dedup", setOf(Layer.DURABLE, Layer.FENCE, Layer.EFFECT_DEDUP, Layer.SUPERVISED), LeafKind.EFFECT,
-            lanes = 2, perLane = 1, staleLane = 1,
-            budget = Budget(crash = 1, reconnect = 1, restart = 1, designate = 1, checkpoint = 1),
+            lanes = 2, perLane = 1, staleLane = 1, staleThenValid = true,
+            budget = Budget(crash = 1, reconnect = 1, restart = 1, checkpoint = 1),
         ),
         Scenario(
             "outbox", setOf(Layer.DURABLE, Layer.OUTBOX, Layer.EFFECT_DEDUP, Layer.SUPERVISED), LeafKind.RELAY,

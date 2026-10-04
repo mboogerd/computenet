@@ -26,7 +26,7 @@ read in the code or spec.
 this directory.
 
 **Division of ownership between the two notes.** This note owns, and PLP refers to: the layers
-and their order, the formation rules (F1-F11), the composites, the flip and relocation
+and their order, the formation rules (F1-F12), the composites, the flip and relocation
 *transactions* (records, prepare/commit, crash recovery), and the host contract (H1-H9, E1-E3).
 PLP owns, and this note refers to: delivery positions, lanes (including replica-set lanes), the
 receiver cursors, acknowledgement levels, and `O`'s retention rules (stable-before-transmit and
@@ -309,7 +309,11 @@ rejects missing and duplicate holders.
   `X` can suppress only what crosses a port (DIS:1232-1268).
 - **F9. Non-deterministic durable leaves log their outputs.** A leaf under `D` that does not declare
   replay-determinism has an `Outbox` that logs its emissions; replay that re-issues a position for
-  different content corrupts every downstream dedup (I-7 R8, 93:2855-2866).
+  different content corrupts every downstream dedup (I-7 R8, 93:2855-2866). The declaration exempts
+  an output only if replaying its determining input re-derives it **through the whole composed
+  path** (PLP §5.8). Where a layer suppresses that replay — `X` at an `Effectful` inlet drops an
+  already-disposed input (PLP §5.3) — the outputs caused through that inlet are logged by `O`, or
+  the term is refused (model finding F9-X).
 - **F10. Exclusive payloads need a holder on every path.** A leaf that can hold a `Leased` value
   acquired outside its ports declares `LeaseHolding`; a path on which an `Owned`/`Leased` payload
   could be accepted with no layer able to capture or discharge it is refused. Dynamically,
@@ -319,6 +323,12 @@ rejects missing and duplicate holders.
   manifest: the external destination and the act a position stands for. It is what promotion (§3.4),
   a witness (§3.1) and frontier transfer compare. An `Effectful` leaf without one is admitted but its
   `acted` history is non-transferable.
+- **F12. Enforcing inlets carry `X`.** An inlet that enforces dedup (PLP §5.3: every `Effectful`
+  inlet, and every inlet of a durable term not declared idempotent) keeps its cursor as `disposed`
+  in `X`, outside `S`. `applied` sits inside `S` and a succession RESTART resets it (PLP §7), so a
+  term deduplicating on `applied` alone takes a retained duplicate again after one (model finding
+  CELL-1). A durable non-idempotent term without `X` is refused unless every RESTART it can take is
+  a continuation (M11 (c)); until M11 is decided, that is every such term.
 
 **Canonical stack**: `D ∘ O ∘ P ∘ F ∘ A ∘ X ∘ S ∘ leaf`. Every layer except `S` is optional; `S` is
 implicit, since every hosted cell has a supervision policy (PROPAGATE by default, 31:197-201). `O` is
@@ -530,8 +540,13 @@ transaction that carries those cursors; PLP §5.6 gives the exactness argument.
    frame accepted ahead of it is stably disposed, folds its scopes into the per-lane frontier as
    `max` (exact by PLP §5.6 step 6), logs `DrainedFor(tx)` and acknowledges. Log R7 when both have.
 8. **Abort** (decision ABORT, only before R5): `ABORT(tx)` to B (no-op if unknown), `UNSETTLE(tx)` to
-   A, then release parked frames in order to A under the old table, A checking them against its
-   `R` scope (frozen at `p_begin`), with R6 and `FlipDrained(tx)` acknowledged as in step 7, then R7.
+   A. Release to A waits for R3, as step 7 waits for `Committed`: if A has not yet settled, the
+   router (re-)sends `FlipFence(tx)` in band and waits for `FlipSettled(tx)`, so A's `R` scope
+   exists before any R-slice reaches it (model finding FLIP-1: released against A's single cursor,
+   which stable slices have already moved past `p_begin`, the R-slice is dropped). Then release
+   parked frames in order to A under the old table, A checking them against its `R` scope (frozen
+   at `p_begin`), with R6 and `FlipDrained(tx)` acknowledged as in step 7, then R7. If A cannot
+   settle, step 9 applies.
 9. **Failure while undecided.** If A cannot settle or B cannot prepare, the range stays parked and a
    stall is reported for that range; unrelated ranges flow. Management chooses abort or wait.
 
@@ -543,7 +558,7 @@ transaction that carries those cursors; PLP §5.6 gives the exactness argument.
 | R1/R2 | re-sending the in-band `SETTLE` as `FlipFence(tx)` (idempotent); parked frames recovered from R2 | A answers from `SettledFor(tx)` if present |
 | R3 | re-sending `PREPARE` | B answers from `Prepared(tx)` if present |
 | R4, before R5 | deciding afresh (commit or abort), then R5 | B is in doubt: holds the staged handoff, acts on nothing in R |
-| R5 | re-sending `COMMIT`/`SHED` (or `ABORT`/`UNSETTLE`), then, once `Committed` is acknowledged, releasing from the R6 cursor | each answers from its record; a re-released frame is a duplicate in its scope and is dropped where enforced, re-absorbed where idempotent |
+| R5 | re-sending `COMMIT`/`SHED` (or `ABORT`/`UNSETTLE`, and `FlipFence(tx)` if R3 is absent), then, once `Committed` (on abort: `FlipSettled`) is acknowledged, releasing from the R6 cursor | each answers from its record; a re-released frame is a duplicate in its scope and is dropped where enforced, re-absorbed where idempotent |
 | R6(n) | releasing from n+1 (frames sent but not yet stably acknowledged are re-sent) | as above; a frame B lost in its own unsynced tail is received again |
 | release complete, before R7 | re-sending `FlipDrained(tx)` | a shard that logged `DrainedFor(tx)` answers from it; R2 is still held |
 | R7 | nothing | – |
@@ -603,7 +618,8 @@ and re-established by frontier discovery and catch-up.
 
 **Realisation (decided; logging the swap window is conditional on M8). Promotion replaces only the leaf.** `PROMOTE(candidate, tier)` is handled by
 `S`, which inserts `Swap(incumbent, candidate)` between itself and the leaf. `D`'s stream continues,
-`F` keeps its epoch, `P` provides the gate, and the term's ports do not change, so there is no relink
+`F` keeps its epoch, `P` provides the gate (PRECHECK vetoes a term without `P`), and the term's
+ports do not change, so there is no relink
 (today's `rebind` loop, `evolve/Evolution.kt:252-255`, disappears). For a `PartitionedCell`, each
 organelle gets its own `Swap` (`[53-STATE-04]`, 53:230-232). This replaces `Promotion.promote`'s
 external orchestration and its `TrafficLightApi` gate.
@@ -633,8 +649,9 @@ PRECHECK compares effect identities:
 1. **PRECHECK**, side-effect free: port-surface equality, the candidate's layers pass formation, the
    effect-identity table, a disposition for every held obligation, and the existing refusals
    (`Evolution.kt:207-215`).
-2. **PREPARE.** `Swap` parks inbound frames in its `held` (custody inside `D`) and drains the
-   incumbent's waves.
+2. **PREPARE.** `P` parks inbound frames (custody inside `D`, outside `X`) and the incumbent
+   finishes the frame in hand. `Swap` holds no frame: a buffer below `X` would let a frame pass `X`
+   and wait while its retransmitted duplicate also passes (F3; model finding SWAP-1).
 3. **COMMIT**, logged before green; it does not veto.
    - **T0/T1 (continuation).** The incumbent's capture is prepared and committed into the candidate.
      `S` owns the identity tier, so the lane continues; no `adoptWaveState`, no `ReBaseline`.
@@ -643,12 +660,16 @@ PRECHECK compares effect identities:
      *incumbent's* lanes, which are `S`'s own. This fixes computenet-lzfr0 by construction (today
      `to.mintFreshEpoch()` runs on the candidate's outlet, `Evolution.kt:246-248`). Obligations do
      not succeed: fence, park and (per the table) effect history stay in their layers.
-4. **Green and RETIRE.** `Swap` releases `held` to the candidate, `S` removes `Swap`, the incumbent is
-   destroyed; its export is retained.
+4. **Green and RETIRE.** `P` resumes and releases its park through `X` to the candidate, `S` removes
+   `Swap`, the incumbent is destroyed; its export is retained.
 
-**Rollback.** Before RETIRE: drop the candidate, release `held` to the incumbent, remove `Swap`.
-After RETIRE: a new swap with the incumbent re-instantiated from the retained export
-(`[53-ROLLBACK-02]`, 53:227-230), subject to the same effect-identity table.
+**Rollback.** Before COMMIT: drop the candidate, remove `Swap`, `P` resumes toward the incumbent.
+From COMMIT on, rollback is a new swap with the incumbent re-instantiated from the retained export
+(`[53-ROLLBACK-02]`, 53:227-230), subject to the same effect-identity table. COMMIT is the
+transaction's decision, after which it only rolls forward (§3.0), and a T2 COMMIT has already
+announced the incumbent's lanes superseded, which every receiver fences for good; resuming the
+incumbent on them loses its output (model finding SWAP-2). The new swap mints and announces its
+own epoch, so no separate rule is needed.
 
 **Crash inside the window.** `D` replays: without a `COMMIT` record it rolls back; with one it rolls
 forward. Today the window is unlogged ("needs no journal", `Evolution.kt:268-269`), which holds only
@@ -889,9 +910,11 @@ A caller that truly cannot own a stub would need it back; none is known at the p
 
 ## 6. Limits
 
-**Refused at formation or link time.** Violations of F1-F11 (`X` outside `D`; nested `D`; custody
+**Refused at formation or link time.** Violations of F1-F12 (`X` outside `D`; nested `D`; custody
 inside `S`; a bypass link; a durable `Effectful` + `Stateful` leaf; a non-deterministic durable leaf
-without `O`; an exclusive path with no holder). Unjournaled shard assignment. Cross-host couplings and
+without `O`, or an emitting `Effectful` term whose `X` suppresses replay without `O` logging; an
+exclusive path with no holder; a durable non-idempotent term without `X` while its RESTART is a
+succession). Unjournaled shard assignment. Cross-host couplings and
 couplings without a disposition. T2 for `NonIdempotentCatchUp` candidates and replicated cells.
 `Effectful` with overlapping interest and no authority. An automatic-claim `Effectful` replica set
 whose destinations have no witness or declared ceiling. Promotion across differing or undeclared
@@ -937,6 +960,13 @@ effect-compatibility assertion (§3.4). Continuation after
 - `BudgetLedger` keyed refund and dedup horizon (§3.7).
 - A coverage certificate that would let a partial-overlap replica take over effect authority (§3.1).
 - Making exclusive consumption and its durable disposition one recoverable step (§2.4, M11).
+- **REPLAY-1 (found by the executable model).** `P` releasing a parked frame is not a `D` record,
+  so a RESTART journaled after a live release replays *before* that release on recovery; the frame
+  is then re-derived under the fresh epoch and taken twice downstream. Candidate fixes: `D` logs
+  each custody hand-on (`P` release, and by the same argument every custody layer's internal
+  hand-on), or `RESUME` drains the park within its own turn. The first holds in the model
+  (`model-results.md` §4); adopting it makes "every custody hand-on is a `D` record" a general rule,
+  which is not yet reviewed against F1-F12 and §3.
 - **Cost.** One `accept` per mediating layer per frame is the per-message tax 93:4151-4157 warned
   against. A layer with no per-message claim should compile to a delegate inside its `D` scope (the
   I-10 green-light rule, per layer).
@@ -1070,7 +1100,7 @@ a prerequisite for steps 4, 8, 10 and 12.
 | Step | What lands | Fixes or enables |
 |---|---|---|
 | 0 | `TagState.snapshot` includes `deadSources` (computenet-kxdjx, `data/delta/TagState.kt:235-239`); `GlitchFreeCell` captures instead of resetting (5jhg3); T2 supersedes the incumbent's lane (lzfr0); `TrafficLightCell` implements the pending-capture seam | bead closures |
-| 1 | `TermManifest` and a pure `FormationCheck` (re-export equality, F1-F11, unique holders), report-only against today's spawns | the grammar is testable |
+| 1 | `TermManifest` and a pure `FormationCheck` (re-export equality, F1-F12, unique holders), report-only against today's spawns | the grammar is testable |
 | 2 | `Capsule`/`Capturable` generalising `Stateful` and `checkpointPending`; HD's carry consumes it | removes HD:651-660's list |
 | 3 | H1 with acknowledgement levels and `stableThrough`; `Recreated(gap)` with `TAIL` driving succession | honest `BATCHED` semantics |
 | 4 | `X` with `disposed`/`acted`; records to the term's stream via an H1 adapter over `journalFor(cellRef)`; MH:1868/1889/1945 skipped for terms with `X` | 8g7kg (migrate); wlwjw with positions |
@@ -1139,7 +1169,7 @@ modules, `:concord:test` (with `dur` and `dist`), and `./gradlew test`; from ste
   `boundaryFrameSplitAcrossRangesBothPartsTaken` **(F)**, `parkedFrameBelowOldOwnerHighWaterActs`
   **(F)** (`p_begin`, not A's high-water), `gainerDoesNotActOnHandoffState` **(F)** (8g7kg),
   `commitWaitsForOldOwnerSettlement` **(F)**, `settleFenceTravelsInBandBehindRoutedFrames` **(F)**, `preparedGainerInDoubtActsOnNothing` **(F)**,
-  `abortReleasesParkedToOldOwner` **(F)**, `uncommittedRangeStaysParkedOthersFlow` **(F)**,
+  `abortReleasesParkedToOldOwner` **(F)**, `abortBeforeFenceWaitsForSettled` **(F)**, `uncommittedRangeStaysParkedOthersFlow` **(F)**,
   `directAssignRefused`, `repartitionVetoedWhileShardSuspended`,
   `replicatedShardFlipWaitsForConfirmedLeader`.
 - **`SwapLayerTest`**: `t1PromotionContinuesLaneWithoutReBaseline`,
@@ -1147,7 +1177,8 @@ modules, `:concord:test` (with `dur` and `dist`), and `./gradlew test`; from ste
   `crashAfterCommitRollsForward` **(F)**, `sameEffectIdentityKeepsActedHistory` **(F)**,
   `differentEffectIdentityVetoed` **(F)**, `sameIdentityWithoutCompatibilityAssertionVetoed` **(F)**,
   `addedDedupStartsAtCapturedAppliedFrontier` **(F)**, `addedDedupWithoutCapturedFrontierVetoed` **(F)**,
-  `rollbackAfterRetireIsNewSwapFromExport` **(F)**.
+  `rollbackAfterRetireIsNewSwapFromExport` **(F)**, `duplicateInSwapWindowParkedInPActsOnce` **(F)**,
+  `rollbackAfterCommitIsNewSwap` **(F)**.
 - **`ReplicaSetAuthorityTest`**: `staleLeaderDeltasFencedAtEveryRecipient` **(F)**,
   `followerSuppressionDoesNotAdvanceDisposed` **(F)**, `positionOnlyFollowerSawIsActedAfterTakeover`
   **(F)** (no omission, Total coverage), `unpublishedActedPositionDuplicatedAtMostOnce` **(F)**,

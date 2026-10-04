@@ -22,5 +22,8 @@ tasks.withType<Test>().configureEach {
     (project.findProperty("compmodel.seeds") as String?)?.let { systemProperty("compmodel.seeds", it) }
     // The experiments write their measured numbers (state counts, depths, verdicts) here;
     // model-results.md quotes them.
-    systemProperty("compmodel.report", layout.buildDirectory.file("compmodel/report.txt").get().asFile.absolutePath)
+    val report = layout.buildDirectory.file("compmodel/report.txt").get().asFile
+    systemProperty("compmodel.report", report.absolutePath)
+    // One report per run: experiments append, so the file is cleared before the task runs.
+    doFirst { report.delete() }
 }

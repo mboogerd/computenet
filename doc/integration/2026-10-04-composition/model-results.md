@@ -4,398 +4,269 @@ Status: results of the `:composition-model` module (`composition-model/`, packag
 `civictech.compmodel`), built for computenet-gl2i7. It checks the claims of
 [per-link-positions.md](per-link-positions.md) (**PLP**) and
 [composite-obligation-holders.md](composite-obligation-holders.md) (**COH**) mechanically.
-It does not edit either note. Every number below is from one run of
-`./gradlew :composition-model:test --rerun`, which writes them to
-`composition-model/build/compmodel/report.txt`.
+Every number below is from one run of `./gradlew :composition-model:test --rerun` (56 tests,
+all passing; 41 s of test time, 43 s wall), which writes them to
+`composition-model/build/compmodel/report.txt`. The test task clears that file before it
+runs, so the file is one run.
 
-**Which text is modelled.** The model was written against the notes at `5820e5c1`. The notes
-were then finalised at `299d4e9c` (round-2 review, see `reconciliation/*.md`). The model was
-re-aligned where that was cheap:
+**Which text is modelled.** The notes as revised for the model findings: `2bfa8639` plus COH
+F9 (whole-path re-derivation), F12 (new), §3.2 step 8 and recovery row R5, §3.4 (gate in `P`,
+rollback only before COMMIT), §6, and PLP §5.3, §5.6 step 4, §5.8 exception, §7, §9. The
+dispositions are in `reconciliation/*.md`, "Model findings response". Each old text that a
+finding refuted is kept as a control variant, and each control still diverges (§5).
 
-| Experiment | Models | Differences from `299d4e9c` |
-|---|---|---|
-| Per-cell stack, order validity | `5820e5c1` = `299d4e9c` for F1-F6 | F2/F3 are now labelled conditional on M5/M16. The rule text the model transcribes did not change. |
-| Flip | `299d4e9c` | Release waits for B's `Committed` ack (B2). Not modelled: R7 waiting for both drain acks. R2 is never truncated in the model, so this cannot change a loss verdict. The router→shard hand-off is a synchronous `STABLE` acceptance, so "R6 advances on `STABLE` ack" is what the model does. |
-| Promotion | `5820e5c1` text of §3.4 | Unchanged in `299d4e9c`'s phase list. Not modelled: M3's "starting frontier = incumbent's `applied` in the COMMIT record". The model's `X` keeps the term's `disposed` frontier. |
-| Replica set | `299d4e9c` | Total interest only. That matches M5: partial-overlap takeover is now refused. |
-| RESTART | `299d4e9c` | Always a succession. That matches the final M11 for any term that can accept `Owned`/`Leased`, and the "until decided" fallback for all others. M11 (c) continuation is not modelled. |
-| Relocation | `5820e5c1` = `299d4e9c` for a durable term | B4 (volatile term's capsule in the `Departing`/`Prepared` records) is not modelled. |
+**Revision after the model review.** An adversarial review of the first model found its
+positive results weaker than claimed. What changed, per review item:
 
-**Independent confirmations of round-2 review findings.** Before seeing the round-2 review,
-the model found **B2**'s "release only after B acknowledges `Committed`": §4.2 has a minimal
-trace in which an R-slice is lost without it. The model did not find B1, B3, B4 or M1-M6.
-Each of those lies outside what is modelled: the model has no `BATCHED` stream, no
-recipient-keyed acks, no volatile relocation, no `Owned` re-consumption under M11 (c), and
-no `supersede=false` lane.
+| Review item | Change |
+|---|---|
+| 1. Flip marked a frame released before the shard acknowledged it; shard crash kept its queue | Rewritten flip: send, acceptance, sync (`STABLE`), `STABLE` ack, R6, marker barriers, drain ack and R7 are separate transitions; a shard crash loses its inbound wire, unsynced tail and unsent answers; `O` resends in order. Control "R6 on send" diverges. |
+| 2. Order validity unproven | Two schedules added (`P`'s suspension across a crash; a stale-then-valid frame at one position). Assertion is now accepted ⊆ valid, plus a named witness for every valid-but-refused order. Full 7-layer stacks are checked (§3). |
+| 3. Refinement was `containsAll` | Exact equality against a ghost reference over accepted content at quiescence; a premature addition is a violation at every state. |
+| 4. REGION-1 was an artefact | Check replaced by the spec's property (no partial region park; no loss of partial-wave custody). REGION-1 and its wave-boundary remedy withdrawn. |
+| 5. `S`-outside-`D` control used RESTART | New control with a crash and no RESTART; the test asserts its trace has a crash and no RESTART. The RESTART control is kept separately. |
+| 6. Fused crash points | Promotion: PRECHECK, PREPARE, COMMIT, green, each release and RETIRE are separate. Flip: COMMIT/SHED and ABORT/UNSETTLE are separate. Flip PRECHECK is not modelled (§6). |
+| 7. F9-X ambiguity | Settled in the notes (COH F9, PLP §5.8); the model logs outputs through an `X`-suppressed inlet; the old text is a control. |
+| 8. Stale or vacuous evidence | Report cleared per run; `-Pcompmodel.seeds` must be a positive integer (0 fails the run); walks assert every seed took steps; order scenarios must each refute something; reachability checks show each finding's configuration is explored under the fixed protocol. |
 
 ---
 
 ## 1. What is modelled, and at what abstraction
 
 Each model is a deterministic transition system over immutable Kotlin data classes
-(`check/Explorer.kt`). It has no wall clock and no threads. Time is just the order of
-transitions. Faults and management actions are ordinary transitions with a per-run budget,
-so a crash falls between every pair of protocol steps by construction.
-
-The checker has two modes:
-
-- **Exhaustive mode:** breadth-first search with state hashing. The first violation found
-  is a shortest one.
-- **Random-walk mode:** seeded walks for larger configurations. The seed count is set by
-  `-Pcompmodel.seeds=N` (default 200); a failure prints its seed and full trace.
+(`check/Explorer.kt`). It has no wall clock and no threads. Faults and management actions are
+ordinary transitions with a per-run budget, so a crash can fall between any two transitions.
+Exhaustive mode is breadth-first search with state hashing (the first violation is a shortest
+one). Walk mode is seeded random walks; `-Pcompmodel.seeds=N` sets the count (default 200).
+`Explorer.reach` finds a shortest path to a configuration, used to show a claim is not vacuous.
 
 | Model element | Encodes | File |
 |---|---|---|
 | Layers `D O P F A X S`, properties table | COH §2.1, §2.5 | `cell/Vocabulary.kt` |
-| Delivery position `(epoch, lane, seq)`, pull id, lane key | PLP §0, §3.2, §5.1, §5.4 | `cell/Vocabulary.kt` |
-| Leaf kinds: `Effectful` sink, mergeable set, non-idempotent counter, relay, `Effectful`+`Stateful` | COH F8; PLP §5.3 | `cell/CellModel.kt` |
-| Acceptance at the outermost layer; `D` appends before delivery and acks `STABLE` (`SYNCHRONOUS` stream) | COH §0.4, §2.3, H1; PLP §5.8, §6 | `CellModel.inward` |
-| `X`: `disposed` per `(epoch, lane)`, `pullDischarged`, `dead`; gap check; advance after the handler; X record after the act | PLP §5.1, §5.3, §5.7; COH F3; [24-DUR-09] window | `CellModel.xCheck/xAdvance/act` |
-| Crash: everything outside `D` is lost; inside `D`, checkpoint + all X records, then the tail replayed in order, before any upstream redelivery | COH §3.8 `NONE`, §4; PLP I-P2, I-P4 | `CellModel.crash/recoverInsideD` |
-| RESTART as succession: resets the inside of `S`; `S` mints and journals a fresh epoch, announces `ReBaseline`; pull-baseline catch-up for mergeable leaves | COH §2.4 (M11 fallback); PLP §7; M14 | `CellModel.doRestart` |
-| `P` suspend/resume (logged by `D` when outside `P`), `F` fence + `DESIGNATE`, `A` wave alignment (in wave order, one turn), `O` retention + resend | COH §2.4, §2.5, §3.1, §3.6; PLP §5.8 | `CellModel` |
-| Upstream U: durable sender, retains until `STABLE`; lost acks / reconnects; optional succession | PLP §5.8, §5.7 | `CellModel` |
-| Downstream R: exact per-position dedup, `dead` epochs, content-per-position check | PLP §5.3, P3 | `CellModel.rReceive` |
-| Formation rules F1-F6 transcribed over the properties table; F8 | COH §2.6 | `cell/FormationCheck.kt` |
-| Repartition flip: R1-R7, in-band fence/drained, scoped cursors at both shards, handoff not acted, abort | COH §3.2; PLP §5.6 | `composite/FlipModel.kt` |
-| Promotion: `Swap` under `S`, PREPARE/COMMIT/RETIRE/rollback logged by `D`, T1/T2, effect identities | COH §3.4; PLP §7 | `composite/PromotionModel.kt` |
-| Replica set: set-lane positions forwarded to both instances, follower `received`/retention, published `disposed`, takeover, exact witness | COH §3.1; PLP §3.2, §2 | `composite/ReplicaSetModel.kt` |
-| Glitch-free region: atomic suspend, contagious veto, join capture on migrate | COH §3.3; spec 34:163-174 | `composite/RegionModel.kt` |
-| Relocation H4: six steps, residency fence, crash table | COH §5.1 | `composite/RelocationModel.kt` |
+| Position `(epoch, lane, seq)`, pull id | PLP §0, §3.2, §5.1, §5.4 | `cell/Vocabulary.kt` |
+| Leaves: `Effectful` sink, mergeable set, relay, `Effectful`+`Stateful` | COH F8; PLP §5.3 | `cell/CellModel.kt` |
+| `D` appends before delivery, acks `STABLE` (`SYNCHRONOUS`) | COH §2.3, H1; PLP §5.8, §6 | `CellModel.inward` |
+| `X`: `disposed`, `pullDischarged`, `dead`, gap check, record after the act | PLP §5.1, §5.3, §5.7; COH F3 | `CellModel` |
+| Crash: outside `D` lost; inside restored from checkpoint, tail replayed | COH §3.8 `NONE`; PLP I-P2 | `CellModel.crash` |
+| RESTART as succession; `ReBaseline`; pull-baseline catch-up | COH §2.4 (M11 fallback); PLP §7; M14 | `CellModel.doRestart` |
+| `P` suspend/resume (management holds the intent), `F` fence + `DESIGNATE`, `A` waves, `O` retention | COH §2.4, §2.5, §3.1; PLP §5.8 | `CellModel` |
+| F1-F6, F8, F12 | COH §2.6 | `cell/FormationCheck.kt` |
+| Flip: R1-R7, in-band barriers, scoped cursors, handoff, abort waiting for R3 | COH §3.2; PLP §5.6, §5.8 | `composite/FlipModel.kt` |
+| Promotion: gate in `P`, phases, T1/T2, effect identity, logged outputs | COH §3.4, F9, F11; PLP §7 | `composite/PromotionModel.kt` |
+| Replica set: set-lane fan-out, `received`, retention, takeover | COH §3.1; PLP §3.2 | `composite/ReplicaSetModel.kt` |
+| Region: atomic suspend, contagious veto, join capture on migrate | COH §3.3; spec 34:163-174 | `composite/RegionModel.kt` |
+| Relocation H4 | COH §5.1 | `composite/RelocationModel.kt` |
 
 **Invariants**, as named in the traces:
 
-- **I1 (custody).** The custody invariant is checked in several forms:
-  - an `Owned` payload is consumed at most once (plus the declared ceiling);
-  - the fence never drops below an accepted `DESIGNATE`;
-  - there are never two live holders;
-  - a frame accepted at relocation is in the state of the holder of record.
-- **I2 (effects).** An input position is acted at most `1 + (crashes inside its act→X-record
-  window)` times. Replica failover adds 1 per unpublished acted position (COH §3.1, M9).
-- **I3 (no silent loss).** Every accepted frame is checked at every state. It must be disposed
-  (judged from ground truth: the world's effect log, the leaf state, or emitted outputs), or
-  held somewhere live, or reported.
-- **I4 (refinement).** At quiescence, a mergeable leaf's state equals the set of accepted
-  inputs. An acted `Effectful`+`Stateful` input has its state transition.
-- **I5 (positions).** A position is never re-issued for different content. A gap on a dense
-  lane is a violation. Downstream never takes one output twice.
-- **Glitch-freedom.** The frames that reach the leaf in one turn form complete waves.
+- **I1 (custody).** An `Owned` payload is consumed at most once (plus the declared ceiling);
+  the fence never drops below an accepted `DESIGNATE`; never two live holders; a stale unit
+  never reaches the leaf after its `DESIGNATE`; **no frame reaches the leaf while management
+  holds the term suspended** (COH §2.4 continuation state, F1).
+- **I2 (effects).** An input position is acted at most `1 + (crashes inside its act → X-record
+  window)` times; replica failover adds 1 per unpublished acted position (COH §3.1, M9).
+- **I3 (no silent loss).** At every state, every accepted frame (and every emitted output) is
+  disposed (by ground truth: the effect log by content, the leaf state, downstream), held
+  somewhere that survives, or reported.
+- **I4 (refinement).** A ghost reference holds the content of every input T accepted. A
+  mergeable leaf never holds content outside it (every state), and at quiescence equals it
+  minus refused-with-report and still-held inputs (**exact equality**). An acted
+  `Effectful`+`Stateful` input has its state transition.
+- **I5 (positions).** A position is never re-issued for different content; no disposal above a
+  gap on a dense lane; downstream never takes one output twice.
+- **Glitch-freedom; region.** The leaf sees complete waves; no partial region park; every
+  forwarded arm is held at the join or delivered in a complete wave.
 
-**Not modelled.** These are coverage limits:
-
-- `BATCHED` streams and `TAIL`/`UNKNOWN` gaps.
-- Wire negotiation; acks keyed by recipient and scope (B3).
-- `supersede=false`, closed-lane LRU and GC caps.
-- Coalescing (E3).
-- Budget charges (§3.7).
-- Couplings (§3.5).
-- `Owned` re-consumption by a durable RESTART: there is no M11 (c) continuation.
-- The failing frame of a RESTART (RESTART is a spontaneous management fault).
-- A crash during recovery.
-- Partial replica interest; automatic claims; a fence-only witness.
-- Volatile relocation (B4); a cross-host region (WAIT/DEGRADE).
-- Catch-up at an `Effectful` leaf after RESTART (M14 pull baselines are modelled only for the mergeable leaf).
-- Liveness. Stuck-but-held is accepted.
+**Not modelled** (coverage limits, §6): `TAIL`/`UNKNOWN` gaps; wire negotiation;
+`supersede=false`, closed-lane LRU, GC caps; coalescing (E3); budget charges (§3.7);
+couplings (§3.5); M11 (c) continuation and `Owned` re-consumption; the failing frame of a
+RESTART; a crash during recovery; partial replica interest; volatile relocation (B4);
+cross-host regions; liveness (stuck-but-held is accepted).
 
 ---
 
 ## 2. What was explored
 
-The test suite has 48 tests in 9 classes, all passing. The test task took 26.2 s and the
-whole Gradle build 32 s on the authoring machine.
-
 | Experiment | Configuration | Result |
 |---|---|---|
-| Order validity, `effect-core` | `{D,P,X,S}`, `Effectful` leaf, 1 lane × 2 frames (first `Owned`); crash, lost ack, RESTART, SUSPEND, checkpoint ×1 each | 24 orders, 737,408 states; canonical 693,818 states, depth 22 |
-| `merge-core` | same, mergeable leaf with catch-up | 24 orders, 1,076,369 states |
-| `align` | `{D,P,A,X,S}`, 2 lanes × 1 wave | 120 orders, 1,765,418 states; canonical 1,567,918 states |
-| `fence` | `{D,F,A,X,S}`, stale writer on lane 1, `DESIGNATE` | 120 orders, 77,822 states |
-| `fence-dedup` | `{D,F,X,S}`, no waves | 24 orders, 195,520 states |
-| `outbox` | `{D,O,X,S}`, relay leaf → R; reconnect on both links | 24 orders, 57,282 states |
-| Projection spot check | 54 full 7-layer orders, combined scenario (all layers and faults), random walks | 39 refuted, every refutation matched by a refuted projection |
-| Flip (`abortFencesFirst`) | 3 boundary frames `{r,a},{r,b},{r}`; router crash ×1, shard crash ×1, abort | 1,237,245 states, 4,414,076 transitions, depth 37, exhaustive, HOLDS |
-| Promotion, `Effectful` T1 / T2 / T2 other identity | 3 frames, crash, lost ack, rollback | 90,612 / 203,566 / 122,088 states, all HOLD |
-| Promotion, relay T1 / T2 | same | 473,704 / 392,825 states, HOLD |
-| Replica set | 3 positions, leader death at any step | 1,268 states HOLDS; exact witness 1,148 HOLDS |
-| Region / relocation | 2 waves / 2 frames, crash of either host at every step | 54 / 288 states, HOLD |
-| Random walks (200 seeds each) | Canonical stack: 2 lanes × 3 waves; mergeable leaf with 2 lanes × 3 frames; relay with 4 frames. Each with crash ×3, reconnect ×3, RESTART ×2, suspend ×2, checkpoint ×3. Flip with 2+2 crashes; promotion with 5 frames; replica set with 5 positions | 33,117 steps, all HOLD |
+| Order validity, 6 projected scenarios | `effect-core`, `merge-core` `{D,P,X,S}`; `align` `{D,P,A,X,S}`; `fence` `{D,F,A,X,S}`; `fence-dedup` `{D,F,X,S}` with a stale-then-valid frame; `outbox` `{D,O,X,S}`. One crash, reconnect, RESTART, SUSPEND, checkpoint (or DESIGNATE) each | 336 orders, 3.46 M states, all holding runs exhaustive |
+| Full 7-layer canonical stack, exhaustive | 6 scenario × fault-set pairs (§3) | 2.73 M states, all HOLD |
+| Full 7-layer stacks, walks | 10 model-valid orders × 4 scenarios × 200 seeds, all faults at once | 108,045 steps, all HOLD |
+| Projection spot check | 40 sampled orders × 4 scenarios | 151 refutations, each matched by a refuted projection |
+| Flip, shard crash ×1 | 3 boundary frames `{r,a},{r,b},{r}`, abort optional | 1,230,705 states, depth 47, HOLDS |
+| Flip, router crash ×1 | 2 frames | 1,746,103 states, depth 49, HOLDS |
+| Flip, `BATCHED` shard streams, shard crash ×1 | 2 frames; crash loses the unsynced tail | 750,917 states, HOLDS |
+| Flip, act → X-record window open, shard crash ×1 | 2 frames | 1,339,256 states, HOLDS |
+| Flip, control on management band, release before `Committed` | 3 frames, shard crash ×1 | 478,781 states, HOLDS |
+| Promotion, `Effectful` T1 / T2 / T2 other identity (`effectFrom = COMMIT`) | 2 frames; crash, lost ack, rollback | 59,409 / 156,210 / 156,210 states, HOLD |
+| Promotion, relay T1 / T2 | 2 frames | 55,130 / 87,280, HOLD |
+| Promotion, emitting `Effectful` T1 / T2 | 2 frames | 193,130 / 353,472, HOLD |
+| Replica set; exact witness | 3 positions, leader death at any step | 1,268; 1,148, HOLD |
+| Region; veto; relocation | 2 waves; 2 frames, crash of either host | 54; 36; 288, HOLD |
+| Cell spot runs (canonical) | relay, same-wave, upstream succession, M1 (a), CELL-1 fixed, REPLAY-1 fixed | 561 to 126,897 states, HOLD |
+| Walks, 200 seeds each | canonical stack 2 lanes × 3 waves; mergeable 2 × 3; relay 4 frames (crash ×3, reconnect ×3, RESTART ×2, suspend ×2, checkpoint ×3); flip 3 frames, router ×2 + shard ×2; promotion 5 frames (`Effectful` and emitting); replica 5 positions | 38,903 steps, all HOLD |
 
 ---
 
 ## 3. Order validity
 
-All 7! = 5040 orders of `{D,O,P,F,A,X,S}` are judged two ways:
-
-- **By the model:** the conjunction of the exhaustive verdicts on the order's projection
-  onto each scenario's layer subset. This is sound because a layer that a scenario does not
-  exercise is a pass-through with constant state. The spot check above supports it
-  empirically.
-- **By F1-F6 as transcribed.**
+All 7! = 5040 orders of `{D,O,P,F,A,X,S}` are judged two ways: by the conjunction of
+exhaustive verdicts on each order's projection onto each scenario's layer subset, and by F1-F6
+as transcribed (`FormationCheck`). The test asserts the intended properties, not the present
+answer: **every accepted order is valid**, and **every valid-but-refused order has a named
+witness** (an unexplained one would fail the test as a new finding).
 
 | | Count | Orders |
 |---|---|---|
 | Formation-accepted | 8 | `DFOPAXS DFPAOXS DFPOAXS DOFPAXS DOPFAXS DPFAOXS DPFOAXS DPOFAXS` |
-| Model-valid | 14 | the 8 above plus `DFPAXOS DPFAXOS PDFAOXS PDFAXOS PDFOAXS PDOFAXS` |
-| Accepted by the rules but refuted by the model | **0** | Soundness holds: every order the rules accept keeps every invariant. |
-| Valid in the model but refused by the rules | 6 | Findings OV-1 and OV-2 below |
+| Model-valid | 10 | the 8 above, plus `DFPAXOS DPFAXOS` |
+| Accepted but refuted | **0** | soundness holds |
+| Valid but refused | 2 | both witnessed by OV-2 |
 
-The test pins the 6-order disagreement as data (`OrderValidityTest.expectedModelOnly`). A
-model change that moves it fails the test.
+**OV-2 (stands, cost-only).** `O` between `X` and `S`. F3 refuses it positionally, but F3's
+reason (a frame held between `X` and the leaf while its duplicate passes `X`) is about inbound
+custody, and `O` holds outbound frames only. COH fixes `O` directly inside `D` for a
+deterministic manifest. No text change is needed; F3 could be read as "no layer that holds
+inbound frames between `X` and the leaf".
 
-What the model itself shows for each rule:
+**OV-1 withdrawn, F5's "outside `X`" half now independently necessary.** With the two added
+schedules:
+- `P` outside `D` is refuted: a crash resets `P`'s suspension, the sender resends the retained
+  frame, and it reaches the leaf with no RESUME (I1). F1 holds for `P` for the reason it states
+  (monotone state), not only as a cost rule.
+- `F` inside `X` (`DXFS`) is refuted: the stale unit passes `X`, `F` refuses it, the refusal
+  advances `disposed`, and the valid frame at the same position is dropped as a duplicate (I3).
 
-- **F1** holds for `X`, `F`, `O` and `S`. Each has a minimal counterexample:
-  - `X` outside `D`: replay re-acts.
-  - `F` outside `D`: the fence regresses below an accepted `DESIGNATE`.
-  - `O` outside `D`: loss of output.
-  - `S` outside `D`: identity re-mint, so downstream takes an output twice.
-- **F2** holds for every layer inside `S`:
-  - `X` inside `S`: the frontier is lost, a gap or a re-act follows.
-  - `P` or `A` inside `S`: the acknowledged held work is lost.
-  - `O` inside `S`: retention is lost.
-  - `F` inside `S`: the fence regresses.
-- **F3** holds where a *holding* layer (`P`, `A`) sits between `X` and the leaf. With `P`
-  between them: a duplicate passes `X` while the original is parked, and the effect is acted
-  twice.
-- **F4** holds: with `P` inside `A`, `P` releases a completed wave one frame per turn, and
-  the leaf sees a partial wave.
-- **F5**, the "outside `A`" half, holds: with `F` inside `A`, a wave completed with a stale
-  unit is delivered without it.
+**Full stacks.** The projection argument assumes no cross-layer interaction a scenario lacks.
+It is checked three ways on full 7-layer stacks: the canonical stack exhaustively (effect +
+waves with crash, reconnect, suspend, DESIGNATE: 401,205 states; with crash, RESTART, suspend,
+DESIGNATE: 145,915; stale-then-valid: 514,827; mergeable with catch-up: 1,056,336; relay with
+reconnect: 487,719; relay with checkpoint: 126,897); every model-valid order under walks; and a
+sampled refutation check. **This found one interaction the projections cannot see: REPLAY-1
+(§4).** Full stacks therefore run with its candidate fix; under the notes' text the canonical
+stack itself fails.
 
-**OV-1. F1's custody half is not falsified for `P` or `A`.**
-- `PDXS` holds in `effect-core` and `merge-core`, and `PDAXS`/`PADXS` hold in `align`. A
-  frame held in `P` or `A` outside `D` is acknowledged only `HELD`. Its sender keeps it until
-  `D` acknowledges `STABLE` (PLP §5.8), so a crash loses nothing.
-- F1's stated reason, "anything accepted outside `D` is lost by a crash while the log claims
-  durability", does not apply: the log claims nothing for that frame.
-- What *is* lost is `P`'s suspension state and the prompt `STABLE` acknowledgement. Those are
-  liveness and management properties, which this model does not check.
-- So F1 is necessary for the monotone-state layers. For custody it is a cost and latency rule
-  under PLP's required acknowledgement level, not a correctness rule.
-
-**OV-2. F3 is stated positionally, but its argument covers only holding layers.**
-- `DPFAXOS` and `DFPAXOS` hold: `O` sits between `X` and `S`, and `O` does not hold inbound
-  frames.
-- Likewise, `DXFS` holds in `fence-dedup`: `F` sits inside `X`. So F5's "outside `X`" half is
-  not independently necessary. In the full stack it follows from F3 together with F5's
-  "outside `A`" half, because `A` must be outside `X`.
-- Harmless, since the canonical stack is unique. It is worth stating F3 as "no layer that
-  holds inbound frames between `X` and the leaf".
+**What the claim covers.** Accepted ⊆ valid is exhaustive per projection and walked on full
+stacks. Valid-but-refused is exactly the witnessed set, per projection. It is not an exhaustive
+proof over full stacks: only the canonical order is explored exhaustively there, under the fault
+sets listed.
 
 ---
 
 ## 4. Findings
 
-Each finding below has a shortest counterexample, and each is a test, so the model
-reproduces it on every run.
+Each finding is a test. For a fixed finding, the fixed protocol holds, the configuration of the
+old counterexample is shown reachable, and a control that restores the old text diverges.
 
-### 4.1 FLIP-1: abort before the fence reaches A drops a parked R-slice
+| Finding | Status | Test |
+|---|---|---|
+| FLIP-1: ABORT before A processes the fence drops the released R-slice | **Fixed in notes** (COH §3.2 step 8: release waits for R3) | `FlipTest."FINDING FLIP-1 fixed ..."` |
+| SWAP-1: `Swap`'s held buffer below `X` lets a duplicate pass `X` twice | **Fixed in notes** (COH §3.4: `P` parks) | `PromotionTest."FINDING SWAP-1 fixed ..."` |
+| SWAP-2: T2 rollback after COMMIT resumes the incumbent on a superseded lane | **Fixed in notes** (rollback only before COMMIT) | `PromotionTest."FINDING SWAP-2 fixed ..."` |
+| F9-X: `X`-suppressed replay does not re-derive an `Effectful` leaf's output | **Fixed in notes** (COH F9, PLP §5.8) | `PromotionTest."FINDING F9-X fixed ..."` |
+| CELL-1: dedup on `applied` does not survive a succession RESTART | **Fixed in notes** (COH F12; PLP §5.3, §7) | `CellModelTest."FINDING CELL-1 fixed ..."` |
+| B2: release before B acknowledges `Committed` | Fixed at `299d4e9c`; kept as a control | `FlipTest."B2 ..."` |
+| REGION-1: "partial-diamond stall" | **Artefact, withdrawn** (§3 of the review); its configuration is reachable and holds | `RegionTest."REGION-1 withdrawn ..."` |
+| OV-1 | **Artefact, withdrawn**; `P` outside `D` is now refuted | §3 |
+| OV-2 | Stands, cost-only, witnessed | §3 |
+| **REPLAY-1** | **New, open** | `CellModelTest."FINDING REPLAY-1 ..."` |
 
-Test: `FlipTest."FINDING FLIP-1 ..."`. The finding still holds at `299d4e9c`.
-
-COH §3.2 step 8 releases parked frames to A "checking them against its `R` scope (frozen at
-`p_begin`)". A has an `R` scope only once it has processed `FlipFence`. If the decision is
-ABORT before that, A checks the released R-slice against its single cursor. That cursor
-already passed the frame's *stable* slice, so the R-slice is dropped as a duplicate:
-
-```
-1. router: R1 FlipBegin(p_begin=0)
-2. router accepts and routes f1[r, a]      (a-slice to A now, r-slice parked)
-3. A acts on f1[a]
-4. A writes X record for [(1, a)]
-5. router: R5 FlipDecision(ABORT)
-6. router sends ABORT to B, UNSETTLE to A
-7. router releases parked f1[r] to A (R6 1)
-8. A drops f1[r] as duplicate (cursor 1)   -> (1, r) never acted: silent loss
-```
-
-Fix modelled as `FlipVariant.abortFencesFirst`: on ABORT, if A has not settled, the router
-first places the in-band `FlipFence(p_begin)` on A's path. With it, the whole flip holds: the
-exhaustive run (1.24 M states) covers crashes at every step on both sides. The note's test
-`abortReleasesParkedToLoserAgainstRScope` assumes A's stable cursor is "already above
-`p_begin`". It should also cover abort before the fence.
-
-### 4.2 B2, confirmed independently: release before B acknowledges `Committed`
-
-Test: `FlipTest."B2 confirmed ..."`. This finding applies to the `5820e5c1` text only; it is
-fixed in `299d4e9c`.
-
-If COMMIT travels on a channel that does not order it against the router's data path to B
-(B is remote: `assignInlet` and `routeInlet` are different lanes), then releasing parked
-frames right after *sending* COMMIT loses a slice:
+**Old-text counterexamples** (shortest, from `report.txt`):
 
 ```
-...  5. router accepts and routes f2[r, b]   6. B acts on f2[b]   (B's cursor = 2)
-... 13. router sends COMMIT to B, SHED to A
-    14. router releases parked f1[r] to B (R6 1)
-    15. B drops f1[r] as duplicate (cursor 2)   -> COMMIT (R scope) not yet installed at B
+FLIP-1 (abort releases before R3)      SWAP-2 (rollback after a T2 COMMIT)
+1. R1 FlipBegin(p_begin=0)             1. PRECHECK  2. PREPARE  3. COMMIT (T2)
+2. routes f1[r,a] (r parked)           4. R receives ReBaseline(e1)
+3. A accepts f1[a]; 4. its STABLE ack  5. ROLLBACK from COMMITTED
+5. R5 ABORT  6. ABORT to B             6. T accepts in1  7. R receives (1,0,1):p1
+7. releases f1[r] to A                    -> fenced: output lost
+8. A accepts it; 9. its STABLE ack
+10. CRASH A: replay acts f1[a] (cursor 1), drops f1[r] -> (1,r) lost
+
+SWAP-1 (Swap holds below X)            F9-X (outputs not logged)       CELL-1 (no X, applied only)
+1. PRECHECK  2. PREPARE                1. T accepts in1 (acts, emits)  1. T accepts p1  2. R takes (50,0,1)
+3. T accepts in1 (passes X, held)      2. X record for in1             3. U->T reconnect  4. RESTART
+4. reconnect, U resends  5. accepts    3. CRASH: replay suppresses     5. T accepts p1 again (applied reset)
+   in1 again (passes X again)             in1; output gone             6. ReBaseline(e50)  7. R takes (100,0,1)
+6. ROLLBACK -> in1 acted twice                                            -> p1 taken twice
 ```
 
-Two configurations hold:
+### REPLAY-1 (new, open): `P`'s release is not a `D` record
 
-- release after B's `Committed` ack (`299d4e9c` step 7);
-- COMMIT on a preempting management band (`flip/preempting-control`).
-
-### 4.3 SWAP-1: `Swap`'s held buffer sits between `X` and the leaf
-
-Test: `PromotionTest."FINDING SWAP-1 ..."`. The finding still holds at `299d4e9c`.
-
-COH §3.4 step 2 says `Swap` "parks inbound frames in its `held`", and `Swap` is inserted
-*inside* `S`, below `X`. That is exactly the shape F3 refuses ("a holding layer between `X`
-and the leaf"). A frame passes `X`, waits in `held`, and its retransmitted duplicate passes
-`X` too:
+The notes have `D` log acceptance and control signals. `P`'s release of a parked frame is an
+internal step that is not logged. A control record written after a live release is therefore
+replayed before it:
 
 ```
-1. PROMOTE: PRECHECK + PREPARE (Swap parks inbound)
-2. T accepts in1                             (passes X, held)
-3. U->T reconnect: acks lost, U resends retained
-4. T accepts in1                             (passes X again, held)
-5. ROLLBACK before RETIRE                    -> in1 acted twice
+1. SUSPEND  2. T accepts p1 (parked)  3. RESUME  4. P releases p1
+5. R receives (50,0,1):p1             6. RESTART (journaled: epoch 100)
+7. CRASH: replay re-parks p1, replays RESUME, then RESTART; p1 is released only after
+8. P releases p1 -> re-derived as (100,0,1)  9. R: ReBaseline(e50)  10. R takes (100,0,1):p1
+   -> downstream takes p1 twice
 ```
 
-Either of two fixes holds. Both are modelled as `recheckOnRelease`:
-
-- `X` re-checks frames released from `held`;
-- `P`, which COH §3.4 says "provides the gate", does the parking outside `X`.
-
-With the fix, every promotion run in §2 holds.
-
-### 4.4 SWAP-2: rollback between COMMIT and RETIRE of a T2 swap
-
-Test: `PromotionTest."FINDING SWAP-2 ..."`. The finding still holds at `299d4e9c`.
-
-COH §3.4 allows "Rollback. Before RETIRE". After a T2 COMMIT, `S` has already announced
-`ReBaseline(supersede = true)` for the incumbent's lane. Rolling back resumes the incumbent
-on that lane, and downstream fences its outputs:
-
-```
-1. PROMOTE (PREPARE)   2. T accepts in1 (held)   3. COMMIT (T2)
-4. R receives ReBaseline(e1)
-5. ROLLBACK before RETIRE (held released to the incumbent on e1)
-6. R receives (1,0,1):p1                  -> fenced as a dead-epoch straggler: output lost
-```
-
-The same configuration without rollback-after-COMMIT holds (392,825 states). Possible
-remedies:
-
-- after a T2 COMMIT, rollback is itself a succession (another fresh epoch);
-- or rollback is restricted to before COMMIT.
-
-### 4.5 F9-X: an `X`-suppressed replay does not re-derive an `Effectful` leaf's emissions
-
-Test: `PromotionTest."FINDING F9-X ..."`. The finding still holds at `299d4e9c`, PLP §5.8.
-
-F9 and PLP §5.8 let a replay-deterministic sender skip persist-before-transmit. Its
-"determining record is then the input record whose replay re-derives the frame". At an
-`Effectful` inlet, replay *suppresses* an already-disposed input (PLP §5.3 "Replay-derived
-frames"; [24-DUR-05]), so the emission is never re-derived. A stateless `Effectful` leaf
-with an outlet is admitted by F8, and it loses its unacknowledged output on a crash:
-
-```
-1. T accepts in1 (acts, emits output, not yet acknowledged)
-2. X record for in1
-3. CRASH and recover from D               -> replay suppresses in1; output gone
-```
-
-This is the output-side twin of DISPUTES:1232. Either of two changes closes it:
-
-- F9's exemption requires that no inlet on the leaf is `X`-suppressed;
-- or such a leaf logs its output.
-
-### 4.6 CELL-1: dedup on `applied` does not survive a succession RESTART
-
-Test: `CellModelTest."FINDING CELL-1 ..."`. The finding still holds at `299d4e9c`, PLP §5.3
-and §7.
-
-PLP §5.3 makes every inlet of a durable cell that is not declared idempotent enforce on
-`applied`. PLP §7 resets `applied` on a succession RESTART. A duplicate retransmitted after
-the RESTART is absorbed again and re-emitted under the fresh epoch, and downstream takes it
-twice:
-
-```
-1. T accepts (1,0,1):p1        2. R receives (50,0,1):p1
-3. U->T link reconnect (ack lost)
-4. RESTART (succession)        5. T accepts (1,0,1):p1  (applied was reset)
-6. R receives ReBaseline(e50)  7. R receives (100,0,1):p1   -> taken twice
-```
-
-Adding `X` (outside `S`) to that term closes it (`DOPXS` holds). The fix is one of:
-
-- non-idempotent durable inlets that can RESTART by succession carry `X` and enforce on
-  `disposed`;
-- or the duplicate is declared, beside "Durable RESTART until M11".
-
-### 4.7 REGION-1: an atomic region suspend does not exclude a partial-diamond stall
-
-Test: `RegionTest."FINDING REGION-1 ..."`. This contradicts spec 34:166-168, and the finding
-still holds at `299d4e9c`.
-
-Spec 34 says the region "suspends atomically ... (a partial-diamond stall cannot exist by
-construction)". COH §3.3 realises this as delivering SUSPEND to every member's `P` in one
-management turn. That excludes *interleaved* delivery. It does not settle work an arm has
-already forwarded:
-
-```
-1. m1 forwards wave 1 to J     (J's A holds a partial wave; m2's arm still queued)
-2. SUSPEND region atomically    -> region parked with a partial wave at J
-```
-
-Nothing is lost, because `A` holds the partial wave in custody and migrate carries it.
-`region/design` holds that. But the claim is false. A wave-boundary precondition makes the
-claim true (`suspendAtWaveBoundary`, which holds): suspend only when J holds no partial wave
-and the members' heads are aligned. That precondition is a DRAIN of the region's open waves,
-not just atomic delivery.
+It needs `P`, a non-`Effectful` emitter (an `Effectful` one is protected by its `X` record)
+and an epoch-rotating control between release and crash, so no projected scenario shows it;
+only the full stack does. The same shape would reach the promotion gate (SWAP-1's fix) if a
+RESTART landed between green and a release **[inference; RESTART during a swap is not
+modelled]**. **Candidate fix, holding in the model**
+(`Variant.logPRelease`, 126,897 states): `D` logs each release, so replay re-runs it at its
+logged point. An alternative is that RESUME releases the whole park within its own turn, before
+any later management-band signal. Not yet in the notes; it needs a decision on whether every
+custody-holding layer's internal hand-on (`P` release, `A` wave release) is a `D` record.
 
 ---
 
 ## 5. Controls: does the checker see each defect?
 
-Every control the brief lists diverges. A minimal trace for each is in `report.txt`.
+Every control diverges. Minimal traces are in `report.txt`.
 
-| Control | Models | Diverges? | Violation |
-|---|---|---|---|
-| DISPUTES:1232 whole-invocation suppression | `Effectful`+`Stateful` leaf under `D` | **yes** | I4: acted input's state transition missing after replay. M1 (a) "suppress only the act" holds. |
-| computenet-wlwjw | `X` keyed on root wave per port | **yes** | I3: second same-wave frame dropped |
-| computenet-d2lue | volatile flip state | **yes** | I3: parked R-slice lost at router crash (3 steps) |
-| computenet-kxdjx | `dead` omitted from checkpoint | **yes** | I2: dead-epoch straggler acted again after checkpoint + crash |
-| `Supervised` outside `Durable` | order `SDOPFAX` | **yes** | I5: downstream takes an output twice (identity re-minted) |
-| computenet-lzfr0 | T2 `ReBaseline` supersedes the candidate's lane | **yes** | I3: candidate's outputs fenced downstream |
-| computenet-8g7kg | handoff state acted as catch-up | **yes** | I2: moved range re-fired at B |
-| Gainer `R` scope from A's high-water | PLP §5.6 step 5 | **yes** | I3 |
-| One unscoped cursor | PLP §5.6 step 4 | **yes** | I3 |
-| computenet-5jhg3 | join drops partial waves on migrate | **yes** | I3 |
-| Un-journaled RESTART epoch | migration step 5 | **yes** | I3: output fenced after crash reverts the epoch |
-| Unlogged swap window | `Evolution.kt:268-269` | **yes**, relay leaf | I3. For an `Effectful`-only leaf it does **not** diverge: `X` alone keeps effects exact, so the window matters only for lanes. |
-| Candidate dedup starts empty | COH §3.4 table | **yes** | I-P3 gap at `X` |
-| Follower suppression advances `disposed` | PLP §2 | **yes** | I3 omission at takeover |
-| No follower retention | COH §3.1 | **yes** | I3 omission |
-| Member-by-member region suspend | COH §3.3 | **yes** | atomicity |
-| No source fence / activate at PREPARE | H4 | **yes** | two live holders / frame outside the holder of record |
-
-The model cannot see three things:
-
-- the cost-only side of F1 for `P`/`A` (OV-1);
-- `O`'s exact position inside `D` (OV-2);
-- the F5 "outside `X`" half in isolation.
+| Control | Diverges with |
+|---|---|
+| DISPUTES:1232 whole-invocation suppression | I4: acted input's state transition missing (M1 (a) holds) |
+| computenet-wlwjw, `X` keyed on root wave | I3: second same-wave frame dropped |
+| computenet-kxdjx, `dead` not checkpointed | I2: straggler acted again |
+| `S` outside `D`, **crash without RESTART** | I5: re-minted identity, output taken twice (trace has CRASH, no RESTART) |
+| `S` outside `D`, RESTART | I5 |
+| Un-journaled RESTART epoch | I3: output fenced after the epoch reverts |
+| CELL-1 old text (`DOPS`, no `X`) | I5 |
+| REPLAY-1 notes' text | I5 |
+| computenet-d2lue, volatile flip state | I3 at router crash |
+| FLIP-1 old text | I3 |
+| R6 advanced on send (review blocker 1) | I3 at a shard crash (trace has `CRASH shard`) |
+| B2, release before `Committed` | I2 (B's scope installed after it acted on an R-slice) |
+| Gainer `R` scope from A's high-water | I3 |
+| One unscoped cursor | I3 |
+| computenet-8g7kg, handoff acted | I2 |
+| SWAP-1 old text | I2 |
+| SWAP-2 old text | I3 downstream |
+| F9-X old text | I3 downstream |
+| computenet-lzfr0 | I3 downstream |
+| Unlogged swap window | I3 downstream |
+| Candidate dedup starts empty | I-P3 gap |
+| Follower suppression advances `disposed`; no follower retention | I3 omission |
+| Member-by-member region suspend | region atomicity |
+| computenet-5jhg3, join drops partial waves | I3 arm custody |
+| No source fence; activate at PREPARE | two live holders; frame outside holder of record |
 
 ---
 
-## 6. Coverage gaps, stated plainly
+## 6. Coverage gaps, stated precisely
 
-The model is bounded:
-
-- per-cell runs use 2 frames per lane, at most 2 lanes, and one fault of each kind;
-- the flip uses 3 boundary frames on one client lane;
-- promotion, replica set and region use 3 frames or waves;
-- random walks extend these, but they are not proofs.
-
-The projection argument for order validity is sound for the model as written. It assumes
-that no layer interacts with traffic its scenario lacks.
-
-Section 1 lists what is not modelled. The most consequential gaps:
-
-- `BATCHED`/`TAIL` behaviour (B1);
-- recipient-keyed acknowledgements (B3);
-- M11 (c) continuation and its `Owned` interaction;
-- the flip's R7 waiting on drain acks;
-- partial replica overlap. The final notes refuse it.
+- **Bounds.** Per-cell projections: ≤ 2 lanes, ≤ 2 frames per lane, one fault of each kind.
+  Flip: 3 frames with one shard crash, 2 frames with one router crash; both parties crashing in
+  one run only under walks (2 + 2 crashes). Promotion: 2 frames exhaustive, 5 under walks.
+  Walks are not proofs: before the REPLAY-1 fix was applied to them, 200 seeds of the relay walk
+  did not hit REPLAY-1.
+- **Flip steps.** Default shard streams are `SYNCHRONOUS` (acceptance is the sync), and act and
+  X record are one step; each is opened in its own exhaustive run (`BATCHED`, 2 frames;
+  act window, 2 frames), not combined with each other or with a router crash. PRECHECK's veto
+  conditions, a replicated shard, and step 9's stall report are not modelled. Liveness of an
+  undecided flip is not checked.
+- **Promotion.** RESTART and DESIGNATE during a swap, T0, the "adds `X`" and "removes `X`"
+  rows of the effect-identity table, and rollback after RETIRE (a new swap) are not modelled.
+- **Order validity.** Full stacks are exhaustive only for the canonical order and only under
+  the six fault sets listed in §3; other model-valid orders are walked.
+- **Not modelled at all.** `TAIL`/`UNKNOWN` gaps; recipient-keyed acks across shared lanes (B3);
+  M11 (c) continuation and `Owned` re-consumption; coalescing; budget charges; couplings;
+  partial replica overlap; volatile relocation; cross-host regions; crash during recovery.

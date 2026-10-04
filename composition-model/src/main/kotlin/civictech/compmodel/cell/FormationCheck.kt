@@ -2,8 +2,8 @@ package civictech.compmodel.cell
 
 /**
  * The formation rules of COH §2.6 that constrain layer ORDER (F1-F6), stated over the
- * layer properties of COH §2.5 as the note states them, and the two leaf rules the model
- * exercises (F8, F9). F7 (no bypass), F10 (exclusive-payload holders) and F11 (effect
+ * layer properties of COH §2.5 as the note states them, and the leaf rules the model
+ * exercises (F8, F12). F7 (no bypass), F10 (exclusive-payload holders) and F11 (effect
  * identity) are not order rules; F11 is exercised by the promotion model.
  *
  * This is the note's rule set transcribed, NOT tuned to the model: `OrderValidity`
@@ -47,12 +47,20 @@ object FormationCheck {
     fun accepts(stack: List<Layer>): Boolean = check(stack).isEmpty()
 
     /**
-     * F8 "A leaf that is both Effectful and Stateful is refused under D, pending M1."
-     * F9 "A leaf under D that does not declare replay-determinism has an Outbox that logs
-     * its emissions." (The model's leaves are all replay-deterministic.)
+     * Leaf rules over the stack:
+     * - F8 "A leaf that is both Effectful and Stateful is refused under D, pending M1."
+     * - F12 (added for model finding CELL-1) "Enforcing inlets carry X": a durable term whose
+     *   leaf is not idempotent (RELAY, COUNTER) and has no `X` is refused while its RESTART is a
+     *   succession, which until M11 is every RESTART.
+     * F9 is not a stack rule here: the cell model's leaves are replay-deterministic and the
+     * `Effectful` leaf with an outlet lives in the promotion model, which encodes F9's revised
+     * text (outputs caused through an `X`-suppressed inlet are logged).
      */
-    fun leafRefusal(stack: List<Layer>, leaf: LeafKind): String? =
-        if (Layer.DURABLE in stack && leaf == LeafKind.EFFECT_STATEFUL) "F8" else null
+    fun leafRefusal(stack: List<Layer>, leaf: LeafKind): String? = when {
+        Layer.DURABLE in stack && leaf == LeafKind.EFFECT_STATEFUL -> "F8"
+        Layer.DURABLE in stack && leaf in setOf(LeafKind.RELAY, LeafKind.COUNTER) && Layer.EFFECT_DEDUP !in stack -> "F12"
+        else -> null
+    }
 }
 
 /** All permutations of [items], in a deterministic order. */

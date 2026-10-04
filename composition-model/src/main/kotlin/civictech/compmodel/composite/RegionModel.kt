@@ -5,8 +5,12 @@ import civictech.compmodel.check.Transition
 
 /**
  * The glitch-free region: COH §3.3 (obligations: partial-wave custody in the join's `A`,
- * region-atomic suspension, the contagious veto) and spec 34:163-174, whose claim is that the
- * region "suspends atomically ... (a partial-diamond stall cannot exist by construction)".
+ * region-atomic suspension, the contagious veto) and spec 34:163-174. The spec's prohibited
+ * "partial-diamond stall" is a region in which only PART parks (34:163-171: the whole region
+ * parks together or none does); a partial wave held in the join's `A` while the WHOLE region
+ * is parked is custody COH §3.3 assigns to `A`, not a stall. The checked properties are
+ * therefore: no partial region park, and no loss of partial-wave custody (every arm a member
+ * has forwarded is held at J or delivered in a complete wave), through suspend and migrate.
  *
  * A diamond on one host: each wave reaches members m1 and m2 (already accepted into their
  * `P` inboxes), each member forwards its arm to the join J, whose `A` holds a wave until both
@@ -21,10 +25,6 @@ data class RegionVariant(
     val sequentialSuspend: Boolean = false,
     /** Control computenet-5jhg3: J's deactivation for migrate drops its partial waves. */
     val joinDropsPartialOnMigrate: Boolean = false,
-    /** Check spec 34's "a partial-diamond stall cannot exist by construction". */
-    val checkNoPartialDiamondStall: Boolean = false,
-    /** Fix candidate: suspend only at a wave boundary (J holds no partial wave, members aligned). */
-    val suspendAtWaveBoundary: Boolean = false,
 )
 
 data class RegionSt(
@@ -37,7 +37,6 @@ data class RegionSt(
     val pendingSuspend: Boolean = false,
     val suspendBudget: Int = 1,
     val migrateBudget: Int = 1,
-    val lost: Set<Pair<Int, Int>> = emptySet(),
 )
 
 class RegionModel(val variant: RegionVariant = RegionVariant(), val waves: Int = 2) : Spec<RegionSt> {
@@ -56,12 +55,9 @@ class RegionModel(val variant: RegionVariant = RegionVariant(), val waves: Int =
         if (!s.s1 && s.m1.isNotEmpty()) add("m1 forwards wave ${s.m1.first()} to J", join(s.copy(m1 = s.m1.drop(1)), s.m1.first(), 1))
         if (!s.s2 && s.m2.isNotEmpty()) add("m2 forwards wave ${s.m2.first()} to J", join(s.copy(m2 = s.m2.drop(1)), s.m2.first(), 2))
         if (s.suspendBudget > 0 && !s.s1 && !s.s2) {
-            val boundaryOk = !variant.suspendAtWaveBoundary || (s.joinBuf.isEmpty() && s.m1.firstOrNull() == s.m2.firstOrNull())
-            if (boundaryOk) {
-                if (variant.sequentialSuspend) add("SUSPEND delivered to m1", s.copy(s1 = true, pendingSuspend = true, suspendBudget = 0), false)
-                else if (variant.m2NonSuspendable) add("SUSPEND region: m2 canSuspend()=false, whole region vetoed", s.copy(suspendBudget = 0), false)
-                else add("SUSPEND region atomically (one management turn)", s.copy(s1 = true, s2 = true, suspendBudget = 0), false)
-            }
+            if (variant.sequentialSuspend) add("SUSPEND delivered to m1", s.copy(s1 = true, pendingSuspend = true, suspendBudget = 0), false)
+            else if (variant.m2NonSuspendable) add("SUSPEND region: m2 canSuspend()=false, whole region vetoed", s.copy(suspendBudget = 0), false)
+            else add("SUSPEND region atomically (one management turn)", s.copy(s1 = true, s2 = true, suspendBudget = 0), false)
         }
         if (s.pendingSuspend) {
             add(
@@ -72,7 +68,7 @@ class RegionModel(val variant: RegionVariant = RegionVariant(), val waves: Int =
         if (s.s1 && s.s2) add("RESUME region (renewed interest)", s.copy(s1 = false, s2 = false))
         else if (s.s1 && !s.pendingSuspend) add("RESUME m1", s.copy(s1 = false))
         if (s.migrateBudget > 0) {
-            val t = if (variant.joinDropsPartialOnMigrate) s.copy(joinBuf = emptySet(), lost = s.lost + s.joinBuf) else s
+            val t = if (variant.joinDropsPartialOnMigrate) s.copy(joinBuf = emptySet()) else s
             add("migrate J (capture partial waves ${s.joinBuf})", t.copy(migrateBudget = 0), false)
         }
         return out
@@ -80,12 +76,14 @@ class RegionModel(val variant: RegionVariant = RegionVariant(), val waves: Int =
 
     override fun invariants(s: RegionSt): List<String> {
         val v = ArrayList<String>()
-        if (s.lost.isNotEmpty()) v.add("I3 silent loss: partial-wave arms ${s.lost} dropped at J")
+        // Custody of partial waves: an arm forwarded by member m (no longer in m's queue) is held
+        // in J's A or its wave was delivered complete.
+        for (w in 1..waves) for ((m, q) in listOf(1 to s.m1, 2 to s.m2)) {
+            if (w !in q && w !in s.delivered && (w to m) !in s.joinBuf) v.add("I3 silent loss: arm of wave $w from m$m is neither held at J nor delivered")
+        }
+        // No partial region park (spec 34:163-171).
         if (s.s1 != s.s2 && !s.pendingSuspend) v.add("region atomicity: only m${if (s.s1) 1 else 2} is suspended and the region was not vetoed whole")
         if (s.s1 != s.s2 && s.pendingSuspend) v.add("region atomicity: m1 suspended while m2 still runs (interleaved delivery)")
-        if (variant.checkNoPartialDiamondStall && s.s1 && s.s2 && s.joinBuf.isNotEmpty()) {
-            v.add("partial-diamond stall: region suspended while J holds partial wave(s) ${s.joinBuf} (spec 34:166-168 says this cannot exist)")
-        }
         return v
     }
 

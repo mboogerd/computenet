@@ -151,17 +151,52 @@ object Explorer {
         }
         return WalkResult(spec.name, n, steps, null)
     }
+
+    /**
+     * Breadth-first search for a reachable state satisfying [target]; returns the shortest
+     * trace to it, or null if none is reachable within [maxStates]. Used for non-vacuity: a
+     * check that some configuration the claim is about is actually explored.
+     */
+    fun <S : Any> reach(spec: Spec<S>, maxStates: Int = 3_000_000, target: (S) -> Boolean): List<String>? {
+        val seen = HashMap<S, Pair<S?, String>>()
+        val queue = ArrayDeque<S>()
+        val init = spec.initial()
+        seen[init] = null to "init"
+        queue.add(init)
+        while (queue.isNotEmpty() && seen.size < maxStates) {
+            val s = queue.poll()
+            if (target(s)) {
+                val out = ArrayList<String>()
+                var cur: S? = s
+                while (cur != null) { val (p, l) = seen.getValue(cur); if (p != null) out.add(l); cur = p }
+                return out.reversed()
+            }
+            for (t in spec.next(s)) if (t.target !in seen) { seen[t.target] = s to t.label; queue.add(t.target) }
+        }
+        return null
+    }
 }
 
-/** Seed count for random walks: `-Pcompmodel.seeds=N`, default [DEFAULT_COUNT]. */
+/**
+ * Seed count for random walks: `-Pcompmodel.seeds=N`, default [DEFAULT_COUNT]. N must be a
+ * positive integer: zero walks would pass vacuously, so anything else fails the run.
+ */
 object Seeds {
     /** Small enough that `:composition-model:test` stays well under a minute. */
     const val DEFAULT_COUNT = 200
-    fun count(): Int = System.getProperty("compmodel.seeds")?.toIntOrNull() ?: DEFAULT_COUNT
+    fun count(): Int {
+        val raw = System.getProperty("compmodel.seeds") ?: return DEFAULT_COUNT
+        val n = raw.toIntOrNull()
+        require(n != null && n > 0) { "-Pcompmodel.seeds must be a positive integer, got '$raw'" }
+        return n
+    }
     fun all(): List<Long> = (0 until count()).map { it.toLong() }
 }
 
-/** Appends measured numbers to the report file the build points at (model-results.md quotes it). */
+/**
+ * Appends measured numbers to the report file the build points at (model-results.md quotes it).
+ * The test task deletes the file before it runs (build.gradle.kts), so one file is one run.
+ */
 object Report {
     private val file: File? = System.getProperty("compmodel.report")?.let { File(it) }
     @Synchronized
