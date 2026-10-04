@@ -22,7 +22,9 @@ import civictech.demograph.ranking.BradleyTerry
 import civictech.demograph.ranking.Elo
 import civictech.demograph.ranking.Glicko
 import civictech.demograph.ranking.MeanOfSigns
+import civictech.demograph.ranking.MetaRankCell
 import civictech.demograph.ranking.RatingEngine
+import civictech.demograph.ranking.RatingCell
 import civictech.demograph.ranking.TrueSkill
 import civictech.demograph.ranking.WengLin
 
