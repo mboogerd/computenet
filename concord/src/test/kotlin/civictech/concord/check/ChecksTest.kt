@@ -404,6 +404,18 @@ class ChecksTest {
     }
 
     @Test
+    fun `composite-whole-waves returns a named Failed for malformed filter args`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf())))),
+            alignedScenario(evensArm = listOf(cell("e", "filter", fn = "gt(x)"))),
+        )
+        val r = composite(ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "member 'evens' arm cell 'e'"
+        r.message shouldContain "gt(x)"
+    }
+
+    @Test
     fun `composite-whole-waves refuses a group-by arm rather than passing`() {
         val ctx = FakeContext(
             FakeDriver(observations = mapOf("c" to listOf(composite(listOf(), listOf())))),

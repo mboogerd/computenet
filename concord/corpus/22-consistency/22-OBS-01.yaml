@@ -23,9 +23,9 @@
 #     torn (no common prefix), independent of any driver.
 #   - `AlignedObserveTest."control - the point-consistent composite mixes
 #     waves on at least one seed"` (kernel/src/test/kotlin/civictech/cell/
-#     observe/AlignedObserveTest.kt:220-232): a kernel-level fixture that
-#     deliberately publishes a torn composite and shows the cell's own
-#     invariant catches it.
+#     observe/AlignedObserveTest.kt:220-230): the point-consistent `observeAll`
+#     harness-strength control finds a mixed composite on some seed. It is not a
+#     check of the aligned cell's own invariant.
 id: 22-OBS-01
 title: An aligned composite over two set arms never mixes waves
 covers: [22-OBS-01]
