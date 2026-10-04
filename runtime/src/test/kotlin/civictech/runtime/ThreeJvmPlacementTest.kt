@@ -38,13 +38,13 @@ class ThreeJvmPlacementTest {
         try {
             val manifest = PlacementFixture.threeJvm()
             val manifestFile = writeManifest(manifest)
+            PlacementFixture.resetCaptures()
             node = Runtime.boot(
                 manifest,
                 "a",
-                PlacementFixture.spec { handle, cell ->
-                    if (handle == "view") view = cell as PlacementFixture.SetFoldCell
-                },
+                PlacementFixture.spec(),
             )
+            view = PlacementFixture.captured("view") as PlacementFixture.SetFoldCell
             node.open()
             val aAddress = requireNotNull(node.boundAddress) { "node a did not expose its granted address" }.text
 
@@ -70,20 +70,18 @@ class ThreeJvmPlacementTest {
     }
 
     private fun runSingleHost(): Set<String> {
-        var view: PlacementFixture.SetFoldCell? = null
+        PlacementFixture.resetCaptures()
         val node = Runtime.boot(
             PlacementFixture.singleHost(),
             "a",
-            PlacementFixture.spec { handle, cell ->
-                if (handle == "view") view = cell as PlacementFixture.SetFoldCell
-            },
+            PlacementFixture.spec(),
         )
+        val view = PlacementFixture.captured("view") as PlacementFixture.SetFoldCell
         try {
             node.open()
             applyOperations(node)
-            val fold = requireNotNull(view) { "the test JVM did not capture view" }
-            awaitUntil("single-host view converges", 15_000) { fold.membership == setOf("pear") }
-            return fold.membership
+            awaitUntil("single-host view converges", 15_000) { view.membership == setOf("pear") }
+            return view.membership
         } finally {
             node.close()
         }
@@ -96,13 +94,13 @@ class ThreeJvmPlacementTest {
         try {
             val manifest = PlacementFixture.threeJvm()
             val manifestFile = writeManifest(manifest)
+            PlacementFixture.resetCaptures()
             node = Runtime.boot(
                 manifest,
                 "a",
-                PlacementFixture.spec { handle, cell ->
-                    if (handle == "view") view = cell as PlacementFixture.SetFoldCell
-                },
+                PlacementFixture.spec(),
             )
+            view = PlacementFixture.captured("view") as PlacementFixture.SetFoldCell
             node.open()
             val aAddress = requireNotNull(node.boundAddress) { "node a did not expose its granted address" }.text
 
