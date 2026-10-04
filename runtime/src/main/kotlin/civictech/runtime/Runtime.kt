@@ -208,6 +208,8 @@ object Runtime {
      * the cumulative spec is their recovery source and becomes [Node.placement]. Recovery refuses
      * a spec whose active local handles or pinned refs disagree with the journal, naming this
      * contract; an ordered spawn followed by an isolated despawn is valid and remains absent.
+     * The check is limited to what the local journal records: a stale spec that omits only
+     * cross-node edges (or spawns placed on other nodes) is not detected, and boots without them.
      */
     fun boot(
         manifest: Manifest,
