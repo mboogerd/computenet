@@ -8,6 +8,8 @@ import civictech.demo.beadsmirror.dolt.DoltSqlException
 import civictech.demo.beadsmirror.equality.MirrorExportEquality
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.MirrorEdge
+import civictech.cell.host.HostColor
+import civictech.cell.host.HostScheduler
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import io.kotest.assertions.throwables.shouldNotThrowAny
@@ -25,6 +27,12 @@ import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.util.PriorityQueue
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
 
 /**
  * computenet-dqj.4.2: [BeadsMirrorApp] wires [civictech.demo.beadsmirror.feed.DoltCommitFeed] ->
@@ -513,6 +521,16 @@ class BeadsMirrorAppTest {
             app!!.stop()
             app = null
             events.clear()
+
+            // Reproduce the recovery race deterministically: hold data frames until replay has
+            // applied every later management-band topology record. Without the pre-swap journal
+            // boundary, incumbent input frames then resolve the reused refs to the replacement
+            // cells and restore the pre-flatten winner into them.
+            MirrorGraph.solo(
+                runDir,
+                sanitizedDoltDatabaseName(workspace.root),
+                ReplayAfterTopologyScheduler(),
+            ).close()
             app = startApp(pollInterval = Duration.ofSeconds(30))
 
             app!!.mirrors.single().committedCheckpoint() shouldBe flattenedHead
@@ -716,6 +734,76 @@ class BeadsMirrorAppTest {
                 .waitFor() == 0
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /**
+     * A deterministic scheduler that preserves host priority/FIFO but drains only when a
+     * management API awaits. During journal recovery this holds data-band frames while later
+     * topology records despawn and respawn their refs, forcing the CI race's losing ordering.
+     */
+    private class ReplayAfterTopologyScheduler : HostScheduler {
+        override val color: HostColor = HostColor.BLOCKING
+
+        private data class Task(
+            val priority: Int,
+            val sequence: Long,
+            val action: suspend () -> Unit,
+        ) : Comparable<Task> {
+            override fun compareTo(other: Task): Int =
+                compareValuesBy(this, other, Task::priority, Task::sequence)
+        }
+
+        private val sequence = AtomicLong()
+        private val tasks = PriorityQueue<Task>()
+        private val monitor = Object()
+        private var releaseData = false
+        private var running = true
+        private val worker = Thread(::drain, "beadsmirror-recovery-order-test").apply {
+            isDaemon = true
+            start()
+        }
+
+        override fun submit(priority: Int, action: suspend () -> Unit) {
+            synchronized(monitor) {
+                tasks += Task(priority, sequence.incrementAndGet(), action)
+                if (priority == Int.MAX_VALUE) releaseData = true
+                monitor.notifyAll()
+            }
+        }
+
+        override fun <T> await(future: CompletableFuture<T>): T = future.get()
+
+        private fun drain() {
+            while (true) {
+                val task = synchronized(monitor) {
+                    while (running && (tasks.isEmpty() || (!releaseData && tasks.peek().priority != 0))) {
+                        monitor.wait()
+                    }
+                    if (!running) return
+                    tasks.remove()
+                }
+                var completed = false
+                var failure: Throwable? = null
+                task.action.startCoroutine(object : Continuation<Unit> {
+                    override val context = EmptyCoroutineContext
+
+                    override fun resumeWith(result: Result<Unit>) {
+                        completed = true
+                        failure = result.exceptionOrNull()
+                    }
+                })
+                check(completed) { "blocking-host task suspended" }
+                failure?.let { throw it }
+            }
+        }
+
+        override fun shutdown() {
+            synchronized(monitor) {
+                running = false
+                monitor.notifyAll()
+            }
+            worker.join()
         }
     }
 
