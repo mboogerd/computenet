@@ -753,12 +753,27 @@ open class ManagedHost(
      * Guarded by [dataLock], whose release at the end also publishes the restored maps to the
      * scheduler thread before dispatch resumes.
      *
-     * Limit: while this is positive a staged frame may have no pending data task, so a
-     * [Quiescence] fence or a priority-30 drain barrier another thread takes during recovery
-     * can complete with frames still staged. [Recovery.awaitApplied]'s fence is taken after
-     * the gate lifts and is unaffected (computenet-1vpsb review).
+     * Recovery is exclusive with externally requested queue fences and drains: [quiescence],
+     * host drain/migration, and [drainCellThenDespawn] reject while this is positive. A
+     * gated frame may temporarily have no pending data task, so allowing any priority-30 or
+     * lower fence through would falsely report it flushed. [Recovery.awaitApplied]'s fence is
+     * taken after the gate lifts and is unaffected (computenet-lnr6u).
+     *
+     * Limit: the rejection is a call-time check ([requireRecoveryIdle] throws
+     * [IllegalStateException]; through the [managementInlet] proxy, whose drain and migrate
+     * are fire-and-forget, that surfaces as a dead letter, not to the caller). A fence or
+     * drain barrier already submitted when recovery raises this gate, including one whose
+     * check raced the raise, is not rejected and can still complete with frames staged.
+     * Exclusivity in that direction is the caller's contract (see [Quiescence]).
      */
     private var recoveryRecordLoops = 0
+
+    private fun requireRecoveryIdle(operation: String) {
+        check(synchronized(dataLock) { recoveryRecordLoops == 0 }) {
+            "$operation is unavailable while journal recovery is restoring records; " +
+                "wait for recoverFrom to return and use Recovery.awaitApplied"
+        }
+    }
 
     /**
      * Per-thread durable-input capture for this host. A per-host field is the host-instance
@@ -1477,16 +1492,14 @@ open class ManagedHost(
      */
     private fun <T> withRecoveryRecordLoop(action: () -> T): T {
         synchronized(dataLock) { recoveryRecordLoops++ }
-        var fenced = false
         try {
             enqueueAwaiting(0) { }
-            fenced = true
             return action()
         } finally {
             val pending = synchronized(dataLock) {
                 check(recoveryRecordLoops > 0) { "recovery record-loop gate underflow" }
                 recoveryRecordLoops--
-                if (fenced && recoveryRecordLoops == 0) {
+                if (recoveryRecordLoops == 0) {
                     attentionScheduler.dataQueues.values.sumOf { it.size }
                 } else {
                     0
@@ -1558,9 +1571,13 @@ open class ManagedHost(
 
     /**
      * A [Quiescence] fence on this host's scheduler: completes once its queue
-     * holds no task at any band. See [Quiescence] for the argument and its limits.
+     * holds no task at any band. Rejected while a recovery record loop is active;
+     * see [Quiescence] for that exclusivity limit and the general fence argument.
      */
-    fun quiescence(): Quiescence = scheduler.quiescence()
+    fun quiescence(): Quiescence {
+        requireRecoveryIdle("quiescence")
+        return scheduler.quiescence()
+    }
 
     /**
      * Checkpoint (M10.2, extended G-59). See [HostDurability.checkpoint] for
@@ -2069,6 +2086,7 @@ open class ManagedHost(
      *
      */
     internal fun drainCellThenDespawn(ref: CellRef, beforeDespawn: () -> Unit = {}) {
+        requireRecoveryIdle("cell drain")
         // Phase 1+2 barrier, drain band (priority 30). An empty task at 30 cannot
         // run until nothing at 0/10/20 is pending, so when this returns every
         // invocation this host had already accepted has been dispatched to its
@@ -2317,6 +2335,7 @@ open class ManagedHost(
             }
 
             override fun drainHost() {
+                requireRecoveryIdle("host drain")
                 // shutdown cascade (G-28, M8.1): children drain first — a child
                 // must not outlive (or keep accepting after) its parent
                 childHosts.forEach { it.managementInlet.call.drainHost() }
@@ -2336,20 +2355,23 @@ open class ManagedHost(
                 cells.keys.forEach { notifyLifecycle(it, LifecycleTransition.HOST_RESUMED) }
             }
 
-            override fun migrate(to: Use<HostManagementApi>) = beginDrain {
-                val moving = cells.toList()
-                cells.clear()
-                moving.forEach { (cellRef, cell) ->
-                    registry?.unpublish(cellRef)
-                    // supervision is per-host and does not migrate (31)
-                    clearSupervision(cellRef, cell)
-                    // the serialization seam is exercised even in-process (G-25):
-                    // restore from a round-tripped snapshot, not the live object
-                    snapshots[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
-                    // target spawn activates, publishes, and replays parked traffic
-                    to.call.spawn(cell)
+            override fun migrate(to: Use<HostManagementApi>) {
+                requireRecoveryIdle("host migration")
+                beginDrain {
+                    val moving = cells.toList()
+                    cells.clear()
+                    moving.forEach { (cellRef, cell) ->
+                        registry?.unpublish(cellRef)
+                        // supervision is per-host and does not migrate (31)
+                        clearSupervision(cellRef, cell)
+                        // the serialization seam is exercised even in-process (G-25):
+                        // restore from a round-tripped snapshot, not the live object
+                        snapshots[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
+                        // target spawn activates, publishes, and replays parked traffic
+                        to.call.spawn(cell)
+                    }
+                    snapshots.clear()
                 }
-                snapshots.clear()
             }
 
             // Link admission (cycle detection, headedness, damping witness,

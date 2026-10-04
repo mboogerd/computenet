@@ -38,6 +38,14 @@ class QuiescenceTimeout(message: String) : IllegalStateException(message)
  * dispatch task, or by an armed `drainBatch` that re-arms while work remains),
  * so completion is *positive* evidence that the host emptied its queue.
  *
+ * **Recovery is exclusive with external fences.** While `ManagedHost.recoverFrom`
+ * is restoring journal records it deliberately gates data dispatch; a staged frame
+ * may then temporarily have no pending scheduler task. A low-level scheduler fence
+ * cannot see that frame. `ManagedHost.quiescence()` therefore throws
+ * [IllegalStateException] if its recovery record loop is active. Serialize external
+ * fences and drain/migration calls after `recoverFrom` returns, then use
+ * [Recovery.awaitApplied], whose fence is taken only after the gate has lifted.
+ *
  * **Starvation cannot fake it.** A host denied CPU does not run the fence, so
  * [await] blocks; the answer arrives late rather than wrong. The timeout is a
  * hang backstop, not a convergence budget: crossing it means the host never
