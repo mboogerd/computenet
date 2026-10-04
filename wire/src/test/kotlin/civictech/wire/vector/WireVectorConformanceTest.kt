@@ -34,7 +34,9 @@ import org.junit.jupiter.api.assertThrows
  *
  * - `frame`/`both`: (1) `encode(frameOf(doc).invocation)` == `encoded.utf8`;
  *   (2) `decodeFrame(encoded)` == `frameOf(doc)`, frame and invocation;
- *   (3) `decodeFrame(encode(v))` == `v`.
+ *   (3) `decodeFrame(encode(v))` == `v`. Equality in (2) and (3) is
+ *   [WireEquality]-normalized because ownership wrappers intentionally retain
+ *   identity equality (decision ncz.3-D6); the byte assertion is unchanged.
  * - `frame`/`decode`: (2) only.
  * - `handshake-text`/`both`: [HandshakeLines.lineOf] == `encoded.utf8`, and for
  *   `HELLO2`/`PROOF` the production parser returns an equal message.
@@ -88,17 +90,23 @@ class WireVectorConformanceTest {
             }
             // (2) [WIR1-I02]
             val decoded = WireCodec.decodeFrame(encoded.bytes)
-            assertEquals(expected.frame, decoded.frame, "$id [WIR1-I02]: decodeFrame(encoded).frame != frameOf(decoded).frame")
+            val normalizedExpected = WireEquality.normalize(expected)
+            val normalizedDecoded = WireEquality.normalize(decoded)
             assertEquals(
-                expected.invocation,
-                decoded.invocation,
+                normalizedExpected.frame,
+                normalizedDecoded.frame,
+                "$id [WIR1-I02]: decodeFrame(encoded).frame != frameOf(decoded).frame",
+            )
+            assertEquals(
+                normalizedExpected.invocation,
+                normalizedDecoded.invocation,
                 "$id [WIR1-I02]: decodeFrame(encoded).invocation != frameOf(decoded).invocation",
             )
             if (doc.direction == VectorDirection.BOTH) {
                 // (3) [WIR1-I03]
                 assertEquals(
-                    expected,
-                    WireCodec.decodeFrame(WireCodec.encode(expected.invocation)),
+                    WireEquality.normalize(expected),
+                    WireEquality.normalize(WireCodec.decodeFrame(WireCodec.encode(expected.invocation))),
                     "$id [WIR1-I03]: decodeFrame(encode(v)) != v",
                 )
             }

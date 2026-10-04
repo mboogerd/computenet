@@ -1,0 +1,25 @@
+{
+  "id": "WV-PAYLOAD-INT-01",
+  "title": "Int args pinning kotlin.Int's discriminator and signed boundaries",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I18"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {"type": "kotlin.Int", "value": 7},
+        {"type": "kotlin.Int", "value": -2147483648}
+      ]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"kotlin.Int\",7],[\"kotlin.Int\",-2147483648]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1sia290bGluLkludCIsN10sWyJrb3RsaW4uSW50IiwtMjE0NzQ4MzY0OF1dfQ=="},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from decoded, then read back and pinned here. OBSERVED: the codec emits both signed values with the discriminator \"kotlin.Int\" and preserves Int.MIN_VALUE as -2147483648; this top-level vector resolves the former primitive discriminator prediction ([WIR1-C05], [WIR1-I01]-[WIR1-I03], [WIR1-I18])."
+}

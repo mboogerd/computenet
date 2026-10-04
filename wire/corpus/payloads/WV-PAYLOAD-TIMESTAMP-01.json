@@ -1,0 +1,24 @@
+{
+  "id": "WV-PAYLOAD-TIMESTAMP-01",
+  "title": "Timestamp args pinning UUID source and counter fields",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {"type": "Timestamp", "fields": {"sourceId": "00000000-0000-0000-0000-0000000000b1", "counter": 7}}
+      ]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Timestamp\",{\"sourceId\":\"00000000-0000-0000-0000-0000000000b1\",\"counter\":7}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siVGltZXN0YW1wIix7InNvdXJjZUlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGIxIiwiY291bnRlciI6N31dXX0="},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from decoded, then read back and pinned here. OBSERVED: Timestamp is emitted as a polymorphic class with sourceId and counter; no defaults are available to omit in this payload. The UUID literal is pinned and the vector covers [WIR1-C05], [WIR1-C09], [WIR1-I01]-[WIR1-I03]."
+}

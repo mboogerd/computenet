@@ -1,0 +1,35 @@
+{
+  "id": "WV-INTEREST-RANGES-01",
+  "title": "Assignment carrying two ordered half-open ranges",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {
+          "type": "Assignment",
+          "fields": {
+            "interest": {
+              "type": "Interest.Ranges",
+              "fields": {
+                "ranges": [{"lo": 0, "hi": 10}, {"lo": 20, "hi": 30}]
+              }
+            },
+            "epoch": 4
+          }
+        }
+      ]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Assignment\",{\"interest\":[\"Interest.Ranges\",{\"ranges\":[{\"lo\":0,\"hi\":10},{\"lo\":20,\"hi\":30}]}],\"epoch\":4}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siQXNzaWdubWVudCIseyJpbnRlcmVzdCI6WyJJbnRlcmVzdC5SYW5nZXMiLHsicmFuZ2VzIjpbeyJsbyI6MCwiaGkiOjEwfSx7ImxvIjoyMCwiaGkiOjMwfV19XSwiZXBvY2giOjR9XV19"},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from decoded, then read back and pinned here. OBSERVED: the Ranges arm appears as an Interest.Ranges polymorphic array inside Assignment, while each Interest.Range is a typed plain object with lo/hi keys and the document's range order is preserved. The Interest arm rides inside Assignment because Interest arms are registered only under the Interest polymorphic scope, not the Any scope (ncz.3-D3/D8); the Assignment is the actual hosted-invocation wire path. covers [WIR1-C05], [WIR1-I01]-[WIR1-I03], and 42 §The interest algebra is closed."
+}

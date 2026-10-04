@@ -1,0 +1,30 @@
+{
+  "id": "WV-PAYLOAD-STAMPED-03",
+  "title": "Stamped with baseline and writer fields present",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-C11", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I18"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{
+        "type": "Stamped",
+        "fields": {
+          "epoch": 5,
+          "delta": {"type": "kotlin.Long", "value": 42},
+          "baseline": true,
+          "writer": 7
+        }
+      }]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stamped\",{\"epoch\":5,\"delta\":[\"kotlin.Long\",42],\"baseline\":true,\"writer\":7}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU3RhbXBlZCIseyJlcG9jaCI6NSwiZGVsdGEiOlsia290bGluLkxvbmciLDQyXSwiYmFzZWxpbmUiOnRydWUsIndyaXRlciI6N31dXX0="},
+  "notes": "Generated from the literal decoded value by ./gradlew :wire:wireVectors -Pwire.vectors.write=true and read back afterward. OBSERVED: Stamped emits the additive baseline=true and writer=7 fields in declaration order after epoch and delta; the Long discriminator is kotlin.Long and the numbers retain integer spelling. Unlike WV-PAYLOAD-STAMPED-01/-02, neither additive field is at its default, so both are present."
+}
