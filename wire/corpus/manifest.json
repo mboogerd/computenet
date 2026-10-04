@@ -19,6 +19,66 @@
       "file": "payloads/WV-PAYLOAD-DOUBLE-01.json"
     },
     {
+      "id": "WV-PAYLOAD-INT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-INT-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-BOOLEAN-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-BOOLEAN-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-STRING-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-STRING-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-LONG-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-LONG-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-UUID-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-UUID-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-TIMESTAMP-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-TIMESTAMP-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-CELLREF-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-CELLREF-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-PORTREF-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-PORTREF-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-TOPOLOGYLINK-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-TOPOLOGYLINK-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-MESSAGECONTEXT-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-MESSAGECONTEXT-01.json"
+    },
+    {
       "id": "WV-PAYLOAD-MAPDELTA-01",
       "category": "payloads",
       "kind": "frame",
@@ -188,14 +248,6 @@
     }
   ],
   "pending": [
-    {"discriminator": "kotlin.Int", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "kotlin.Boolean", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Uuid", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "Timestamp", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "CellRef", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "PortRef", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "TopologyLink", "owedBy": "computenet-ncz.3"},
-    {"discriminator": "MessageContext", "owedBy": "computenet-ncz.3"},
     {"discriminator": "CounterDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "PnCounterDelta", "owedBy": "computenet-ncz.3"},
     {"discriminator": "WatermarkDelta", "owedBy": "computenet-ncz.3"},

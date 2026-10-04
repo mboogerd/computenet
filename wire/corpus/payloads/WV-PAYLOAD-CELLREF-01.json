@@ -1,0 +1,25 @@
+{
+  "id": "WV-PAYLOAD-CELLREF-01",
+  "title": "CellRef args pinning instanceId default omission and presence",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {"type": "CellRef", "fields": {"id": "00000000-0000-0000-0000-000000000043", "instanceId": 9}},
+        {"type": "CellRef", "fields": {"id": "00000000-0000-0000-0000-000000000044"}}
+      ]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"CellRef\",{\"id\":\"00000000-0000-0000-0000-000000000043\",\"instanceId\":9}],[\"CellRef\",{\"id\":\"00000000-0000-0000-0000-000000000044\"}]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siQ2VsbFJlZiIseyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyIsImluc3RhbmNlSWQiOjl9XSxbIkNlbGxSZWYiLHsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDQifV1dfQ=="},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from decoded, then read back and pinned here. OBSERVED: CellRef's non-default instanceId 9 is emitted, while the default instanceId 0 is omitted from the second object; both UUID ids remain pinned ([WIR1-C05], [WIR1-C09], [WIR1-I01]-[WIR1-I03])."
+}

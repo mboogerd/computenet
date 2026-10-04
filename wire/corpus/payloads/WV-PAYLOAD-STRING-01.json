@@ -1,0 +1,25 @@
+{
+  "id": "WV-PAYLOAD-STRING-01",
+  "title": "String args pinning kotlin.String's discriminator and escaping",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-C16", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I18"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {"type": "kotlin.String", "value": "x"},
+        {"type": "kotlin.String", "value": "quote \" and backslash \\ and ünïcode"}
+      ]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"kotlin.String\",\"x\"],[\"kotlin.String\",\"quote \\\" and backslash \\\\ and ünïcode\"]]}", "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1sia290bGluLlN0cmluZyIsIngiXSxbImtvdGxpbi5TdHJpbmciLCJxdW90ZSBcIiBhbmQgYmFja3NsYXNoIFxcIGFuZCDDvG7Dr2NvZGUiXV19"},
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from decoded, then read back and pinned here. OBSERVED: the discriminator is \"kotlin.String\"; the quote emits only \\\" and the backslash only \\\\, while ünïcode remains raw UTF-8 in encoded.utf8. This pins current string escaping ([WIR1-C05], [WIR1-C09], [WIR1-C16], [WIR1-I01]-[WIR1-I03], [WIR1-I18])."
+}
