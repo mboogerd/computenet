@@ -5542,7 +5542,7 @@ default).
 > Member pairs: N1×N19, N2×N19, N17×N19, N19×N22, N19×N23, N19×N24, N19×N25, N19×N27
 > Existing gaps touched: G-3 · Confidence: high
 > Spec drift (judged at `a69186a`): 3/8 member pairs findings need re-wording while the analysis ran — see §3.1
-> Landed state at `0c09a32` (M11): **PARTIAL** — The normative single-boundary statement (color checked ONLY at admission; a cross-link color mismatch is a cross-host boundary, not an error, and never a link-time check); the config-only multi-host placement driver is landed (explicit `Manifest.placements` selector-to-node-name mapping, with cross-node bridges that are not `TopologyLink`s per 8k723-D6); `CellDescriptor.color` generation (51 §Code generation and 41 point 2) and color-derived placement remain deferred.
+> Landed state at `0c09a32` (M11): **PARTIAL** — The normative single-boundary statement (color checked ONLY at admission; a cross-link color mismatch is a cross-host boundary, not an error, and never a link-time check); `CellDescriptor.color` generation (51 §Code generation and 41 point 2) and color-derived placement remain deferred.
 
 #### 1. Challenge restatement
 
