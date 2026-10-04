@@ -758,6 +758,13 @@ open class ManagedHost(
      * gated frame may temporarily have no pending data task, so allowing any priority-30 or
      * lower fence through would falsely report it flushed. [Recovery.awaitApplied]'s fence is
      * taken after the gate lifts and is unaffected (computenet-lnr6u).
+     *
+     * Limit: the rejection is a call-time check ([requireRecoveryIdle] throws
+     * [IllegalStateException]; through the [managementInlet] proxy, whose drain and migrate
+     * are fire-and-forget, that surfaces as a dead letter, not to the caller). A fence or
+     * drain barrier already submitted when recovery raises this gate, including one whose
+     * check raced the raise, is not rejected and can still complete with frames staged.
+     * Exclusivity in that direction is the caller's contract (see [Quiescence]).
      */
     private var recoveryRecordLoops = 0
 
