@@ -33,12 +33,6 @@ data class Manifest(
                     "journalTopology requires journalDir",
                 )
             }
-            if (placements.isNotEmpty() && node.journalTopology) {
-                violations += ManifestViolation(
-                    "nodes[$name].journalTopology",
-                    "topology journalling is not supported with placements",
-                )
-            }
             node.dial.forEachIndexed { index, targetName ->
                 val target = nodes[targetName]
                 when {

@@ -62,13 +62,22 @@ class ManifestTest {
     }
 
     @Test
-    fun `topology journalling is refused when placements are active`() {
+    fun `topology journalling with placements round-trips and still requires a journal directory`() {
+        val parsed = Manifest.parse(
+            """{"nodes":{"a":{"journalTopology":true,"journalDir":"run/a"}},"placements":{"source":"a"}}""",
+        )
+
+        assertEquals(true, parsed.nodes.getValue("a").journalTopology)
+        assertEquals(mapOf("source" to "a"), parsed.placements)
+        assertEquals(parsed, Manifest.parse(Json.encodeToString(parsed)))
+
         val failure = invalid(
             """{"nodes":{"a":{"journalTopology":true}},"placements":{"source":"a"}}""",
         )
 
-        assertViolation(failure, "nodes[a].journalTopology", "requires journalDir")
-        assertViolation(failure, "nodes[a].journalTopology", "not supported with placements")
+        val topologyViolations = failure.violations.filter { it.field == "nodes[a].journalTopology" }
+        assertEquals(1, topologyViolations.size, failure.message)
+        assertTrue(topologyViolations.single().message.contains("requires journalDir"), failure.message)
     }
 
     @Test
