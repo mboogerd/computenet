@@ -5,6 +5,8 @@ import civictech.cell.Cell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.evolve.Effectful
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
@@ -25,8 +27,10 @@ import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
+import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -35,11 +39,13 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 class TopologyRecoveryTest {
 
     private companion object {
         val cells = ConcurrentHashMap<CellRef, Cell>()
+        val effectCounts = ConcurrentHashMap<CellRef, AtomicInteger>()
     }
 
     private object RecordingSetFactory : CellFactory {
@@ -49,6 +55,18 @@ class TopologyRecoveryTest {
     private object RecordingObserveFactory : CellFactory {
         override fun create(ref: CellRef): Cell =
             ObserveCell(View.set<String>(), ref).also { cells[ref] = it }
+    }
+
+    private object RecordingEffectfulSetSinkFactory : CellFactory {
+        override fun create(ref: CellRef): Cell = EffectfulSetSink(ref).also { cells[ref] = it }
+    }
+
+    private class EffectfulSetSink(override val ref: CellRef) : Cell, Effectful {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
+
+        init {
+            inlet.serve(Propagate { effectCounts.getValue(ref).incrementAndGet() })
+        }
     }
 
     private object RejectingReconnectObserveFactory : CellFactory {
@@ -183,6 +201,48 @@ class TopologyRecoveryTest {
         val compacted = runtime(journal)
         compacted.context.recover(journal).awaitApplied(30_000)
         assertRecovered(compacted, setOf("apple", "banana"))
+    }
+
+    @Test
+    fun `checkpoint topology recovery does not re-fire an effectful sink`() {
+        val journal = InMemoryJournal()
+        val effects = AtomicInteger()
+        effectCounts[sinkRef] = effects
+        val before = runtime(journal)
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    "source",
+                    RecordingSetFactory,
+                    IdentityBinding.Exact(sourceRef),
+                    journalId = "j",
+                ),
+                SpawnStep(
+                    "sink",
+                    RecordingEffectfulSetSinkFactory,
+                    IdentityBinding.Exact(sinkRef),
+                    journalId = "j",
+                ),
+                ConnectStep("source", "outlet", "sink", "inlet", LinkOptions(staged = true)),
+            ),
+        ).apply(before.context)
+
+        sourceOps(before).add("apple")
+        before.host.quiescence().await(30_000, "pre-checkpoint effect")
+        effects.get() shouldBe 1
+        before.deadLetters.shouldBeEmpty()
+
+        before.host.checkpoint(journal)
+
+        val recovered = runtime(journal)
+        recovered.context.recover(journal).awaitApplied(30_000)
+
+        // The folded-link re-handshake uses ordinary onLinked catch-up, which is
+        // contextless today. The Effectful inlet therefore refuses it under
+        // [24-DUR-06] instead of acting on the restored source state again.
+        effects.get() shouldBe 1
+        recovered.deadLetters.single().description shouldContain
+            "PORT_API invocation carries no MessageContext"
     }
 
     @Test
