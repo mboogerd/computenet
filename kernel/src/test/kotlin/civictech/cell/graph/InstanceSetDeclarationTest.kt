@@ -183,4 +183,17 @@ class InstanceSetDeclarationTest {
         // including the durable hint on each lowered spawn.
         lowered shouldBe handWritten
     }
+
+    @Test
+    fun `lowering carries every instance placement onto its SpawnStep`() {
+        val declared = instances(partitions = 3, replicationFactor = 1)
+        val lowered = InstanceSetStep(
+            "orders",
+            UUID.randomUUID(),
+            recordingShardBase(mutableMapOf()),
+            declared,
+        ).lower().filterIsInstance<SpawnStep>()
+
+        lowered.map { it.placement } shouldBe declared.map { it.placement }
+    }
 }
