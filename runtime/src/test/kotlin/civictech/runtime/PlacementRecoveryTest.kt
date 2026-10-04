@@ -62,16 +62,16 @@ class PlacementRecoveryTest {
             assertEquals(setOf("x"), membership(recoveredUnion))
 
             val plan = requireNotNull(b2.placement)
-            val consumerLink = assertInstanceOf(
-                WireEdgeLink::class.java,
-                recoveredUnion.inlet.linking.links.single(),
-            )
-            assertEquals(PortAddress(plan.refOf("w"), "outlet"), consumerLink.fromAddr)
             val producerLink = assertInstanceOf(
                 WireEdgeLink::class.java,
                 recoveredUnion.outlet.linking.links.single(),
             )
             assertEquals(PortAddress(plan.refOf("v"), "inlet"), producerLink.toAddr)
+            val consumerLink = assertInstanceOf(
+                WireEdgeLink::class.java,
+                recoveredUnion.inlet.linking.links.single(),
+            )
+            assertEquals(PortAddress(plan.refOf("w"), "outlet"), consumerLink.fromAddr)
 
             b2.open()
             writer.inlet.call.add("y")
