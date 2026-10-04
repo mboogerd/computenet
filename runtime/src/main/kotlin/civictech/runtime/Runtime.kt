@@ -18,15 +18,19 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.StateRequest
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.replication.Replication
 import civictech.cell.wire.PeerAddress
+import civictech.cell.wire.BridgeInstallMode
 import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerListener
 import civictech.cell.wire.PeerTransport
 import civictech.cell.wire.PeerTransports
 import civictech.cell.wire.Peering
 import civictech.cell.wire.PortAddress
+import civictech.cell.wire.WireEdgeLink
 import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.economy.EconomicPolicy
@@ -36,6 +40,7 @@ import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Builds one manifest node without exposing host, journal or transport construction to its caller. */
 object Runtime {
@@ -46,11 +51,10 @@ object Runtime {
      * topology link: local cycle admission and the Inspector's declared-link
      * view cannot see it (8k723-D6; spec 41 G-41).
      *
-     * Reinstalling halves after recovery does not reproduce identical edge-event
-     * observations: a rebooted consumer sees no fresh `EdgeOpen` from a surviving
-     * producer, while a rebooted producer sends a second `EdgeOpen` to a surviving
-     * consumer. Cells whose state keys on edge events across a recovered bridge are
-     * outside this recovery guarantee (8i1m6.2-D5).
+     * Recovery reinstalls only this node's physical bridge halves. The address-pair
+     * handshake is recovery-idempotent: a surviving peer observes no logical
+     * close/open churn, while a rebuilt consumer reconstructs its one local open-edge
+     * observation (9kvab-D1; spec 13 [13-REBIND-01], 93 I-13).
      */
     private fun applyPlacement(
         plan: PlacementPlan,
@@ -68,23 +72,28 @@ object Runtime {
         plan: PlacementPlan,
         mainHost: ManagedHost,
         registry: LocationRegistry,
+        recovered: Boolean = false,
     ) {
         val sink = InvocationSink(registry::deliver)
+        val installMode = if (recovered) BridgeInstallMode.RECOVERED else BridgeInstallMode.OPEN
 
         plan.producerHalves.forEach { edge ->
             val outlet = producerPort(mainHost, edge)
+            val counterpartRef = PortRef.of(edge.toRef, edge.inlet)
             mainHost.managementInlet.call.connect(
                 edge.fromRef,
                 edge.outlet,
                 Use.fixed(
                     RoutedPropagate<Any>(edge.toRef, edge.inlet, registry::deliver),
-                    PortRef.generate(),
+                    counterpartRef,
                 ),
             )
             val result = outlet.bridgeTo(
                 selfAddr = PortAddress(edge.fromRef, edge.outlet),
                 toAddr = PortAddress(edge.toRef, edge.inlet),
                 sink = sink,
+                counterpartRef = counterpartRef,
+                installMode = installMode,
             )
             if (result is LinkResult.Rejected) {
                 throw IllegalStateException(
@@ -98,6 +107,7 @@ object Runtime {
                 selfAddr = PortAddress(edge.toRef, edge.inlet),
                 fromAddr = PortAddress(edge.fromRef, edge.outlet),
                 sink = sink,
+                installMode = installMode,
             )
             if (result is LinkResult.Rejected) {
                 throw IllegalStateException(
@@ -199,8 +209,8 @@ object Runtime {
      * Construct the node-local graph. Network endpoints and the inspector are deferred to [Node.open].
      * A node with [NodeSpec.journalTopology] recovers its graph from the main host journal when
      * that journal is non-empty; otherwise its spec is applied and journaled as the first topology.
-     * A recovered placed node reinstalls its bridge halves before [Node.open], with the asymmetric
-     * `EdgeOpen` limitation documented on [applyPlacement] (8i1m6.2-D5).
+     * A recovered placed node reinstalls its physical bridge halves before [Node.open]
+     * without reopening the logical edge or duplicating its edge-event accounting.
      *
      * For a placed node, [spec] on recovery MUST be the cumulative ordered graph history: the
      * original boot spec followed by every successfully applied [Node.apply] delta. Local cells
@@ -279,7 +289,7 @@ object Runtime {
                             }
                         }
                 }
-                if (placement != null) installHalves(placement, mainHost, registry)
+                if (placement != null) installHalves(placement, mainHost, registry, recovered = true)
                 inputs = declaredSpawns
                     .filter { it.inputs.isNotEmpty() }
                     .associate { step ->
@@ -377,6 +387,40 @@ object Runtime {
         /** The cumulative placement fold, or null when manifest placement is inert. */
         var placement: PlacementPlan? = initialPlacement
             private set
+
+        private val recoveryCatchUps = mutableListOf<AutoCloseable>()
+
+        init {
+            if (recovered) {
+                initialPlacement?.consumerHalves?.forEach { edge ->
+                    val requested = AtomicBoolean()
+                    fun requestIfAvailable(ref: CellRef) {
+                        if (
+                            ref == edge.fromRef &&
+                            registry.location(ref) is LocationRegistry.Remote &&
+                            requested.compareAndSet(false, true)
+                        ) {
+                            val link = recoveredConsumerLink(edge)
+                            Protocols.sendUpstream(
+                                link,
+                                Protocols.StateRequest,
+                                StateRequest(link.to, since = null),
+                            )
+                        }
+                    }
+                    recoveryCatchUps += registry.onPublish(::requestIfAvailable)
+                    requestIfAvailable(edge.fromRef)
+                }
+            }
+        }
+
+        private fun recoveredConsumerLink(edge: CrossEdge): WireEdgeLink =
+            consumerPort(mainHost, edge).linking.links
+                .filterIsInstance<WireEdgeLink>()
+                .single {
+                    it.fromAddr == PortAddress(edge.fromRef, edge.outlet) &&
+                        it.toAddr == PortAddress(edge.toRef, edge.inlet)
+                }
 
         /**
          * Apply a graph delta through this node's services and topology journal.
@@ -480,6 +524,7 @@ object Runtime {
 
             connectionEndpoints.asReversed().forEach { connection -> capture(connection::close) }
             listener?.let { endpoint -> capture(endpoint::close) }
+            recoveryCatchUps.forEach { subscription -> capture(subscription::close) }
             inspector?.let { server -> capture(server::close) }
             buildList {
                 bridgeHost?.let { add(it) }
