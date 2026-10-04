@@ -465,7 +465,7 @@ class RebaselineTest {
             interval = Duration.ofDays(1),
             onBatch = {},
         )
-        return WorkspaceMirror::class.java.declaredConstructors.single().let { constructor ->
+        return WorkspaceMirror::class.java.declaredConstructors.single { it.parameterCount == 12 }.let { constructor ->
             constructor.isAccessible = true
             constructor.newInstance(
                 IDENTITY,
