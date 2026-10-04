@@ -122,7 +122,7 @@ class DtoGoldenTest {
 
         /** Nullable [NodeDto] fields. */
         private val NODE_NULLABLE = setOf(
-            "text", "depth", "status", "override", "activity",
+            "text", "depth", "status", "reason", "override", "activity",
             "proposer", "alsoProposedBy", "merged", "evidence", "undercuts", "onLink", "positionOf",
             "plausibility", "relevance", "quality", "contribution", "sensitivity", "reach",
             "proSaturation", "conSaturation", "rounds", "duplicatesDropped", "triage", "error",
@@ -188,7 +188,10 @@ class DtoGoldenTest {
         // ---- nodes ----
         // SPEC FRA-02: a reading/position is a claim of its question (root = the question ref, proposer "reading"/"position").
         private val nQ1 = NodeDto(ref = "q1", kind = "CLAIM", credence = 0.5, root = "q1", text = "What does ‘freedom’ mean here?", depth = 0, status = Status.FRAMED, proposer = "question")
-        private val nPos1 = NodeDto(ref = "pos1", kind = "CLAIM", credence = 0.65, root = "q1", text = "Reading A", depth = 0, status = Status.SATURATED, proposer = "reading", positionOf = "q1")
+        private val nPos1 = NodeDto(
+            ref = "pos1", kind = "CLAIM", credence = 0.65, root = "q1", text = "Reading A", depth = 0,
+            status = Status.DONE, reason = Reason.SATURATED, proposer = "reading", positionOf = "q1",
+        )
         private val nP1a = NodeDto(ref = "p1a", kind = "CLAIM", credence = 0.55, root = "q1", text = "An argument for reading A.", depth = 1, proposer = "claude")
         private val eP1a = NodeDto(ref = "e-p1a", kind = "EDGE", credence = 0.5, root = "q1", polarity = "SUPPORT", source = "p1a", target = "pos1", strength = 0.5)
         private val nPos2 = NodeDto(ref = "pos2", kind = "CLAIM", credence = 0.4, root = "q1", text = "Reading B", proposer = "reading", positionOf = "q1")
@@ -204,7 +207,7 @@ class DtoGoldenTest {
         )
         private val nA1 = NodeDto(
             ref = "a1", kind = "CLAIM", credence = 0.7, root = "q2", text = "An argument for X.", depth = 1,
-            status = Status.SATURATED, proposer = "claude",
+            status = Status.DONE, reason = Reason.SATURATED, proposer = "claude",
             alsoProposedBy = listOf("codex"), merged = true, evidence = listOf("Some evidence text."),
             plausibility = 0.7, relevance = 0.9, quality = 0.8, contribution = 0.55, sensitivity = 0.4, reach = 0.8,
             proSaturation = 0.6, conSaturation = 0.3, rounds = 3, duplicatesDropped = 1,
@@ -213,7 +216,7 @@ class DtoGoldenTest {
         private val eA1 = NodeDto(
             ref = "e-a1", kind = "EDGE", credence = 0.8, root = "q2",
             text = "“An argument for X.” is a reason for “Should the city adopt X?”",
-            depth = 1, status = Status.SATURATED, override = Override.EXPAND,
+            depth = 1, status = Status.DONE, reason = Reason.SATURATED, override = Override.EXPAND,
             polarity = "SUPPORT", source = "a1", target = "q2", strength = 0.8,
         )
         private val nU1 = NodeDto(

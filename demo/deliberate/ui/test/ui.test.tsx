@@ -28,7 +28,7 @@ const graph: GraphDto = {
     },
     {
       ref: 'a', kind: 'CLAIM', credence: 0.75, root: 'q', text: 'It would help.', depth: 1,
-      status: 'SATURATED', override: 'EXPAND', proposer: 'claude', alsoProposedBy: ['codex'], merged: true,
+      status: 'DONE', reason: 'SATURATED', override: 'EXPAND', proposer: 'claude', alsoProposedBy: ['codex'], merged: true,
       plausibility: 0.7, reach: 0.8, relevance: 0.8, quality: 0.9, contribution: 0.576,
       proSaturation: 0.8, conSaturation: 0.6, rounds: 2, duplicatesDropped: 1,
       triage: { ADD: 2, MERGE: 1 },
@@ -36,11 +36,11 @@ const graph: GraphDto = {
     {
       ref: 'a-q', kind: 'EDGE', credence: 0.8, root: 'q', polarity: 'SUPPORT',
       source: 'a', target: 'q', strength: 0.8,
-      text: '“It would help.” is a reason for “Should we?”', depth: 1, status: 'PRUNED', override: 'AUTO', rounds: 0,
+      text: '“It would help.” is a reason for “Should we?”', depth: 1, status: 'DONE', reason: 'PRUNED', override: 'AUTO', rounds: 0,
     },
     {
       ref: 'b', kind: 'CLAIM', credence: 0.3, root: 'q', text: 'It has a cost.', depth: 2,
-      status: 'PRUNED', override: 'AUTO', proposer: 'codex', reach: 0.32,
+      status: 'DONE', reason: 'PRUNED', override: 'AUTO', proposer: 'codex', reach: 0.32,
     },
     {
       ref: 'b-a', kind: 'EDGE', credence: 0.4, root: 'q', polarity: 'ATTACK',
@@ -112,7 +112,7 @@ describe('SPEC UI contract', () => {
     expect(renderToString(() => <TreeView graph={graph} root="q" />)).not.toContain('a call failed');
     const errored: GraphDto = {
       ...graph,
-      nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, status: 'BUDGET', error: 'budget exhausted' } : n)),
+      nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, status: 'DONE', reason: 'BUDGET', error: 'budget exhausted' } : n)),
     };
     expect(renderToString(() => <TreeView graph={errored} root="q" />)).toContain('a call failed');
   });
@@ -122,7 +122,7 @@ describe('SPEC UI contract', () => {
     const stopped: GraphDto = {
       ...graph,
       questions: [{ ...graph.questions[0], active: false, stoppedBy: 'voi' }],
-      nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, status: 'DIMINISHING' } : n)),
+      nodes: graph.nodes.map((n) => (n.ref === 'a' ? { ...n, status: 'DONE', reason: 'DIMINISHING' } : n)),
     };
     const html = renderToString(() => <TreeView graph={stopped} root="q" />);
     expect(html).toContain('stopped: nothing left could change the answer');
@@ -196,7 +196,7 @@ describe('SPEC UI contract', () => {
       ...graph,
       nodes: graph.nodes.map((n) =>
         n.kind === 'CLAIM'
-          ? { ...n, status: 'SATURATED' }
+          ? { ...n, status: 'DONE', reason: 'SATURATED' }
           : n.ref === 'a-q'
             ? { ...n, status: 'EXPLORING', activity: 'exploring' }
             : n,
@@ -482,7 +482,7 @@ describe('UI-09 model A: framing', () => {
       { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'Do fish sleep?', depth: 0, status: 'FRAMED', proposer: 'question' },
       {
         ref: 'p1', kind: 'CLAIM', credence: 0.55, root: 'q', text: 'Do fish enter a rest state with lowered responsiveness?',
-        depth: 0, positionOf: 'q', status: 'SATURATED', override: 'AUTO', proposer: 'reading', plausibility: 0.9,
+        depth: 0, positionOf: 'q', status: 'DONE', reason: 'SATURATED', override: 'AUTO', proposer: 'reading', plausibility: 0.9,
       },
       {
         ref: 'p2', kind: 'CLAIM', credence: 0.4, root: 'q', text: 'Do fish show REM-like brain activity?',
@@ -490,7 +490,7 @@ describe('UI-09 model A: framing', () => {
       },
       {
         ref: 'a', kind: 'CLAIM', credence: 0.6, root: 'q', text: 'They stop responding to stimuli at night.',
-        depth: 1, status: 'SATURATED', proposer: 'claude',
+        depth: 1, status: 'DONE', reason: 'SATURATED', proposer: 'claude',
       },
       { ref: 'a-p1', kind: 'EDGE', credence: 0.6, root: 'q', polarity: 'SUPPORT', source: 'a', target: 'p1', strength: 0.6 },
     ],
@@ -515,8 +515,8 @@ describe('UI-09 model A: framing', () => {
     ],
     nodes: [
       { ref: 'q', kind: 'CLAIM', credence: 0.5, root: 'q', text: 'How many will attend?', depth: 0, status: 'FRAMED', proposer: 'question' },
-      { ref: 'p1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'Under 100.', depth: 0, positionOf: 'q', status: 'SATURATED', proposer: 'reading' },
-      { ref: 'p2', kind: 'CLAIM', credence: 0.4, root: 'q', text: 'Between 100 and 300.', depth: 0, positionOf: 'q', status: 'SATURATED', proposer: 'reading' },
+      { ref: 'p1', kind: 'CLAIM', credence: 0.7, root: 'q', text: 'Under 100.', depth: 0, positionOf: 'q', status: 'DONE', reason: 'SATURATED', proposer: 'reading' },
+      { ref: 'p2', kind: 'CLAIM', credence: 0.4, root: 'q', text: 'Between 100 and 300.', depth: 0, positionOf: 'q', status: 'DONE', reason: 'SATURATED', proposer: 'reading' },
       { ref: 'p3', kind: 'CLAIM', credence: 0.1, root: 'q', text: 'Over 300.', depth: 0, positionOf: 'q', status: 'QUEUED', proposer: 'reading' },
     ],
   };

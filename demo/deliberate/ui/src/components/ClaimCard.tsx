@@ -15,9 +15,9 @@ import {
   spreadOf,
   reachTier,
   statusHint,
+  statusLabel,
   triageText,
   reachWeight,
-  STATUS_LABEL,
   strengthWord,
   verdict,
 } from '../util/format';
@@ -249,11 +249,9 @@ export function ClaimCard(props: { claimRef: string; index: () => TreeIndex; sel
                   {(ed) => <LinkChip edge={ed()} side={side()} args={e().linkArgs} open={linkOpen()} onToggle={() => setLinkOpen(!linkOpen())} />}
                 </Show>
                 <Show when={claim().status}>
-                  {(s) => (
-                    <span class={`status status--${phase()}`} title={statusHint(s())}>
-                      {STATUS_LABEL[s()]}
-                    </span>
-                  )}
+                  <span class={`status status--${phase()}`} title={statusHint(claim())}>
+                    {statusLabel(claim())}
+                  </span>
                 </Show>
                 <Show when={callFailed(claim()) && phase() !== 'failed'}>
                   <span class="status status--failed" title={claim().error}>a call failed</span>
@@ -401,7 +399,7 @@ function LinkChip(props: {
           <LinkSentence text={props.edge.text} />
           <span class="linkchip__peek-meta">
             {linkHoldsText(props.edge)}
-            <Show when={props.edge.status}>{(st) => <> · {STATUS_LABEL[st()]}</>}</Show>
+            <Show when={props.edge.status}> · {statusLabel(props.edge)}</Show>
             <Show when={props.args.length > 0}>
               {' · '}
               {counts().holds} for · {counts().fails} against
@@ -509,11 +507,9 @@ export function LinkPanel(props: {
           </div>
           <div class="card__meta linkpanel__meta">
             <Show when={props.edge.status}>
-              {(s) => (
-                <span class={`status status--${phase()}`} title={statusHint(s(), true)}>
-                  {STATUS_LABEL[s()]}
-                </span>
-              )}
+              <span class={`status status--${phase()}`} title={statusHint(props.edge, true)}>
+                {statusLabel(props.edge)}
+              </span>
             </Show>
             <Show when={callFailed(props.edge) && phase() !== 'failed'}>
               <span class="status status--failed" title={props.edge.error}>a call failed</span>

@@ -173,7 +173,10 @@ class SensitivityTest {
                 val exact = g.exactValueOf(refs.getValue(node), listOf(refs.getValue("n0")))!!.expectedRootChange
                 assertEquals(independent, exact, 1e-11, "seed $seed, $node")
                 val gate = policy.scheduleGate(ClaimView(valueOfInformation = exact), QuestionView(treeSize = claims.size))
-                assertTrue(independent < epsilon || gate != Status.DIMINISHING, "seed $seed, $node: exact=$independent")
+                assertTrue(
+                    independent < epsilon || gate != Finish(Status.DONE, Reason.DIMINISHING),
+                    "seed $seed, $node: exact=$independent",
+                )
             }
         }
     }

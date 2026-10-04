@@ -10,8 +10,12 @@ import {
   phaseOf,
   priorDecidesText,
   priorText,
+  REASON_HINT,
+  REASON_LABEL,
   STATUS_HINT,
   STATUS_LABEL,
+  statusHint,
+  statusLabel,
   stoppedHint,
   stoppedText,
   questionProgress,
@@ -102,17 +106,25 @@ describe('strength and status wording', () => {
     expect(phaseOf('JUDGING')).toBe('active');
     expect(phaseOf('EXPLORING')).toBe('active');
     expect(phaseOf('QUEUED')).toBe('active');
-    expect(phaseOf('SATURATED')).toBe('done');
-    expect(phaseOf('ROUND_LIMIT')).toBe('done');
-    expect(phaseOf('PRUNED')).toBe('halted');
+    expect(phaseOf('DONE')).toBe('done');
+    expect(phaseOf('FRAMED')).toBe('halted');
     expect(phaseOf('STOPPED')).toBe('halted');
     expect(phaseOf('FAILED')).toBe('failed');
-    expect(phaseOf('DIMINISHING')).toBe('halted');
   });
 
-  it('words the value-of-information stop for claims and questions (model C)', () => {
-    expect(STATUS_LABEL.DIMINISHING).toBe('not worth exploring');
-    expect(STATUS_HINT.DIMINISHING).toContain('value of information');
+  it('covers every status and reason and words DONE from its reason', () => {
+    expect(Object.keys(STATUS_LABEL)).toEqual(['QUEUED', 'JUDGING', 'EXPLORING', 'FRAMED', 'DONE', 'STOPPED', 'FAILED']);
+    expect(Object.keys(STATUS_HINT)).toEqual(['QUEUED', 'JUDGING', 'EXPLORING', 'FRAMED', 'DONE', 'STOPPED', 'FAILED']);
+    expect(Object.keys(REASON_LABEL)).toEqual(['SATURATED', 'ROUND_LIMIT', 'PRUNED', 'DEPTH_LIMIT', 'BUDGET', 'DIMINISHING']);
+    expect(Object.keys(REASON_HINT)).toEqual(['SATURATED', 'ROUND_LIMIT', 'PRUNED', 'DEPTH_LIMIT', 'BUDGET', 'DIMINISHING']);
+    expect(statusLabel({ status: 'DONE', reason: 'DIMINISHING' })).toBe('not worth exploring');
+    expect(statusHint({ status: 'DONE', reason: 'DIMINISHING' })).toContain('value of information');
+    expect(statusLabel({ status: 'DONE' })).toBe('done');
+    expect(statusHint({ status: 'DONE' })).toBe('Exploration of this claim is complete');
+    expect(statusHint({ status: 'DONE', reason: 'SATURATED' }, true)).toContain('this link complete');
+  });
+
+  it('words the value-of-information stop for questions (model C)', () => {
     const q = { root: 'q', text: 'Q?', claims: 60, active: false };
     expect(stoppedText(q)).toBeUndefined();
     expect(stoppedText(undefined)).toBeUndefined();
@@ -130,12 +142,14 @@ describe('strength and status wording', () => {
 });
 
 describe('questionProgress', () => {
-  const claim = (ref: string, root: string, status: NodeDto['status']): NodeDto => ({ ref, root, kind: 'CLAIM', credence: 0.5, status });
+  const claim = (ref: string, root: string, status: NodeDto['status'], reason?: NodeDto['reason']): NodeDto => (
+    { ref, root, kind: 'CLAIM', credence: 0.5, status, reason }
+  );
   it('counts settled claims of one question only, ignoring edges', () => {
     const nodes: NodeDto[] = [
-      claim('q', 'q', 'SATURATED'),
+      claim('q', 'q', 'DONE', 'SATURATED'),
       claim('a', 'q', 'EXPLORING'),
-      claim('b', 'q', 'PRUNED'),
+      claim('b', 'q', 'DONE', 'PRUNED'),
       claim('c', 'q', 'QUEUED'),
       claim('x', 'other', 'EXPLORING'),
       { ref: 'e', root: 'q', kind: 'EDGE', credence: 0.5 },

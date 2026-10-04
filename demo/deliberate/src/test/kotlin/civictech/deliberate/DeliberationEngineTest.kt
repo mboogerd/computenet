@@ -171,6 +171,11 @@ class DeliberationEngineTest {
     private fun GraphDto.edges() = nodes.filter { it.kind == "EDGE" }
     private fun GraphDto.childrenOf(ref: CellRef) = edges().filter { it.target == ref.id.toString() }
     private fun GraphDto.claim(ref: String) = nodes.single { it.ref == ref }
+    private fun NodeDto.isDone(reason: Reason) = status == Status.DONE && this.reason == reason
+    private fun assertDone(node: NodeDto, reason: Reason, message: String? = null) {
+        assertEquals(Status.DONE, node.status, message)
+        assertEquals(reason, node.reason, message)
+    }
 
     @Test
     fun `calibrated exploration defaults are stable`() {
@@ -194,7 +199,7 @@ class DeliberationEngineTest {
         val r = g.node(root)
         assertEquals("question", r.proposer)
         assertEquals(0, r.depth)
-        assertEquals(Status.ROUND_LIMIT, r.status)
+        assertDone(r, Reason.ROUND_LIMIT)
         assertEquals(1, r.rounds)
         // 2 proposers x 2 sides x argsPerCall 2
         val edges = g.childrenOf(root)
@@ -206,7 +211,7 @@ class DeliberationEngineTest {
             assertEquals(1, child.depth)
             assertEquals(root.id.toString(), child.root)
             assertEquals(root.id.toString(), edge.root)
-            assertEquals(Status.DEPTH_LIMIT, child.status)
+            assertDone(child, Reason.DEPTH_LIMIT)
             // provenance and side both come from the generated text "<proposer>-<side>-n"
             assertTrue(child.text!!.startsWith(child.proposer!!), child.text)
             assertTrue(child.text!!.contains(if (edge.polarity == "SUPPORT") "-support-" else "-attack-"))
@@ -267,7 +272,7 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         val r = g.node(root)
-        assertEquals(Status.ROUND_LIMIT, r.status)
+        assertDone(r, Reason.ROUND_LIMIT)
         assertEquals(3, r.rounds)
         assertEquals(0.1, r.conSaturation)
         // round 1: 4 pro / 4 con, pro saturated. Round 2 asks con only (8 con). Pro is now
@@ -279,7 +284,7 @@ class DeliberationEngineTest {
         val r2 = both.ask("Q2?")
         both.idle()
         val n2 = both.snapshot().node(r2)
-        assertEquals(Status.SATURATED, n2.status)
+        assertDone(n2, Reason.SATURATED)
         assertEquals(1, n2.rounds)
     }
 
@@ -305,7 +310,7 @@ class DeliberationEngineTest {
         assertEquals(mapOf(Polarity.SUPPORT to 1, Polarity.ATTACK to 2), asked.groupingBy { it }.eachCount())
         assertEquals(2, g.childrenOf(root).count { it.polarity == "SUPPORT" })
         assertEquals(2, g.childrenOf(root).count { it.polarity == "ATTACK" })
-        assertEquals(Status.SATURATED, g.node(root).status)
+        assertDone(g.node(root), Reason.SATURATED)
     }
 
     @Test
@@ -357,8 +362,8 @@ class DeliberationEngineTest {
         val q = g.questions.single()
         val kids = g.childrenOf(root).map { g.claim(it.source!!) }
         assertEquals(4, kids.size)
-        assertTrue(kids.all { it.status == Status.DIMINISHING && it.rounds == 0 && it.plausibility == 0.999 }, kids.toString())
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertTrue(kids.all { it.isDone(Reason.DIMINISHING) && it.rounds == 0 && it.plausibility == 0.999 }, kids.toString())
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
         // Budget remaining: 5 of 180 claims, no depth limit — the value of information stopped it.
         assertEquals(5, q.claims)
         assertTrue(q.claims < config.maxClaims)
@@ -369,7 +374,7 @@ class DeliberationEngineTest {
         val root2 = open.ask("Q?")
         open.idle()
         val g2 = open.snapshot()
-        assertTrue(g2.childrenOf(root2).map { g2.claim(it.source!!) }.all { it.status == Status.ROUND_LIMIT && it.rounds == 1 })
+        assertTrue(g2.childrenOf(root2).map { g2.claim(it.source!!) }.all { it.isDone(Reason.ROUND_LIMIT) && it.rounds == 1 })
     }
 
     @Test
@@ -383,15 +388,15 @@ class DeliberationEngineTest {
         val q = g.questions.single()
         assertEquals(7, q.claims)
         assertEquals("budget", q.stoppedBy)
-        assertTrue(g.claims().none { it.status == Status.DIMINISHING }, g.claims().toString())
-        val capped = g.claims().filter { it.status == Status.BUDGET }
+        assertTrue(g.claims().none { it.isDone(Reason.DIMINISHING) }, g.claims().toString())
+        val capped = g.claims().filter { it.isDone(Reason.BUDGET) }
         assertTrue(capped.isNotEmpty())
-        assertEquals(Status.BUDGET, g.node(root).status)
+        assertDone(g.node(root), Reason.BUDGET)
         assertNull(g.node(root).error)
         awaitUntil("the capped arguments' exact sways are known") {
-            e.snapshot().claims().filter { it.status == Status.BUDGET }.all { it.sensitivity != null }
+            e.snapshot().claims().filter { it.isDone(Reason.BUDGET) }.all { it.sensitivity != null }
         }
-        for (n in e.snapshot().claims().filter { it.status == Status.BUDGET }) {
+        for (n in e.snapshot().claims().filter { it.isDone(Reason.BUDGET) }) {
             val voi = service.exactValueOf(CellRef(java.util.UUID.fromString(n.ref)), listOf(root))!!.expectedRootChange
             assertTrue(voi >= 2 * config.voiEpsilon, "a capped argument was still worth a round (VoI above ε): $voi")
         }
@@ -433,7 +438,7 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         assertEquals(1 + 4 + 16, g.claims().size)
         g.claims().filter { it.depth == 2 }.forEach {
-            assertEquals(Status.DEPTH_LIMIT, it.status)
+            assertDone(it, Reason.DEPTH_LIMIT)
             assertEquals(0, it.rounds)
             assertEquals(1.0, it.relevance) // assessed when attached, like every argument
         }
@@ -448,48 +453,143 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         assertEquals(5, g.claims().size)
         // The root explored before the budget ran out; `rounds` still shows that (EXP-06).
-        assertEquals(Status.BUDGET, g.node(root).status)
+        assertDone(g.node(root), Reason.BUDGET)
         assertNull(g.node(root).error)
         assertTrue(g.node(root).rounds!! > 0)
-        assertTrue(g.claims().filter { it.depth == 1 }.all { it.status == Status.BUDGET && it.rounds == 0 })
+        assertTrue(g.claims().filter { it.depth == 1 }.all { it.isDone(Reason.BUDGET) && it.rounds == 0 })
         assertEquals(5, g.questions.single().claims)
     }
 
     @Test
-    fun `a legacy ROUND_LIMIT-with-budget-exhausted record restores as BUDGET with no error`() {
+    fun `literal legacy status fields migrate to DONE reasons before decode`() {
+        val otherFields = mapOf(
+            "question" to "\"q\"", "text" to "\"rewritten\"", "proposer" to "\"claude\"",
+            "override" to "\"EXPAND\"", "roundLimit" to "7", "rounds" to "2",
+            "plausibility" to "0.7", "relevance" to "0.8", "quality" to "0.9", "reach" to "0.4",
+            "contribution" to "0.3", "proSaturation" to "0.6", "conSaturation" to "0.5",
+            "saturated" to "[\"SUPPORT\"]", "duplicatesDropped" to "1", "triage" to "{\"ADD\":2}",
+            "alsoProposedBy" to "[\"codex\"]", "evidence" to "[\"e\"]", "merged" to "true",
+            "error" to "\"claude: exit 1\"", "anyCallSucceeded" to "true", "edgeStrength" to "0.75",
+            "framingMode" to "\"READINGS\"", "framingTerm" to "\"bank\"",
+        )
+        for (reason in Reason.entries) {
+            val literal = otherFields + ("status" to "\"${reason.name}\"")
+            val migrated = EngineRecords.recordFrom(literal)
+            assertEquals(
+                otherFields + mapOf("status" to "\"DONE\"", "reason" to "\"${reason.name}\""),
+                EngineRecords.fieldsOf(migrated),
+                reason.name,
+            )
+        }
+
         val claim = Claim(
             ref = CellRef(java.util.UUID.randomUUID()), root = CellRef(java.util.UUID.randomUUID()),
             parent = null, side = null, text = "x", depth = 0, proposer = "claude", roundLimit = 3,
         )
         val legacy = EngineRecords.recordFrom(
-            mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1", "error" to "\"budget exhausted\""),
+            otherFields + mapOf("status" to "\"ROUND_LIMIT\"", "error" to "\"budget exhausted\""),
         )
         EngineRecords.apply(claim, legacy)
-        assertEquals(Status.BUDGET, claim.status)
+        assertEquals(Status.DONE, claim.status)
+        assertEquals(Reason.BUDGET, claim.reason)
         assertNull(claim.error)
-        assertEquals(1, claim.rounds)
+        assertEquals(2, claim.rounds)
+        assertEquals(Override.EXPAND, claim.override)
+        assertEquals(0.7, claim.plausibility)
 
-        // A ROUND_LIMIT record with any other error (or none) is left as written: the mapping
-        // is keyed on the (status, error) pair, not on the status alone.
-        val claim2 = Claim(
-            ref = CellRef(java.util.UUID.randomUUID()), root = CellRef(java.util.UUID.randomUUID()),
-            parent = null, side = null, text = "x", depth = 0, proposer = "claude", roundLimit = 3,
+        val ordinaryError = EngineRecords.recordFrom(
+            otherFields + mapOf("status" to "\"ROUND_LIMIT\"", "error" to "\"claude: exit 1\""),
         )
-        val other = EngineRecords.recordFrom(
-            mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1", "error" to "\"claude: exit 1\""),
-        )
-        EngineRecords.apply(claim2, other)
-        assertEquals(Status.ROUND_LIMIT, claim2.status)
-        assertEquals("claude: exit 1", claim2.error)
+        assertEquals(Status.DONE, ordinaryError.status)
+        assertEquals(Reason.ROUND_LIMIT, ordinaryError.reason)
+        assertEquals("claude: exit 1", ordinaryError.error)
 
-        val claim3 = Claim(
-            ref = CellRef(java.util.UUID.randomUUID()), root = CellRef(java.util.UUID.randomUUID()),
-            parent = null, side = null, text = "x", depth = 0, proposer = "claude", roundLimit = 3,
+        // New-vocabulary fields are not rewritten: the legacy map is keyed only by removed names.
+        val current = otherFields + mapOf("status" to "\"DONE\"", "reason" to "\"PRUNED\"")
+        assertEquals(
+            current,
+            EngineRecords.fieldsOf(EngineRecords.recordFrom(current)),
         )
-        val noError = EngineRecords.recordFrom(mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1"))
-        EngineRecords.apply(claim3, noError)
-        assertEquals(Status.ROUND_LIMIT, claim3.status)
-        assertNull(claim3.error)
+    }
+
+    @Test
+    fun `a restart over legacy root child and link statuses preserves the tree and runs no round`() {
+        val dir = java.nio.file.Files.createTempDirectory("deliberate-legacy-status-restore").toFile()
+        val log = java.io.File(dir, "host.journal")
+        val firstStore = InMemoryMetaStore()
+        val config = DeliberationEngine.Config(
+            argsPerCall = 1, maxRounds = 1, maxDepth = 0, voiEpsilon = 0.0, exploreLinks = false,
+        )
+        val e1 = DeliberationEngine(
+            durableGraph(host, registry, log), FakeJudge(), listOf(FakeProposer("claude")), config,
+            store = firstStore, persistEveryMs = 60_000,
+        ).also { engines += it }
+        val root = e1.ask("Legacy?")
+        e1.idle()
+        e1.persistNow()
+        val before = e1.snapshot()
+        val child = before.claims().first { it.depth == 1 }
+        val link = before.edges().single { it.source == child.ref }
+        val budgetChild = before.claims().first { it.depth == 1 && it.ref != child.ref }
+        e1.close()
+
+        val seeded = firstStore.load().mapValues { (_, fields) -> fields.toMutableMap() }.toMutableMap()
+        fun legacy(key: String, status: String) {
+            seeded[key] = seeded.getValue(key).apply {
+                this["status"] = "\"$status\""
+                remove("reason")
+            }
+        }
+        legacy("c:${root.id}", "ROUND_LIMIT")
+        legacy("c:${child.ref}", "PRUNED")
+        legacy("l:${link.ref}", "SATURATED")
+        // The pre-computenet-dq2fy.24.1 budget encoding: ROUND_LIMIT + "budget exhausted".
+        legacy("c:${budgetChild.ref}", "ROUND_LIMIT")
+        seeded.getValue("c:${budgetChild.ref}")["error"] = "\"budget exhausted\""
+        val store = RecordingMetaStore(seeded)
+        val restartJudge = FakeJudge()
+        val restartProposer = FakeProposer("claude")
+
+        try {
+            val e2 = restart(log, store, config, restartJudge, listOf(restartProposer))
+            e2.idle()
+            val after = e2.snapshot()
+            assertDone(after.node(root), Reason.ROUND_LIMIT)
+            assertDone(after.claim(child.ref), Reason.PRUNED)
+            assertDone(after.nodes.single { it.ref == link.ref }, Reason.SATURATED)
+            assertDone(after.claim(budgetChild.ref), Reason.BUDGET)
+            assertNull(after.claim(budgetChild.ref).error, "the legacy budget pair restores with no error")
+
+            fun preserved(n: NodeDto) = listOf(
+                n.root, n.depth, n.override, n.rounds, n.proposer,
+                n.plausibility, n.relevance, n.quality, n.proSaturation, n.conSaturation,
+                n.source, n.target, n.polarity, n.strength,
+            )
+            assertEquals(preserved(before.node(root)), preserved(after.node(root)))
+            assertEquals(preserved(child), preserved(after.claim(child.ref)))
+            assertEquals(preserved(budgetChild), preserved(after.claim(budgetChild.ref)))
+            assertEquals(preserved(link), preserved(after.nodes.single { it.ref == link.ref }))
+            assertTrue(restartProposer.contexts.isEmpty(), "legacy terminal records must not re-run a round")
+            assertTrue(
+                restartJudge.plausibilityCalls.isEmpty() && restartJudge.relationCalls.isEmpty() && restartJudge.triageCalls.isEmpty(),
+                "legacy terminal records must not re-run judgments",
+            )
+            assertEquals(0, restartJudge.saturationCalls.get())
+
+            e2.persistNow()
+            val rewritten = store.load()
+            assertEquals("\"DONE\"", rewritten.getValue("c:${root.id}")["status"])
+            assertEquals("\"ROUND_LIMIT\"", rewritten.getValue("c:${root.id}")["reason"])
+            assertEquals("\"DONE\"", rewritten.getValue("c:${child.ref}")["status"])
+            assertEquals("\"PRUNED\"", rewritten.getValue("c:${child.ref}")["reason"])
+            assertEquals("\"DONE\"", rewritten.getValue("l:${link.ref}")["status"])
+            assertEquals("\"SATURATED\"", rewritten.getValue("l:${link.ref}")["reason"])
+            assertEquals("\"DONE\"", rewritten.getValue("c:${budgetChild.ref}")["status"])
+            assertEquals("\"BUDGET\"", rewritten.getValue("c:${budgetChild.ref}")["reason"])
+            assertNull(rewritten.getValue("c:${budgetChild.ref}")["error"], "the obsolete budget error is removed on rewrite")
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test
@@ -500,7 +600,7 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         val r = g.node(root)
-        assertEquals(Status.ROUND_LIMIT, r.status)
+        assertDone(r, Reason.ROUND_LIMIT)
         assertTrue(r.error!!.contains("codex exploded"), r.error)
         val kids = g.childrenOf(root).map { g.claim(it.source!!) }
         assertEquals(4, kids.size)
@@ -524,7 +624,7 @@ class DeliberationEngineTest {
         val root = e.ask("Q?")
         e.idle()
         val node = e.snapshot().node(root)
-        assertEquals(Status.ROUND_LIMIT, node.status)
+        assertDone(node, Reason.ROUND_LIMIT)
         assertEquals(3, node.rounds)
         assertEquals(6, calls.get())
         assertTrue(node.error!!.contains("temporary outage"), node.error)
@@ -556,13 +656,13 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         val r = g.node(root)
-        assertEquals(Status.ROUND_LIMIT, r.status)
+        assertDone(r, Reason.ROUND_LIMIT)
         assertEquals(2, r.rounds)
         assertNull(r.plausibility)
         assertNotNull(r.error)
         assertEquals(16, g.childrenOf(root).size)
         assertTrue(g.edges().all { it.strength == null })
-        assertTrue(g.childrenOf(root).all { g.claim(it.source!!).status == Status.DEPTH_LIMIT })
+        assertTrue(g.childrenOf(root).all { g.claim(it.source!!).isDone(Reason.DEPTH_LIMIT) })
     }
 
     /** Proposer that blocks the root's first round until released. */
@@ -605,10 +705,10 @@ class DeliberationEngineTest {
         e.setOverride(root, Override.AUTO)
         e.idle()
         val g2 = e.snapshot()
-        assertEquals(Status.ROUND_LIMIT, g2.node(root).status)
+        assertDone(g2.node(root), Reason.ROUND_LIMIT)
         assertEquals(3, g2.node(root).rounds)
         assertEquals(12, g2.childrenOf(root).size)
-        assertTrue(g2.claims().filter { it.depth == 1 }.all { it.status == Status.DEPTH_LIMIT })
+        assertTrue(g2.claims().filter { it.depth == 1 }.all { it.isDone(Reason.DEPTH_LIMIT) })
         assertNull(g2.questions.single().stoppedBy)
     }
 
@@ -622,19 +722,19 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         val kid = g.childrenOf(root).first().source!!
-        assertEquals(Status.DIMINISHING, g.claim(kid).status)
+        assertDone(g.claim(kid), Reason.DIMINISHING)
         val kidRef = CellRef(java.util.UUID.fromString(kid))
         val relevanceCallsBefore = judge.relevanceCalls.size
         e.setOverride(kidRef, Override.EXPAND)
         e.idle()
         val g2 = e.snapshot()
-        assertEquals(Status.ROUND_LIMIT, g2.claim(kid).status)
+        assertDone(g2.claim(kid), Reason.ROUND_LIMIT)
         assertEquals(1, g2.claim(kid).rounds)
         assertEquals(4, g2.childrenOf(kidRef).size)
         // gates skipped for the forced claim itself (no judgment at dequeue); only its 4 new
         // arguments are assessed, and those depth-2 children hit DEPTH_LIMIT
         assertEquals(relevanceCallsBefore + 4, judge.relevanceCalls.size)
-        assertTrue(g2.childrenOf(kidRef).all { g2.claim(it.source!!).status == Status.DEPTH_LIMIT })
+        assertTrue(g2.childrenOf(kidRef).all { g2.claim(it.source!!).isDone(Reason.DEPTH_LIMIT) })
     }
 
     @Test
@@ -643,12 +743,12 @@ class DeliberationEngineTest {
         val e = engine(judge = FakeJudge(saturation = { _, _ -> 1.0 }), config = config)
         val root = e.ask("Q?")
         e.idle()
-        assertEquals(Status.SATURATED, e.snapshot().node(root).status)
+        assertDone(e.snapshot().node(root), Reason.SATURATED)
         assertEquals(4, e.snapshot().childrenOf(root).size)
         e.setOverride(root, Override.EXPAND)
         e.idle()
         val g = e.snapshot()
-        assertEquals(Status.SATURATED, g.node(root).status)
+        assertDone(g.node(root), Reason.SATURATED)
         assertEquals(2, g.node(root).rounds)
         assertEquals(8, g.childrenOf(root).size)
         assertTrue(g.childrenOf(root).groupingBy { it.polarity }.eachCount().values.all { it > config.maxArgsPerSide })
@@ -668,7 +768,7 @@ class DeliberationEngineTest {
         p.release.countDown()
         e.idle()
         val g = e.snapshot()
-        assertEquals(Status.SATURATED, g.node(root).status)
+        assertDone(g.node(root), Reason.SATURATED)
         assertEquals(2, g.node(root).rounds)
         assertEquals(8, g.childrenOf(root).size)
     }
@@ -679,7 +779,7 @@ class DeliberationEngineTest {
         val root = e.ask("Q?")
         e.idle()
         val children = e.snapshot().childrenOf(root).size
-        assertEquals(Status.ROUND_LIMIT, e.snapshot().node(root).status)
+        assertDone(e.snapshot().node(root), Reason.ROUND_LIMIT)
 
         e.setOverride(root, Override.STOP)
         assertEquals(Status.STOPPED, e.snapshot().node(root).status)
@@ -688,7 +788,7 @@ class DeliberationEngineTest {
 
         val node = e.snapshot().node(root)
         assertEquals(Override.AUTO, node.override)
-        assertEquals(Status.ROUND_LIMIT, node.status)
+        assertDone(node, Reason.ROUND_LIMIT)
         assertEquals(children, e.snapshot().childrenOf(root).size)
     }
 
@@ -776,11 +876,11 @@ class DeliberationEngineTest {
         assertTrue(!g2.questions.single().active)
         assertNull(g2.questions.single().stoppedBy)
         assertEquals(Override.AUTO, g2.node(root).override)
-        assertEquals(Status.ROUND_LIMIT, g2.node(root).status)
+        assertDone(g2.node(root), Reason.ROUND_LIMIT)
         assertEquals(2, g2.node(root).rounds)
         assertTrue(g2.claims().none { it.status == Status.STOPPED }, "${g2.claims().map { it.text to it.status }}")
-        assertTrue(g2.claims().filter { it.depth == 1 }.all { it.status == Status.ROUND_LIMIT && it.rounds == 2 })
-        assertTrue(g2.claims().filter { it.depth == 2 }.all { it.status == Status.DEPTH_LIMIT })
+        assertTrue(g2.claims().filter { it.depth == 1 }.all { it.isDone(Reason.ROUND_LIMIT) && it.rounds == 2 })
+        assertTrue(g2.claims().filter { it.depth == 2 }.all { it.isDone(Reason.DEPTH_LIMIT) })
     }
 
     @Test
@@ -806,10 +906,10 @@ class DeliberationEngineTest {
         assertEquals(1, g.claim(inFlight.ref).rounds)
         val kids = g.childrenOf(g.ref(inFlight)).map { g.claim(it.source!!) }
         assertEquals(2, kids.size)
-        assertTrue(kids.all { it.status == Status.DEPTH_LIMIT }, "descendants are not affected: $kids")
-        assertEquals(Status.ROUND_LIMIT, g.claim(other.ref).status)
+        assertTrue(kids.all { it.isDone(Reason.DEPTH_LIMIT) }, "descendants are not affected: $kids")
+        assertDone(g.claim(other.ref), Reason.ROUND_LIMIT)
         assertEquals(1, g.claim(other.ref).rounds)
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
         assertNull(g.questions.single().stoppedBy)
         assertEquals(6, p.asked.size)
     }
@@ -873,7 +973,7 @@ class DeliberationEngineTest {
         val ordered = seen.distinct()
         assertTrue(ordered.indexOf(Status.QUEUED) < ordered.indexOf(Status.JUDGING), ordered.toString())
         assertTrue(ordered.indexOf(Status.JUDGING) < ordered.indexOf(Status.EXPLORING), ordered.toString())
-        assertTrue(ordered.indexOf(Status.EXPLORING) < ordered.indexOf(Status.ROUND_LIMIT), ordered.toString())
+        assertTrue(ordered.indexOf(Status.EXPLORING) < ordered.indexOf(Status.DONE), ordered.toString())
     }
 
     @Test
@@ -948,7 +1048,7 @@ class DeliberationEngineTest {
             assertEquals(DeliberationEngine.Config.FALLBACK_STRENGTH, it.contribution)
             assertNull(it.relevance)
             assertNull(it.quality)
-            assertEquals(Status.ROUND_LIMIT, it.status)
+            assertDone(it, Reason.ROUND_LIMIT)
             assertEquals(0.5, it.plausibility) // judged on its own when the claim was started
         }
         assertTrue(g.claims().filter { it.depth == 2 }.all { it.error!!.contains("jev assess") })
@@ -976,8 +1076,8 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         val d1 = g.claims().filter { it.depth == 1 }
         assertEquals(2, d1.size)
-        assertTrue(d1.all { it.status == Status.DIMINISHING && it.rounds == 0 }, d1.toString())
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertTrue(d1.all { it.isDone(Reason.DIMINISHING) && it.rounds == 0 }, d1.toString())
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
 
         // CTL-02: EXPAND bypasses the gate for that claim only.
         val stopped = g.ref(d1.first())
@@ -989,7 +1089,7 @@ class DeliberationEngineTest {
         val grandkids = g2.childrenOf(stopped).map { g2.claim(it.source!!) }
         assertEquals(2, grandkids.size)
         // its children face the gate again
-        assertTrue(grandkids.all { it.status == Status.DIMINISHING && it.rounds == 0 })
+        assertTrue(grandkids.all { it.isDone(Reason.DIMINISHING) && it.rounds == 0 })
         assertEquals(relevanceBefore + 2, judge.relevanceCalls.size)
     }
     @Test
@@ -1001,7 +1101,7 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         val r = g.node(root)
         // round 1 offers 2 proposers × 2 = 4 per side; only 3 fit
-        assertEquals(Status.SATURATED, r.status)
+        assertDone(r, Reason.SATURATED)
         assertEquals(1, r.rounds)
         assertEquals(3, g.childrenOf(root).count { it.polarity == "SUPPORT" })
         assertEquals(3, g.childrenOf(root).count { it.polarity == "ATTACK" })
@@ -1024,7 +1124,7 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         assertEquals(listOf(2, 1), asked.toList())
         assertEquals(3, g.childrenOf(root).count { it.polarity == "SUPPORT" })
-        assertEquals(Status.SATURATED, g.node(root).status)
+        assertDone(g.node(root), Reason.SATURATED)
         assertEquals(2, g.node(root).rounds)
     }
 
@@ -1042,7 +1142,7 @@ class DeliberationEngineTest {
         assertEquals(2, g.childrenOf(root).count { it.polarity == "SUPPORT" })
         assertEquals(3, g.childrenOf(root).count { it.polarity == "ATTACK" })
         assertEquals(0.6, g.node(root).proSaturation)
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
     }
 
     @Test
@@ -1056,7 +1156,7 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         val kids = g.childrenOf(root).map { g.claim(it.source!!) }
         assertEquals(4, kids.size)
-        assertTrue(kids.all { it.status == Status.BUDGET }, kids.toString())
+        assertTrue(kids.all { it.isDone(Reason.BUDGET) }, kids.toString())
     }
     @Test
     fun `exploration follows exact q-weighted value of information`() {
@@ -1338,7 +1438,7 @@ class DeliberationEngineTest {
             val ref = CellRef(java.util.UUID.fromString(k.ref))
             assertEquals(2, g.childrenOf(ref).count { it.polarity == "SUPPORT" })
             assertEquals(2, g.childrenOf(ref).count { it.polarity == "ATTACK" })
-            assertEquals(Status.SATURATED, k.status)
+            assertDone(k, Reason.SATURATED)
         }
     }
 
@@ -1434,19 +1534,19 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         assertEquals(5, g.claims().size)
-        val budget = g.claims().first { it.status == Status.BUDGET }
+        val budget = g.claims().first { it.isDone(Reason.BUDGET) }
         val ref = g.ref(budget)
 
         e.setOverride(ref, Override.EXPAND)
         e.idle()
         val g2 = e.snapshot()
         assertEquals(1, g2.node(ref).rounds)
-        assertEquals(Status.ROUND_LIMIT, g2.node(ref).status)
+        assertDone(g2.node(ref), Reason.ROUND_LIMIT)
         // Its own allowance: 2 proposers x 1 per side, within the child cap of 3 per side.
         assertEquals(4, g2.childrenOf(ref).size)
         assertEquals(9, g2.claims().size)
         // The new arguments meet the exhausted budget like any other claim.
-        assertTrue(g2.childrenOf(ref).all { g2.claim(it.source!!).status == Status.BUDGET })
+        assertTrue(g2.childrenOf(ref).all { g2.claim(it.source!!).isDone(Reason.BUDGET) })
 
         // The root (BUDGET) also gets its forced round.
         e.setOverride(root, Override.EXPAND)
@@ -1502,7 +1602,7 @@ class DeliberationEngineTest {
         val call = judge.relationCalls.single { it.child == "U" }
         assertEquals("“P” is a reason for “Q?”", call.parent)
         // Explored like any claim: its own argument attaches to it, with the root question as its path.
-        assertEquals(Status.ROUND_LIMIT, u.status)
+        assertDone(u, Reason.ROUND_LIMIT)
         assertEquals(listOf("U holds"), g.childrenOf(g.ref(u)).map { g.claim(it.source!!).text })
         assertEquals(listOf("Q?", "“P” is a reason for “Q?”"), claude.contexts.first { it.claim == "U" }.path)
         // The undercut lowers the link's credence below its own strength stance.
@@ -1616,7 +1716,13 @@ class DeliberationEngineTest {
     fun `REFINE evidence survives a restart, and a record written before evidence existed still restores`() {
         // Durability: `evidence` is an optional ClaimRecord field with an empty default, not
         // encoded when empty — a pre-change record is exactly a record without it.
-        val old = mapOf("question" to "\"q\"", "status" to "\"ROUND_LIMIT\"", "rounds" to "1", "alsoProposedBy" to "[\"codex\"]")
+        val old = mapOf(
+            "question" to "\"q\"",
+            "status" to "\"DONE\"",
+            "reason" to "\"ROUND_LIMIT\"",
+            "rounds" to "1",
+            "alsoProposedBy" to "[\"codex\"]",
+        )
         val decoded = EngineRecords.recordFrom(old)
         assertEquals(emptyList(), decoded.evidence)
         assertEquals(old, EngineRecords.fieldsOf(decoded), "an empty evidence list is not stored")
@@ -1678,12 +1784,12 @@ class DeliberationEngineTest {
         // The legacy contribution display is contribution(argument) × 4s(1-s). Exact VoI reaches
         // the same decision here: the strength-1 link cannot move, while the even link can.
         assertEquals(0.0, strong.contribution!!, 1e-9)
-        assertEquals(Status.DIMINISHING, strong.status)
+        assertDone(strong, Reason.DIMINISHING)
         assertTrue(even.sensitivity != null && even.sensitivity!! < 0, "the con's link pulls the root down: $even")
         assertEquals(0, strong.rounds)
         assertEquals(0.5, even.contribution!!, 1e-9)
         assertEquals(0.5, even.reach!!, 1e-9)
-        assertEquals(Status.ROUND_LIMIT, even.status)
+        assertDone(even, Reason.ROUND_LIMIT)
         assertEquals(1, even.rounds)
         // The link is a claim: its text is built from its ends, at its argument's depth.
         assertEquals("“Even” is a reason against “Q?”", even.text)
@@ -1704,7 +1810,7 @@ class DeliberationEngineTest {
         assertEquals(even.ref, fails.onLink)
         assertEquals(even.ref, fails.undercuts)
         assertEquals(2, holds.depth)
-        assertEquals(Status.DEPTH_LIMIT, holds.status)
+        assertDone(holds, Reason.DEPTH_LIMIT)
         assertEquals(even.text, judge.relationCalls.single { it.child == "Even holds" }.parent)
         assertEquals(mapOf("ADD" to 2), even.triage)
         assertEquals(0.0, even.proSaturation)
@@ -1793,7 +1899,7 @@ class DeliberationEngineTest {
         assertEquals(3, q.claims)
         assertEquals(q.claims - 1, links.size)
         assertEquals(1, links.sumOf { it.rounds ?: 0 })
-        assertTrue(links.any { it.status == Status.BUDGET }, "$links")
+        assertTrue(links.any { it.isDone(Reason.BUDGET) }, "$links")
         assertTrue(g.nodes.none { it.status in setOf(Status.QUEUED, Status.JUDGING, Status.EXPLORING) })
     }
 
@@ -1847,7 +1953,7 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         val link = g.linkOf(g.text("P"))
-        assertEquals(Status.PRUNED, link.status)
+        assertDone(link, Reason.PRUNED)
         awaitUntil("the root settles on its one argument") { e.snapshot().node(root).credence > 0.5 + 1e-6 }
         val rootBefore = e.snapshot().node(root).credence
         val edgeBefore = e.snapshot().nodes.single { it.ref == link.ref }.credence
@@ -1932,7 +2038,7 @@ class DeliberationEngineTest {
         e.idle()
         val g2 = e.snapshot()
         val again = g2.nodes.single { it.ref == link.ref }
-        assertEquals(Status.ROUND_LIMIT, again.status)
+        assertDone(again, Reason.ROUND_LIMIT)
         assertEquals(listOf("L"), g2.childrenOf(g2.ref(link)).map { g2.claim(it.source!!).text })
     }
 
@@ -2005,7 +2111,7 @@ class DeliberationEngineTest {
         val link = g.linkOf(arg)
         assertEquals("“Clearer P” is a reason for “Q?”", link.text)
         assertEquals(0.5, link.contribution!!, 1e-9)
-        assertEquals(Status.ROUND_LIMIT, link.status)
+        assertDone(link, Reason.ROUND_LIMIT)
     }
 
     @Test
@@ -2109,7 +2215,7 @@ class DeliberationEngineTest {
             resume.countDown()
             e2.idle()
             val done = e2.snapshot()
-            assertEquals(Status.ROUND_LIMIT, done.claim(resumed.ref).status)
+            assertDone(done.claim(resumed.ref), Reason.ROUND_LIMIT)
             assertEquals(1, done.claim(resumed.ref).rounds)
             assertEquals(root.id.toString(), done.questions.single().root)
             // The undercutter was rebuilt as one.
@@ -2174,7 +2280,9 @@ class DeliberationEngineTest {
 
         engine.setOverride(root, Override.STOP)
         engine.persistNow()
-        assertEquals(setOf("status", "override"), store.deltas.single { it.first == key }.second.keys)
+        val stopped = store.deltas.single { it.first == key }.second
+        assertEquals(setOf("status", "override", "reason"), stopped.keys)
+        assertNull(stopped.getValue("reason"), "a non-DONE status removes its completion reason")
         // CTL-03 on a question root: the question record carries the stop.
         assertEquals(mapOf("stopped" to "true"), store.deltas.single { it.first == "q:${root.id}" }.second)
         assertEquals(2, store.deltas.size)
@@ -2184,8 +2292,9 @@ class DeliberationEngineTest {
         engine.idle()
         engine.persistNow()
         val reset = store.deltas.single { it.first == key }.second
-        assertEquals(setOf("status", "override"), reset.keys)
+        assertEquals(setOf("status", "override", "reason"), reset.keys)
         assertNull(reset.getValue("override"), "AUTO is the default and must be persisted as a field removal")
+        assertEquals("\"ROUND_LIMIT\"", reset.getValue("reason"), "DONE restores its completion reason")
         assertEquals(mapOf("stopped" to null), store.deltas.single { it.first == "q:${root.id}" }.second)
         assertEquals(2, store.deltas.size)
     }
@@ -2235,7 +2344,7 @@ class DeliberationEngineTest {
             assertEquals(1, graph.edges().size)
             assertEquals(1, graph.node(root).duplicatesDropped)
             assertTrue(graph.nodes.none { it.ref == orphan.id.toString() })
-            assertEquals(Status.DEPTH_LIMIT, graph.node(placed).status)
+            assertDone(graph.node(placed), Reason.DEPTH_LIMIT)
         } finally {
             scheduler2.shutdown()
             dir.deleteRecursively()
@@ -2265,10 +2374,10 @@ class DeliberationEngineTest {
         val low = kids.single { it.text!!.contains("attack") }
         assertEquals(0.12, kept.contribution!!, 1e-9)
         assertEquals(0.3, kept.quality)
-        assertEquals(Status.ROUND_LIMIT, kept.status)
+        assertDone(kept, Reason.ROUND_LIMIT)
         // Changed by model C: 0.08 was below the 0.10 floor (PRUNED); the floor is gone.
         assertEquals(0.08, low.contribution!!, 1e-9)
-        assertEquals(Status.ROUND_LIMIT, low.status)
+        assertDone(low, Reason.ROUND_LIMIT)
     }
     @Test
     fun `round yield is value x novelty per argument asked`() {
@@ -2552,7 +2661,7 @@ class DeliberationEngineTest {
             e.idle()
             assertEquals(emptyList(), p.linkCalls.toList())
             val g = e.snapshot()
-            assertTrue(g.edges().all { it.status == Status.PRUNED }, "${g.edges().map { it.status }}")
+            assertTrue(g.edges().all { it.isDone(Reason.PRUNED) }, "${g.edges().map { it.status to it.reason }}")
             assertTrue(g.questions.none { it.active })
             // CTL-02: EXPAND is the one way to explore a link with exploration off.
             val queued = g.nodes.single { "l:${it.ref}" == edges[1] }
@@ -2589,7 +2698,7 @@ class DeliberationEngineTest {
 
             val links = e.snapshot().edges()
             assertEquals(2, proposer.linkCalls.toSet().size, "both rebuilt links were explored")
-            assertTrue(links.all { it.rounds == 1 && it.status == Status.ROUND_LIMIT && it.error == null }, links.toString())
+            assertTrue(links.all { it.rounds == 1 && it.isDone(Reason.ROUND_LIMIT) && it.error == null }, links.toString())
         } finally {
             dir.deleteRecursively()
         }
@@ -2637,9 +2746,9 @@ class DeliberationEngineTest {
         e.idle()
         val g3 = e.snapshot()
         assertTrue(!g3.questions.single().paused && !g3.questions.single().active)
-        assertEquals(Status.ROUND_LIMIT, g3.claim(kids.last().ref).status)
+        assertDone(g3.claim(kids.last().ref), Reason.ROUND_LIMIT)
         assertEquals(1, g3.claim(kids.last().ref).rounds)
-        assertTrue(g3.childrenOf(g3.ref(first)).all { g3.claim(it.source!!).status == Status.DEPTH_LIMIT })
+        assertTrue(g3.childrenOf(g3.ref(first)).all { g3.claim(it.source!!).isDone(Reason.DEPTH_LIMIT) })
     }
 
     @Test
@@ -2667,7 +2776,7 @@ class DeliberationEngineTest {
         e.setPaused(root, false)
         e.idle()
         assertEquals(3, e.snapshot().node(root).rounds)
-        assertEquals(Status.ROUND_LIMIT, e.snapshot().node(root).status)
+        assertDone(e.snapshot().node(root), Reason.ROUND_LIMIT)
     }
 
     @Test
@@ -2824,7 +2933,7 @@ class DeliberationEngineTest {
             e3.idle()
             val g3 = e3.snapshot()
             assertTrue(judge3.relationCalls.any { it.child == g3.claim(kid).text })
-            assertTrue(g3.claims().filter { it.depth == 1 && it.root == q1.id.toString() }.all { it.status == Status.ROUND_LIMIT })
+            assertTrue(g3.claims().filter { it.depth == 1 && it.root == q1.id.toString() }.all { it.isDone(Reason.ROUND_LIMIT) })
             assertTrue(g3.questions.none { it.active || it.paused })
         } finally {
             gate.countDown()
@@ -2869,7 +2978,7 @@ class DeliberationEngineTest {
         assertEquals(listOf("Should cities ban cars?"), framer.questions)
         assertEquals(0, judgedBeforeFraming.get(), "the framer runs before Judge.plausibility of the root")
         val g = e.snapshot()
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
         assertEquals(plain.snapshot().argumentsOf(plainRoot), g.argumentsOf(root))
         val q = g.questions.single { it.root == root.id.toString() }
         assertNull(q.framing)
@@ -2885,7 +2994,7 @@ class DeliberationEngineTest {
         val g = e.snapshot()
         assertEquals(1, framer.counter.get())
         assertTrue(g.node(root).error!!.startsWith("framing: "), g.node(root).error)
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
         assertEquals(8, g.childrenOf(root).size)
         assertNull(g.questions.single().framing)
     }
@@ -2910,7 +3019,7 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         assertEquals(1, framer.counter.get(), "the framer is asked once, even across the pause")
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
         assertNull(g.questions.single().framing)
         assertTrue(g.node(root).error!!.startsWith("framing: "), g.node(root).error)
     }
@@ -2948,7 +3057,7 @@ class DeliberationEngineTest {
         e.idle()
         val g = e.snapshot()
         assertEquals(1, framer.counter.get(), "the framer is asked once, even across the graph-write failure and the pause")
-        assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+        assertDone(g.node(root), Reason.ROUND_LIMIT)
         assertNull(g.questions.single().framing)
         assertTrue(g.node(root).error!!.startsWith("framing: "), g.node(root).error)
     }
@@ -2986,7 +3095,7 @@ class DeliberationEngineTest {
             e2.idle()
             assertEquals(1, counter.get(), "a NONE framing is remembered across restart, not asked again")
             val g = e2.snapshot()
-            assertEquals(Status.ROUND_LIMIT, g.node(root).status)
+            assertDone(g.node(root), Reason.ROUND_LIMIT)
             assertNull(g.questions.single().framing)
         } finally {
             release.countDown()
@@ -3108,7 +3217,7 @@ class DeliberationEngineTest {
         e.setPaused(root, false)
         e.idle()
         val after = e.snapshot()
-        assertTrue(ps.all { after.claim(it.ref).status == Status.ROUND_LIMIT }, "resumed positions are explored")
+        assertTrue(ps.all { after.claim(it.ref).isDone(Reason.ROUND_LIMIT) }, "resumed positions are explored")
     }
 
     @Test

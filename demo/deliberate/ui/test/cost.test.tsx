@@ -1,6 +1,6 @@
 import { renderToString } from 'solid-js/web';
 import { describe, expect, it } from 'vitest';
-import type { NodeDto, QuestionDto } from '../src/api/types';
+import type { NodeDto, QuestionDto, Reason } from '../src/api/types';
 import { CostBadge, CostPanel, nextCostPopoverState } from '../src/components/CostBadge';
 import { mockCost } from '../src/mock/mockSource';
 import { projectionText, tokens, usd } from '../src/util/format';
@@ -116,14 +116,16 @@ describe('cost badge and popover (SPEC §12)', () => {
 });
 
 describe('mock cost', () => {
-  const claim = (rounds: number, status: NodeDto['status']): NodeDto => ({ ref: 'x', kind: 'CLAIM', credence: 0.5, root: 'q', rounds, status });
+  const claim = (rounds: number, status: NodeDto['status'], reason?: Reason): NodeDto => (
+    { ref: 'x', kind: 'CLAIM', credence: 0.5, root: 'q', rounds, status, reason }
+  );
 
   it('is plausible: cents per round, a projection only after 3 rounds', () => {
     const early = mockCost([claim(2, 'EXPLORING'), claim(0, 'QUEUED')]);
     expect(early.projectedUsd).toBeUndefined();
     expect(early.costUsd!).toBeGreaterThan(0.05);
     expect(early.costUsd!).toBeLessThan(0.5);
-    const later = mockCost([claim(3, 'SATURATED'), claim(1, 'ROUND_LIMIT'), claim(0, 'QUEUED'), claim(0, 'QUEUED')]);
+    const later = mockCost([claim(3, 'DONE', 'SATURATED'), claim(1, 'DONE', 'ROUND_LIMIT'), claim(0, 'QUEUED'), claim(0, 'QUEUED')]);
     expect(later.cost!.queued).toBe(2);
     expect(later.projectedUsd).toBeCloseTo(later.costUsd! + 2 * (later.costUsd! / 4), 10);
     expect(later.cost!.backends.map((b) => b.backend)).toEqual(['claude', 'codex', 'jev']);

@@ -9,8 +9,8 @@ import {
   priorText,
   readingsLine,
   shown,
-  STATUS_LABEL,
   statusHint,
+  statusLabel,
 } from '../util/format';
 import { ClaimCard, Facts, indexTree, sideCounts, SpreadBand, useChildRefs, useCollapse, type Selection, type TreeIndex } from './ClaimCard';
 import { OverrideControl } from './OverrideControl';
@@ -163,11 +163,9 @@ export function Reading(props: { position: PositionDto; tree: TreeNode; sel: Sel
 
             <div class="reading__meta">
               <Show when={claim().status}>
-                {(s) => (
-                  <span class={`status status--${phase()}`} title={statusHint(s())}>
-                    {STATUS_LABEL[s()]}
-                  </span>
-                )}
+                <span class={`status status--${phase()}`} title={statusHint(claim())}>
+                  {statusLabel(claim())}
+                </span>
               </Show>
               <button
                 type="button"

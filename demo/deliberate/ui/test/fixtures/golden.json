@@ -158,7 +158,7 @@
             "argumentsFirstConsensus": 0.65,
             "text": "Reading A",
             "depth": 0,
-            "status": "SATURATED",
+            "status": "DONE", "reason": "SATURATED",
             "proposer": "reading",
             "positionOf": "q1"
         },
@@ -276,7 +276,7 @@
             "argumentsFirstConsensus": 0.7,
             "text": "An argument for X.",
             "depth": 1,
-            "status": "SATURATED",
+            "status": "DONE", "reason": "SATURATED",
             "activity": "exploring",
             "proposer": "claude",
             "alsoProposedBy": [
@@ -314,7 +314,7 @@
             "argumentsFirstConsensus": 0.8,
             "text": "“An argument for X.” is a reason for “Should the city adopt X?”",
             "depth": 1,
-            "status": "SATURATED",
+            "status": "DONE", "reason": "SATURATED",
             "override": "EXPAND",
             "polarity": "SUPPORT",
             "source": "a1",

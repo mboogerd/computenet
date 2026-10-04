@@ -95,14 +95,15 @@ class DeliberationEngine(
         val workers: Int = 8,
         /**
          * A node whose exact value of information ([ExplorationPolicy.voiOf]) is
-         * below this gets no further round (DIMINISHING), so a question stops once
+         * below this gets no further round (DONE with reason DIMINISHING), so a question stops once
          * the largest value over its remaining nodes is below it
          * (`--voi-eps`). 0 disables the stop.
          */
         val voiEpsilon: Double = DEFAULT_VOI_EPSILON,
         /**
          * SPEC §3 "Links as claims": links compete in the queue like claims. Off, a
-         * link is never explored automatically (it ends PRUNED); EXPAND still explores it.
+         * link is never explored automatically (it ends DONE with reason PRUNED);
+         * EXPAND still explores it.
          */
         val exploreLinks: Boolean = true,
         /**
@@ -252,7 +253,7 @@ class DeliberationEngine(
             if (questionRoot && mode == Override.AUTO && stopped.remove(c.root)) {
                 c.forceRound = false
                 restarted = claims.values.filter { it.root == c.root && it.status == Status.STOPPED && it.override != Override.STOP }
-                restarted.forEach { it.status = Status.QUEUED }
+                restarted.forEach { it.status = Status.QUEUED; it.reason = null }
                 return@synchronized emptyList()
             }
             // STOP cancels queued work; AUTO returns to ordinary gates. Neither keeps an earlier forced round.
@@ -263,10 +264,12 @@ class DeliberationEngine(
                     c.status == Status.EXPLORING && c.waiting -> {
                         c.waiting = false
                         c.status = Status.STOPPED
+                        c.reason = null
                         emptyList()
                     }
                     c.status !in setOf(Status.JUDGING, Status.EXPLORING) -> {
                         c.status = Status.STOPPED
+                        c.reason = null
                         emptyList()
                     }
                     else -> emptyList()
@@ -274,6 +277,7 @@ class DeliberationEngine(
                 // CTL-04: back through the normal gates.
                 Override.AUTO -> if (c.status == Status.STOPPED) {
                     c.status = Status.QUEUED
+                    c.reason = null
                     listOf(c)
                 } else emptyList()
                 // CTL-02: the claim's next round is forced — whatever its status, budget included.
@@ -282,6 +286,7 @@ class DeliberationEngine(
                         c.roundLimit = maxOf(c.roundLimit, c.rounds + 1)
                         c.forceRound = true
                         c.status = Status.QUEUED
+                        c.reason = null
                         listOf(c)
                     }
                     c.status == Status.QUEUED -> {
@@ -338,6 +343,7 @@ class DeliberationEngine(
     /** Caller holds [lock]. Ends [c]'s withheld or queued work as STOPPED; a task already queued goes stale. */
     private fun cancel(c: Claim) {
         c.status = Status.STOPPED
+        c.reason = null
         c.waiting = false
         c.parked = false
         c.needsAssessment = false
@@ -616,7 +622,7 @@ class DeliberationEngine(
             if (c.status != Status.QUEUED) return
             when {
                 // CTL-03 on the root: a stopped question queues nothing (finish records the STOPPED).
-                cancelled(c) -> Status.STOPPED
+                cancelled(c) -> Finish(Status.STOPPED)
                 held(c) -> {
                     c.parked = true
                     return
@@ -670,7 +676,7 @@ class DeliberationEngine(
             if (continuing) step(c) else start(c)
         } catch (t: Throwable) {
             // EXP-08: never let an exception kill a worker or leave a claim stuck.
-            finish(c, Status.FAILED, error = t.toString())
+            finish(c, Finish(Status.FAILED), error = t.toString())
             true
         }
         if (!finished) {
@@ -683,7 +689,7 @@ class DeliberationEngine(
         // still active. The latter must not be lost at the finish boundary.
         val forcedRequeue = synchronized(lock) {
             (c.override == Override.EXPAND && c.forceRound && c.status in FINISHED)
-                .also { if (it) c.status = Status.QUEUED }
+                .also { if (it) { c.status = Status.QUEUED; c.reason = null } }
         }
         if (forcedRequeue) {
             onChange()
@@ -706,7 +712,7 @@ class DeliberationEngine(
         // Model A: a framed root is never explored itself (an EXPAND on it runs no round).
         if (synchronized(lock) { c.framing.let { it != null && it.mode != FramingMode.NONE } }) {
             update { c.forceRound = false }
-            return finish(c, Status.FRAMED)
+            return finish(c, Finish(Status.FRAMED))
         }
         if (frame(c)) return true
         // CRED-01 (a link's stance is its argument's CRED-02 strength, judged at attach time)
@@ -751,7 +757,7 @@ class DeliberationEngine(
     private fun step(c: Claim): Boolean {
         val (sides, forcedRound, terminal) = synchronized(lock) {
             // CTL-03 on the root: the question was stopped while this claim waited for its next round.
-            if (cancelled(c)) return@synchronized Triple(emptyList<Side>(), false, Status.STOPPED)
+            if (cancelled(c)) return@synchronized Triple(emptyList<Side>(), false, Finish(Status.STOPPED))
             if (held(c)) {
                 c.parked = true
                 c.waiting = true
@@ -829,7 +835,7 @@ class DeliberationEngine(
                 Claim(ref, c.root, null, null, item, 0, proposer, config.maxRounds).also { claims[ref] = it }
             }.also { treeSize.merge(c.root, it.size, Int::plus) }
         }
-        finish(c, Status.FRAMED)
+        finish(c, Finish(Status.FRAMED))
         positions.forEach(::schedule)
         return true
     }
@@ -844,12 +850,12 @@ class DeliberationEngine(
         update { ledger.record(root, u, usd) }
     }
 
-    /** Ends [c]'s expansion with [status] as [ExplorationPolicy.finish] rules and returns true. */
-    private fun finish(c: Claim, status: Status, error: String? = null): Boolean = update {
+    /** Ends [c]'s expansion with [outcome] as [ExplorationPolicy.finish] rules and returns true. */
+    private fun finish(c: Claim, outcome: Finish, error: String? = null): Boolean = update {
         c.waiting = false
-        val end = policy.finish(c.view(), status)
+        val end = policy.finish(c.view(), outcome)
         c.status = end.status
-        end.error?.let { c.error = it }
+        c.reason = end.reason.takeIf { end.status == Status.DONE }
         if (error != null) c.error = error
         true
     }

@@ -27,7 +27,7 @@ export interface QuestionDto {
   /**
    * Why the tree stopped growing early: the human stopped the question (STOP on
    * its root, CTL-03), the claim budget (the hard cap), or — no work left — model
-   * C's value-of-information stop, when it left a node DIMINISHING.
+   * C's value-of-information stop, when it left a node DONE/DIMINISHING.
    */
   stoppedBy?: StoppedBy;
   /**
@@ -146,15 +146,12 @@ export type Status =
   | 'QUEUED'
   | 'JUDGING'
   | 'EXPLORING'
-  | 'SATURATED'
-  | 'ROUND_LIMIT'
-  | 'PRUNED'
-  | 'DEPTH_LIMIT'
-  | 'BUDGET'
-  | 'DIMINISHING'
+  | 'FRAMED'
+  | 'DONE'
   | 'STOPPED'
-  | 'FAILED'
-  | 'FRAMED';
+  | 'FAILED';
+
+export type Reason = 'SATURATED' | 'ROUND_LIMIT' | 'PRUNED' | 'DEPTH_LIMIT' | 'BUDGET' | 'DIMINISHING';
 
 export type Override = 'AUTO' | 'EXPAND' | 'STOP';
 
@@ -191,6 +188,8 @@ export interface NodeDto {
   /** A link's depth is its argument's depth. */
   depth?: number;
   status?: Status;
+  /** Present exactly when status is DONE. */
+  reason?: Reason;
   override?: Override;
   /**
    * What the node is doing right now, for the activity line: "exploring" (a

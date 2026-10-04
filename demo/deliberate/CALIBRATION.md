@@ -52,7 +52,7 @@ In the "cross estimate" column, each depth-1 strength (36 claims) is paired with
 
 **`saturation` = 0.22.** Jev's saturation signal responds to argument count, but weakly. It rises monotonically with n, and the samples are very stable, yet it never leaves the bottom third of the scale: even with 6 arguments Jev still gives, on average, a 0.73 probability that something important is missing, and the highest saturation observed was 0.37. So the first run's 0.7 threshold, like any threshold on a "probably saturated" reading, can never fire. At 0.22, no side saturates empty and 2% saturate with one argument. Half of all sides saturate by n=3 and two thirds by n=4, which meets §10(a) on the median. The discrimination between 3 and 6 arguments is shallow (0.22 → 0.27 mean), so the reliable stop is still **`maxArgsPerSide` = 6**. Jev's saturation mainly ends a side early at 2–4 arguments, where its reading is higher than typical.
 
-**`minInfluence` = 0.35.** Relevance alone barely decays with depth (median 0.70 → 0.62 → 0.60), which is why a relevance-only gate never pruned. Reach supplies the decay: 0.64 → 0.51 → 0.32. At 0.35 the gate expands about 72% of depth-1 claims, pruning the weakly connected ones (strength ≤ ~0.5). It expands only 12–25% of depth-2 claims and no depth-3 claim. Most depth-2 claims therefore end `PRUNED`, and `DEPTH_LIMIT` (depth > 3) is practically unreachable, which meets §10(b).
+**`minInfluence` = 0.35.** Relevance alone barely decays with depth (median 0.70 → 0.62 → 0.60), which is why a relevance-only gate never pruned. Reach supplies the decay: 0.64 → 0.51 → 0.32. At 0.35 the gate expands about 72% of depth-1 claims, pruning the weakly connected ones (strength ≤ ~0.5). It expands only 12–25% of depth-2 claims and no depth-3 claim. Most depth-2 claims therefore finish `DONE` for reason `PRUNED`, and the `DEPTH_LIMIT` reason (depth > 3) is practically unreachable, which meets §10(b).
 
 With the defaults of two proposers × `argsPerCall` 1, each round offers up to two new arguments per side. Jev's saturation judgment is therefore consulted at 2 and 4 arguments per side, before the dependable `maxArgsPerSide` cap of 6 ends a side that Jev has not already saturated.
 
@@ -118,7 +118,8 @@ above were calibrated under the old judgments and prompts.
 
 The first live run under the new ones (2026-09-27, "Should cities ban private
 cars from their centres?", defaults with `minInfluence` 0.35) showed the gate
-misbehaving: all 9 depth-1 arguments ended `PRUNED` (contributions 0.09–0.32),
+misbehaving: all 9 depth-1 arguments ended `DONE` for reason `PRUNED`
+(contributions 0.09–0.32),
 so nothing below the root was ever explored. Re-asking Jev for the two factors
 of those 9 arguments separately:
 
@@ -205,7 +206,7 @@ final EXP-10 rule.
 | Is Trump intelligent? | 21 → **55** | diminishing (nothing left to halt) | 1/10/25/13/5/1 | 1/5/1/2 | 5 of 10 | 22, 0.060 vs 0.114 | ~5.4 min |
 | Do animals employ language? | 110 → **64** | diminishing | 1/8/27/20/8/0 | 1/8/5/2 | 8 of 8 | 16, 0.113 vs 0.198 | ~3.4 min |
 
-Status counts: God — 65 `DEPTH_LIMIT`, 50 `PRUNED`, 42 `DIMINISHING`,
+`DONE` reason counts: God — 65 `DEPTH_LIMIT`, 50 `PRUNED`, 42 `DIMINISHING`,
 3 `SATURATED`, 2 `ROUND_LIMIT`; Trump — 40 `PRUNED`, 6 `DEPTH_LIMIT`,
 6 `ROUND_LIMIT`, 3 `SATURATED`; animals — 31 `PRUNED`, 22 `DIMINISHING`,
 8 `DEPTH_LIMIT`, 2 `SATURATED`, 1 `ROUND_LIMIT`. Triage: God 172 proposals
@@ -222,7 +223,8 @@ proposed investigating disinfectant injections into the body as a treatment
 for COVID-19." and "Donald Trump built a real estate and branding business
 that Forbes estimated to be worth billions of dollars as of the 2020s." — each
 a checkable, relevant fact rather than a copy of a prompt example. Its root
-relevance stays low (0.16–0.57, cause 4), so it still ends mostly by `PRUNED`;
+relevance stays low (0.16–0.57, cause 4), so it still ends mostly `DONE` for
+reason `PRUNED`;
 its yield stop fired on its last rounds with no claim left waiting.
 
 **Final correction.** The animals stop exposed a biased comparison: the root's

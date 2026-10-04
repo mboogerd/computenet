@@ -40,6 +40,8 @@ internal class Claim(
      */
     val structureText: String = text
     var status = Status.QUEUED
+    /** Why [status] is [Status.DONE]; null for every other status. */
+    var reason: Reason? = null
     var override = Override.AUTO
     var plausibility: Double? = null
     var relevance: Double? = null

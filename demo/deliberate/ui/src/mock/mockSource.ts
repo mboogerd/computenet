@@ -181,6 +181,7 @@ export class MockSource implements GraphSource {
       // CTL-03: scripted in-flight results may still arrive, but STOP remains
       // terminal until the user returns the claim to AUTO.
       if (n.override === 'STOP' && patch.override === undefined) next.status = 'STOPPED';
+      if (next.status !== 'DONE') delete next.reason;
       this.nodes.set(ref, next);
     }
   }
@@ -398,28 +399,28 @@ function seedFinished(m: MockSource): void {
   const q = 'w0';
   m.claim(q, q, 'Should our team adopt a four-day work week?', 0, 'question', { status: 'QUEUED' });
   m.claim('w0p1', q, 'A four-day week with the same total pay and fewer hours worked.', 0, 'reading', {
-    positionOf: q, status: 'SATURATED', credence: 0.65, plausibility: 0.6, rounds: 1, proSaturation: 0.78, conSaturation: 0.7,
+    positionOf: q, status: 'DONE', reason: 'SATURATED', credence: 0.65, plausibility: 0.6, rounds: 1, proSaturation: 0.78, conSaturation: 0.7,
   });
   m.claim('w0p2', q, 'A four-day week that compresses the same weekly hours into fewer, longer days.', 0, 'reading', {
-    positionOf: q, status: 'SATURATED', credence: 0.4, plausibility: 0.35, rounds: 1, proSaturation: 0.66, conSaturation: 0.6,
+    positionOf: q, status: 'DONE', reason: 'SATURATED', credence: 0.4, plausibility: 0.35, rounds: 1, proSaturation: 0.66, conSaturation: 0.6,
   });
-  m.arg('w1', q, 'w0p1', 'SUPPORT', 'Trials report stable output with fewer hours worked.', 'claude', { status: 'SATURATED', credence: 0.71, plausibility: 0.75, relevance: 0.83, rounds: 1 });
-  m.arg('w2', q, 'w0p1', 'ATTACK', 'Customer support coverage would drop on the fifth day.', 'codex', { status: 'PRUNED', credence: 0.42, plausibility: 0.5, relevance: 0.31 });
+  m.arg('w1', q, 'w0p1', 'SUPPORT', 'Trials report stable output with fewer hours worked.', 'claude', { status: 'DONE', reason: 'SATURATED', credence: 0.71, plausibility: 0.75, relevance: 0.83, rounds: 1 });
+  m.arg('w2', q, 'w0p1', 'ATTACK', 'Customer support coverage would drop on the fifth day.', 'codex', { status: 'DONE', reason: 'PRUNED', credence: 0.42, plausibility: 0.5, relevance: 0.31 });
   m.edge('w1', 'w0p1', 0.72);
   m.edge('w2', 'w0p1', 0.48);
-  m.arg('w3', q, 'w1', 'ATTACK', 'Trial participants self-selected and are not representative.', 'codex', { status: 'DEPTH_LIMIT', credence: 0.55, plausibility: 0.5 });
+  m.arg('w3', q, 'w1', 'ATTACK', 'Trial participants self-selected and are not representative.', 'codex', { status: 'DONE', reason: 'DEPTH_LIMIT', credence: 0.55, plausibility: 0.5 });
   m.edge('w3', 'w1', 0.61);
   // The link w1 → w0p1 explored as a claim: one reason it holds, one that it fails.
   const link = m.link('w1', 'w0p1');
-  m.set(link, { status: 'ROUND_LIMIT', rounds: 1, credence: 0.64, triage: { ADD: 2 } });
-  m.arg('w4', q, link, 'SUPPORT', 'The trials measured output with the same metrics used before the change.', 'claude', { status: 'DEPTH_LIMIT', credence: 0.7, plausibility: 0.75 });
-  m.arg('w5', q, link, 'ATTACK', 'Output in the trials was measured over six months, too short to show attrition effects.', 'codex', { status: 'DEPTH_LIMIT', credence: 0.62, plausibility: 0.75 });
+  m.set(link, { status: 'DONE', reason: 'ROUND_LIMIT', rounds: 1, credence: 0.64, triage: { ADD: 2 } });
+  m.arg('w4', q, link, 'SUPPORT', 'The trials measured output with the same metrics used before the change.', 'claude', { status: 'DONE', reason: 'DEPTH_LIMIT', credence: 0.7, plausibility: 0.75 });
+  m.arg('w5', q, link, 'ATTACK', 'Output in the trials was measured over six months, too short to show attrition effects.', 'codex', { status: 'DONE', reason: 'DEPTH_LIMIT', credence: 0.62, plausibility: 0.75 });
   m.edge('w4', link, 0.7);
   m.edge('w5', link, 0.66);
-  m.set(m.link('w2', 'w0p1'), { status: 'PRUNED' });
-  m.set(m.link('w3', 'w1'), { status: 'DEPTH_LIMIT' });
+  m.set(m.link('w2', 'w0p1'), { status: 'DONE', reason: 'PRUNED' });
+  m.set(m.link('w3', 'w1'), { status: 'DONE', reason: 'DEPTH_LIMIT' });
   // The second reading gets a small subtree of its own.
-  m.arg('w6', q, 'w0p2', 'ATTACK', 'Compressed ten-hour days increase fatigue-related errors.', 'codex', { status: 'SATURATED', credence: 0.35, plausibility: 0.4, relevance: 0.6, rounds: 1 });
+  m.arg('w6', q, 'w0p2', 'ATTACK', 'Compressed ten-hour days increase fatigue-related errors.', 'codex', { status: 'DONE', reason: 'SATURATED', credence: 0.35, plausibility: 0.4, relevance: 0.6, rounds: 1 });
   m.edge('w6', 'w0p2', 0.58);
   m.frame(q, 'READINGS', ['w0p1', 'w0p2'], 'four-day week');
 }
@@ -434,17 +435,17 @@ function seedFramedPositions(m: MockSource): void {
   m.claim(q, q, 'How many vehicles a day will the new river bridge carry at peak?', 0, 'question', { status: 'QUEUED' });
   // POSITIONS items are proposer "position" (READINGS items are "reading"; Claim.READING/Claim.POSITION).
   m.claim('i0p1', q, 'Under 5,000 vehicles a day.', 0, 'position', {
-    positionOf: q, status: 'SATURATED', credence: 0.7, plausibility: 0.72, rounds: 1, proSaturation: 0.7, conSaturation: 0.6,
+    positionOf: q, status: 'DONE', reason: 'SATURATED', credence: 0.7, plausibility: 0.72, rounds: 1, proSaturation: 0.7, conSaturation: 0.6,
   });
   m.claim('i0p2', q, 'Between 5,000 and 15,000 vehicles a day.', 0, 'position', {
-    positionOf: q, status: 'SATURATED', credence: 0.42, plausibility: 0.45, rounds: 1, proSaturation: 0.55, conSaturation: 0.5,
+    positionOf: q, status: 'DONE', reason: 'SATURATED', credence: 0.42, plausibility: 0.45, rounds: 1, proSaturation: 0.55, conSaturation: 0.5,
   });
   m.claim('i0p3', q, 'Over 15,000 vehicles a day.', 0, 'position', {
     positionOf: q, status: 'QUEUED', credence: 0.12, plausibility: 0.15,
   });
-  m.arg('i1', q, 'i0p1', 'SUPPORT', 'Traffic on the current ferry route has stayed under 4,000 a day for a decade.', 'claude', { status: 'SATURATED', credence: 0.68, plausibility: 0.7, relevance: 0.75, rounds: 1 });
+  m.arg('i1', q, 'i0p1', 'SUPPORT', 'Traffic on the current ferry route has stayed under 4,000 a day for a decade.', 'claude', { status: 'DONE', reason: 'SATURATED', credence: 0.68, plausibility: 0.7, relevance: 0.75, rounds: 1 });
   m.edge('i1', 'i0p1', 0.7);
-  m.arg('i2', q, 'i0p2', 'SUPPORT', 'Comparable bridges elsewhere settle in this band within two years of opening.', 'codex', { status: 'SATURATED', credence: 0.6, plausibility: 0.6, relevance: 0.62, rounds: 1 });
+  m.arg('i2', q, 'i0p2', 'SUPPORT', 'Comparable bridges elsewhere settle in this band within two years of opening.', 'codex', { status: 'DONE', reason: 'SATURATED', credence: 0.6, plausibility: 0.6, relevance: 0.62, rounds: 1 });
   m.edge('i2', 'i0p2', 0.62);
   m.frame(q, 'POSITIONS', ['i0p1', 'i0p2', 'i0p3']);
 }
@@ -549,7 +550,7 @@ function script(
     () => m.arg('c5', q, q, 'SUPPORT', T.c5, 'claude'),
     () => {
       m.edge('c5', q, 0.66);
-      m.set(q, { status: 'SATURATED', rounds: 2, proSaturation: 0.83, conSaturation: 0.76, credence: 0.6 });
+      m.set(q, { status: 'DONE', reason: 'SATURATED', rounds: 2, proSaturation: 0.83, conSaturation: 0.76, credence: 0.6 });
       m.set('c1', { status: 'JUDGING' });
     },
     () => m.set('c1', { status: 'EXPLORING', relevance: 0.81 }),
@@ -564,11 +565,11 @@ function script(
       m.set('c1', { credence: 0.69 });
       // EXP-03 UNDERCUT, re-targeted by triage: it attacks the link c1b → c1.
       onLink('c1bu', 'c1b', 'c1', 'ATTACK', T.c1bu, 'codex', {
-        status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.72,
+        status: 'DONE', reason: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.72,
       });
-      m.set('c2', { status: 'PRUNED', relevance: 0.34, plausibility: 0.5, credence: 0.47 });
+      m.set('c2', { status: 'DONE', reason: 'PRUNED', relevance: 0.34, plausibility: 0.5, credence: 0.47 });
       // The link c1 → q is wide open (strength 0.78, contribution high): queued to be explored.
-      setLink('c2', q, { status: 'PRUNED' });
+      setLink('c2', q, { status: 'DONE', reason: 'PRUNED' });
     },
     () => {
       edgeOnLink('c1bu', 'c1b', 'c1', 0.66);
@@ -589,7 +590,7 @@ function script(
     () => m.set('c3', { status: 'EXPLORING', relevance: 0.66, plausibility: 0.75 }),
     () => {
       m.arg('c3a', q, 'c3', 'ATTACK', T.c3a, 'codex');
-      m.set('c1', { status: 'SATURATED', rounds: 1, proSaturation: 0.77, conSaturation: 0.72 });
+      m.set('c1', { status: 'DONE', reason: 'SATURATED', rounds: 1, proSaturation: 0.77, conSaturation: 0.72 });
     },
     () => {
       m.edge('c3a', 'c3', 0.64);
@@ -598,11 +599,11 @@ function script(
     },
     () => m.set('c3a', { status: 'JUDGING' }),
     () => m.set('c3a', { status: 'EXPLORING', relevance: 0.59, plausibility: 0.5 }),
-    () => m.arg('c3a1', q, 'c3a', 'ATTACK', T.c3a1, 'claude', { status: 'DEPTH_LIMIT' }),
+    () => m.arg('c3a1', q, 'c3a', 'ATTACK', T.c3a1, 'claude', { status: 'DONE', reason: 'DEPTH_LIMIT' }),
     () => {
       m.edge('c3a1', 'c3a', 0.52);
-      m.set('c3a', { status: 'SATURATED', rounds: 1, proSaturation: 0.71, conSaturation: 0.7, credence: 0.49 });
-      m.set('c3', { status: 'ROUND_LIMIT', rounds: 3, proSaturation: 0.55, conSaturation: 0.62, duplicatesDropped: 2 });
+      m.set('c3a', { status: 'DONE', reason: 'SATURATED', rounds: 1, proSaturation: 0.71, conSaturation: 0.7, credence: 0.49 });
+      m.set('c3', { status: 'DONE', reason: 'ROUND_LIMIT', rounds: 3, proSaturation: 0.55, conSaturation: 0.62, duplicatesDropped: 2 });
       m.set('c4', { status: 'JUDGING' });
     },
     () => m.set('c4', { status: 'EXPLORING', relevance: 0.72, plausibility: 0.75, credence: 0.7 }),
@@ -619,24 +620,24 @@ function script(
       m.edge('c4b', 'c4', 0.35);
       m.edge('c4a', 'c4', 0.75);
       m.set('c4', { credence: 0.52 });
-      m.set('c1a', { status: 'PRUNED', relevance: 0.44, plausibility: 0.5 });
+      m.set('c1a', { status: 'DONE', reason: 'PRUNED', relevance: 0.44, plausibility: 0.5 });
       m.set(q, { credence: 0.63 });
     },
     () => {
-      setLink('c1', q, { status: 'ROUND_LIMIT', proSaturation: 0.6, conSaturation: 0.55 });
-      m.set('c1h', { status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.75 });
-      m.set('c1f', { status: 'DEPTH_LIMIT', plausibility: 0.5, credence: 0.5 });
-      setLink('c1b', 'c1', { status: 'DEPTH_LIMIT' });
-      setLink('c3', q, { status: 'PRUNED' });
-      setLink('c4', q, { status: 'PRUNED' });
-      setLink('c5', q, { status: 'PRUNED' });
+      setLink('c1', q, { status: 'DONE', reason: 'ROUND_LIMIT', proSaturation: 0.6, conSaturation: 0.55 });
+      m.set('c1h', { status: 'DONE', reason: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.75 });
+      m.set('c1f', { status: 'DONE', reason: 'DEPTH_LIMIT', plausibility: 0.5, credence: 0.5 });
+      setLink('c1b', 'c1', { status: 'DONE', reason: 'DEPTH_LIMIT' });
+      setLink('c3', q, { status: 'DONE', reason: 'PRUNED' });
+      setLink('c4', q, { status: 'DONE', reason: 'PRUNED' });
+      setLink('c5', q, { status: 'DONE', reason: 'PRUNED' });
     },
     () => {
-      m.set('c4', { status: 'SATURATED', rounds: 1, proSaturation: 0.74, conSaturation: 0.8 });
+      m.set('c4', { status: 'DONE', reason: 'SATURATED', rounds: 1, proSaturation: 0.74, conSaturation: 0.8 });
       m.set('c5', { status: 'STOPPED', override: 'STOP', plausibility: 0.5, credence: 0.56 });
-      m.set('c1b', { status: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.76 });
-      m.set('c4a', { status: 'BUDGET', plausibility: 0.75, credence: 0.75 });
-      m.set('c3a2', { status: 'BUDGET', plausibility: 0.5, credence: 0.5 });
+      m.set('c1b', { status: 'DONE', reason: 'DEPTH_LIMIT', plausibility: 0.75, credence: 0.76 });
+      m.set('c4a', { status: 'DONE', reason: 'BUDGET', plausibility: 0.75, credence: 0.75 });
+      m.set('c3a2', { status: 'DONE', reason: 'BUDGET', plausibility: 0.5, credence: 0.5 });
     },
   ];
   return { root, steps };

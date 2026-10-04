@@ -36,8 +36,8 @@ data class QuestionDto(
     /**
      * Why the tree stopped growing early: "human" (the human stopped the question:
      * STOP on its root, CTL-03), "budget" (the hard cap, EXP-06), "voi"
-     * (model C: no work left, and at least one node ended DIMINISHING because its
-     * value of information fell below ε), or null. ("diminishing", the removed
+     * (model C: no work left, and at least one node ended DONE for reason
+     * DIMINISHING because its value of information fell below ε), or null. ("diminishing", the removed
      * yield stop, is no longer sent.)
      */
     val stoppedBy: String? = null,
@@ -154,16 +154,17 @@ data class BackendCostDto(
     val note: String? = null,
 )
 
-/**
- * SPEC §5. DIMINISHING (model C): its value of information fell below ε before
- * its next round (records written before model C: the removed yield stop).
- * DEPTH_LIMIT arises only from an explicit engine `maxDepth` (no longer a stop rule).
- */
 enum class Status {
-    QUEUED, JUDGING, EXPLORING, SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING, STOPPED, FAILED,
+    QUEUED, JUDGING, EXPLORING,
     /** Model A: a question root that was framed — its readings/positions are explored instead of it. */
     FRAMED,
+    /** Expansion completed; [NodeDto.reason] says why. */
+    DONE,
+    STOPPED, FAILED,
 }
+
+/** SPEC §5: why a [Status.DONE] claim completed its expansion. */
+enum class Reason { SATURATED, ROUND_LIMIT, PRUNED, DEPTH_LIMIT, BUDGET, DIMINISHING }
 
 enum class Override { AUTO, EXPAND, STOP }
 
@@ -198,6 +199,8 @@ data class NodeDto(
     /** A link's depth is its argument's depth. */
     val depth: Int? = null,
     val status: Status? = null,
+    /** Present exactly when [status] is [Status.DONE]. */
+    val reason: Reason? = null,
     val override: Override? = null,
     /**
      * What the node is doing right now, for the UI's activity line: "exploring"

@@ -1,4 +1,4 @@
-import { ACTIVE_STATUSES, type Activity, type FramingDto, type NodeDto, type QuestionDto, type Status } from '../api/types';
+import { ACTIVE_STATUSES, type Activity, type FramingDto, type NodeDto, type QuestionDto, type Reason, type Status } from '../api/types';
 
 export const pct = (x: number | undefined): string => (x === undefined ? '—' : `${Math.round(x * 100)}%`);
 
@@ -11,30 +11,38 @@ export const STATUS_LABEL: Record<Status, string> = {
   QUEUED: 'waiting',
   JUDGING: 'weighing',
   EXPLORING: 'gathering arguments',
-  SATURATED: 'fully argued',
-  ROUND_LIMIT: 'round limit',
-  PRUNED: 'set aside',
-  DEPTH_LIMIT: 'depth limit',
-  BUDGET: 'budget spent',
-  DIMINISHING: 'not worth exploring',
+  FRAMED: 'depends on the reading',
+  DONE: 'done',
   STOPPED: 'stopped by you',
   FAILED: 'failed',
-  FRAMED: 'depends on the reading',
 };
 
 export const STATUS_HINT: Record<Status, string> = {
   QUEUED: 'Waiting for its turn to be explored',
   JUDGING: 'Jev is judging whether this claim is worth exploring',
   EXPLORING: 'Claude and Codex are proposing arguments for and against it',
+  FRAMED: 'The question has several readings (or several possible answers): each is explored on its own below',
+  DONE: 'Exploration of this claim is complete',
+  STOPPED: 'You stopped exploring this claim',
+  FAILED: 'Every call for this claim failed',
+};
+
+export const REASON_LABEL: Record<Reason, string> = {
+  SATURATED: 'fully argued',
+  ROUND_LIMIT: 'round limit',
+  PRUNED: 'set aside',
+  DEPTH_LIMIT: 'depth limit',
+  BUDGET: 'budget spent',
+  DIMINISHING: 'not worth exploring',
+};
+
+export const REASON_HINT: Record<Reason, string> = {
   SATURATED: 'Jev judged both sides complete — nothing important missing',
   ROUND_LIMIT: 'Stopped after the maximum number of rounds',
   PRUNED: 'Judged unlikely to change the answer to the question, so not explored further',
   DEPTH_LIMIT: 'Too far from the question to explore further',
   BUDGET: 'The question reached its claim budget',
   DIMINISHING: 'Not explored: settling it could barely move the answer (its value of information fell below the threshold)',
-  STOPPED: 'You stopped exploring this claim',
-  FAILED: 'Every call for this claim failed',
-  FRAMED: 'The question has several readings (or several possible answers): each is explored on its own below',
 };
 
 /**
@@ -53,7 +61,7 @@ export function stoppedHint(q: QuestionDto | undefined): string | undefined {
   if (q?.stoppedBy === 'human') {
     return 'You stopped this question: queued claims were cancelled and no new round starts. Auto on the question restarts it';
   }
-  if (q?.stoppedBy === 'budget') return STATUS_HINT.BUDGET;
+  if (q?.stoppedBy === 'budget') return REASON_HINT.BUDGET;
   if (q?.stoppedBy !== 'voi') return undefined;
   return 'Every claim left to explore could move the answer too little to be worth a round (value of information below the threshold)';
 }
@@ -63,7 +71,7 @@ export type Phase = 'active' | 'done' | 'halted' | 'failed';
 
 export function phaseOf(s: Status | undefined): Phase {
   if (s === undefined || ACTIVE_STATUSES.has(s)) return 'active';
-  if (s === 'SATURATED' || s === 'ROUND_LIMIT') return 'done';
+  if (s === 'DONE') return 'done';
   if (s === 'FAILED') return 'failed';
   return 'halted';
 }
@@ -302,12 +310,26 @@ export function linkParts(text: string | undefined): LinkParts | undefined {
 export const LINK_STATUS_HINT: Partial<Record<Status, string>> = {
   QUEUED: 'Waiting for its turn: the proposers will be asked whether this argument really bears on the claim',
   EXPLORING: 'Claude and Codex are proposing reasons this link holds, and reasons it fails',
+};
+
+export const LINK_REASON_HINT: Partial<Record<Reason, string>> = {
   PRUNED:
     "Not explored: the argument matters little, or Jev's link strength is already clear-cut (near 0 or 1). Expand to explore it anyway",
   SATURATED: 'Jev judged both sides of this link complete',
 };
 
-export const statusHint = (s: Status, link = false): string => (link ? LINK_STATUS_HINT[s] : undefined) ?? STATUS_HINT[s];
+export function statusLabel(n: Pick<NodeDto, 'status' | 'reason'>): string | undefined {
+  if (n.status === undefined) return undefined;
+  return n.status === 'DONE' && n.reason !== undefined ? REASON_LABEL[n.reason] : STATUS_LABEL[n.status];
+}
+
+export function statusHint(n: Pick<NodeDto, 'status' | 'reason'>, link = false): string | undefined {
+  if (n.status === undefined) return undefined;
+  if (n.status === 'DONE' && n.reason !== undefined) {
+    return (link ? LINK_REASON_HINT[n.reason] : undefined) ?? REASON_HINT[n.reason];
+  }
+  return (link ? LINK_STATUS_HINT[n.status] : undefined) ?? STATUS_HINT[n.status];
+}
 
 /** One line of the "now exploring" ticker. */
 export interface ActivityItem {
