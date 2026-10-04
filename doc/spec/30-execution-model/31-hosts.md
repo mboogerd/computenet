@@ -117,9 +117,13 @@ header, is assumed to belong to generation 1 rather than checked.
 
 The decided recovery-regime precedence (amended in
 [93 I-7 R4](../90-roadmap/93-feature-interactions.md)) is one pipeline:
-**checkpoint restore → un-suppressed journal-tail replay → parked (SUSPEND)
-live drain**. Re-announcement and catch-up remain ordinary topology/link
-behavior, not a mandatory replay-exit re-baseline over existing links.
+**topology fold → checkpoint restore → folded-link re-handshake → un-suppressed
+journal-tail replay → parked (SUSPEND) live drain** on the checkpointed
+topology-journal path. After restoring checkpoint state,
+`ApplyContext.checkpointRestored()` unlinks and re-connects every folded link so
+ordinary `onLinked` catch-up observes the restored state. A compacted journal
+with no tail rebuilds volatile downstream state through that catch-up; an
+uncompacted tail rebuilds it through ordinary replay emission.
 Durability subsumes RESTART: a durable cell's RESTART MUST restore its latest
 snapshot + journal tail instead of
 the spawn-time checkpoint — same mechanism, richer checkpoint source; the
@@ -138,7 +142,12 @@ frame: a replayed frame and its same-journal derivations are not re-appended,
 while live traffic accepted during recovery is journaled. That path is safe
 for *state* through replay-stable identity (ref-derived tags/PN slots, tag
 counter in snapshots) + idempotent merges + anti-entropy/catch-up dedup.
-There is no phase-3 recovery re-baseline over existing links. `Effectful`
+Contextual replay frames are PN-2 baseline-marked, so they take the
+`[24-DUR-05]`, `[24-DUR-07]`, and `[24-DUR-08]` branches at an `Effectful`
+inlet. Checkpoint restoration also re-handshakes the folded links; each
+ordinary catch-up baseline receives a fresh `(sourceId, counter)`. Whether
+that checkpoint-boundary catch-up re-fires an already-acted `Effectful` sink
+is the open kernel follow-up `computenet-n2jwi`. `Effectful`
 sinks *(G-59 resolved in part, W2.6, closes C-9)* are the one case
 un-suppressed emission is not safe for: an `Effectful` inlet now journals a
 processed-frontier — the last applied `(sourceId, counter)` per inlet — and
