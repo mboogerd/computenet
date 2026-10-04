@@ -362,16 +362,19 @@ time vs 2% for Sol — Jev does not catch this.
 
 With `--data <dir>` a deliberation survives a restart, `kill -9` included.
 Only **inputs** are kept in the one write-ahead file, `host.journal`: topology
-records capture every claim, edge, sensitivity cell and issue framing in
-creation order, while the journal's metadata fold holds per-claim status and
-completion reason,
+records capture every claim, edge and issue framing in creation order, while
+the journal's metadata fold holds per-claim status and completion reason,
 override, proposer, rewritten text, the Jev judgments (which are the `jev`
-stances), triage counts, rounds and errors. Nothing derived is written: every
-ordinary and arguments-first credence, influence, consensus and sensitivity
-(model C) is recomputed from those inputs on boot, with no model call or cost
-record for the arguments-first view. Each framing is one topology delta, so it
-is either
-present as a complete graph construction or absent. The journal compacts
+stances), triage counts, rounds and errors. New topology deltas create no
+sensitivity cells. Journals written by the retired model-C build may contain
+`SensitivityFactory` spawns and links; those legacy types remain loadable, but
+their derivative output is ignored. Nothing derived is written: ordinary and
+arguments-first credence, influence and consensus are re-derived from the
+restored inputs, while exact value of information and signed sway are evaluated
+on demand and never journaled. Rebuilding the arguments-first view makes no
+model call and adds no cost record. Each framing is one topology delta, so it
+is either present as a complete graph construction or absent. The journal
+compacts
 itself to one checkpoint at boot, at shutdown, and whenever it has grown by
 more than 64 KB and its own last checkpoint size. On restart the topology is
 rebuilt under its recorded refs before metadata frames replay, the trees are
