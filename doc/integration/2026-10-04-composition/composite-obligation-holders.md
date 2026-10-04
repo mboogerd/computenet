@@ -95,7 +95,7 @@ unchanged:
 **Transitions.** *Continuation*: fence admission, settle accepted work, capture state and identity,
 release held work under its original context, adopt the identity. *Succession*: invalidate transient
 work with an accounted disposition, mint a fresh epoch, announce `ReBaseline(supersedes,
-supersede = true)`, rebuild by catch-up; sound only for mergeable state (93:11480-11511). Only a
+supersede = true)`, rebuild by catch-up — whether a successor also re-runs the inbound handshake is conditional on M14; sound only for mergeable state (93:11480-11511). Only a
 `supersede = true` notice retires an epoch; a pull-merge notice (`supersede = false`,
 `MessageContext.kt:75-86`) retires nothing and fences nothing. *Selector*: continue only when the
 successor can prove it is the one exclusive, complete continuation.
@@ -271,7 +271,7 @@ the host may decline to run a term, but the inbox is the term's custody.
 `P < A` mirrors the `ADMIT < ALIGN` tier order (`port/InletPolicy.kt:34`): the canonical stack is the
 per-port chain lifted to the term.
 
-### 2.6 Formation rules (decided; where a rule places `D` per term, conditional on M3/M4 — under their fallback `D` adapts `journalFor(cellRef)` and the rules still apply)
+### 2.6 Formation rules (decided unless a rule says otherwise; where a rule places `D` per term, conditional on M3/M4 — under their fallback `D` adapts `journalFor(cellRef)` and the rules still apply)
 
 A formation check runs over `TermManifest` at instantiate, at link time and at every stack edit. It
 refuses with `RefusedComposition(rule, stack)`, records which layer holds each obligation, and
@@ -280,11 +280,11 @@ rejects missing and duplicate holders.
 - **F1. Persistence outermost.** If `D` is present, no layer outside it holds custody or monotone
   state. Anything accepted outside `D` is lost by a crash while the log claims durability (the
   `TrafficLightCell` red buffer today).
-- **F2. Restart innermost.** `S` directly wraps the leaf (or the `Swap` during a promotion); no layer
+- **F2. Restart innermost.** (`S` travelling with the term on relocation is conditional on M5.) `S` directly wraps the leaf (or the `Swap` during a promotion); no layer
   with custody or monotone state sits inside `S`. RESTART resets what is inside `S`. Hence
   `Durable(Supervised(Suspendable(cell)))` is refused as written; its valid form is
   `Durable(Suspendable(Supervised(cell)))`.
-- **F3. Dedup adjacent to delivery.** `X` is immediately outside `S`. It checks the position at
+- **F3. Dedup adjacent to delivery.** (Checking delivery positions rather than wave positions at `Effectful` inlets is conditional on M16; until adopted, `X` keeps today's wave-keyed check with the computenet-wlwjw limitation.) `X` is immediately outside `S`. It checks the position at
   delivery time (MH:1889 runs at delivery today) and advances `disposed` after the handler returns,
   in the same `D` record as the delivery outcome: the at-least-once window of 24:1488-1522. A
   holding layer between `X` and the leaf would let a frame pass the check and wait while its
@@ -298,7 +298,7 @@ rejects missing and duplicate holders.
   appears at most once on any root-to-leaf path. Two durable custodians of one frame double-append
   (computenet-4fpyy). A composite whose children carry `D` persists its ledger with a `D` around its
   coordinator part only (§3.0).
-- **F7. No bypass of the acceptance point.** A term whose stack contains `D`, `X`, `C` or a flow-time
+- **F7. No bypass of the acceptance point.** (Mandatory mediation through the membrane is conditional on M10.) A term whose stack contains `D`, `X`, `C` or a flow-time
   boundary policy exposes the affected inlets as Mediate at that layer. Inside a `D` scope, inner
   layers may flatten only where the holder has accepted the input and can deterministically
   re-derive the interior transition. A raw link targeting a port *inside* a term is refused. This is
@@ -608,7 +608,7 @@ and re-established by frontier discovery and catch-up.
 organelle gets its own `Swap` (`[53-STATE-04]`, 53:230-232). This replaces `Promotion.promote`'s
 external orchestration and its `TrafficLightApi` gate.
 
-**Effect history is transferred only between equal effect identities (decided).** `X`'s state has
+**Effect history is transferred only between equal effect identities (conditional on M8).** `X`'s state has
 two parts with different fates:
 - **`applied`** (what the leaf has absorbed, PLP §5.1) belongs to the leaf: under T0/T1 it
   continues with the captured state; under T2 the candidate's state is rebuilt, so it starts
