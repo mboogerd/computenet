@@ -162,6 +162,38 @@ class PlacementRecoveryTest {
 
     @Test
     @Timeout(60)
+    fun `a bridged producer half catches its consumer up on state written before the edge`() {
+        captured.clear()
+        val base = evolvingBaseSpec()
+        val delta = evolvingDeltaSpec()
+        val manifest = evolvingManifest()
+        val a = Runtime.boot(manifest, "a", base)
+        var b: Runtime.Node? = null
+
+        try {
+            a.open()
+            val address = requireNotNull(a.boundAddress).text
+            b = Runtime.boot(manifest, "b", base, overrides = mapOf("a" to address))
+            b.open()
+
+            (captured.getValue("w") as SetCell<String>).inlet.call.add("before-edge")
+            b.apply(delta)
+            a.apply(delta)
+            val view = captured.getValue("v") as UnionSetCell<String>
+            // The single-host twin's late link replays the producer's state; the
+            // bridged producer half's onLinked catch-up must reach the remote
+            // consumer rather than a surrogate ref ([41-LOC-01]).
+            awaitUntil("the late-bridged consumer receives the producer's prior state", 15_000) {
+                membership(view) == setOf("before-edge")
+            }
+        } finally {
+            b?.close()
+            a.close()
+        }
+    }
+
+    @Test
+    @Timeout(60)
     fun `a surviving edge-keyed consumer does not double count a recovered producer`() {
         val expected = singleHostPresenceOutcome("before-reboot", "after-reboot")
         captured.clear()
