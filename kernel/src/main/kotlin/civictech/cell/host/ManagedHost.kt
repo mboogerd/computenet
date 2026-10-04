@@ -738,6 +738,29 @@ open class ManagedHost(
     private val dataLock = Any()
 
     /**
+     * Number of journal record loops that have not yet restored their complete durability
+     * state. A replay frame is staged in journal order while this is positive, but data-band
+     * tasks do not dequeue anything until the loop has applied every later frontier,
+     * baseline-discharge, outlet-wave and checkpoint record.
+     *
+     * Recovery runs on the caller's thread while delivery runs on [scheduler]. Without this
+     * gate the default free-running scheduler can deliver a frame immediately after it is
+     * staged, before the caller reaches the following processed-frontier record. Besides
+     * re-firing an `Effectful` sink, that races [HostDurability]'s plain mutable durability
+     * maps across the two threads. The management-band fence taken when the first loop starts
+     * lets any data delivery already in progress finish before journal restoration begins;
+     * topology replay remains free to use the management band while later data tasks defer.
+     * Guarded by [dataLock], whose release at the end also publishes the restored maps to the
+     * scheduler thread before dispatch resumes.
+     *
+     * Limit: while this is positive a staged frame may have no pending data task, so a
+     * [Quiescence] fence or a priority-30 drain barrier another thread takes during recovery
+     * can complete with frames still staged. [Recovery.awaitApplied]'s fence is taken after
+     * the gate lifts and is unaffected (computenet-1vpsb review).
+     */
+    private var recoveryRecordLoops = 0
+
+    /**
      * Per-thread durable-input capture for this host. A per-host field is the host-instance
      * key: sends to another host see that host's distinct thread-local and proceed normally.
      */
@@ -1111,7 +1134,7 @@ open class ManagedHost(
             if (stagedLinkCloseMarker) stagedLinkCloseMarkers += hostedInvocation
             attentionScheduler.stage(hostedInvocation)
         }
-        if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
+        if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()
     }
 
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
@@ -1225,7 +1248,7 @@ open class ManagedHost(
             }
         }
         announce?.invoke()
-        if (dispatchBatch == 1) enqueue(20) { attentionScheduler.dispatchOne() } else armBatchDispatch()
+        if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()
     }
 
     /**
@@ -1286,12 +1309,22 @@ open class ManagedHost(
      */
     private suspend fun drainBatch() {
         try {
-            attentionScheduler.dispatchUpTo(dispatchBatch)
+            if (synchronized(dataLock) { recoveryRecordLoops == 0 }) {
+                attentionScheduler.dispatchUpTo(dispatchBatch)
+            }
         } finally {
             val rearm = synchronized(dataLock) {
-                attentionScheduler.dataQueues.isNotEmpty().also { dispatchArmed = it }
+                (recoveryRecordLoops == 0 && attentionScheduler.dataQueues.isNotEmpty())
+                    .also { dispatchArmed = it }
             }
             if (rearm) enqueue(20) { drainBatch() }
+        }
+    }
+
+    /** A queued unbatched task becomes a no-op while recovery is still restoring records. */
+    private suspend fun dispatchOneWhenRecoveryReady() {
+        if (synchronized(dataLock) { recoveryRecordLoops == 0 }) {
+            attentionScheduler.dispatchOne()
         }
     }
 
@@ -1430,8 +1463,43 @@ open class ManagedHost(
     /** Recover with the services and cumulative topology fold supplied by [context]. */
     fun recoverFrom(journal: Journal, context: ApplyContext): Recovery {
         require(context.host === this) { "recovery ApplyContext belongs to a different ManagedHost" }
-        val frames = context.replaying { hostDurability.recoverFrom(journal, context) }
+        val frames = withRecoveryRecordLoop {
+            context.replaying { hostDurability.recoverFrom(journal, context) }
+        }
         return Recovery(frames, scheduler.quiescence())
+    }
+
+    /**
+     * Fence the scheduler, restore one journal in-order, then restart data dispatch. The
+     * priority-0 fence completes after any data task already executing when the gate was
+     * raised; queued data tasks observe [recoveryRecordLoops] and defer without occupying
+     * the scheduler, so topology replay can still make awaited management calls.
+     */
+    private fun <T> withRecoveryRecordLoop(action: () -> T): T {
+        synchronized(dataLock) { recoveryRecordLoops++ }
+        var fenced = false
+        try {
+            enqueueAwaiting(0) { }
+            fenced = true
+            return action()
+        } finally {
+            val pending = synchronized(dataLock) {
+                check(recoveryRecordLoops > 0) { "recovery record-loop gate underflow" }
+                recoveryRecordLoops--
+                if (fenced && recoveryRecordLoops == 0) {
+                    attentionScheduler.dataQueues.values.sumOf { it.size }
+                } else {
+                    0
+                }
+            }
+            if (pending > 0) {
+                if (dispatchBatch == 1) {
+                    repeat(pending) { enqueue(20) { dispatchOneWhenRecoveryReady() } }
+                } else {
+                    armBatchDispatch()
+                }
+            }
+        }
     }
 
     /** Append one write-ahead topology delta to [journal]. */
