@@ -250,10 +250,10 @@ live Jev judgments of real proposer output; the data and reasoning are in
 [`CALIBRATION.md`](CALIBRATION.md). In short, Jev's saturation reading rises
 only weakly with the number of arguments, so `--max-args-per-side` is the
 dependable stop for a side. `--voi-eps`'s default began as a value from a
-one-off scratch review; the bounded 2026-10-04 live calibration retained it:
-three fresh trees and exact replays from 0 through 0.04 produced the same
-explored-work counts before the deliberately small experimental cap, so the
-sample did not justify moving 0.01. Full distributions and costs are in
+one-off scratch review and is still uncalibrated. A bounded 2026-10-04 live
+run (three fresh trees, exact replays from 0 through 0.04) explored the same
+work at every candidate, because its small claim cap, not epsilon, decided
+every tree. It could not distinguish values, so 0.01 stays. Full distributions and costs are in
 [`CALIBRATION.md`](CALIBRATION.md). (`minInfluence` and
 the `DEPTH_LIMIT` reason as a practical stop is gone with model C, so most
 claims now stop on value of information, saturation or the claim budget, not

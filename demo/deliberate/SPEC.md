@@ -324,7 +324,8 @@ This value, decayed by `roundDecay^(rounds already run)`, **is the
 claim's priority in the exploration queue** (below), replacing the earlier
 reach × relevance ordering; and once it falls below `--voi-eps`
 (`DEFAULT_VOI_EPSILON` = 0.01 — a starting value from a one-off scratch
-review, retained after the bounded 2026-10-04 calibration in §10) the claim
+review, still uncalibrated: the bounded 2026-10-04 run in §10 could not
+distinguish candidates) the claim
 gets no (further) round and ends
 `DONE` with reason `DIMINISHING`; the UI wording is "not worth exploring" /
 "nothing left could change the answer". A question therefore stops once the
@@ -703,7 +704,7 @@ typically saturates by 3–4 arguments. (`minInfluence`, the EXP-10 yield-stop
 parameters and `maxDepth` as a stop rule are removed by model C — §3
 "Exact value of information" — and appear only as history.
 `--voi-eps`'s default is a starting value from a one-off scratch model
-review, retained after the bounded live calibration below.)
+review, still uncalibrated after the bounded live run below.)
 
 The measurements, the history of each default, and what remains to
 recalibrate live in `CALIBRATION.md`; this section states only the criteria.
@@ -724,8 +725,10 @@ The live generation made 170 external calls and cost $0.373648
 API-equivalent/assumed in total. Under the deliberately small 11-claim replay
 cap, every candidate explored the same number of claims in every tree and all
 three trees stopped at the budget; 0.01 stopped two of 60 non-root nodes by
-VoI, at exact values 0.0025 and 0.0051. The sample therefore does not justify
-moving `DEFAULT_VOI_EPSILON` from 0.01. The same invocation remeasured
+VoI, at exact values 0.0025 and 0.0051, both claims the budget left
+unexplored at epsilon 0. Epsilon only relabelled budget stops, so the sample
+cannot distinguish the candidates: `DEFAULT_VOI_EPSILON` stays 0.01,
+uncalibrated, and the run says nothing about it under the production limits. The same invocation remeasured
 saturation on 24 cached node-sides with current Jev: at 0.22, 47.9% saturated
 by three arguments and 62.5% by four, with no empty side saturated, so
 `DEFAULT_SATURATION` remains 0.22. Full distributions, per-tree exploration,

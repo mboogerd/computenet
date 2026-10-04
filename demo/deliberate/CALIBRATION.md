@@ -61,8 +61,8 @@ With the defaults of two proposers × `argsPerCall` 1, each round offers up to t
 VoI now uses the propagated credence `q` and exact two-point re-evaluation of
 every path to each active answer root; the retired local derivative and its
 `4p(1-p)` plausibility factor no longer schedule or stop work. The existing
-`--voi-eps` default 0.01 remained a starting value until the bounded live
-calibration below. The shipping regression
+`--voi-eps` default 0.01 is still a starting value: the bounded live run
+below could not distinguish candidates (see its decision). The shipping regression
 fixture puts a depth-1 support beyond the weight-of-evidence energy clamp: the
 old linear value is 0 while the exact expected root movement is 0.061838. The
 test suite also checks deterministic random trees against an independent
@@ -80,9 +80,9 @@ bounded shipping sample, not a population estimate or a run at the production
 180-claim cap. The live answers were recorded in memory and replayed through
 the real engine and exact evaluator at every candidate epsilon, so all
 candidates saw identical proposals and judgments and the replays made no model
-calls. Replays used an 11-claim cap: the live cap left every call such a replay
-could make on the tape, while the one-claim reduction made the competition
-between epsilon and the hard budget observable.
+calls. Replays used an 11-claim cap so that every call a replay could make was
+on the tape. That cap also let the budget, not epsilon, decide every tree (see
+the decision below).
 
 The fresh generation made 170 external calls: 40 Claude calls (139,609 input,
 3,025 output tokens, $0.369084 API-equivalent cost reported by Claude Code) and
@@ -116,13 +116,19 @@ nodes ranged 0.0092–0.1153 (median 0.0615); 32 depth-bound nodes ranged
 was 0, 1, 1, 2, 2 and 3 respectively; the overall distribution and the work
 counts above did not change.
 
-**Decision: keep `DEFAULT_VOI_EPSILON` = 0.01.** This sample does not justify a
-move in either direction. Raising epsilon fourfold found one more low-value
-node but changed no tree's explored work or stop owner; lowering it to zero
-also changed neither. The 11-claim experimental cap won every tree before the
-threshold could discriminate, so these data are evidence against tuning from
-this small run, not evidence that 0.01 is optimal. A larger run with the
-production round and claim limits would be needed to move the value.
+**Decision: keep `DEFAULT_VOI_EPSILON` = 0.01, uncalibrated.** This sample
+cannot distinguish the candidates. With one round per node, depth 1 and an
+11-claim cap, the root's children are explored in value order until the cap is
+reached. Every `DIMINISHING` node at any candidate (largest exact VoI 0.037)
+was a claim the budget left unexplored at epsilon 0, so epsilon only
+relabelled budget stops. The explored nodes' stop-point VoI was at least
+0.048, above the largest candidate, 0.04. The data show only that 0 to 0.04
+behave identically under these limits. They show nothing for or against 0.01
+under the production round, depth and 180-claim limits, where the VoI stop can
+end a question. 0.01 stays because nothing here supports a different number.
+A run that can discriminate needs production limits, candidates reaching past
+the stop-point median (0.048), and a persisted tape so that candidates can be
+added without new calls.
 
 The old yield stop is **obsolete**: model C removed it in PR #1138. Yield
 history remains diagnostic only, and no yield parameter or stop is
