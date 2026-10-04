@@ -1,4 +1,4 @@
-package civictech.demo.backlogtriage
+package civictech.demograph.ranking
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
@@ -18,20 +18,20 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.CombineLatestCell
 import civictech.cell.data.view.MapDiffPublisher
-import civictech.demograph.ranking.Borda
-import civictech.demograph.ranking.RatingEngine
+import civictech.demograph.ranking.PairwisePreference
 
 /**
- * `@CellBase` Api for [RatingCell] (T09 §C: the first `@CellBase` consumer
- * outside `:kernel`'s own cell library — see [RatingCell] for why it, and not
- * [MetaRankCell], is the honest candidate). KSP generates `RatingCellBase`:
+ * `@CellBase` Api for [RatingCell] (T09 §C: it now lives in `:demograph` and
+ * was first authored in `demo/backlog-triage` — see [RatingCell] for why it,
+ * and not [MetaRankCell], is the honest candidate). KSP generates
+ * `RatingCellBase`:
  * `inlet` registered and statically bound to `onInlet`, `outlet` registered
  * (emission stays [RatingCell]'s own logic, as `@CellBase`'s authoring
  * contract documents).
  */
 @CellBase
 interface RatingApi {
-    val inlet: Serve<Propagate<SetDelta<Pref>>>
+    val inlet: Serve<Propagate<SetDelta<PairwisePreference>>>
     val outlet: Subscribe<Propagate<MapDelta<String, Double>>>
 }
 
@@ -70,7 +70,7 @@ class RatingCell(
     private val epsilon: Double = 1e-9,
     ref: CellRef = CellRef(UUID.randomUUID()),
 ) : RatingCellBase(ref) {
-    private val live = mutableMapOf<Pref, MutableSet<Timestamp>>()
+    private val live = mutableMapOf<PairwisePreference, MutableSet<Timestamp>>()
     private val ratings = MapDiffPublisher<String, Double>(changed = { a, b -> abs(a - b) > epsilon })
 
     init {
@@ -78,7 +78,7 @@ class RatingCell(
         outlet.catchUpOnLinked { ratings.catchUpDelta() }
     }
 
-    override fun onInlet(value: SetDelta<Pref>) {
+    override fun onInlet(value: SetDelta<PairwisePreference>) {
         value.adds.forEach { (p, tags) ->
             val t = live.getOrPut(p) { mutableSetOf() }
             val wasLive = t.isNotEmpty()

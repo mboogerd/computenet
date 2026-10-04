@@ -24,7 +24,9 @@ import civictech.demograph.ranking.BradleyTerry
 import civictech.demograph.ranking.Contribution
 import civictech.demograph.ranking.Elo
 import civictech.demograph.ranking.Glicko
+import civictech.demograph.ranking.MetaRankCell
 import civictech.demograph.ranking.PairwisePreference
+import civictech.demograph.ranking.RatingCell
 import civictech.demograph.ranking.TrueSkill
 import civictech.demograph.ranking.WengLin
 import civictech.demograph.ranking.WilsonAggregator

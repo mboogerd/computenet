@@ -1,5 +1,5 @@
 plugins {
-    id("buildsrc.convention.ksp-cell")
+    id("buildsrc.convention.kotlin-jvm")
     application
 }
 
