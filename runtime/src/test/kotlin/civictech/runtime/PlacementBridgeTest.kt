@@ -1,6 +1,7 @@
 package civictech.runtime
 
 import civictech.cell.Cell
+import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
@@ -12,6 +13,7 @@ import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.link.LinkPolicy
 import civictech.cell.link.LinkResult
+import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
@@ -25,12 +27,18 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 @Suppress("UNCHECKED_CAST")
 class PlacementBridgeTest {
+
+    @TempDir
+    lateinit var tempDir: Path
 
     @Test
     fun `a cross-node graph carries data and installs one wire edge on each half`() {
@@ -213,6 +221,87 @@ class PlacementBridgeTest {
     }
 
     @Test
+    fun `a refused placed boot deactivates cells before rethrowing`() {
+        val deactivations = AtomicInteger()
+        val base = placedManifest()
+        val manifest = base.copy(
+            nodes = base.nodes + (
+                "b" to base.nodes.getValue("b").copy(
+                    hosts = listOf("main", "worker"),
+                    journalDir = tempDir.resolve("journals").toString(),
+                )
+            ),
+        )
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep("w", CellFactory { ref -> SetCell<String>(ref) }),
+                SpawnStep(
+                    "bad",
+                    CellFactory { ref -> RefusingInletCell(ref, deactivations) },
+                    placement = "sink",
+                ),
+                ConnectStep("w", "outlet", "bad", "inlet"),
+            ),
+        )
+
+        val failure = assertThrows<IllegalStateException> {
+            Runtime.boot(manifest, "b", spec, transport = LoopbackPeerTransport(backoff = { 0L }))
+        }
+
+        assertTrue(failure.message!!.contains("consumer half"), failure.message)
+        assertEquals(1, deactivations.get(), "the locally applied prefix was not drained")
+        assertTrue(Files.isDirectory(tempDir.resolve("journals").resolve("main")))
+        assertTrue(Files.isDirectory(tempDir.resolve("journals").resolve("worker")))
+    }
+
+    @Test
+    fun `a failed placed delta leaves the node unusable for later placed deltas`() {
+        val base = GraphSpec(
+            listOf(
+                SpawnStep("w", CellFactory { ref -> SetCell<String>(ref) }),
+                SpawnStep("u", CellFactory { ref -> UnionSetCell<String>(ref) }, placement = "sink"),
+            ),
+        )
+        val node = Runtime.boot(
+            placedManifest(),
+            "a",
+            base,
+            transport = LoopbackPeerTransport(backoff = { 0L }),
+        )
+
+        try {
+            val partial = GraphSpec(
+                listOf(
+                    SpawnStep(
+                        "v",
+                        CellFactory { ref ->
+                            SetCell<String>(ref).also {
+                                it.outlet.linking.policies += LinkPolicy {
+                                    LinkResult.Rejected("partial delta refusal")
+                                }
+                            }
+                        },
+                    ),
+                    ConnectStep("v", "outlet", "u", "inlet"),
+                ),
+            )
+
+            val failure = assertThrows<IllegalStateException> { node.apply(partial) }
+
+            assertTrue(failure.message!!.contains("partial delta refusal"), failure.message)
+            assertTrue("v" in node.refs, "the local prefix should remain live after partial apply")
+            assertThrows<IllegalStateException> { node.placement!!.refOf("v") }
+
+            val followUp = assertThrows<IllegalStateException> {
+                node.apply(GraphSpec(listOf(ConnectStep("v", "outlet", "u", "inlet"))))
+            }
+            assertTrue(followUp.message!!.contains("unknown handle 'v'"), followUp.message)
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
     fun `placement refusal happens before any cell factory runs`() {
         val creations = AtomicInteger()
         val spec = GraphSpec(
@@ -285,5 +374,20 @@ class PlacementBridgeTest {
             "inlet",
             Use.fixed<Propagate<SetDelta<String>>>(Propagate { }, PortRef.generate()),
         )
+    }
+
+    private class RefusingInletCell(
+        override val ref: CellRef,
+        private val deactivations: AtomicInteger,
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
+
+        init {
+            inlet.linking.policies += LinkPolicy { LinkResult.Rejected("boot cleanup refusal") }
+        }
+
+        override fun onDeactivate(ctx: CellContext) {
+            deactivations.incrementAndGet()
+        }
     }
 }

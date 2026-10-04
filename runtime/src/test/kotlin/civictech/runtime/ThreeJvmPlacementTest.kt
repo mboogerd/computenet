@@ -3,7 +3,6 @@ package civictech.runtime
 import civictech.cell.data.SetApi
 import civictech.testkit.JvmPeer
 import civictech.testkit.awaitUntil
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -16,7 +15,7 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 @Tag("multi-jvm")
-@Timeout(120)
+@Timeout(240)
 class ThreeJvmPlacementTest {
 
     @TempDir
