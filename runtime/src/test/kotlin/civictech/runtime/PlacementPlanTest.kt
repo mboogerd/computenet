@@ -224,6 +224,45 @@ class PlacementPlanTest {
         assertTrue(failure.message!!.contains("source"), failure.message)
     }
 
+    @Test
+    fun `delta planning resolves base handles and retains cross edges for later refusals`() {
+        val manifest = placedManifest("a" to "a", "b" to "b")
+        val base = GraphSpec(listOf(spawn("source", placement = "a")))
+        val baseA = requireNotNull(PlacementPlan.of(base, manifest, "a"))
+        val baseB = requireNotNull(PlacementPlan.of(base, manifest, "b"))
+        val delta = GraphSpec(
+            listOf(
+                spawn("sink", placement = "b"),
+                ConnectStep("source", "outlet", "sink", "inlet"),
+            ),
+        )
+
+        val deltaA = requireNotNull(PlacementPlan.of(delta, manifest, "a", baseA))
+        val deltaB = requireNotNull(PlacementPlan.of(delta, manifest, "b", baseB))
+        val edge = CrossEdge(
+            "source",
+            baseA.refOf("source"),
+            "outlet",
+            "sink",
+            deltaA.refOf("sink"),
+            "inlet",
+        )
+
+        assertEquals(listOf(edge), deltaA.producerHalves)
+        assertEquals(emptyList<CrossEdge>(), deltaA.consumerHalves)
+        assertEquals(emptyList<String>(), spawnHandles(deltaA))
+        assertEquals(emptyList<CrossEdge>(), deltaB.producerHalves)
+        assertEquals(listOf(edge), deltaB.consumerHalves)
+        assertEquals(listOf("sink"), spawnHandles(deltaB))
+        assertEquals(baseA.refOf("source"), deltaA.refOf("source"))
+        assertEquals(deltaA.refOf("sink"), deltaB.refOf("sink"))
+
+        val failure = assertThrows<IllegalStateException> {
+            PlacementPlan.of(GraphSpec(listOf(DespawnStep("source"))), manifest, "a", deltaA)
+        }
+        assertEquals("despawn 'source': cross-node despawn is not supported", failure.message)
+    }
+
     private fun crossSpec(vararg trailing: civictech.cell.graph.GraphStep): GraphSpec = GraphSpec(
         listOf(
             spawn("source", placement = "a"),
