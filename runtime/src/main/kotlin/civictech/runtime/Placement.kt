@@ -56,6 +56,20 @@ class PlacementPlan private constructor(
         return nodes[handle]
     }
 
+    /**
+     * The active, non-family spawns assigned to this node in the cumulative fold.
+     * Recovery uses this view instead of [localSpec], whose ordered history may also
+     * contain spawns removed by a later [DespawnStep].
+     */
+    internal fun activeLocalSpawns(): List<SpawnStep> = spawns
+        .filter { (handle, step) ->
+            handle in activeHandles &&
+                step.family == null &&
+                (step.replicated && nodes.getValue(handle) == null || nodes.getValue(handle) == node)
+        }
+        .values
+        .toList()
+
     companion object {
         /**
          * Plans [spec] for [node], or returns null when placement is disabled by
