@@ -185,6 +185,34 @@ class PlacementBridgeTest {
     }
 
     @Test
+    fun `a rejected producer bridge half fails boot naming the edge half and reason`() {
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    "w",
+                    CellFactory { ref ->
+                        SetCell<String>(ref).also { writer ->
+                            writer.outlet.linking.policies += LinkPolicy {
+                                LinkResult.Rejected("producer test refusal")
+                            }
+                        }
+                    },
+                ),
+                SpawnStep("u", CellFactory { ref -> UnionSetCell<String>(ref) }, placement = "sink"),
+                ConnectStep("w", "outlet", "u", "inlet"),
+            ),
+        )
+
+        val failure = assertThrows<IllegalStateException> {
+            Runtime.boot(placedManifest(), "a", spec, transport = LoopbackPeerTransport(backoff = { 0L }))
+        }
+
+        assertTrue(failure.message!!.contains("w.outlet -> u.inlet"), failure.message)
+        assertTrue(failure.message!!.contains("producer half"), failure.message)
+        assertTrue(failure.message!!.contains("producer test refusal"), failure.message)
+    }
+
+    @Test
     fun `placement refusal happens before any cell factory runs`() {
         val creations = AtomicInteger()
         val spec = GraphSpec(
