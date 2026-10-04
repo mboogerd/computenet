@@ -249,8 +249,12 @@ contribution figure. The `--saturation` default was calibrated on
 live Jev judgments of real proposer output; the data and reasoning are in
 [`CALIBRATION.md`](CALIBRATION.md). In short, Jev's saturation reading rises
 only weakly with the number of arguments, so `--max-args-per-side` is the
-dependable stop for a side. `--voi-eps`'s default is a starting value from a
-one-off scratch review, not a calibration run (`minInfluence` and
+dependable stop for a side. `--voi-eps`'s default began as a value from a
+one-off scratch review and is still uncalibrated. A bounded 2026-10-04 live
+run (three fresh trees, exact replays from 0 through 0.04) explored the same
+work at every candidate, because its small claim cap, not epsilon, decided
+every tree. It could not distinguish values, so 0.01 stays. Full distributions and costs are in
+[`CALIBRATION.md`](CALIBRATION.md). (`minInfluence` and
 the `DEPTH_LIMIT` reason as a practical stop is gone with model C, so most
 claims now stop on value of information, saturation or the claim budget, not
 depth).
@@ -409,7 +413,8 @@ build/install/deliberate/bin/deliberate 8091 --data <dir> --start-paused
 ```bash
 ./gradlew :demo:deliberate:test --rerun         # fakes only, no network
 DELIBERATE_LIVE=1 ./gradlew :demo:deliberate:test --tests '*LiveSmokeTest' --rerun
-# re-measure the Jev thresholds (CALIBRATION.md); regenerates material only if its cache is absent
+# re-measure Jev thresholds and grow/replay three fresh bounded exact-VoI trees
+# (the older saturation material regenerates only if its cache is absent)
 DELIBERATE_CALIBRATE=1 ./gradlew :demo:deliberate:test --tests '*CalibrationTest' --rerun
 cd demo/deliberate/ui && npm run typecheck && npm test
 ```

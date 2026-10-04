@@ -124,9 +124,9 @@ class DeliberationEngine(
         companion object {
             const val DEFAULT_SATURATION = 0.22
             /**
-             * Model C's ε. A starting value, not a calibrated one: a scratch model review
-             * (2026-09-27, not in the repo) found about half of the explored claims could
-             * not move the root by 0.01.
+             * Model C's ε. A starting value, still uncalibrated: the 2026-10-04 bounded
+             * live run could not distinguish candidates 0..0.04 (its claim cap decided
+             * every tree), so it gives no reason to move it. See CALIBRATION.md.
              */
             const val DEFAULT_VOI_EPSILON = 0.01
             /** EXP-10: the recent-yield window QuestionDto reports (the yield stop itself is gone). */

@@ -178,7 +178,7 @@ class DeliberationEngineTest {
     }
 
     @Test
-    fun `calibrated exploration defaults are stable`() {
+    fun `exploration defaults are stable`() {
         val config = DeliberationEngine.Config()
         assertEquals(1, config.argsPerCall)
         assertEquals(6, config.maxArgsPerSide)
