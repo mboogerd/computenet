@@ -189,13 +189,14 @@ relational `leftJoin`/`rightJoin`/`fullJoin`.
 Declare an Api interface with `@CellBase`; KSP generates a base class with
 ports registered and inlets bound. Every kernel data cell/operator
 (`SetCell`, `MapCell`, `CounterCell`, `CountCell`, `GroupByCell`, ...) is
-written this way; `demo/backlog-triage`'s `RatingCell` is the app-level
-example (`demo/backlog-triage/.../RankingCells.kt`):
+written this way; `:demograph`'s `civictech.demograph.ranking.RatingCell` is
+the app-level example
+(`demograph/src/main/kotlin/civictech/demograph/ranking/RankingCells.kt`):
 
 ```kotlin
 @CellBase
 interface RatingApi {
-    val inlet: Serve<Propagate<SetDelta<Pref>>>
+    val inlet: Serve<Propagate<SetDelta<PairwisePreference>>>
     val outlet: Subscribe<Propagate<MapDelta<String, Double>>>
 }
 
@@ -203,14 +204,14 @@ class RatingCell(
     private val engine: RatingEngine,
     ref: CellRef = CellRef(UUID.randomUUID()),
 ) : RatingCellBase(ref) {
-    override fun onInlet(value: SetDelta<Pref>) {
+    override fun onInlet(value: SetDelta<PairwisePreference>) {
         // fold the delta into `engine`, then outlet.call.propagate(...)
     }
 }
 ```
 
 Requires the KSP plugin plus `ksp(project(":gen"))` — copy the setup from
-`demo/backlog-triage/build.gradle.kts` (or `kernel/build.gradle.kts` — every
+`demograph/build.gradle.kts` (or `kernel/build.gradle.kts` — every
 cell-authoring module applies `buildsrc.convention.ksp-cell`). Cells that
 should survive restarts implement `Stateful` (`snapshot()`/`restore()`).
 

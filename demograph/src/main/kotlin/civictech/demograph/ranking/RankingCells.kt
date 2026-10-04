@@ -18,7 +18,6 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.CombineLatestCell
 import civictech.cell.data.view.MapDiffPublisher
-import civictech.demograph.ranking.PairwisePreference
 
 /**
  * `@CellBase` Api for [RatingCell] (T09 §C: it now lives in `:demograph` and
@@ -113,7 +112,7 @@ class RatingCell(
  * The four inlets update on separate propagations, so a mid-wave read can
  * see meta computed from a partially-updated source set before it settles —
  * the same observation-edge glitch recorded as finding F-5 (and targeted by
- * the SnapshotView/observe() backlog items this demo ranks).
+ * the SnapshotView/observe() backlog items).
  *
  * Deliberately NOT `@CellBase` (T09 §C): its `inlets` are a runtime-sized map
  * keyed by the `sources` constructor argument — one `FanInlet` per algorithm
