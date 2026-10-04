@@ -1,10 +1,11 @@
 plugins {
-    id("buildsrc.convention.ksp-cell")
+    id("buildsrc.convention.kotlin-jvm")
     application
 }
 
 dependencies {
     implementation(project(":kernel"))
+    implementation(project(":demograph")) // computenet-drz8.2: shared ranking types and engines
     implementation(libs.kotlinx.serialization)
     implementation(project(":demo:shell"))
     implementation(project(":inspect")) // computenet-3iv0w.5: the shared `--inspect-port` opt-in (InspectorFlag)

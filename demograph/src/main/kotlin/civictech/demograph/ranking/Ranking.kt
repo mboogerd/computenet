@@ -1,6 +1,7 @@
-package civictech.demo.backlogtriage
+package civictech.demograph.ranking
 
 import civictech.cell.data.Aggregator
+import civictech.demograph.Aggregation
 import java.io.Serializable
 import kotlin.math.PI
 import kotlin.math.abs
@@ -21,7 +22,7 @@ import civictech.cell.data.op.GroupByCell
  * exact (their state is invertible counts); [Elo] is approximate — see its
  * doc.
  */
-interface RatingEngine {
+interface RatingEngine : Aggregation {
     fun add(winner: String, loser: String)
     fun retract(winner: String, loser: String)
     fun ratings(): Map<String, Double>
