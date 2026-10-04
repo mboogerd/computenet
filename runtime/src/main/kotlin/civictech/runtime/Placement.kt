@@ -187,9 +187,11 @@ class PlacementPlan private constructor(
                         requireActive(active, step.to)
                         val fromLocal = local(step.from)
                         val toLocal = local(step.to)
+                        val crossesNodes =
+                            assignedNodes.getValue(step.from) != assignedNodes.getValue(step.to)
                         when {
                             fromLocal && toLocal -> localSteps += step
-                            fromLocal || toLocal -> {
+                            crossesNodes -> {
                                 val key = edgeKey(step.from, step.outlet, step.to, step.inlet)
                                 if (step.options != LinkOptions.DEFAULT) {
                                     throw IllegalStateException(
@@ -197,7 +199,8 @@ class PlacementPlan private constructor(
                                     )
                                 }
                                 val edge = crossEdge(step)
-                                if (fromLocal) producerHalves += edge else consumerHalves += edge
+                                if (fromLocal) producerHalves += edge
+                                if (toLocal) consumerHalves += edge
                                 liveCrossEdges += edge
                             }
                         }

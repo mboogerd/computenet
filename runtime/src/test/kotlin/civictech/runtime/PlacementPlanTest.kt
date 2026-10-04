@@ -140,6 +140,28 @@ class PlacementPlanTest {
     }
 
     @Test
+    fun `third node applies the same cross-node link validation as endpoint nodes`() {
+        val manifest = threeNodeManifest("a" to "a", "b" to "b")
+        val spec = crossSpec(
+            ConnectStep("source", "outlet", "sink", "inlet", LinkOptions(staged = true)),
+        )
+
+        val messages = listOf("a", "b", "c").map { node ->
+            assertThrows<IllegalStateException> {
+                PlacementPlan.of(spec, manifest, node)
+            }.message
+        }
+
+        assertEquals(
+            List(3) {
+                "link source.outlet->sink.inlet: link options are not supported across nodes " +
+                    "(staged/Observe)"
+            },
+            messages,
+        )
+    }
+
+    @Test
     fun `cross-node unlink is refused by edge key`() {
         val failure = assertThrows<IllegalStateException> {
             PlacementPlan.of(
@@ -154,20 +176,23 @@ class PlacementPlanTest {
 
     @Test
     fun `cross-node links refuse replicated and family endpoints`() {
-        val replicatedFailure = assertThrows<IllegalStateException> {
-            PlacementPlan.of(
-                GraphSpec(
-                    listOf(
-                        spawn("replica", replicated = true),
-                        spawn("sink", placement = "b"),
-                        ConnectStep("replica", "outlet", "sink", "inlet"),
-                    ),
-                ),
-                placedManifest("b" to "b"),
-                "a",
-            )
+        val manifest = threeNodeManifest("a" to "a", "b" to "b")
+        val replicatedSpec = GraphSpec(
+            listOf(
+                spawn("replica", placement = "a", replicated = true),
+                spawn("sink", placement = "b"),
+                ConnectStep("replica", "outlet", "sink", "inlet"),
+            ),
+        )
+        val replicatedMessages = listOf("a", "b", "c").map { node ->
+            assertThrows<IllegalStateException> {
+                PlacementPlan.of(replicatedSpec, manifest, node)
+            }.message
         }
-        assertTrue(replicatedFailure.message!!.contains("replica"), replicatedFailure.message)
+        assertEquals(
+            List(3) { "link replica.outlet->sink.inlet: replicated handle 'replica' has no single remote ref" },
+            replicatedMessages,
+        )
 
         val family = SpawnStep(
             handle = "family",
@@ -175,20 +200,22 @@ class PlacementPlanTest {
             family = KeyedFamily("items"),
             placement = "a",
         )
-        val familyFailure = assertThrows<IllegalStateException> {
-            PlacementPlan.of(
-                GraphSpec(
-                    listOf(
-                        family,
-                        spawn("sink", placement = "b"),
-                        ConnectStep("family", "outlet", "sink", "inlet"),
-                    ),
-                ),
-                placedManifest("a" to "a", "b" to "b"),
-                "a",
-            )
+        val familySpec = GraphSpec(
+            listOf(
+                family,
+                spawn("sink", placement = "b"),
+                ConnectStep("family", "outlet", "sink", "inlet"),
+            ),
+        )
+        val familyMessages = listOf("a", "b", "c").map { node ->
+            assertThrows<IllegalStateException> {
+                PlacementPlan.of(familySpec, manifest, node)
+            }.message
         }
-        assertTrue(familyFailure.message!!.contains("family"), familyFailure.message)
+        assertEquals(
+            List(3) { "link family.outlet->sink.inlet: family handle 'family' has no port" },
+            familyMessages,
+        )
     }
 
     @Test
@@ -263,6 +290,29 @@ class PlacementPlanTest {
         assertEquals("despawn 'source': cross-node despawn is not supported", failure.message)
     }
 
+    @Test
+    fun `third node retains remote cross edge for later despawn refusal`() {
+        val manifest = threeNodeManifest("a" to "a", "b" to "b")
+        val base = crossSpec(ConnectStep("source", "outlet", "sink", "inlet"))
+
+        val messages = listOf("a", "b", "c").map { node ->
+            val plan = requireNotNull(PlacementPlan.of(base, manifest, node))
+            assertThrows<IllegalStateException> {
+                PlacementPlan.of(
+                    GraphSpec(listOf(DespawnStep("source"))),
+                    manifest,
+                    node,
+                    plan,
+                )
+            }.message
+        }
+
+        assertEquals(
+            List(3) { "despawn 'source': cross-node despawn is not supported" },
+            messages,
+        )
+    }
+
     private fun crossSpec(vararg trailing: civictech.cell.graph.GraphStep): GraphSpec = GraphSpec(
         listOf(
             spawn("source", placement = "a"),
@@ -286,6 +336,11 @@ class PlacementPlanTest {
 
     private fun placedManifest(vararg placements: Pair<String, String>): Manifest = Manifest(
         nodes = mapOf("a" to NodeSpec(), "b" to NodeSpec()),
+        placements = mapOf(*placements),
+    )
+
+    private fun threeNodeManifest(vararg placements: Pair<String, String>): Manifest = Manifest(
+        nodes = mapOf("a" to NodeSpec(), "b" to NodeSpec(), "c" to NodeSpec()),
         placements = mapOf(*placements),
     )
 
