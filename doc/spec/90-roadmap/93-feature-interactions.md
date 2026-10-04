@@ -5542,7 +5542,7 @@ default).
 > Member pairs: N1×N19, N2×N19, N17×N19, N19×N22, N19×N23, N19×N24, N19×N25, N19×N27
 > Existing gaps touched: G-3 · Confidence: high
 > Spec drift (judged at `a69186a`): 3/8 member pairs findings need re-wording while the analysis ran — see §3.1
-> Landed state at `0c09a32` (M11): **PARTIAL** — The normative single-boundary statement (color checked ONLY at admission; a cross-link color mismatch is a cross-host boundary, not an error, and never a link-time check); CellDescriptor.color generation (51 §Code generation and 41 point 2 still list color …
+> Landed state at `0c09a32` (M11): **PARTIAL** — The normative single-boundary statement (color checked ONLY at admission; a cross-link color mismatch is a cross-host boundary, not an error, and never a link-time check); `CellDescriptor.color` generation (51 §Code generation and 41 point 2) and color-derived placement remain deferred.
 
 #### 1. Challenge restatement
 
@@ -5579,8 +5579,10 @@ boundary enforces it, uniformly across every composition surface?*
 - **N19×N24** — must a logical cell's **replicas** share a color, and are candidate
   hosts color-filtered (42 §Design as implemented is silent)?
 - **N19×N25** — `GraphSpec` "replays onto any host" through **one** management inlet
-  (51 §Graph construction DSL), yet a `BlockingCell` cannot replay onto a 🟣 host and
-  mixed-color graphs are inexpressible in a single-inlet spec.
+  (51 §Graph construction DSL), yet a `BlockingCell` cannot replay onto a 🟣 host.
+  The landed config-only placement driver routes explicit selector-to-node-name
+  assignments from `Manifest.placements` and bridges cross-node edges; color-derived
+  placement remains outside its scope.
 - **N19×N27** — promotion swaps a candidate behind links bound to logical identity
   (53 §Model), but a candidate whose color marker differs from the active one breaks
   the co-hosting/fusion assumption (30/32 §Compatibility and coercion: color
@@ -5793,13 +5795,14 @@ without instantiating. Color is **absent** from `CellRef`, `PortRef`, `Link`,
 - **N19×N25 (GraphSpec mixed-color replay):** Rule 1 at the replay gate. `GraphSpec`
   spawn steps already carry a `CellFactory` (51), from which `CellDescriptor.color` is
   derivable. A single-inlet replay validates each cell at that one host and **fails
-  loudly** on a wrong-color cell (correct — the admission gate is doing its job). For
-  mixed-color graphs, spawn steps carry an optional **placement constraint**
-  (auto-derived from the cell's color, or an explicit host target); a multi-host
-  replay router routes each spawn to an `admits`-compatible host. Placement metadata
-  is therefore the cell's own color surfaced for the router — the "color-aware
-  placement metadata" 40/41 point 2 / 51 fixed as a direction — not a hand-authored
-  field.
+  loudly** on a wrong-color cell (correct — the admission gate is doing its job). The
+  landed config-only placement driver routes each spawn from the explicit
+  `Manifest.placements` selector-to-node-name map; its cross-node edges are bridged
+  and are not recorded as `TopologyLink`s (8k723-D6). Color-derived placement
+  constraints and an `admits`-aware router remain deferred. Placement metadata is
+  therefore not yet the cell's own color surfaced for the router — the "color-aware
+  placement metadata" direction in 40/41 point 2 / 51 remains open, separate from
+  the landed node-name driver.
 - **N19×N27 (promotion across colors):** Rule 4 — a candidate may change color; it is
   placed (rule 1) on a color-compatible host and the swap relinks the incumbent's
   links onto it (I-2 active-swap over full refs). Because links are color-blind
@@ -5874,9 +5877,9 @@ No CONFLICT flag required.
   `WireFrame` field; restate remote spawn/migrate color validation at the receiver's
   gate.
 - **51 §Graph construction DSL + §Code generation** — State that spawn steps carry the
-  cell's derivable color; single-inlet replay fails loudly on a wrong-color cell;
-  mixed-color graphs carry an optional placement constraint (auto-derived from color)
-  routed by a multi-host replay driver.
+  cell's derivable color; single-inlet replay fails loudly on a wrong-color cell; the
+  landed multi-host driver is config-only and consumes explicit node-name placement
+  selectors, while color-derived placement constraints remain deferred.
 - **42 §Design as implemented** — Add the color filter on candidate-host selection
   (rule 5) and the near-vacuous-because-mergeable-cells-are-pure observation.
 - **53 §Model + §G-33** — State that a candidate may change color across incarnations;
@@ -5900,9 +5903,10 @@ No CONFLICT flag required.
   return); the notice's descriptor, idempotence, and interaction with the producer's
   outlet are undesigned.
 - **`CellDescriptor.color` generation & the placement-constraint shape** — KSP must
-  emit `color` per cell type (alongside ownership flags), and the optional
-  `GraphSpec` placement constraint (derived color vs explicit host target) plus a
-  multi-host replay router are unbuilt.
+  emit `color` per cell type (alongside ownership flags). The landed multi-host
+  placement driver is config-only: explicit selectors name nodes and cross-node
+  edges are bridged without `TopologyLink` records (8k723-D6). A derived-color
+  `GraphSpec` placement constraint and color-aware router remain unbuilt.
 - **Multi-host / color-aware placement engine** — 30/32 says placement engines SHOULD
   co-host same-colored chains; the actual placement/fusion engine (which host each
   cell of a mixed-color graph lands on, and when a pure cell is replicated per color
@@ -11610,7 +11614,7 @@ M6–M11 — see 91 for the canonical list).
 - *(from I-14)* **Migration counter-carry** — The concrete migration-payload field carrying the outlet counter high-water (vs minting fresh) needs pinning, including whether migration is observationally a topology event downstream must causally order.
 - *(from I-15)* **Color-keyed bridges under bounded intakes** — When intakes bound (30/32 deferred gap), a cross-color enqueue can stall; the four ADR-2 bridges become real at the enqueueHostedInvocation seam, keyed by (senderHostColor, targetHostColor) with target color as rare-path link metadata (never a frame field). Concrete bridge design plus a generative color-crossing test are needed.
 - *(from I-15)* **Backpressure refusal as an upstream metadata-plane notice** — A bounded-intake refusal rides I-1's protocol plane upstream (never a data-contract return, keeping data push-only); the notice's descriptor, idempotence, and interaction with the producer's outlet are undesigned.
-- *(from I-15)* **CellDescriptor.color generation and placement-constraint shape** — KSP must emit color per cell type alongside ownership flags; the optional GraphSpec placement constraint (auto-derived color vs explicit host target) and a multi-host replay router are unbuilt.
+- *(from I-15)* **CellDescriptor.color generation and placement-constraint shape** — KSP must emit color per cell type alongside ownership flags. The landed placement driver is config-only: explicit selectors name nodes, and cross-node edges are bridged without `TopologyLink` records (8k723-D6); the optional derived-color GraphSpec placement constraint and color-aware router remain unbuilt.
 - *(from I-15)* **Multi-host / color-aware placement engine** — 30/32 says placement engines SHOULD co-host same-colored chains; the actual placement/fusion engine (which host each cell of a mixed-color graph lands on, and when a pure cell is replicated per color neighbourhood) is undesigned.
 - *(from I-15)* **Remote-spawn color-rejection surface** — The exact rejection channel when a wrong-color cell arrives over a remote HostManagementApi (dead-letter vs a typed LinkResult-style rejection back to the caller) needs pinning against G-26/G-12.
 - *(from I-16)* **Tag-clock monotonicity for incremental frontier** — Incremental pull assumes merge tags are per-source-monotonic counters so TagFrontier is a valid version vector; the OR-set minting discipline must guarantee this, and Map/List (arrival-order limited) must be flagged full-state-pull-only. Needs a stated invariant plus test.

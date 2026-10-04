@@ -3,9 +3,12 @@
 > **Status**: Partial (cell authoring + graph DSL exist; `SpawnStep`
 > identity/parent/factory and `spawnBound` remote application built (W3.6,
 > G-51 core); `UnlinkStep(from, outlet, to, inlet)` and `DespawnStep(handle)`
-> built; applied topology records and preserve-refs recovery built; placement/
-> membrane extensions decided in [93](../90-roadmap/93-feature-interactions.md),
-> unimplemented; codegen/tooling exploratory)
+> built; applied topology records and preserve-refs recovery built; the config-only
+> multi-host placement driver (`Manifest.placements` selector-to-node-name mapping)
+> and cross-host bridging are built (bridged edges are not `TopologyLink`s per
+> 8k723-D6); color-derived placement and membrane extensions decided in
+> [93](../90-roadmap/93-feature-interactions.md) remain unimplemented;
+> codegen/tooling exploratory)
 > **Sources**: ADR — Cellular Software Development Process, ADR — Task Definitions, ADR 3 (codegen)
 > **Implementation**: hand-written cells + host API; `cell.graph` DSL (`graph`/`GraphSpec`, `IdentityBinding`, `HostManagementApi.spawnBound`, `GraphSpec.applyRemote`/`ApplyReport`); KSP seed (`gen`); no scaffolding
 
@@ -161,10 +164,11 @@ Replay is placement: each spawn step is validated at the target host's
 spawn-admission gate, the cell's color being derivable from its factory
 (the generated `CellDescriptor.color`, §Code generation below). A
 single-inlet replay MUST fail loudly on a wrong-color cell — the admission
-gate doing its job — and mixed-color graphs need an optional per-step
-placement constraint (auto-derived from the cell's color, or an explicit
-host target) routed by a multi-host replay driver (decided in 93 I-15;
-driver unbuilt).
+gate doing its job. The landed multi-host placement driver is config-only: its
+`Manifest.placements` map assigns explicit selectors to node names and it bridges
+cross-node edges; those bridged edges are not recorded as `TopologyLink`s
+(93 I-15, 8k723-D6). Color-derived per-step placement constraints and an
+`admits`-aware replay router remain deferred.
 
 Distinct from construction mode (mint fresh), a **preserve-refs replay
 mode** — `applyTo` rebinding existing `(logicalId, instanceId)`, i.e.
