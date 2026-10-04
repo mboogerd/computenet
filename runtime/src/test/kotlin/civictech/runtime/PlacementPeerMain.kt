@@ -53,8 +53,12 @@ object PlacementPeerMain {
         try {
             println("computenet-recovered ${runtime.recovered}")
             runtime.open()
-            val port = runtime.boundAddress?.let { URI(it.text).port.takeIf { it >= 0 } } ?: 0
+            runtime.boundAddress?.let { address ->
+                println(ADDRESS_LINE_PREFIX + address.text)
+            }
+            val port = runtime.boundAddress?.let { URI(it.text).port.takeIf { port -> port >= 0 } } ?: 0
             println(JvmPeer.PORT_LINE_PREFIX + "ws " + port)
+            println(READY_LINE_PREFIX + runtime.name)
             System.out.flush()
             while (System.`in`.read() >= 0) {
                 // Keep the peer alive until JvmPeer destroys it after the test.
@@ -66,4 +70,7 @@ object PlacementPeerMain {
 
     private fun Array<String>.requireValue(index: Int, option: String): String =
         getOrNull(index) ?: error("$option requires a value")
+
+    const val ADDRESS_LINE_PREFIX: String = "computenet-address "
+    const val READY_LINE_PREFIX: String = "computenet-ready "
 }

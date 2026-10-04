@@ -55,32 +55,42 @@ object PlacementFixture {
         captured.clear()
     }
 
-    fun singleHost(): Manifest = Manifest(
+    fun singleHost(
+        transport: String = "ws",
+        transportConfig: Map<String, String> = emptyMap(),
+    ): Manifest = Manifest(
         nodes = mapOf(
             "a" to NodeSpec(
-                transport = "ws",
-                listen = "ws://127.0.0.1:0",
+                transport = transport,
+                transportConfig = transportConfig,
+                listen = listenAddress(transport),
                 peerName = "a",
             ),
         ),
         placements = selectorsTo("a"),
     )
 
-    fun threeJvm(): Manifest = Manifest(
+    fun threeJvm(
+        transport: String = "ws",
+        transportConfig: Map<String, String> = emptyMap(),
+    ): Manifest = Manifest(
         nodes = mapOf(
             "a" to NodeSpec(
-                transport = "ws",
-                listen = "ws://127.0.0.1:0",
+                transport = transport,
+                transportConfig = transportConfig,
+                listen = listenAddress(transport),
                 peerName = "a",
             ),
             "b" to NodeSpec(
-                transport = "ws",
-                listen = "ws://127.0.0.1:0",
+                transport = transport,
+                transportConfig = transportConfig,
+                listen = listenAddress(transport),
                 dial = listOf("a"),
                 peerName = "b",
             ),
             "c" to NodeSpec(
-                transport = "ws",
+                transport = transport,
+                transportConfig = transportConfig,
                 dial = listOf("a", "b"),
                 peerName = "c",
             ),
@@ -121,6 +131,12 @@ object PlacementFixture {
 
     private fun selectorsTo(node: String): Map<String, String> =
         listOf("source", "op", "relay", "sink").associateWith { node }
+
+    private fun listenAddress(transport: String): String = when (transport) {
+        "ws" -> "ws://127.0.0.1:0"
+        "iroh" -> "iroh://"
+        else -> error("placement fixture has no listen address for transport '$transport'")
+    }
 
     private val captured = ConcurrentHashMap<String, Cell>()
 
