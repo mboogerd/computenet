@@ -176,6 +176,21 @@ class PlacementPlanTest {
 
     @Test
     fun `cross-node links refuse replicated and family endpoints`() {
+        val replicatedFailure = assertThrows<IllegalStateException> {
+            PlacementPlan.of(
+                GraphSpec(
+                    listOf(
+                        spawn("replica", replicated = true),
+                        spawn("sink", placement = "b"),
+                        ConnectStep("replica", "outlet", "sink", "inlet"),
+                    ),
+                ),
+                placedManifest("b" to "b"),
+                "a",
+            )
+        }
+        assertTrue(replicatedFailure.message!!.contains("replica"), replicatedFailure.message)
+
         val manifest = threeNodeManifest("a" to "a", "b" to "b")
         val replicatedSpec = GraphSpec(
             listOf(
