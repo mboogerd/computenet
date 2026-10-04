@@ -210,10 +210,14 @@ class PlacementPlan private constructor(
                         requireActive(active, step.from)
                         requireActive(active, step.to)
                         val key = edgeKey(step.from, step.outlet, step.to, step.inlet)
-                        if (!local(step.from) || !local(step.to)) {
-                            throw IllegalStateException("unlink $key: cross-node unlink is not supported")
+                        val crossesNodes =
+                            assignedNodes.getValue(step.from) != assignedNodes.getValue(step.to)
+                        when {
+                            crossesNodes -> {
+                                throw IllegalStateException("unlink $key: cross-node unlink is not supported")
+                            }
+                            local(step.from) && local(step.to) -> localSteps += step
                         }
-                        localSteps += step
                     }
 
                     is DespawnStep -> {
