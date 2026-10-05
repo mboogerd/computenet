@@ -233,14 +233,14 @@ class WsBudgetReconnectResumesTest {
             // a. Spend the three-token bootstrap, then refuse the fourth frame.
             at.dial(alice1, incarnation = 1).use { first ->
                 repeat(3) { first.send(++version) }
-                await("three Attention assertions were applied and spent alice's bucket") {
-                    at.observed.size == 3 && at.ledger.snapshot().let { snapshot ->
-                        snapshot.bucket(alice1.peerId, ClaimClass.Attention)?.balance == 0L &&
-                            snapshot.admitted[ClaimClass.Attention] == 3L
-                    }
-                }
+                await("three Attention assertions were applied") { at.observed.size == 3 }
                 first.send(++version)
                 awaitDenial(at, count = 1L, peer = alice1.peerId)
+                awaitSnapshot(at, "three admissions depleted alice's only bucket") { snapshot ->
+                    snapshot.bucketCount == 1 &&
+                        snapshot.bucket(alice1.peerId, ClaimClass.Attention)?.balance == 0L &&
+                        snapshot.admitted[ClaimClass.Attention] == 3L
+                }
                 at.observed.map { it.version } shouldContainExactly listOf(1L, 2L, 3L)
                 at.listener.admissionDenialCount shouldBe 0L
             }
