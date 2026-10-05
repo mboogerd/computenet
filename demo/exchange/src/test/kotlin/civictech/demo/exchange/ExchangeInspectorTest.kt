@@ -22,7 +22,7 @@ class ExchangeInspectorTest {
 
             val json = probe.state(InspectorServer.TOPOLOGY_PATH)
 
-            assertTrue(""""host":"exchange""" in json, "missing app host: $json")
+            assertTrue(""""host":"exchange"""" in json, "missing app host: $json")
             assertTrue(""""host":"exchange-shard-""" !in json, "solo mode exposes a shard host: $json")
             assertTrue(""""typeFqn"""" in json, "expected at least one node: $json")
             // solo mode: no peering bridge host
