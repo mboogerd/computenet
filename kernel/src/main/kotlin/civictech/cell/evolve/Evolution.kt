@@ -362,6 +362,7 @@ object Promotion {
         candidate: civictech.cell.data.Replicable<*>,
         outletName: String = "outlet",
         judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
     ) {
         // PRECHECK — decided strictly before any state mutation.
         if (judge != null) {
@@ -400,8 +401,13 @@ object Promotion {
             )
         }
         // COMMIT — the rebind (reuse-ref crash-recovery); surviving replicas play
-        // the retained incumbent and re-feed the candidate.
+        // the retained incumbent and re-feed the candidate. A journaled caller
+        // checkpoints only after every PRECHECK has passed, then records only a
+        // completed rebind. With no seam this remains the original two-statement
+        // path: no checkpoint, no topology record, no durability cost.
+        journal?.checkpointBeforeStateHandoff()
         replication.rebind(incumbent, candidate, host)
+        journal?.recordCommittedSwap(to.waveState())
     }
 
     /**
