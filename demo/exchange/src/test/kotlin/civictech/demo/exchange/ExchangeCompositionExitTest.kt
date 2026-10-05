@@ -41,8 +41,8 @@ import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.mapSet
-import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.op.MergeableGroupByCell
+import civictech.cell.partition.PartitionedCell
 import civictech.cell.partition.ShardCell
 import civictech.cell.partition.PartitionedShardSet
 
@@ -61,12 +61,10 @@ import civictech.cell.partition.PartitionedShardSet
  *    [Peering.loopback] bridge (the same M5 frame path a socket carries), and
  *    each peer's partitioned shards live on their own hosts reached over bridges.
  *  - **[B] replication**: the logical order OR-set is [Replication.replicate]d
- *    on both peers; writes on either converge (idempotent tag merge). This is
- *    the workaround for the known `GroupByCell`-not-`Replicable` gap — we
- *    replicate the shard's *input membership* (the OR-set), not its `MapDelta`
- *    aggregate, and each peer recomputes the aggregate from convergent input
- *    (GroupByCell's own doc: "peers recompute from their replicated inputs and
- *    converge with no aggregate-level gossip").
+ *    on both peers; writes on either converge (idempotent tag merge), and the
+ *    partitioned board itself replicates by membership gossip through its
+ *    composite membrane. Each peer recomputes its own region aggregate from
+ *    convergent membership, with no aggregate-level coordination.
  *  - **[C] partitioned**: each peer routes its converged orders into a
  *    [PartitionedShardSet] whose [ShardCell] shards own disjoint region-slot
  *    ranges on different hosts; the scatter-gather union of shard ranges is the
@@ -209,6 +207,85 @@ class ExchangeCompositionExitTest {
             val expected = batch(o0.membership())
             assertEquals(expected, m0.board(), "peer0 board diverged on seed $seed")
             assertEquals(expected, m1.board(), "peer1 board diverged on seed $seed")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // [B×C] one replicated PartitionedCell per peer. Membership gossip crosses
+    // the composite membrane, while each replica folds its private organelles.
+    // ------------------------------------------------------------------
+
+    private fun foldBoard(board: MutableMap<String, Long>, delta: MapDelta<String, Long>) {
+        delta.puts.forEach { (key, value) -> board[key] = value }
+        delta.removals.forEach { board.remove(it) }
+    }
+
+    private fun replicatedPartitionedBoard(ref: CellRef) = PartitionedCell<String, String, Long, Long>(
+        ref = ref,
+        initialShardCount = 3,
+        keyFn = ::region,
+        aggregator = Aggregators.sumOf(::amount),
+    )
+
+    @Test
+    fun `replicated PartitionedCell boards on both peers equal batch over cross-peer writes - 100 seeds`() {
+        for (seed in 0L until 100L) {
+            val controller = SimulationController(seed)
+            val rnd = Random(seed)
+            val peers = listOf(Peer(controller), Peer(controller))
+            val bridge = Peering.loopback(peers[0].side, peers[1].side)
+            val boardId = UUID.nameUUIDFromBytes("exchange-partitioned-board-$seed".toByteArray())
+            val cells = peers.mapIndexed { index, peer ->
+                replicatedPartitionedBoard(CellRef(boardId, index.toLong())).also {
+                    peer.replication.replicate(it, peer.host)
+                }
+            }
+            val boards = cells.map { mutableMapOf<String, Long>() }
+            cells.forEachIndexed { index, cell ->
+                cell.outlet.subscribe(
+                    Use.fixed(
+                        Propagate<MapDelta<String, Long>> { foldBoard(boards[index], it) },
+                        PortRef.generate(),
+                    ),
+                )
+            }
+            val inputs = peers.mapIndexed { index, peer ->
+                (HostedCellProxy.create(
+                    cells[index].ref,
+                    peer.registry,
+                    SetDeltaInletProxy::class.java,
+                ) as SetDeltaInletProxy).inlet.call
+            }
+            controller.runToIdle()
+
+            var counter = 1L
+            val live = mutableMapOf<String, Timestamp>()
+            repeat(60) { operation ->
+                if (operation == 20) bridge.partition()
+                if (operation == 30) {
+                    bridge.heal()
+                    controller.runToIdle()
+                }
+
+                val element = domain[rnd.nextInt(domain.size)]
+                val target = rnd.nextInt(inputs.size)
+                val existing = live[element]
+                if (existing == null) {
+                    val tag = Timestamp(UUID(0, counter), counter++)
+                    live[element] = tag
+                    inputs[target].propagate(SetDelta(adds = mapOf(element to setOf(tag))))
+                } else {
+                    live.remove(element)
+                    inputs[target].propagate(SetDelta(dels = mapOf(element to setOf(existing))))
+                }
+                repeat(rnd.nextInt(3)) { controller.step() }
+            }
+            controller.runToIdle()
+
+            val expected = batch(live.keys)
+            boards.forEachIndexed { index, board ->
+                assertEquals(expected, board, "replica $index board diverged on seed $seed")
+            }
         }
     }
 
@@ -777,8 +854,8 @@ class ExchangeCompositionExitTest {
     // ------------------------------------------------------------------
     // The manifest assertion (PN-12): the evidence graph's composed natures,
     // read off the marker interfaces the cells implement — board {GLITCH_FREE},
-    // writers {DURABLE}, union {REPLICATED}, shards {PARTITIONED}. The composed
-    // graph's manifest is the union of its cells' manifests: the four
+    // writers {DURABLE}, union {REPLICATED}, partitioned board {PARTITIONED}.
+    // The composed graph's manifest is the union of its cells' manifests: the four
     // Phase-1/2/3 natures, all present in one graph.
     // ------------------------------------------------------------------
 
@@ -789,13 +866,12 @@ class ExchangeCompositionExitTest {
         assertTrue(Manifest.GLITCH_FREE in manifestOf(GlitchFreeCell::class.java), "board is not GLITCH_FREE")
         assertTrue(Manifest.DURABLE in manifestOf(SetCell::class.java), "writers are not DURABLE")
         assertTrue(Manifest.REPLICATED in manifestOf(UnionSetCell::class.java), "union is not REPLICATED")
-        assertTrue(Manifest.PARTITIONED in manifestOf(ShardCell::class.java), "shards are not PARTITIONED")
+        assertTrue(Manifest.PARTITIONED in manifestOf(PartitionedCell::class.java), "board is not PARTITIONED")
 
         val composed = manifestOf(GlitchFreeCell::class.java) +   // board
             manifestOf(SetCell::class.java) +                     // writers
             manifestOf(UnionSetCell::class.java) +                // union
-            manifestOf(ShardCell::class.java) +                   // shards
-            manifestOf(MergeableGroupByCell::class.java)          // sharded-replicated aggregate
+            manifestOf(PartitionedCell::class.java)               // replicated partitioned board
         assertEquals(
             setOf(Manifest.GLITCH_FREE, Manifest.DURABLE, Manifest.REPLICATED, Manifest.PARTITIONED),
             composed,

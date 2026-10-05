@@ -10,8 +10,7 @@ import kotlin.test.assertTrue
 /**
  * The shared `--inspect-port` opt-in (computenet-3iv0w rule R4, D2/D4), wired
  * for `:demo:exchange` — the region-partitioned composition probe (CP-E2):
- * three hosts in solo mode (the app host plus its two aggregation shards,
- * `shardCount = 2`), a fourth when peered.
+ * one app host in solo mode, and a second bridge host when peered.
  */
 class ExchangeInspectorTest {
 
@@ -23,9 +22,8 @@ class ExchangeInspectorTest {
 
             val json = probe.state(InspectorServer.TOPOLOGY_PATH)
 
-            listOf("exchange", "exchange-shard-0", "exchange-shard-1").forEach { host ->
-                assertTrue(""""host":"$host"""" in json, "missing host $host: $json")
-            }
+            assertTrue(""""host":"exchange"""" in json, "missing app host: $json")
+            assertTrue(""""host":"exchange-shard-""" !in json, "solo mode exposes a shard host: $json")
             assertTrue(""""typeFqn"""" in json, "expected at least one node: $json")
             // solo mode: no peering bridge host
             assertTrue(""""host":"exchange-bridge"""" !in json, "solo mode has no bridge host: $json")
