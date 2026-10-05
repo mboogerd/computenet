@@ -802,11 +802,13 @@ internal class HostDurability(
     ) {
         val journal = cellJournalSelector(trigger.cellRef) ?: return
         if (trigger.replayOf === journal) return
-        // Prefer the exact bytes the intake already appended. Re-encoding here runs
+        // Only the exact bytes the intake already appended. Re-encoding here runs
         // after the handler failed and may therefore encounter an `Owned` argument the
         // handler already consumed; durability must never touch that exclusive twice.
-        val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] }
-            ?: WireCodec.encode(trigger)
+        // A trigger with no appended bytes (a never-journaled `PORT_PROTOCOL` frame,
+        // which `WireCodec.encode` refuses for an in-process link) is absent from the
+        // journal, so replay could never match a record for it: write none.
+        val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] } ?: return
         journal.append(
             journalRecord(
                 RECORD_RESTART,

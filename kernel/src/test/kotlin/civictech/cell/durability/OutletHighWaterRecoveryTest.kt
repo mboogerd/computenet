@@ -6,16 +6,22 @@ import civictech.cell.Consumer
 import civictech.cell.MessageContext
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.evolve.Effectful
+import civictech.cell.control.Attention
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.JournalRecords
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
+import civictech.cell.link.Link
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
 import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
@@ -343,5 +349,54 @@ class OutletHighWaterRecoveryTest {
         after.relay.outlet.waveState().highWater shouldBe 2L
         recoveredRestartNotices.single().timestamp.sourceId shouldBe postRestartNoticeSource
         recoveredRestartNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+    }
+
+    /**
+     * computenet-49i65 review: the type-8 write must not make a RESTART fail that
+     * completed before it. A `PORT_PROTOCOL` frame is never journaled (`accept`
+     * returns before the tee), so a metadata-plane handler failure on a journaled
+     * RESTART cell has no appended bytes to name as its trigger. Re-encoding it
+     * instead threw `PORT_PROTOCOL requires a WireEdgeLink` out of supervision,
+     * after `onDeactivate` and before `onActivate`/`reBaseline`. Such a trigger
+     * could never be matched on replay anyway, so no record is written.
+     */
+    @Test
+    fun `a metadata-plane failure on a journaled RESTART cell completes the restart and writes no type-8 record`() {
+        val controller = SimulationController(seed = 29)
+        val journal = InMemoryJournal()
+        val world = World(controller, journal, CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()), mutableListOf())
+        controller.runToIdle()
+        world.feed(1)
+        controller.runToIdle()
+        val notices = mutableListOf<MessageContext>()
+        world.relay.restartOutlet.observe(PortRef.generate()) { notices += it }
+        val preRestartSource = world.relay.outlet.waveState().sourceId
+
+        ProtocolSupport.of(world.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = world.relay.inlet.ref
+            override val to = world.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+        world.host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                world.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+
+        world.host.supervisionAccounting().restarts shouldBe 1
+        (world.relay.outlet.waveState().sourceId != preRestartSource).shouldBeTrue()
+        notices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+        journal.replay().mapNotNull(JournalRecords::decodeRestart) shouldBe emptyList()
     }
 }
