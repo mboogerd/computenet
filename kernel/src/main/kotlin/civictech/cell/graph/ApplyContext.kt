@@ -17,7 +17,6 @@ import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
-import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRef
@@ -241,7 +240,7 @@ class ApplyContext(
         judge: PromotionJudge? = null,
     ) {
         val before = live()
-        val gateCell = cells[gate] as? TrafficLightApi<*>
+        val gateCell = cells[gate]
             ?: throw Promotion.PromotionAborted("PRECHECK", "gate $gate is not a live TrafficLightApi")
         val incumbentCell = cells[incumbent]
             ?: throw Promotion.PromotionAborted("PRECHECK", "incumbent $incumbent is not live")
@@ -307,10 +306,9 @@ class ApplyContext(
             }
         }
 
-        @Suppress("UNCHECKED_CAST")
         Promotion.promote(
             host = host,
-            gate = gateCell as TrafficLightApi<Any>,
+            gate = gateCell,
             incumbent = incumbentCell,
             candidate = candidateCell,
             outletName = outletName,

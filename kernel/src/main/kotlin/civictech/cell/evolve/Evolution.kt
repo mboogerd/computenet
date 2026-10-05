@@ -178,6 +178,27 @@ object Promotion {
         RuntimeException("promotion aborted at $phase: $message", cause)
 
     /**
+     * Graph/runtime entry point that keeps the concrete membrane type behind
+     * the evolution package boundary. The typed overload below remains the
+     * protocol implementation used by callers that already hold a gate API.
+     */
+    internal fun promote(
+        host: ManagedHost,
+        gate: Cell,
+        incumbent: Cell,
+        candidate: Cell,
+        outletName: String,
+        downstream: List<Use<*>>,
+        judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
+    ) {
+        @Suppress("UNCHECKED_CAST")
+        val trafficLight = gate as? TrafficLightApi<Any>
+            ?: throw PromotionAborted("PRECHECK", "gate ${gate.ref} is not a live TrafficLightApi")
+        promote(host, trafficLight, incumbent, candidate, outletName, downstream, judge, journal)
+    }
+
+    /**
      * Promote [candidate] over [incumbent] behind [gate], despawning the
      * retired incumbent from [host] only after a successful COMMIT.
      *
