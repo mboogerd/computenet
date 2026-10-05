@@ -135,12 +135,13 @@ Preserved epoch (no `ReBaseline`; the same source lane continues):
   (`a checkpointed journaled source still fires each delta exactly once across a crash`,
   `an epoch rotated before the checkpoint is restored as-is, never re-derived over`),
   `OutletHighWaterRecoveryTest`, scenario `DUR-SRCID-02`. These pin the
-  restored `sourceId` and counter high-water; none asserts the absence of a
-  `ReBaseline` on this branch.
+  restored `sourceId` and counter high-water; the absence of a `ReBaseline`
+  on this branch is asserted by `OutletWaveRecoveryTest`
+  (`BS-22 checkpointed - recovery restores the epoch and announces no ReBaseline`).
 - Durable recovery without a checkpoint (ref-derived `sourceId`; full-WAL
   replay re-derives the counter) — `OutletWaveRecoveryTest`
   (`BS-22 - durable recovery is a preserved-epoch continuation, ref-derived and not re-baselined`,
-  the one test asserting no `ReBaseline` on recovery, and
+  asserting no `ReBaseline` on recovery, and
   `a journaled source feeding an effectful sink fires each delta exactly once across a crash`),
   scenario `DUR-SRCID-01`; a pre-KFX-12 journal — `JournalCompatibilityTest`.
 
