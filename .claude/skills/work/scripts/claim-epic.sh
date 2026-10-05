@@ -164,10 +164,12 @@ if [ "$mode" = release ]; then
   fi
   # The epic's own holder, re-judged on its subtree writes: step 3 judged it on
   # the epic row's updated_at, which a long-running session never bumps.
-  if [ -n "$obs_holder" ] && [ "$obs_holder" != none ] && \
-     [ "$("$SCRIPT_DIR/session-holder.sh" --check "$obs_holder" "$(newest_by_holder "$obs_holder")" 2>/dev/null)" = LIVE ]; then
-    live="${live:+$live
-}$id held by $obs_holder (LIVE, wrote beneath it at $(newest_by_holder "$obs_holder"))"
+  if [ -n "$obs_holder" ] && [ "$obs_holder" != none ]; then
+    wrote=$(newest_by_holder "$obs_holder")
+    if [ "$("$SCRIPT_DIR/session-holder.sh" --check "$obs_holder" "$wrote" 2>/dev/null)" = LIVE ]; then
+      live="${live:+$live
+}$id held by $obs_holder (LIVE, wrote beneath it at $wrote)"
+    fi
   fi
   if [ -n "$live" ]; then
     echo "KEPT: $id — a live session works beneath it; leave it claimed and do not select it:" >&2

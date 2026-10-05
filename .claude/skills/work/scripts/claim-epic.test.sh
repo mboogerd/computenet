@@ -536,6 +536,15 @@ out=$(HOLDER_MAX_AGE_S=0 "$SCRIPT" --release computenet-e --observed "someone-el
   && ok "--release still frees an old-token epic whose holder has not written for 5h (residue)" \
   || bad "2jx46 residue: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
 
+# Between features the session holds NO in_progress child: only the epic's own
+# holder, re-judged on its subtree writes, keeps it.
+fixture; two_jx 40
+sed -i.bak 's/"status":"in_progress","updated_at":"2020/"status":"closed","updated_at":"2020/' "$CTRL/list.json"
+out=$(HOLDER_MAX_AGE_S=0 "$SCRIPT" --release computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^KEPT" <<<"$out" && ! grep -qE -- "--status=open|^comment" "$BD_LOG"; } \
+  && ok "--release keeps an epic whose own holder wrote a (closed) child 40m ago" \
+  || bad "2jx46 epic holder: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
 # --- --release records what it saw before it clears it (computenet-60f8) -----
 fixture; desc_rows "someone-else:99999:Tue Jan  1 00:00:00 2020"
 out=$("$SCRIPT" --release computenet-e --observed "old:1:x" DEAD 2>&1); rc=$?
