@@ -169,6 +169,10 @@ class OwnershipTest {
                 localReceived += buffer.take()
             }
         }))
+        // the handshake form: a bridged consumer reaches linkTo(LinkFrom) as a local stand-in inlet
+        // serving the remote proxy, the endpoint RemoteLinkRequests.translate builds for requestLinkTo
+        val standIn = FanInlet.create<OwnedPush>().also { it.serve(remote) }
+        outlet.linkTo(standIn as LinkFrom<OwnedPush>).shouldBeInstanceOf<LinkResult.Rejected>()
         shouldThrow<IllegalStateException> {
             outlet.subscribe(fixed(remote))
         }
@@ -201,6 +205,8 @@ class OwnershipTest {
                 as OwnedInletProxy).inlet.call
         val outlet = FanOutlet.create<OwnedPush>()
         outlet.subscribe(fixed(firstRemote))
+        val secondStandIn = FanInlet.create<OwnedPush>().also { it.serve(secondRemote) }
+        outlet.linkTo(secondStandIn as LinkFrom<OwnedPush>).shouldBeInstanceOf<LinkResult.Rejected>()
         shouldThrow<IllegalStateException> {
             outlet.subscribe(fixed(secondRemote))
         }
