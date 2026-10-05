@@ -37,3 +37,6 @@ demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 runtime/src/main/kotlin/civictech/runtime/Runtime.kt
 # configured name — Runtime maps the manifest's `peerName` through a
 # constructor reference before assigning the bridge side's asserted peer.
+
+economy/src/main/kotlin/civictech/economy/TokenBucketLedger.kt
+# checkpoint restore — `restoreState` reads back `BucketRecord.peer`, the stable name `checkpointTo` wrote from `PeerId.name`; a persisted name, never derived from key material (xbs8t-D1, 66m-D9).

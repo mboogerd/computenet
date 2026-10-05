@@ -9,6 +9,12 @@ import civictech.cell.link.AuthLevel
 import civictech.cell.link.IssuerId
 import civictech.cell.link.PeerId
 import civictech.cell.link.PeerStamp
+import civictech.economy.persist.BucketRecord
+import civictech.economy.persist.BudgetCheckpointStore
+import civictech.economy.persist.CheckpointRead
+import civictech.economy.persist.FallbackReason
+import civictech.economy.persist.LedgerState
+import civictech.economy.persist.RestoreOutcome
 import java.util.EnumMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -92,6 +98,13 @@ import kotlin.concurrent.withLock
  * judging instant (refill arithmetic unchanged; see [refill]), so a drained bucket that has
  * since refilled back to its bootstrap becomes eligible without first being touched.
  *
+ * **Restart persistence** (`[ECO1-PAR-07]`/`[ECO1-PAR-08]`, `66m-D9`): checkpoints restore
+ * balances at no more than the current capacity, count recorded holds as spent, and start the
+ * monotonic refill clock at restore time. Missing, unreadable, policy-mismatched or stale state
+ * leaves the ledger empty so the next first charge initializes from bootstrap, never capacity.
+ * The store's injected wall clock is used only to stamp and judge checkpoint staleness; refill
+ * continues to read [clock] exclusively.
+ *
  * **Creation lock:** every bucket creation (and the eviction making room for it) runs under
  * one ledger-level [ReentrantLock], so two concurrent first charges cannot both pass the size
  * check; charges on existing buckets take only their bucket's monitor. The creating thread
@@ -154,18 +167,24 @@ class TokenBucketLedger(
     /** Held around every bucket creation and the eviction that makes room for it (`kwhw6-D9`). */
     private val creationLock = ReentrantLock()
     private val heldByIssuer = ConcurrentHashMap<String, Long>()
+    private val chargeHasRun = AtomicBoolean(false)
+    private var restoreCompleted = false
+    private var checkpointSequence = 0L
+    private var lastCheckpointNanos: Long? = null
     private val admittedCounts: Map<ClaimClass, LongAdder> =
         EnumMap<ClaimClass, LongAdder>(ClaimClass::class.java).apply {
             ClaimClass.entries.forEach { put(it, LongAdder()) }
         }
     private val deniedCounts = ConcurrentHashMap<Pair<ClaimClass, DenialReason>, LongAdder>()
 
-    override fun charge(claim: BudgetClaim): BudgetOutcome =
-        try {
+    override fun charge(claim: BudgetClaim): BudgetOutcome {
+        chargeHasRun.set(true)
+        return try {
             chargeUnguarded(claim)
         } catch (e: Exception) {
             refuse(claim.claimClass, DenialReason.LEDGER_FAILURE, null, "${e::class.simpleName}: ${e.message}")
         }
+    }
 
     private fun chargeUnguarded(claim: BudgetClaim): BudgetOutcome {
         val now = clock()
@@ -467,6 +486,102 @@ class TokenBucketLedger(
         return refused
     }
 
+    /**
+     * Restores this newly constructed ledger once. Configuration refusals from [store]
+     * propagate; ordinary absence or unreadability is returned as a caller-visible fallback.
+     */
+    @Synchronized
+    fun restoreFrom(store: BudgetCheckpointStore): RestoreOutcome {
+        val checkpoint = checkNotNull(policy.checkpoint) { "policy ${policy.label} has no checkpoint configuration" }
+        return creationLock.withLock {
+            check(!chargeHasRun.get() && buckets.isEmpty()) { "restore requires a ledger on which no charge has run" }
+            check(!restoreCompleted) { "ledger restore has already completed" }
+
+            val outcome = when (val read = store.read(scope)) {
+                CheckpointRead.Missing -> RestoreOutcome.Fallback(FallbackReason.MISSING)
+                is CheckpointRead.Unreadable -> RestoreOutcome.Fallback(FallbackReason.UNREADABLE, read.detail)
+                is CheckpointRead.Present -> {
+                    val state = read.state
+                    when {
+                        state.policyLabel != policy.label -> RestoreOutcome.Fallback(
+                            FallbackReason.POLICY_MISMATCH,
+                            "checkpoint policy ${state.policyLabel} does not match ${policy.label}",
+                        )
+
+                        store.wallMillis() - state.wallStampMillis > checkpoint.stalenessBoundNanos / NANOS_PER_MILLI ->
+                            RestoreOutcome.Fallback(FallbackReason.STALE, "checkpoint is older than the staleness bound")
+
+                        else -> restoreState(state)
+                    }
+                }
+            }
+            restoreCompleted = true
+            outcome
+        }
+    }
+
+    /** Writes an unconditional checkpoint, used for cadence writes and orderly close. */
+    @Synchronized
+    fun checkpointTo(store: BudgetCheckpointStore): LedgerState {
+        checkNotNull(policy.checkpoint) { "policy ${policy.label} has no checkpoint configuration" }
+        checkpointSequence++
+        val state = LedgerState(
+            policyLabel = policy.label,
+            sequence = checkpointSequence,
+            wallStampMillis = store.wallMillis(),
+            buckets = exportBuckets(),
+        )
+        store.write(scope, state)
+        lastCheckpointNanos = clock()
+        return state
+    }
+
+    /** Writes when the policy cadence has elapsed; the caller owns the timer and invokes this tick. */
+    @Synchronized
+    fun tick(store: BudgetCheckpointStore, now: Long = clock()): LedgerState? {
+        val checkpoint = checkNotNull(policy.checkpoint) { "policy ${policy.label} has no checkpoint configuration" }
+        val last = lastCheckpointNanos
+        return if (last == null || now - last >= checkpoint.cadenceNanos) checkpointTo(store) else null
+    }
+
+    /** Caller holds [creationLock]; restored rows bypass [makeRoom] so restart cannot refill by eviction. */
+    private fun restoreState(state: LedgerState): RestoreOutcome {
+        val now = clock()
+        state.buckets.forEach { record ->
+            val capacity = policy.capacity(record.claimClass)
+            val bucket = Bucket(
+                capacity = capacity,
+                refill = policy.refill(record.claimClass),
+                bootstrapLevel = minOf(record.bootstrapLevel, capacity),
+                issuerName = record.issuer,
+                now = now,
+            )
+            bucket.balance = minOf(record.balance, capacity)
+            buckets[BucketKey(PeerId(record.peer), record.claimClass)] = bucket
+        }
+        checkpointSequence = state.sequence
+        return RestoreOutcome.Restored(state.sequence, buckets.size)
+    }
+
+    /** Reads every exported row under its bucket monitor; cross-bucket consistency is intentionally weak. */
+    private fun exportBuckets(): List<BucketRecord> =
+        buckets.entries.mapNotNull { (key, bucket) ->
+            synchronized(bucket) {
+                if (bucket.evicted) {
+                    null
+                } else {
+                    BucketRecord(
+                        peer = key.peer.name,
+                        claimClass = key.claimClass,
+                        balance = bucket.balance,
+                        heldTotal = bucket.held,
+                        bootstrapLevel = bucket.bootstrapLevel,
+                        issuer = bucket.issuerName,
+                    )
+                }
+            }
+        }.sortedWith(compareBy(BucketRecord::peer, { it.claimClass.ordinal }))
+
     /** A plain-data read of counters and buckets (`kwhw6-D6`); see [LedgerSnapshot] for consistency. */
     fun snapshot(): LedgerSnapshot {
         val views = buckets.entries.map { (key, bucket) ->
@@ -493,5 +608,7 @@ class TokenBucketLedger(
 
         /** The fixed refusal detail when `retention.maxBuckets` are live and none is evictable (`kwhw6-D9`). */
         const val LEDGER_FULL_DETAIL: String = "ledger full"
+
+        private const val NANOS_PER_MILLI: Long = 1_000_000L
     }
 }
