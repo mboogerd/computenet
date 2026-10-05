@@ -265,4 +265,47 @@ class ReplicatedGroupByTest {
             .ports.first { it.name == "inlet" }
         inlet.natures.level(NatureAxis.MERGE_IDEMPOTENCE) shouldBe MergeClass.NON_IDEMPOTENT
     }
+
+    /**
+     * Retained tombstones must ride the membership catch-up. A replica restored
+     * from a checkpoint taken before a del still holds the add; the replica that
+     * folded the del holds only its tombstone, so a catch-up gated on
+     * non-empty adds sends nothing and the restored add survives forever (the
+     * peer rejects the add as tombstoned without echoing anything back).
+     */
+    @Test
+    fun `a replica restored from a pre-del checkpoint learns the del through catch-up`() {
+        val controller = SimulationController(5)
+        val peers = List(2) { Peer(controller) }
+        val logicalId = UUID.nameUUIDFromBytes("replicated-group-by-restore".toByteArray())
+        val tag = Timestamp(UUID.nameUUIDFromBytes("replicated-group-by-restore-tag".toByteArray()), 1)
+        val checkpoint = groupBy(CellRef(logicalId, 1))
+            .apply { inlet.call.propagate(SetDelta(adds = mapOf("a3" to setOf(tag)))) }
+            .snapshot()
+
+        val survivor = spawn(peers[0], CellRef(logicalId, 0))
+        controller.runToIdle()
+        inlet(peers[0], survivor.ref).propagate(SetDelta(adds = mapOf("a3" to setOf(tag))))
+        controller.runToIdle()
+        inlet(peers[0], survivor.ref).propagate(SetDelta(dels = mapOf("a3" to setOf(tag))))
+        controller.runToIdle()
+        survivor.contents().adds.keys shouldBe emptySet()
+
+        var restored: GroupByCell<String, String, Long, Long>? = null
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "restored-group-by",
+                    factory = CellFactory { chosen -> groupBy(chosen).also { it.restore(checkpoint); restored = it } },
+                    identity = IdentityBinding.Exact(CellRef(logicalId, 1)),
+                    replicated = true,
+                ),
+            ),
+        ).apply(ApplyContext(peers[1].host, peers[1].replication))
+        Peering.loopback(peers[0].side, peers[1].side)
+        controller.runToIdle()
+
+        withClue("survivor") { survivor.contents().adds.keys shouldBe emptySet() }
+        withClue("restored replica") { checkNotNull(restored).contents().adds.keys shouldBe emptySet() }
+    }
 }

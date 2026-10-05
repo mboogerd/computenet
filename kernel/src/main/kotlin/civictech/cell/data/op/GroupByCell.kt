@@ -227,7 +227,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
             override fun propagate(value: WaterlineDelta) = onWaterline(value)
         })
         deltaInlet.serve(Propagate<SetDelta<E>>(::onGossip))
-        membership.catchUpOnLinked { state.asDelta().takeIf { it.adds.isNotEmpty() } }
+        membership.catchUpOnLinked { state.asDelta().takeIf { it.adds.isNotEmpty() || it.dels.isNotEmpty() } }
     }
 
     private fun onWaterline(delta: WaterlineDelta) {
