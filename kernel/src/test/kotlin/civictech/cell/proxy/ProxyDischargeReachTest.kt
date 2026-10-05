@@ -2,6 +2,8 @@ package civictech.cell.proxy
 
 import civictech.cell.Leased
 import civictech.cell.Owned
+import civictech.gen.wire.Contract
+import civictech.gen.wire.Key
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -16,7 +18,28 @@ import org.junit.jupiter.api.assertThrows
  * something that never owned it — so every test here is paired with its
  * opposite, and no fix may make one green by reddening the other.
  */
+/** computenet-dmwl: parameter 0 is exclusive; parameter 1 is declared `Holder(Any)`, invisible to the scan. */
+@Contract
+interface DmwlPush {
+    fun push(@Key item: Owned<String>, holder: DmwlHolder)
+}
+
+class DmwlHolder(val any: Any)
+
+class DmwlDerived(val held: Owned<String>)
+
 class ProxyDischargeReachTest {
+
+    @Test
+    fun `a supertype-declared parameter holding a runtime exclusive is not consumed by the discharging proxy`() {
+        val item = Owned("item")
+        val foreign = Owned("foreign")
+
+        Proxy.discharging(DmwlPush::class.java).push(item, DmwlHolder(DmwlDerived(foreign)))
+
+        isLive(item) shouldBe false
+        isLive(foreign) shouldBe true
+    }
 
     // ------------------------------------------------------------------
     // Fixtures

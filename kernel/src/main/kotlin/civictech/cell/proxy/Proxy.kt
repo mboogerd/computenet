@@ -107,12 +107,15 @@ object Proxy {
         val descriptor = requireNotNull(ContractRegistry.descriptor(clazz)) {
             "A discharging proxy requires a generated contract descriptor for ${clazz.name}"
         }
-        val exclusiveMethods = descriptor.methods.filter { it.exclusive }.mapTo(mutableSetOf()) {
-            it.name to it.jvmDescriptor
+        // computenet-dmwl: only the descriptor-marked parameter positions are walked, so a
+        // supertype-declared parameter the compile-time scan did not mark is never opened.
+        val exclusiveMethods = descriptor.methods.filter { it.exclusive }.associate {
+            (it.name to it.jvmDescriptor) to it.exclusiveParameters
         }
         return fromClass(clazz) { _, method, args ->
-            if ((method.name to JvmDescriptors.of(method)) in exclusiveMethods) {
-                args.orEmpty().forEach(::discharge)
+            exclusiveMethods[method.name to JvmDescriptors.of(method)]?.let { marked ->
+                val values = args.orEmpty()
+                marked.forEach { index -> if (index < values.size) discharge(values[index]) }
             }
             null
         }
@@ -322,17 +325,18 @@ object Proxy {
      * So the rule is: **the runtime walk's reach is exactly the compile-time scan's reach**.
      * If those two disagree, the divergence is the bug, in whichever direction it points.
      *
-     * **Where the rule is not yet exact, stated here rather than in a report.** The scan
-     * reads *declared* types; this walk reads *runtime* classes, and the two cannot be made
-     * to coincide by a stop list alone. The compiler-generated-carrier stops above and in
-     * [dischargeFields] close the cases that were measured. One residual is known and
-     * remains: a parameter declared as a supertype (`Any`, an interface) whose runtime value
-     * is a class holding an `Owned` is invisible to the scan — which therefore does not mark
-     * the method exclusive at all — yet is opened and consumed here if the method is
-     * exclusive for some *other* parameter. Measured 2026-08-17 under review
-     * (`Holder(val any: Any)` holding a class with an `Owned` property: consumed). Closing it
-     * needs the walk to be descriptor-driven rather than purely reflective; filed separately,
-     * not done here.
+     * **Where the rule is exact, and where it is not (computenet-dmwl).** The scan reads
+     * *declared* types and this walk reads *runtime* classes, so they cannot be made to
+     * coincide by a stop list alone. Reach is therefore bounded per **parameter**: the
+     * descriptor's `exclusiveParameters` names the positions whose declared type carries an
+     * exclusive, and both [discharging] and the ADMIT drop (`Admit.offer`) discharge only
+     * those. A parameter declared as a supertype (`Any`, an interface) that the scan did not
+     * mark is never opened, even when its runtime value holds an `Owned`. Two residuals remain,
+     * neither in scope of that task: (i) inside a *marked* parameter, a supertype-declared
+     * FIELD is still opened by its runtime class; (ii) the other `args.forEach(Proxy::discharge)`
+     * sites — `ManagedHost` refusals, `LocationRegistry.refuseRetired`,
+     * `BoundaryDenials.dischargeRefusedArgs`, `DeadLetters.sanitizeForDeadLetter` — still walk
+     * every argument.
      */
     private fun discharge(value: Any?, seen: MutableSet<Any>) {
         if (value == null || !seen.add(value)) return
