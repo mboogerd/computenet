@@ -8,6 +8,7 @@ import civictech.cell.graph.AppliedGraph
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DurableInput
 import civictech.cell.host.KeyedCells
@@ -42,6 +43,7 @@ import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Builds one manifest node without exposing host, journal or transport construction to its caller. */
@@ -178,6 +180,35 @@ object Runtime {
         return expected.values.toList()
     }
 
+    /**
+     * A journaled promotion retires the incumbent handle while activating its already-declared
+     * shadow candidate. Accept that one missing original-spec handle without aliasing it back into
+     * [ApplyContext.handles]: the journal's post-promotion fold remains the live topology exposed
+     * through [Node.refs]. Requiring the same declared logical identity plus a recovered
+     * shadow-to-active transition keeps unrelated stale specs loud and survives topology
+     * checkpoint compaction, where the historical Promote event itself is no longer present.
+     */
+    private fun retiredByRecoveredPromotion(
+        missing: SpawnStep,
+        declared: List<SpawnStep>,
+        context: ApplyContext,
+    ): Boolean {
+        val logicalId = missing.identity.declaredLogicalId() ?: return false
+        val live = context.live()
+        return declared.any { candidate ->
+            candidate.handle != missing.handle &&
+                candidate.shadow &&
+                candidate.identity.declaredLogicalId() == logicalId &&
+                context.handles[candidate.handle]?.let { ref -> live.spawns[ref]?.shadow == false } == true
+        }
+    }
+
+    private fun IdentityBinding.declaredLogicalId(): UUID? = when (this) {
+        IdentityBinding.FreshLogical -> null
+        is IdentityBinding.NewInstanceOf -> logicalId
+        is IdentityBinding.Exact -> ref.id
+    }
+
     /** Drain every host built by a boot that failed before it could return a [Node]. */
     private fun closeFailedBootHosts(hosts: Collection<ManagedHost>, failure: Throwable) {
         hosts.forEach { host ->
@@ -220,7 +251,10 @@ object Runtime {
      * the cumulative spec is their recovery source and becomes [Node.placement]. Recovery refuses
      * a spec whose active local handles or pinned refs disagree with the journal, naming this
      * contract; an ordered spawn followed by an isolated despawn is valid and remains absent.
-     * The check is limited to what the local journal records: a stale spec that omits only
+     * A journaled promotion may retire an incumbent declared by that cumulative spec: recovery
+     * accepts it only when the fold shows the same-logical declared shadow candidate became active,
+     * and exposes only that candidate handle. The check is limited to what the local journal records:
+     * a stale spec that omits only
      * cross-node edges (or spawns placed on other nodes) is not detected, and boots without them.
      */
     fun boot(
@@ -279,17 +313,22 @@ object Runtime {
                 val declaredSpawns = if (placement != null) {
                     recoveredPlacementSpawns(placement, applyContext, journalDir)
                 } else {
-                    spec.lowered()
+                    val spawns = spec.lowered()
                         .filterIsInstance<SpawnStep>()
                         .filter { it.family == null }
-                        .also { spawns ->
-                            spawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
+                    spawns
+                        .also { declared ->
+                            declared.firstOrNull { missing ->
+                                missing.handle !in applyContext.handles &&
+                                    !retiredByRecoveredPromotion(missing, declared, applyContext)
+                            }?.let { missing ->
                                 throw IllegalStateException(
                                     "recovered topology is missing handle '${missing.handle}' declared by " +
                                         "the GraphSpec in journal directory '$journalDir'",
                                 )
                             }
                         }
+                        .filter { it.handle in applyContext.handles }
                 }
                 if (placement != null) installHalves(placement, mainHost, registry, recovered = true)
                 inputs = declaredSpawns

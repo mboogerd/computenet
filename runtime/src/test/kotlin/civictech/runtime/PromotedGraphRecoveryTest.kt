@@ -46,9 +46,9 @@ import java.util.concurrent.ConcurrentHashMap
  * Both tests close a node and re-boot it in-process. The real-JVM `kill -9` leg over separate
  * peers belongs to the sibling stacked-gate feature, not here.
  *
- * A recovered node checks that every spawn handle of the boot [GraphSpec] is live, so the re-boot
- * spec of the single-instance test is the post-promotion one (no incumbent spawn): recovery itself
- * takes the topology from the journal and ignores the spec's contents beyond that handle check.
+ * The single-instance node re-boots with the exact original, pre-promotion [GraphSpec]. The journal
+ * is the authority for the post-promotion topology: callers do not need to author a second spec
+ * that already knows which candidate won.
  */
 class PromotedGraphRecoveryTest {
 
@@ -70,11 +70,12 @@ class PromotedGraphRecoveryTest {
                 ),
             ),
         )
-        val first = Runtime.boot(manifest, "solo", singleSpec(logicalId, withIncumbent = true))
+        val spec = singleSpec(logicalId)
+        val first = Runtime.boot(manifest, "solo", spec)
         var second: Runtime.Node? = null
         try {
             assertFalse(first.recovered)
-            gate().controlInlet.call.setGreen()
+            gate(first).controlInlet.call.setGreen()
             (1..5).forEach { feed(first, it) }
             first.mainHost.quiescence().await(10_000, "pre-promotion drive")
 
@@ -87,28 +88,26 @@ class PromotedGraphRecoveryTest {
             )
             (6..8).forEach { feed(first, it) }
             first.mainHost.quiescence().await(10_000, "post-promotion drive")
-            val preCrash = collector().received.toList()
+            val preCrash = collector(first).received.toList()
             assertEquals(36L, preCrash.last(), "1..8 sum before the crash")
             first.close()
 
-            second = Runtime.boot(manifest, "solo", singleSpec(logicalId, withIncumbent = false))
+            second = Runtime.boot(manifest, "solo", spec)
             assertTrue(second.recovered)
             assertTrue("candidate" in second.refs, "recovered refs ${second.refs.keys} lack the candidate")
             assertFalse("incumbent" in second.refs, "recovered refs ${second.refs.keys} keep the incumbent")
             assertInstanceOf(SummerV2::class.java, singleCaptured.getValue(second.refs.getValue("candidate")))
             second.mainHost.quiescence().await(10_000, "recovery drain")
-            assertEquals(preCrash, collector().received.toList(), "collector state was not carried")
+            assertEquals(preCrash, collector(second).received.toList(), "collector state was not carried")
 
-            // The input goes straight to the candidate, not back through the relay and gate: with no
-            // journalId on the gate the host still journals it on the main host journal, and a
-            // recovered gate is red, so replayed post-swap frames sit in it and would be delivered a
-            // second time the moment the test turned it green.
-            second.mainHost.lookup<RelayProxy>(second.refs.getValue("candidate"))!!.inlet.call.provide(9)
+            gate(second).controlInlet.call.setGreen()
+            feed(second, 9)
             second.mainHost.quiescence().await(10_000, "post-reboot drive")
-            awaitUntil("the post-reboot input reaches the collector with the carried sum", 15_000) {
-                collector().received.lastOrNull() == 45L
-            }
-            assertEquals(preCrash + 45L, collector().received.toList())
+            assertEquals(
+                preCrash + 45L,
+                collector(second).received.toList(),
+                "the post-reboot input reaches the collector with the carried sum exactly once",
+            )
         } finally {
             second?.close()
             first.close()
@@ -173,33 +172,30 @@ class PromotedGraphRecoveryTest {
         }
     }
 
-    private fun singleSpec(logicalId: UUID, withIncumbent: Boolean): GraphSpec {
+    private fun singleSpec(logicalId: UUID): GraphSpec {
         val staged = LinkOptions(staged = true)
         return GraphSpec(
             buildList {
-                // The relay stands for an external source and is not journaled.
+                // Runtime's host-journal fallback journals these unbound relay/gate cells too;
+                // recovery must therefore suppress their replay-derived copies downstream.
                 add(SpawnStep("relay", SingleFactory("relay")))
                 add(SpawnStep("gate", SingleFactory("gate")))
-                if (withIncumbent) {
-                    add(
-                        SpawnStep(
-                            "incumbent", SingleFactory("incumbent"),
-                            identity = IdentityBinding.NewInstanceOf(logicalId), journalId = "main",
-                        ),
-                    )
-                }
+                add(
+                    SpawnStep(
+                        "incumbent", SingleFactory("incumbent"),
+                        identity = IdentityBinding.NewInstanceOf(logicalId), journalId = "main",
+                    ),
+                )
                 add(
                     SpawnStep(
                         "candidate", SingleFactory("candidate"),
-                        identity = IdentityBinding.NewInstanceOf(logicalId), journalId = "main", shadow = withIncumbent,
+                        identity = IdentityBinding.NewInstanceOf(logicalId), journalId = "main", shadow = true,
                     ),
                 )
                 add(SpawnStep("collector", SingleFactory("collector"), journalId = "main"))
                 add(ConnectStep("relay", "outlet", "gate", "dataInlet", staged))
-                if (withIncumbent) {
-                    add(ConnectStep("gate", "dataOutlet", "incumbent", "inlet", staged))
-                    add(ConnectStep("incumbent", "outlet", "collector", "inlet", staged))
-                }
+                add(ConnectStep("gate", "dataOutlet", "incumbent", "inlet", staged))
+                add(ConnectStep("incumbent", "outlet", "collector", "inlet", staged))
                 add(ConnectStep("gate", "dataOutlet", "candidate", "inlet", staged))
             },
         )
@@ -222,10 +218,11 @@ class PromotedGraphRecoveryTest {
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun gate(): TrafficLightCell<Consumer<Int>> = singleCaptured.values
-        .filterIsInstance<TrafficLightCell<*>>().last() as TrafficLightCell<Consumer<Int>>
+    private fun gate(node: Runtime.Node): TrafficLightCell<Consumer<Int>> =
+        singleCaptured.getValue(node.refs.getValue("gate")) as TrafficLightCell<Consumer<Int>>
 
-    private fun collector(): CollectorCell = singleCaptured.values.filterIsInstance<CollectorCell>().last()
+    private fun collector(node: Runtime.Node): CollectorCell =
+        singleCaptured.getValue(node.refs.getValue("collector")) as CollectorCell
 
     @Suppress("UNCHECKED_CAST")
     private fun membership(cell: Cell): Set<String> = when (cell) {

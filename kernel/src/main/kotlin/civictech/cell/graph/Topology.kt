@@ -44,6 +44,8 @@ sealed interface TopoEvent : Serializable {
      * [TopoEvent] field must itself be Java-serializable.
      */
     data class Promote(
+        /** The single-instance membrane gate completed green by this commit; absent for replicas. */
+        val gate: CellRef?,
         val incumbent: CellRef,
         val candidate: CellRef,
         val outlet: String,
