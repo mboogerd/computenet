@@ -20,13 +20,11 @@ import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
-import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.replication.Replication
-import civictech.cell.verify.InvariantCell
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -282,14 +280,10 @@ class ApplyContext(
             )
         }
 
-        @Suppress("UNCHECKED_CAST")
-        val gate = prepared.gate as? TrafficLightApi<Any>
-            ?: throw Promotion.PromotionAborted(
-                "PRECHECK",
-                "gate '${step.gate}' (${prepared.gate.ref}) is not a live TrafficLightApi",
-            )
-        val gates = step.gates.map { invariantFor(it, "gate") }
-        val baseline = step.baseline?.let { handle ->
+        val gates = step.gates.map { handle ->
+            handle to cells.getValue(evolutionRef(handle, "gate"))
+        }
+        val baselineTwin = step.baseline?.let { handle ->
             val ref = evolutionRef(handle, "baseline")
             val spawn = live().spawns[ref]
                 ?: throw Promotion.PromotionAborted(
@@ -302,11 +296,13 @@ class ApplyContext(
                     "baseline '$handle' must be declared shadow = true",
                 )
             }
-            Evolve.Baseline(
-                twin = cells.getValue(ref),
-                gates = step.baselineGates.map { invariantFor(it, "baseline gate") },
-            )
+            cells.getValue(ref)
         }
+        val baselineGates = step.baseline?.let {
+            step.baselineGates.map { handle ->
+                handle to cells.getValue(evolutionRef(handle, "baseline gate"))
+            }
+        }.orEmpty()
         val hooks = object : EvolutionHooks {
             override val journal: PromotionJournal = prepared.journal
 
@@ -324,14 +320,16 @@ class ApplyContext(
 
         return Evolve.run(
             host = host,
-            gate = gate,
+            gateHandle = step.gate,
+            gate = prepared.gate,
             incumbent = prepared.incumbent,
             candidate = prepared.candidate,
             outletName = step.outletName,
             downstream = prepared.downstream,
             policy = step.policy,
             gates = gates,
-            baseline = baseline,
+            baselineTwin = baselineTwin,
+            baselineGates = baselineGates,
             hooks = hooks,
         )
     }
@@ -442,15 +440,6 @@ class ApplyContext(
             throw Promotion.PromotionAborted("PRECHECK", "$role handle '$handle' ($ref) is not live")
         }
         return ref
-    }
-
-    private fun invariantFor(handle: String, role: String): InvariantCell<*, *> {
-        val ref = evolutionRef(handle, role)
-        return cells.getValue(ref) as? InvariantCell<*, *>
-            ?: throw Promotion.PromotionAborted(
-                "PRECHECK",
-                "$role handle '$handle' ($ref) is not an InvariantCell",
-            )
     }
 
     /**

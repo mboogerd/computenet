@@ -87,6 +87,51 @@ object Evolve {
         val gates: List<InvariantCell<*, *>>,
     )
 
+    /**
+     * Graph/runtime entry point that keeps the concrete membrane and invariant types behind
+     * the evolution package boundary. Labels are retained solely for actionable PRECHECK
+     * refusals; callers that already hold typed gates use the public overload below.
+     */
+    internal fun run(
+        host: ManagedHost,
+        gateHandle: String,
+        gate: Cell,
+        incumbent: Cell,
+        candidate: Cell,
+        outletName: String,
+        downstream: List<Use<*>>,
+        policy: PromotionPolicy,
+        gates: List<Pair<String, Cell>>,
+        baselineTwin: Cell? = null,
+        baselineGates: List<Pair<String, Cell>> = emptyList(),
+        authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly,
+        hooks: EvolutionHooks? = null,
+    ): EvolutionHandle {
+        @Suppress("UNCHECKED_CAST")
+        val trafficLight = gate as? TrafficLightApi<Any>
+            ?: throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "gate '$gateHandle' (${gate.ref}) is not a live TrafficLightApi",
+            )
+        val candidateInvariants = gates.toInvariants("gate")
+        val baseline = baselineTwin?.let { twin ->
+            Baseline(twin, baselineGates.toInvariants("baseline gate"))
+        }
+        return run(
+            host = host,
+            gate = trafficLight,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            downstream = downstream,
+            policy = policy,
+            gates = candidateInvariants,
+            baseline = baseline,
+            authority = authority,
+            hooks = hooks,
+        )
+    }
+
     fun <T : Any> run(
         host: ManagedHost,
         gate: TrafficLightApi<T>,
@@ -151,6 +196,15 @@ object Evolve {
             throw Refused("authority: $reason")
         }
     }
+
+    private fun List<Pair<String, Cell>>.toInvariants(role: String): List<InvariantCell<*, *>> =
+        map { (handle, cell) ->
+            cell as? InvariantCell<*, *>
+                ?: throw Promotion.PromotionAborted(
+                    "PRECHECK",
+                    "$role handle '$handle' (${cell.ref}) is not an InvariantCell",
+                )
+        }
 
     private fun validateGates(
         policy: PromotionPolicy,
