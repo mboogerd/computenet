@@ -113,6 +113,34 @@ class ChargeIdempotencyTest {
     }
 
     @Test
+    fun `8s74x - undoing a zero-price admission forgets its key, so a retry is a fresh admission`() {
+        val free = TokenBucketLedger(
+            EconomicPolicy.placeholder().copy(
+                prices = EconomicPolicy.placeholder().prices + (ClaimClass.Spawn to 0L),
+                unvouchedBootstrap = mapOf(ClaimClass.Spawn to 5L),
+                retention = EconomicPolicy.Retention(idleNanos = 1_000, maxBuckets = 3, recentKeys = 2),
+            ).applied(),
+            { now },
+            "idem-scope-free",
+        )
+        fun claim() = BudgetClaim(PeerStamp(PeerId("z")), ClaimClass.Spawn, key = "k1")
+
+        val first = free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        // Replay while the key is in the window: admitted, but a no-op undo.
+        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>().undo()
+        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+
+        // The real admission's undo takes the monitor and forgets the key.
+        first.undo()
+        val retry = free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        // A fresh admission has a real undo: undoing it forgets the key again, so the next
+        // charge is once more a recorded admission rather than a replay (no-op undo).
+        retry.undo()
+        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        free.snapshot().admitted[ClaimClass.Spawn] shouldBe 5
+    }
+
+    @Test
     fun `sb9v1 - undoing a real hold's release forgets its key, so a retry with the same key holds again`() {
         val l = TokenBucketLedger(
             EconomicPolicy.placeholder().copy(

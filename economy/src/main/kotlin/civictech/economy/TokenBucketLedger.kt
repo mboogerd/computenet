@@ -294,7 +294,9 @@ class TokenBucketLedger(
                 // balance, but its `undo` still forgets the idempotency key (below) so a
                 // real admission's retry is never mistaken for the replay's own no-op undo.
                 val token = recordAdmission(bucket, claim)
-                return BudgetOutcome.Admitted(onceOnly { forgetKey(bucket, claim.key, token) })
+                // `undo` runs from any thread: take the bucket's monitor, as refundDebit and
+                // releaseHold do, because forgetKey mutates the unsynchronized window.
+                return BudgetOutcome.Admitted(onceOnly { synchronized(bucket) { forgetKey(bucket, claim.key, token) } })
             }
 
             if (claim.hold) {
