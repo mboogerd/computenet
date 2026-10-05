@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.data.Aggregator
+import civictech.cell.data.Gossiping
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.GroupByApi
@@ -12,6 +13,7 @@ import civictech.cell.membrane.CompositeCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
+import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
@@ -49,11 +51,12 @@ import java.util.UUID
  * - **Repartition = a versioned routing table + full state-as-delta-from-
  *   empty replay** (spec 20/24 "Repartition = per-range Buffering + a
  *   versioned routing table"): [repartition] bumps [routingEpoch] and
- *   rebuilds every organelle from this cell's own tag ledger ([routed]),
- *   replaying each live element's ORIGINAL tags (never re-minted — spec
- *   20/24 §Tag continuity) into whichever shard the new partition function
- *   assigns it to. `PartitionedCell` is a single, ordinary cell dispatched
- *   like any other under the one authority lattice (30/34 decision 5:
+ *   rebuilds every organelle from the union of the old organelles' membership,
+ *   replaying each live element's ORIGINAL tags and every retained tombstone
+ *   (never re-minted — spec 20/24 §Tag continuity) into whichever shard the
+ *   new partition function assigns it to. `PartitionedCell` is a single,
+ *   ordinary cell dispatched like any other under the one authority lattice
+ *   (30/34 decision 5:
  *   "partitions... are placements in this lattice, not exceptions to it") —
  *   [repartition] runs synchronously on this cell's own turn, so there is no
  *   concurrent command to race the routing-table flip; the deeper
@@ -66,6 +69,13 @@ import java.util.UUID
  *   §Hierarchy) already makes their containment cascade free: when this cell
  *   deactivates, its organelles simply become unreachable, with no separate
  *   host-level bookkeeping required.
+ * - **Replication = the composite is the instance** (7afo4-D9): this one
+ *   composite replicates under its one [ref], while organelle membership
+ *   gossips through [membership]/[deltaInlet] across the membrane. Organelles
+ *   are never registry-published, [repartition] remains per replica, and
+ *   `[24-PART-01]` therefore holds on every replica by construction. Hosted,
+ *   independently addressable per-organelle instances are the separate
+ *   [ShardCell]/[PartitionedShardSet] route (PN-4), not this composite.
  */
 class PartitionedCell<E, K, A, ACC : Serializable>(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
@@ -73,7 +83,7 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
     private val keyFn: (E) -> K,
     private val aggregator: Aggregator<E, A, ACC>,
     private val partitionOf: (K) -> Int = { k -> k.hashCode() },
-) : CompositeCell(ref), GroupByApi<E, K, A>, Partitioned {
+) : CompositeCell(ref), GroupByApi<E, K, A>, Partitioned, Gossiping<SetDelta<E>> {
 
     init {
         require(initialShardCount > 0) { "shardCount must be positive, got $initialShardCount" }
@@ -81,6 +91,9 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
 
     override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, A>>>())
+    override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<E>>>())
+    val membership = registerPort("membership", FanOutlet.create<Propagate<SetDelta<E>>>())
+    override val gossipOutlet: Subscribe<Propagate<SetDelta<E>>> get() = membership
 
     /** Union-of-shards catch-up view, kept for late-join replay on THIS cell's own outlet. */
     private val merged = mutableMapOf<K, A>()
@@ -108,22 +121,45 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
                 PortRef.generate(),
             ),
         )
+        shard.membership.subscribe(
+            Use.fixed(
+                object : Propagate<SetDelta<E>> {
+                    override fun propagate(value: SetDelta<E>) {
+                        // wave-transparent forward: same call frame, no re-origination
+                        membership.call.propagate(value)
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
         return shard
     }
 
     private fun shardFor(key: K): Int = Math.floorMod(partitionOf(key), shards.size)
 
-    private fun route(value: SetDelta<E>) {
+    private fun route(
+        value: SetDelta<E>,
+        deliver: (GroupByCell<E, K, A, ACC>, SetDelta<E>) -> Unit,
+    ) {
         // PN-6: no router-side ledger — each element lives in exactly one shard's
         // own TagState, so the router holds O(instances) routing state and never
         // a second O(total) copy. Repartition sources its replay from the shards.
         val addsByShard = splitByShard(value.adds)
         val delsByShard = splitByShard(value.dels)
-        (addsByShard.keys + delsByShard.keys).forEach { shard ->
-            shards[shard].inlet.call.propagate(
-                SetDelta(addsByShard[shard] ?: emptyMap(), delsByShard[shard] ?: emptyMap()),
+        (addsByShard.keys + delsByShard.keys).forEach { index ->
+            deliver(
+                shards[index],
+                SetDelta(addsByShard[index] ?: emptyMap(), delsByShard[index] ?: emptyMap()),
             )
         }
+    }
+
+    private fun route(value: SetDelta<E>) = route(value) { shard, slice ->
+        shard.inlet.call.propagate(slice)
+    }
+
+    private fun routeGossip(value: SetDelta<E>) = route(value) { shard, slice ->
+        shard.deltaInlet.call.propagate(slice)
     }
 
     private fun splitByShard(byElement: Map<E, Set<civictech.cell.Timestamp>>): Map<Int, Map<E, Set<civictech.cell.Timestamp>>> {
@@ -136,35 +172,51 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
         inlet.serve(object : Propagate<SetDelta<E>> {
             override fun propagate(value: SetDelta<E>) = route(value)
         })
+        deltaInlet.serve(object : Propagate<SetDelta<E>> {
+            override fun propagate(value: SetDelta<E>) = routeGossip(value)
+        })
         // late-join catch-up (G-22): the union view as a delta-from-empty
         outlet.catchUpOnLinked { if (merged.isEmpty()) null else MapDelta(merged.toMap(), emptySet()) }
+        membership.catchUpOnLinked {
+            membershipContents().takeIf { it.adds.isNotEmpty() || it.dels.isNotEmpty() }
+        }
+    }
+
+    /** Per-organelle membership snapshots for the `[24-PART-02]` disjointness assertion. */
+    internal fun shardContents(): List<SetDelta<E>> = shards.map { it.contents() }
+
+    /** Hidden organelle identities for asserting they never enter a host registry. */
+    internal fun shardRefs(): List<CellRef> = shards.map { it.ref }
+
+    /** Full membership state, including retained tombstones needed by catch-up and repartition. */
+    private fun membershipContents(): SetDelta<E> {
+        val adds = mutableMapOf<E, Set<Timestamp>>()
+        val dels = mutableMapOf<E, Set<Timestamp>>()
+        shardContents().forEach { contents ->
+            contents.adds.forEach { (element, tags) -> adds.merge(element, tags, Set<Timestamp>::plus) }
+            contents.dels.forEach { (element, tags) -> dels.merge(element, tags, Set<Timestamp>::plus) }
+        }
+        return SetDelta(adds, dels)
     }
 
     /**
      * Repartitions to [newShardCount] organelles (spec 20/24 "Repartition =
      * per-range Buffering + a versioned routing table"): bumps
-     * [routingEpoch] and rebuilds every shard from this cell's own tag
-     * ledger, replaying each live element's ORIGINAL tags (never re-minted)
-     * against the new partition function. Synchronous — this cell's own
-     * turn under the one authority lattice — so external links observe one
-     * coherent flip, never a torn one.
+     * [routingEpoch] and rebuilds every shard from the old organelles' full
+     * membership, replaying live tags and retained tombstones verbatim against
+     * the new partition function. Synchronous — this cell's own turn under the
+     * one authority lattice — so external links observe one coherent flip,
+     * never a torn one.
      */
     fun repartition(newShardCount: Int) {
         require(newShardCount > 0) { "shardCount must be positive, got $newShardCount" }
         if (newShardCount == shards.size) return
-        // Source the live state-as-delta from the OLD shards' own contents (PN-6:
-        // the `routed` ledger is deleted) BEFORE replacing them — each element's
-        // ORIGINAL tags, verbatim (never re-minted, spec 20/24 §Tag continuity).
-        val live = shards.map { it.contents() }.fold(mutableMapOf<E, Set<Timestamp>>()) { acc, d ->
-            d.adds.forEach { (e, tags) -> acc.merge(e, tags) { a, b -> a + b } }
-            acc
-        }
+        // Source the state-as-delta from the OLD shards BEFORE replacing them:
+        // live tags and retained tombstones both move verbatim. Dropping the
+        // latter would let a stale peer add resurrect after this replica heals.
+        val contents = membershipContents()
         shards = List(newShardCount) { newShard() }
         routingEpoch++
-        live.forEach { (e, tags) ->
-            if (tags.isNotEmpty()) {
-                shards[shardFor(keyFn(e))].inlet.call.propagate(SetDelta(adds = mapOf(e to tags)))
-            }
-        }
+        route(contents)
     }
 }
