@@ -105,7 +105,11 @@ class BudgetCheckpointFallbackTest {
     @Test
     fun `checkpoint for another policy falls back to bootstrap`(@TempDir directory: Path) {
         val store = store(directory)
-        ledger(label = "other-policy").checkpointTo(store)
+        // Spent first, so a fallback that still applied the record would refuse the first claim.
+        ledger(label = "other-policy").apply {
+            spendBootstrap()
+            checkpointTo(store)
+        }
         val restored = ledger()
 
         val outcome = restored.restoreFrom(store).shouldBeInstanceOf<RestoreOutcome.Fallback>()
@@ -117,7 +121,11 @@ class BudgetCheckpointFallbackTest {
     @Test
     fun `checkpoint older than the staleness bound falls back to bootstrap`(@TempDir directory: Path) {
         val store = store(directory)
-        ledger().checkpointTo(store)
+        // Spent first, so a fallback that still applied the record would refuse the first claim.
+        ledger().apply {
+            spendBootstrap()
+            checkpointTo(store)
+        }
         wallMillis += 60_000_000_000 / 1_000_000 + 1
         val restored = ledger()
 
