@@ -2,7 +2,7 @@ package civictech.cell.graph
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.Replicable
+import civictech.cell.data.Gossiping
 import civictech.cell.evolve.Effectful
 import civictech.cell.evolve.Shadow
 import civictech.cell.nature.manifestOf
@@ -395,12 +395,13 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         if (step.replicated) {
                             val cell = step.factory.create(ref)
                             requireBoundRef(step.handle, step.identity, ref, cell.ref)
-                            if (cell !is Replicable<*>) {
+                            if (cell !is Gossiping<*>) {
                                 throw IllegalStateException(
-                                    "spawn step '${step.handle}': parameter 'replicated' requires a Replicable cell " +
+                                    "spawn step '${step.handle}': parameter 'replicated' requires a replicable (Gossiping) cell " +
                                         "(built ${cell.javaClass.name})",
                                 )
                             }
+                            cell.replicationRefusal?.let { throw IllegalStateException(it) }
                             preparedReplicas[index] = cell
                         }
                     }

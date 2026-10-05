@@ -21,11 +21,11 @@
 | Typed ports / explicit links | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | 13 |
 | Deltas & data-cell operators | - | USED | USED | USED | USED | - | USED | USED | USED | USED | USED | USED | USED | 11 |
 | Glitch-free observation | USED | - | - | - | - | USED | USED | USED | USED | USED | USED | USED | USED | 9 |
-| Interest-driven execution | - | - | - | - | - | - | - | USED | - | - | - | USED | - | 2 |
+| Interest-driven execution | - | - | - | - | - | - | - | - | - | - | - | USED | - | 1 |
 | Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Partitioning | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Partitioning | - | - | - | - | - | - | - | USED | - | - | - | - | - | 1 |
 | Durability / recovery | USED | USED | USED | USED | USED | USED | USED | USED | - | - | - | USED | USED | 10 |
-| Replication | - | - | - | - | USED | - | - | - | USED | - | - | - | USED | 3 |
+| Replication | - | - | - | - | USED | - | - | USED | USED | - | - | - | USED | 4 |
 | Wire transport (ws / iroh) | - | - | - | - | USED | - | - | USED | USED | - | - | - | USED | 4 |
 | Identity / authority | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Invariants / verify | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -33,7 +33,7 @@
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
 | Demograph | - | - | - | USED | - | - | - | - | - | - | - | - | - | 1 |
-| **headline count** | 4 | 4 | 3 | 5 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
+| **headline count** | 4 | 4 | 3 | 5 | 5 | 4 | 5 | 8 | 6 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
@@ -48,7 +48,6 @@
 ## Headline features used by no demo
 
 - Owned / Leased payloads (`owned-leased`)
-- Partitioning (`partitioning`)
 - Identity / authority (`identity`)
 - Invariants / verify (`invariants`)
 - Evolution / promotion (`evolution`)
@@ -89,8 +88,8 @@
 - glitch-free-observe / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
 - glitch-free-observe / social: demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt
 - glitch-free-observe / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
-- interest / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - interest / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/InterestDrivenFamily.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
+- partitioning / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - durability / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt
 - durability / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
 - durability / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt
@@ -102,6 +101,7 @@
 - durability / social: demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
 - durability / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - replication / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorGraph.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
+- replication / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - replication / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - replication / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - wire / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/DiscoveredIrohPeerTransport.kt

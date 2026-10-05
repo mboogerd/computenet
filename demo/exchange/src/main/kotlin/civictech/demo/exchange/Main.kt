@@ -17,8 +17,9 @@ import civictech.cell.host.link
 import civictech.cell.observe.observe
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
-import civictech.cell.link.Interest
 import civictech.cell.link.PeerId
+import civictech.cell.partition.PartitionedCell
+import civictech.cell.replication.Replication
 import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerListener
 import civictech.cell.wire.PeerTransports
@@ -39,18 +40,15 @@ import java.util.concurrent.ConcurrentHashMap
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.UnionSetCell
-import civictech.cell.data.op.GroupByCell
-import civictech.cell.data.op.MergeableGroupByCell
 
 // The composition probe (:demo:exchange, CP-E1). Two symmetric JVM peers hold
 // region-keyed orders in per-peer writer SetCells; the writers stream into a
 // per-peer order union that is chained to the counterpart over the M5 wire
 // (the "existing mesh" replicating the order inputs). Each peer folds its union
-// through a per-region GroupBy(sum) and observes it behind a glitch-free board
-// (CP-A4 inlet policy). Writer intake is journaled per-cell (CP-C1) so a killed
-// peer recovers its own orders; the aggregate cells are volatile and recomputed
-// from the replayed/replicated inputs — GroupBy is a deterministic function of
-// convergent membership (kernel spec 42), so both peers' boards converge.
+// through one replicated, region-partitioned board and observes it behind a
+// glitch-free cell (CP-A4 inlet policy). Writer intake is journaled per-cell
+// (CP-C1) so a killed peer recovers its own orders; the partitioned board
+// recomputes from membership gossip at each replica, so both peers converge.
 
 /** An order carries a region, an id and a Long amount, packed into one wire-safe
  *  string element (the M5 codec ships String/Long/deltas, not arbitrary classes). */
@@ -120,46 +118,21 @@ class ExchangeApp(
     // orders → union (mesh-replicated inputs)
     private val orderUnion = UnionSetCell<String>(ref = unionRef("orders", myRole))
 
-    // Partitioned aggregation (CP-E2, spec 42 §Interest-scoped instance sets):
-    // the plain single GroupBy(sum) is swapped for a region-partitioned set of
-    // shard GroupBys, EACH ON ITS OWN HOST, owning a disjoint region-slot range.
-    // The router forwards each order's region slice to exactly its owning shard;
-    // because ranges are disjoint, the shard region-sums never collide, so the
-    // scatter-gather union of shard outputs is the board with no partial-sum
-    // merge (the GroupBy-not-Replicable / no-MapDelta-merge gap is designed
-    // around: we partition the INPUT and recompute per shard, never merging
-    // aggregates). Shards on different hosts = the C–F pairwise cell in one graph.
-    private val shardCount = 2
-    private val totalSlots = 12
-    private val shardHosts = List(shardCount) { ManagedHost(registry = registry) }
-    private val shardInterests = List(shardCount) { Interest.Slots.forShard(it, shardCount, totalSlots) }
-    private fun shardRef(i: Int) = CellRef(UUID.nameUUIDFromBytes("exchange-shard:$i@$myRole".toByteArray()))
-    private val shards = List(shardCount) { i ->
-        GroupByCell<String, String, Long, Long>(
-            ref = shardRef(i),
-            keyFn = ::regionOf,
-            aggregator = Aggregators.sumOf(::amountOf),
-        )
-    }
-
-    // Disjoint-merge scatter-gather (spec 42, CP-G1): the kernel
-    // [MergeableGroupByCell] folds the per-shard region-sums per key on its
-    // aggregate `deltaInlet`, replacing the demo-side forward. Shards own
-    // disjoint region ranges AND stream *absolute* region totals that update
-    // over time, so the sound operator here is replace-per-key (last value
-    // wins) — a summing operator would double-count a region's successive
-    // totals. The merge is thus never combining across shards (ranges are
-    // disjoint); the cell's operator would converge genuine partials only for
-    // an *idempotent* accumulator (max/min) under overlapping keys — see
-    // MergeableGroupByTest's max mesh.
-    private val boardMerge = MergeableGroupByCell<String, String, Long>(
-        ref = CellRef(UUID.nameUUIDFromBytes("exchange-board-merge@$myRole".toByteArray())),
-        keyOf = ::regionOf,
-        accumulate = ::amountOf,
-        merge = { _, incoming -> incoming },
+    // Partitioned aggregation (CP-E2): one composite board per peer. The
+    // composite owns its private GroupBy organelles and is the replicated
+    // instance; membership deltas gossip through its membrane while each
+    // replica computes its own region sums.
+    private val replication = Replication(registry)
+    private val boardId = UUID.nameUUIDFromBytes("exchange-board".toByteArray())
+    private val boardInstance: Long = if (myRole == "dialer") 1L else 0L
+    private val partitioned = PartitionedCell<String, String, Long, Long>(
+        ref = CellRef(boardId, boardInstance),
+        initialShardCount = 2,
+        keyFn = ::regionOf,
+        aggregator = Aggregators.sumOf(::amountOf),
     )
 
-    // merge → glitch-free board (CP-A4): a whole-cell fan-in whose inlet carries
+    // partitioned board → glitch-free board (CP-A4): a whole-cell fan-in whose inlet carries
     // WaveFrontier(WAIT). It surfaces the scatter-gathered board as one aligned
     // MapDelta per wave, so the SSE never shows a half-applied shard update.
     @Suppress("UNCHECKED_CAST")
@@ -196,11 +169,10 @@ class ExchangeApp(
     /**
      * Opt-in inspector (`--inspect-port`): serves this JVM's live dataflow
      * graph on its own port; non-null after [start] iff [inspectorOptions]
-     * was given. Hosts: `exchange` (the app host), `exchange-shard-0`/
-     * `exchange-shard-1` (the region-partitioned aggregation shards, CP-E2),
-     * and `exchange-bridge` when peered. Declaring the cross-JVM order-union
-     * chain as a link is shopping's M5-NET pilot precedent, not this task —
-     * follow-up territory (feature design 3iv0w-D2, D3 non-goals).
+     * was given. Hosts: `exchange` (the app host), and `exchange-bridge`
+     * when peered. Declaring the cross-JVM order-union chain as a link is
+     * shopping's M5-NET pilot precedent, not this task — follow-up territory
+     * (feature design 3iv0w-D2, D3 non-goals).
      */
     var inspector: InspectorServer? = null
         private set
@@ -226,26 +198,13 @@ class ExchangeApp(
 
     init {
         manage.spawn(orderUnion)
-        manage.spawn(boardMerge)
+        replication.replicate(partitioned, host)
         manage.spawn(boardCell)
-        shards.forEachIndexed { i, shard -> shardHosts[i].managementInlet.call.spawn(shard) }
 
-        // each shard's region-sums → the mergeable aggregate's `deltaInlet`
-        // (cross-host, routed via the registry) → glitch-free board
-        shards.forEach { it.outlet.streamTo(routedMapDelta(boardMerge.ref, "deltaInlet")) }
-        manage.link(boardMerge.outlet, boardCell.inlet)
-
-        // the region router: fan the union stream out to the owning shard only.
-        // Each order's group key (region) hashes to exactly one shard's slot
-        // range, so the partition is total and disjoint (spec 42).
-        orderUnion.outlet.streamTo(object : Propagate<SetDelta<String>> {
-            override fun propagate(value: SetDelta<String>) {
-                shards.forEachIndexed { i, shard ->
-                    val slice = value.within(shardInterests[i]) { regionOf(it as String) } ?: return@forEachIndexed
-                    routedDelta(shard.ref).propagate(slice)
-                }
-            }
-        })
+        // the order union feeds the replicated partitioned board; its composite
+        // membrane routes each order to exactly one private organelle.
+        orderUnion.outlet.streamTo(routedDelta(partitioned.ref))
+        manage.link(partitioned.outlet, boardCell.inlet)
 
         // observe the board's aligned outlet → SSE state
         host.observe(boardCell.ref, View.map<String, Long>()) {
@@ -296,9 +255,6 @@ class ExchangeApp(
     private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
         RoutedPropagate(ref, "inlet", registry::deliver)
 
-    private fun routedMapDelta(ref: CellRef, port: String = "inlet"): Propagate<MapDelta<String, Long>> =
-        RoutedPropagate(ref, port, registry::deliver)
-
     private fun handleOp(exchange: HttpExchange) {
         val params = exchange.requestBody.readBytes().decodeToString()
             .split("&").filter { it.contains("=") }
@@ -335,14 +291,12 @@ class ExchangeApp(
 
     private fun inspectorHosts(): Map<String, ManagedHost> = buildMap {
         put("exchange", host)
-        shardHosts.forEachIndexed { i, shardHost -> put("exchange-shard-$i", shardHost) }
         bridgeHost?.let { put("exchange-bridge", it) }
     }
 
     private fun inspectorCellNames(): Map<CellRef, String> = buildMap {
         put(orderUnion.ref, "orders")
-        shards.forEachIndexed { i, shard -> put(shard.ref, "shard-$i") }
-        put(boardMerge.ref, "board-merge")
+        put(partitioned.ref, "board-partitioned")
         put(boardCell.ref, "board")
     }
 
