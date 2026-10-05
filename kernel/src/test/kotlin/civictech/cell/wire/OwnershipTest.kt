@@ -147,6 +147,73 @@ class OwnershipTest {
     }
 
     @Test
+    fun `a local first consumer blocks a bridged second`() {
+        val controller = SimulationController(12)
+        val registryA = LocationRegistry()
+        val registryB = LocationRegistry()
+        val hostB = ManagedHost(scheduler = controller.scheduler(), registry = registryB)
+        val bridgeA = ManagedHost(scheduler = controller.scheduler(), registry = registryA)
+        val bridgeB = ManagedHost(scheduler = controller.scheduler(), registry = registryB)
+        Peering.loopback(Peering.Side(registryA, bridgeA), Peering.Side(registryB, bridgeB))
+
+        val remoteConsumer = OwnedConsumerCell()
+        hostB.managementInlet.call.spawn(remoteConsumer)
+        controller.runToIdle()
+        val remote = (HostedCellProxy.create(remoteConsumer.ref, registryA, OwnedInletProxy::class.java)
+                as OwnedInletProxy).inlet.call
+
+        val localReceived = mutableListOf<String>()
+        val outlet = FanOutlet.create<OwnedPush>()
+        outlet.subscribe(fixed(object : OwnedPush {
+            override fun push(buffer: Owned<String>) {
+                localReceived += buffer.take()
+            }
+        }))
+        shouldThrow<IllegalStateException> {
+            outlet.subscribe(fixed(remote))
+        }
+
+        outlet.call.push(Owned("local-first"))
+        controller.runToIdle()
+        localReceived shouldBe listOf("local-first")
+        remoteConsumer.received shouldBe emptyList()
+    }
+
+    @Test
+    fun `two bridged consumers refuse the second and keep the first consumer`() {
+        val controller = SimulationController(13)
+        val registryA = LocationRegistry()
+        val registryB = LocationRegistry()
+        val hostB = ManagedHost(scheduler = controller.scheduler(), registry = registryB)
+        val bridgeA = ManagedHost(scheduler = controller.scheduler(), registry = registryA)
+        val bridgeB = ManagedHost(scheduler = controller.scheduler(), registry = registryB)
+        Peering.loopback(Peering.Side(registryA, bridgeA), Peering.Side(registryB, bridgeB))
+
+        val firstConsumer = OwnedConsumerCell()
+        val secondConsumer = OwnedConsumerCell()
+        hostB.managementInlet.call.spawn(firstConsumer)
+        hostB.managementInlet.call.spawn(secondConsumer)
+        controller.runToIdle()
+
+        val firstRemote = (HostedCellProxy.create(firstConsumer.ref, registryA, OwnedInletProxy::class.java)
+                as OwnedInletProxy).inlet.call
+        val secondRemote = (HostedCellProxy.create(secondConsumer.ref, registryA, OwnedInletProxy::class.java)
+                as OwnedInletProxy).inlet.call
+        val outlet = FanOutlet.create<OwnedPush>()
+        outlet.subscribe(fixed(firstRemote))
+        shouldThrow<IllegalStateException> {
+            outlet.subscribe(fixed(secondRemote))
+        }
+
+        val moving = Owned("first-only")
+        outlet.call.push(moving)
+        controller.runToIdle()
+        firstConsumer.received shouldBe listOf("first-only")
+        secondConsumer.received shouldBe emptyList()
+        shouldThrow<IllegalStateException> { moving.take() }
+    }
+
+    @Test
     fun `Leased is refused at the machine boundary`() {
         val egress = BridgeEgressCell()
         val remote = (HostedCellProxy.create(CellRef(UUID.randomUUID()), egress, LeasedInletProxy::class.java)
