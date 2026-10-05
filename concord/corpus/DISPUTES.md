@@ -3925,17 +3925,23 @@ test names below were checked with `git grep -n` at that commit.
   throws `UnsupportedCatalogBinding` for every other type. Neither has a
   `waterline` inlet. No production `Replicable` cell exposes a `waterline`
   inlet at all: the seam's refusal (`WaterlineEviction.kt`, `check(host !is
-  Replicable<*>)`) is reachable only through the kernel tests' minimal
-  test-only `Replicable` hosts. So neither the refusal nor a control is
-  drivable from a scenario.
+  Gossiping<*> || host.replicationRefusal != null)`) is reachable only through the kernel tests' minimal
+  test-only `Replicable` hosts. Since computenet-7afo4, `GroupByCell` is
+  `Gossiping` and a `GroupByCell` with a lateness declaration is refused at
+  `Replication.replicate` (a production-reachable refusal, pinned by
+  `ReplicatedGroupByTest`'s `a GroupByCell with a lateness declaration is
+  refused replication naming 24-WL-18` test), while the dist driver still
+  binds no `GroupByCell` replica, so this entry remains a `driver-binding-gap`.
+  Neither the refusal nor a control is drivable from a scenario.
 - **What was NOT done instead**: no scenario asserts "a replica's view is
   unchanged" over a `set-source` replica, which evicts nothing because it has
   no waterline inlet, not because it refuses.
 - **Kernel pins**: `GroupByEvictionTest` `B17 - the eviction seam refuses a
   Replicable host and leaves its state untouched` and `JoinFamilyEvictionTest`
   `B17 - the grown seam still refuses a Replicable host and leaves its state
-  untouched`. Both run against test-only hosts. The epic excludes B17 from the
-  corpus as scaffolding.
+  untouched`. `ReplicatedGroupByTest` also pins `a GroupByCell with a lateness
+  declaration is refused replication naming 24-WL-18`. The B17 tests run
+  against test-only hosts. The epic excludes B17 from the corpus as scaffolding.
 - **Check to restore**: none while the restriction stands. The requirement is
   a refusal at a seam no production cell reaches. When a waterline floor is
   tied to `Replication.stableFrontier` (E3.7-adjacent, `computenet-lxo`
