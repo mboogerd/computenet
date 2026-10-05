@@ -8,6 +8,7 @@ import civictech.cell.consistency.ReplicaQuorum
 import civictech.cell.consistency.StabilityFreezeDetector
 import civictech.cell.control.StallNotice
 import civictech.cell.Propagate
+import civictech.cell.data.Gossiping
 import civictech.cell.data.Replicable
 import civictech.cell.data.WatermarkCell
 import civictech.cell.host.LocationRegistry
@@ -73,7 +74,7 @@ class Replication(
         val deltaInlet: Use<Propagate<Any?>>
     }
 
-    private val localReplicas = mutableMapOf<UUID, MutableList<Replicable<*>>>()
+    private val localReplicas = mutableMapOf<UUID, MutableList<Gossiping<*>>>()
 
     /** The host each local replica was spawned on — needed to suspend/despawn it later (eviction). */
     private val hostOf = mutableMapOf<CellRef, ManagedHost>()
@@ -87,7 +88,7 @@ class Replication(
     private val partitionSuspended = mutableSetOf<CellRef>()
 
     /** Established gossip links per (local replica → remote replica) pair. */
-    private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
+    private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Gossiping<*>, Link>>()
 
     /**
      * The tag-lane high-water of a replica that LEFT this peer, kept against the
@@ -437,7 +438,8 @@ class Replication(
      * see [supersedeLocalInstance] for why the superseded instance's local
      * bookkeeping has to be dropped here rather than by a cooperative path.
      */
-    fun replicate(cell: Replicable<*>, host: ManagedHost) {
+    fun replicate(cell: Gossiping<*>, host: ManagedHost) {
+        cell.replicationRefusal?.let { throw IllegalStateException(it) }
         // PN-17 effect-authority formation refusal (spec 31 §Effects on instance
         // sets, plan §3b). A [Replicable] that is ALSO
         // [civictech.cell.evolve.Effectful] joining THIS mergeable mesh has no
@@ -547,12 +549,12 @@ class Replication(
      * retire cannot lose ground. A cell that does not mint a ref-derived lane
      * ([civictech.cell.data.delta.TagLaneContinuity]) records nothing.
      */
-    private fun rememberTagLane(cell: Replicable<*>) {
+    private fun rememberTagLane(cell: Gossiping<*>) {
         val high = (cell as? TagLaneContinuity)?.tagLaneHighWater() ?: return
         departedTagLanes[cell.ref] = maxOf(departedTagLanes[cell.ref] ?: 0L, high)
     }
 
-    private fun supersedeLocalInstance(cell: Replicable<*>): Boolean {
+    private fun supersedeLocalInstance(cell: Gossiping<*>): Boolean {
         val locals = localReplicas[cell.ref.id] ?: return false
         if (!locals.any { it !== cell && it.ref == cell.ref }) return false
         // computenet-uju5: the superseded instance is a departing incarnation of this ref
@@ -587,7 +589,7 @@ class Replication(
      * [supersedeLocalInstance]; read that KDoc before assuming more is offered
      * here than there is.
      */
-    private fun trackDeliveries(cell: Replicable<*>, host: ManagedHost, rehome: Boolean = false) {
+    private fun trackDeliveries(cell: Gossiping<*>, host: ManagedHost, rehome: Boolean = false) {
         if (cell is WatermarkCell) return
         var fresh = false
         val companion = watermarks.getOrPut(cell.ref.id) {
@@ -628,7 +630,7 @@ class Replication(
         // retained — its per-outlet-epoch watermark is a distinct key space from
         // the per-origin advances above (both ride the one companion, one mesh).
         @Suppress("UNCHECKED_CAST")
-        companion.trackDeliveriesOf(cell.outlet as FanOutlet<Propagate<Any?>>)
+        companion.trackDeliveriesOf(cell.gossipOutlet as FanOutlet<Propagate<Any?>>)
     }
 
     /**
@@ -774,7 +776,7 @@ class Replication(
      * fix; `false` reproduces the pre-PN-0c wedge). Non-replica-fed graphs never
      * read the row, so closing it is unobservable to them.
      */
-    fun evict(cell: Replicable<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
+    fun evict(cell: Gossiping<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
         val reachablePeers = registry.instances.replicasOf(cell.ref.id) - cell.ref
         if (reachablePeers.isEmpty()) {
             if (partitionSuspended.add(cell.ref)) {
@@ -799,7 +801,7 @@ class Replication(
             // just flushed (computenet-078s closed that ordering wart).
             catchUpTarget?.let { link ->
                 @Suppress("UNCHECKED_CAST")
-                (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+                (cell.gossipOutlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
             }
         }
         // computenet-uju5: the replica is leaving on a ref that may come back here. Carry
@@ -863,8 +865,8 @@ class Replication(
      * delta is lost.
      */
     fun rebind(
-        incumbent: Replicable<*>,
-        candidate: Replicable<*>,
+        incumbent: Gossiping<*>,
+        candidate: Gossiping<*>,
         host: ManagedHost,
         carryTagState: Boolean = true,
     ) {
@@ -912,7 +914,7 @@ class Replication(
         }
     }
 
-    private fun maybeLink(local: Replicable<*>, other: CellRef) {
+    private fun maybeLink(local: Gossiping<*>, other: CellRef) {
         if (other == local.ref) return
         // Interest gate (spec 40/42 §Interest-scoped instance sets, CP-D2): a
         // gossip link forms only where the two instances' interests overlap —
@@ -937,7 +939,7 @@ class Replication(
             // computenet-h50w): `cell` here is whatever object was linked, and
             // re-firing a DISCARDED one's outlet reaches nobody.
             @Suppress("UNCHECKED_CAST")
-            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+            (cell.gossipOutlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
             return
         }
         // the proxy resolves the port by name; delta types are erased on this
@@ -953,7 +955,8 @@ class Replication(
         val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
-        linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(sink, at = gossipRef(local.ref, other))
+        linked[key] = local to
+            (local.gossipOutlet as FanOutlet<Propagate<Any?>>).streamTo(sink, at = gossipRef(local.ref, other))
     }
 
     /**
