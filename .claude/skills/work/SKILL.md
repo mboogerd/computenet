@@ -200,7 +200,7 @@ Background jobs you start are supervised by nothing: bound each, record it in
 
 ## 3. Sync and claim one epic
 
-`bd dolt pull` (timeout >= 300s). A failed pull stops the session, except the
+`bd dolt pull` (Bash timeout ≥ 300000 ms). A failed pull stops the session, except the
 conflicts [recovery.md](references/recovery.md) "Dolt pull conflicts" covers. If
 `git hash-object .claude/skills/work/SKILL.md` differs from `git rev-parse
 origin/main:.claude/skills/work/SKILL.md`, read the skill from `origin/main`.
@@ -260,7 +260,7 @@ than make it up (say so in the prompt). `twin-scan.py <epic>` flags children
 filed twice: one twin closed soon after creation with no comments → trust the
 survivor; otherwise treat it as a collision ([recovery.md](references/recovery.md), "Collisions").
 
-Before dispatching, run `breakdown-marker.sh acquire <epic>` (timeout >= 300s;
+Before dispatching, run `breakdown-marker.sh acquire <epic>` (Bash timeout ≥ 300000 ms;
 it pushes). Exit 0 → read capacity, bound the agent (5b) and dispatch below with
 the printed `TOKEN`; 11 (FOREIGN) → already broken down elsewhere: list children
 again and continue at step 5, or park per "Still no children" below if that
