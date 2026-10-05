@@ -10,6 +10,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
+import civictech.cell.host.ActorIngress
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -44,6 +45,7 @@ import java.util.Collections
 import java.util.Random
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit.SECONDS
 
 /**
  * KE2-28/KE2-29 (spec 20/22): an [AlignedCompositeCell] whose `remote` arm
@@ -182,6 +184,8 @@ class AlignedObserveBridgedTest {
         remoteEven: Boolean,
         progressCapable: Boolean = true,
         duplication: DuplicationScope = DuplicationScope.PROTOCOL_ONLY,
+        ingress: ActorIngress = ActorIngress(UUID.randomUUID()),
+        registerHandles: Boolean = false,
     ): Recorded {
         val net = Net(seed, duplication)
         val source = SetCell<Int>()
@@ -231,17 +235,27 @@ class AlignedObserveBridgedTest {
 
         val recorded = Collections.synchronizedList(mutableListOf<Map<String, Any?>>())
         sink.onChange { recorded += it }
+        val handles = mutableListOf<java.util.concurrent.CompletableFuture<Visibility>>()
 
         val ops = net.hostNear.lookup<IntSetInlet>(source.ref)!!.inlet.call
         val rnd = Random(seed xor 0x5eed)
         for (n in 1..waves) {
-            ops.add(n)
+            val (wave, _) = ingress.driveStamped { ops.add(n) }
+            if (registerHandles) handles += sink.visibilityOf(wave)
             repeat(rnd.nextInt(4)) { net.controller.step() }
         }
         net.controller.runToIdle()
 
         val expectedPublications = if (!progressCapable && remoteEven && waves % 2 == 1) waves else waves + 1
         awaitUntil("aligned composites delivered (seed $seed)") { recorded.size >= expectedPublications }
+        if (registerHandles) {
+            handles.forEachIndexed { index, handle ->
+                when (val visibility = handle.get(5, SECONDS)) {
+                    is Visible, is VisibleVacuously -> Unit
+                    else -> error("seed=$seed handle=$index completed with $visibility")
+                }
+            }
+        }
         val result = Recorded(
             composites = recorded.toList(),
             unmatchedDeltas = sink.unmatchedDeltas,
@@ -387,6 +401,32 @@ class AlignedObserveBridgedTest {
         withClue(run.current) {
             (run.bufferedWaves >= 1).shouldBeTrue()
             ((run.current.getValue("local") as Set<*>).contains(9)) shouldBe false
+        }
+    }
+
+    @Test
+    fun `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`() {
+        val waves = 30
+        for (seed in 0L until 20L) {
+            val actorId = UUID.randomUUID()
+            val withoutHandles = runAligned(
+                seed = seed,
+                waves = waves,
+                remoteEven = true,
+                ingress = ActorIngress(actorId),
+            )
+            val withHandles = runAligned(
+                seed = seed,
+                waves = waves,
+                remoteEven = true,
+                ingress = ActorIngress(actorId),
+                registerHandles = true,
+            )
+            withClue(seed) {
+                withHandles.frames.size shouldBe withoutHandles.frames.size
+                withHandles.frames.map { it.second }.toSet() shouldBe
+                    withoutHandles.frames.map { it.second }.toSet()
+            }
         }
     }
 
