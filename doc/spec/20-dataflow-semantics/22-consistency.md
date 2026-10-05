@@ -1,6 +1,6 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), and `Progress` absorb-acks are implemented both in-process (`cell.control.absorbAck`, CP-A3) and across a bridge, over the handshake-routed bridged open (CP-A2)
+> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), and `Progress` absorb-acks are implemented both in-process (`cell.control.absorbAck`, CP-A3) and across a bridge, over the handshake-routed bridged open (CP-A2)
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext), 93 (feature-interaction resolutions I-1/4/5/11/13/14/18/23/24)
 > **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.FanOutlet`, `cell.consistency.GlitchFreeCell`
 
@@ -67,7 +67,7 @@ through stateless cells (93 I-1/I-4/I-9/I-16/I-18).
 *(G-4 resolved. Context is captured into invocations at the cross-host proxy
 (`HostedCellProxy`) and the `Buffering` recorder; wire bridges are M5.)*
 
-### Source identity: emission epochs (decided in 93 I-14, unimplemented)
+### Source identity: emission epochs (decided in 93 I-14; implemented)
 
 A "source" is one outlet during one **emission epoch** of one instance —
 never the logical cell, and finer than the instance (each emitting outlet
@@ -106,12 +106,58 @@ source ids.
   per-source completeness set on it.
 
   *(C-12 resolved, W2.1 + D-C12: the landed RESTART announces its fresh epoch
-  exactly as this rule requires. `ManagedHost`'s supervision path mints a fresh
-  per-epoch `sourceId` on every outlet of the restarted cell, collects the
-  superseded ids, and emits the `ReBaseline` supersession notice naming them —
-  the same non-silent succession an instance swap owes. The earlier
-  same-sourceId reading was of the M3.5 prose, not of the code. Exercised by
-  the `21-REBASE-01` scenario (21). Reclamation of the superseded epochs stays G-42, below.)*
+  as this rule requires; the arms below are the landed set, each with its
+  pinning test or scenario. Reclamation of the superseded epochs stays G-42,
+  below.)*
+
+**Landed arms.**
+
+Fresh epoch (a fresh `sourceId`, `counter = 0`; a succession of a live lane
+announces `ReBaseline`):
+
+- Supervision RESTART: `ManagedHost` mints per-epoch ids and emits
+  `ReBaseline` naming the superseded ones —
+  `RestartReBaselineTest`, scenario `21-REBASE-01`.
+- Replica / shadow-candidate spawn (fresh by construction) and the T2
+  catch-up-fallback promotion swap (fresh, with `ReBaseline`) —
+  `EpochTransitionFreshMintTest`, arms (b) and (c).
+- Volatile cold start: a volatile cell's outlet mints a fresh epoch per
+  incarnation — `OutletWaveRecoveryTest`
+  (`a volatile cell's outlet still mints a fresh epoch per incarnation`).
+
+Preserved epoch (no `ReBaseline`; the same source lane continues):
+
+- Promotion state transfer — `PromotionWaveStateTest`. Drain and
+  migration are listed as preserved above but no test pins their epoch
+  continuity (migration's is part of G-42, below).
+- Durable recovery with a checkpoint (`RECORD_OUTLET_WAVE`, `[KFX-12]`,
+  `[24-DUR-04]`) — `OutletWaveRecoveryTest`
+  (`a checkpointed journaled source still fires each delta exactly once across a crash`,
+  `an epoch rotated before the checkpoint is restored as-is, never re-derived over`),
+  `OutletHighWaterRecoveryTest`, scenario `DUR-SRCID-02`. These pin the
+  restored `sourceId` and counter high-water; none asserts the absence of a
+  `ReBaseline` on this branch.
+- Durable recovery without a checkpoint (ref-derived `sourceId`; full-WAL
+  replay re-derives the counter) — `OutletWaveRecoveryTest`
+  (`BS-22 - durable recovery is a preserved-epoch continuation, ref-derived and not re-baselined`,
+  the one test asserting no `ReBaseline` on recovery, and
+  `a journaled source feeding an effectful sink fires each delta exactly once across a crash`),
+  scenario `DUR-SRCID-01`; a pre-KFX-12 journal — `JournalCompatibilityTest`.
+
+Durable recovery is a preserved-epoch continuation with or without a
+checkpoint — the ref-derived `sourceId` plus a checkpoint-carried or
+replay-re-derived counter high-water — and announces no `ReBaseline`
+(qfi22-D6, `[KFX-12]`, `[24-DUR-04]`).
+
+Recovery against glitch-freedom (replay is a baseline, `[22-REC-01]`):
+`DurableGlitchFreeReplayTest`, un-checkpointed branch (`replay re-enters as a
+baseline - ...`) and checkpointed branch (`checkpointed replay re-enters as a
+baseline - ...`). Once-delivery of a journaled-to-journaled tail
+(`[22-REC-01]`, `[24-DUR-03]`): `JournaledEdgeReplayOnceTest`.
+
+Open corner, unpinned (qfi22-D10): a RESTART after the last checkpoint
+followed by a crash re-derives the derived epoch over the fresh epoch's
+counters. No test pins that interaction; it is not resolved.
 
 ⚠ GAP (G-42): epoch source-ids and restart generations accrete unboundedly —
 OR-set/PN source columns, stale glitch-free partial-wave buffers, and
