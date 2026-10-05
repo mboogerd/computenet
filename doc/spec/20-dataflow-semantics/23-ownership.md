@@ -1,6 +1,6 @@
 # 23 — Payload Ownership Contracts and the SPSC Rule
 
-> **Status**: Implemented through phase 2 (M5.6); pooling (phase 3) deliberately unbuilt; consumer/observer taps, cycle-edge/backpressure/frontier boundary rules, and recovery obligations design decided in 93 (I-6/I-12/I-18/I-20/I-22), unimplemented
+> **Status**: Implemented — ownership enforcement, consumer/observer taps, and discharging sinks are implemented; recovery obligations R6–R8 are implemented; pooling (phase 3) deliberately unbuilt
 > **Sources**: ADR — SPSC link requirement; 93 feature-interaction resolutions I-6, I-12, I-18, I-20, I-22
 > **Implementation**: `cell.Ownership` (Borrowed/Owned/Leased/Frozen); exclusive bit in generated `MethodDescriptor`s; `FanOutlet` link/subscribe enforcement; `Broadcast` refusal; `BridgeEgressCell` boundary rules
 
@@ -109,7 +109,7 @@ Enforcement point: `InstanceSet.admitExclusive` (delegating to
 `OWNERSHIP` refusal the link handshake uses, applied to the whole cover instead
 of a single edge.
 
-## Taps: consumers vs observers (decided in 93 I-20, unbuilt)
+## Taps: consumers vs observers (decided in 93 I-20; implemented)
 
 The SPSC count is a count of **consumers**, not of attachments. Every
 downstream attachment is either a **Consume** link — receives the payload
@@ -136,15 +136,20 @@ never retained, mutated, or released.
   drop: `Owned` → `take()`-and-drop, `Leased` → `release()`. Generated
   from the same exclusive bit.
 
-*(Conflict C-11 resolved, `computenet-ulss` + `computenet-3jv2` — the core
-landed, two narrow residuals filed. `Shadow.spawn` discharges `Owned`/`Leased`
-payloads via `Proxy.discharging` rather than dropping them, and the exclusive
-bit's KSP scan and the discharge walk both reach an exclusive nested in a
-plain payload object, not only `Map`/`Iterable`/`Array`. Still filed, not
-fixed: a platform container outside those three shapes —
-`Pair`/`Triple`/`Result`/`Optional` — is marked exclusive by the scan and then
-skipped by the walk (`computenet-woto`); the walk can also over-reach through
-a non-payload reference an argument happens to hold (`computenet-h6sf`).)*
+*(Conflict C-11 resolved. The closed history is: `computenet-woto` added
+explicit accessors for `Pair`/`Triple`/`Result`/`Optional` and walked the value
+of an outer `Owned`; `computenet-zyg1` extended that walk through a `Leased`
+value after a successful release; `computenet-h6sf` stopped at function and
+synthetic/hidden capture carriers and counted already-discharged exclusives
+without swallowing them; `computenet-dmwl` bounded discharging proxies and
+ADMIT drops to descriptor-marked parameter positions; and
+`computenet-u6np` added accounting predicates, the successful-discharge
+counter, and propagation of pool-callback failures. The remaining named
+residuals are those in `Proxy.discharge`'s KDoc: a supertype-declared field
+inside a marked parameter is still opened by runtime class, and the
+non-descriptor discharge sites (`ManagedHost` refusals,
+`LocationRegistry.refuseRetired`, `BoundaryDenials.dischargeRefusedArgs`,
+`DeadLetters.sanitizeForDeadLetter`) still walk every argument.)*
 
 ⚠ GAP (G-47): The uncounted read-only Tap (a Borrowed projection fired
 before the sole consumer) that lets invariants/shadows/judges observe
@@ -204,7 +209,7 @@ routed cross-process proxy whose negotiation is the bridge's job) cannot
 negotiate and falls through to the historic bypass unchanged. This change is gated
 on the composition demo suite (`ExchangeCompositionExitTest`, `ExchangeScaffoldTest`).
 
-## Recovery and dead letters (decided in 93 I-22, unimplemented)
+## Recovery and dead letters (93 I-22 R6–R8; implemented)
 
 - **RESTART never re-consumes an `Owned` payload** (93 I-22 R6): RESTART
   restores *state*; it never re-drives the invocations that produced it,
@@ -223,16 +228,43 @@ on the composition demo suite (`ExchangeCompositionExitTest`, `ExchangeScaffoldT
   represented by a redacted marker; the outlet then fans a
   `Frozen`/serialized value.
 
-⚠ GAP (G-46): Exclusive (Owned/Leased) payloads have no defined story off
-the happy path: a payload parked-but-unsnapshotted at crash is lost with no
-stated at-most-once contract, and the DeadLetter envelope for
-freezing/serializing/redacting them is unspecified. Proposal: State the
-sender-durability contract that makes crash loss at-most-once acceptable
-(or require the producing host to be durable), and pin the DeadLetter
-envelope: Owned → move-by-serialize at capture, Leased → released, with a
-redaction rule for non-serializable payloads — mergeable parked traffic is
-already covered end-to-end by the M10 journal + anti-entropy pair
-(93 I-7/I-22/I-12).
+Journal recovery adds the ownership rule at the journal boundary. A journal
+append consumes nothing: its serialized frame is a copy of the live input, not
+a second live `Owned`. On replay, decoding re-mints the `Owned` for the
+recovered incarnation, so there is one owner at every instant across the
+incarnation boundary. A non-`Effectful` inlet takes that re-minted owner once;
+at an `Effectful` inlet at or behind the processed frontier, the replay is
+suppressed and its exclusive is discharged. `[24-DUR-05]` therefore governs
+the accounting of replayed exclusives, in the same boundary model resolved by
+93 I-20 and 93 I-22. This is journal replay, not supervision RESTART: R6 still
+restores state without re-driving the inputs that produced it. The ownership
+and recovery path is pinned by
+civictech.cell.durability.ExclusiveReplayOwnershipTest.
+
+The gate path accounts fates from evidence rather than receipt: an item is
+**consumed** only when the live handler performs `take()`, **discharged** from
+the delta of `Proxy.discharges`, or **dead-lettered** when the sanitized
+dead-letter record contains its `Frozen` value. Those three fates partition the
+produced items in civictech.cell.host.ExclusiveFateAccountingTest. The
+cross-node SPSC refusal that protects the single consumer is pinned by
+civictech.cell.wire.OwnershipTest.
+
+⚠ GAP (G-46): Exclusive (Owned/Leased) payloads have no completely closed
+story off the happy path.
+
+**Closed by `computenet-z88w1`:** the DeadLetter envelope is pinned — `Owned`
+is move-by-serialize into a `Frozen` value, `Leased` is released into a
+`Redacted` marker, and nested exclusives are consumed during sanitization
+(`DeadLetters.kt`, civictech.cell.host.LifecycleAndDeadLetterTest). Park/crash
+accounting on the gate path and replay ownership are pinned by
+civictech.cell.host.ExclusiveFateAccountingTest and
+civictech.cell.durability.ExclusiveReplayOwnershipTest respectively.
+
+**Remaining:** the sender-durability contract that makes crash loss of a
+parked-but-unsnapshotted payload at-most-once acceptable (or requires the
+producing host to be durable), and the redaction rule for a non-serializable
+payload. Mergeable parked traffic is already covered end-to-end by the M10
+journal + anti-entropy pair (93 I-7/I-22/I-12).
 
 The state-level analogue of payload exclusivity — a single-writer
 replicated cell (40/42) — carries its own open liveness half:
