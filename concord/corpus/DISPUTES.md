@@ -41,11 +41,12 @@ the scalar half in B2/D-CONCORD once `CoalescingCombineCell` landed (D-COMBINE).
 
 ## Resolved by R1 (dispute-resolution wave)
 
-Five entries below were closed in dispute-resolution wave R1 (two parallel
-tickets, file-merged onto `main`). Each gap named a *real* kernel/oracle
-mechanism that had no scenario surface; R1 built the missing surface (a catalog
-cell, a schema descriptor, or a harness fold) without weakening any check. Their
-full by-scenario entries below are now marked **RESOLVED (R1)**.
+Five entries below were first addressed in dispute-resolution wave R1 (two
+parallel tickets, file-merged onto `main`). Each gap named a *real*
+kernel/oracle mechanism that had no scenario surface; R1 built the missing
+surface (a catalog cell, a schema descriptor, or a harness fold) without
+weakening any check. The remaining `23-SPSC-01` driver binding closed in a
+follow-up; each full by-scenario entry below names the wave that resolved it.
 
 - `42-INTEREST-01` — **RESOLVED** (`schema-gap`). New `interest:` descriptor
   (`InterestSpec` on `CellSpec`, `Scenario.kt`); `CorpusRunner` lowers it to a
@@ -123,8 +124,9 @@ glitch-freedom positively. See the "By scenario id" entry.)*
 group-by over `Windows`); `22-WAVE-FANIN-01` — resolved in R2 (set-shaped
 `observations-whole-waves` predicate landed). See the "Resolved by R2" section.)*
 
-*(`12-NEGOTIATE-01`, `23-SPSC-01`, `24-OP-PRESENCE-01` — resolved
-in R1, see the "Resolved by R1" section above.)*
+*(`12-NEGOTIATE-01`, `24-OP-PRESENCE-01` — resolved in R1;
+`23-SPSC-01` — R1 catalog surface plus the in-host Observe driver-binding
+follow-up. See the "Resolved by R1" section above.)*
 
 **`kernel-gap` / `spec-gap` — capability absent from the kernel, or the decided
 design is unimplemented; deep, implementation-ticket work:**
