@@ -140,10 +140,11 @@ Rules (normative):
    `LinkRole { Consume, Observe }` on the 10/13 handshake — is the decided
    surface.
    ⚠ EARS-GAP: the in-host Consume/Observe distinction, SPSC exemption, and
-   tap-before-consumer dispatch are implemented. The remaining G-47 surface
-   is KSP-derived Borrowed-contract projection and link-time validation,
-   attach-forward-only catch-up semantics, and the copy-fork/cloneability
-   contract for mutable exclusive shadow candidates.
+   tap-before-consumer dispatch are implemented; `23-SPSC-01` covers both the
+   Observe ADMIT and second-Consume REJECT outcomes. The remaining G-47
+   surface is KSP-derived Borrowed-contract projection and link-time
+   validation, attach-forward-only catch-up semantics, and the
+   copy-fork/cloneability contract for mutable exclusive shadow candidates.
 3. [12-FANIN-01] Multi-producer inlets are permitted only where the cell declares merge
    semantics (e.g. `UnionSetCell` ref-counting) — "unions may explicitly
    allow multiple producers".

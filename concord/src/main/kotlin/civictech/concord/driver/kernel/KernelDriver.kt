@@ -16,6 +16,8 @@ import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.link.Interest
+import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkRole
 import civictech.cell.Propagate
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
@@ -395,7 +397,8 @@ class KernelDriver private constructor(
         } else {
             src.ref to KernelCatalog.outletName(src.type, outlet)
         }
-        val result = src.host.managementInlet.call.connect(srcRef, outletName, dst.ref, inletName)
+        val options = if (role == "observe") LinkOptions(role = LinkRole.Observe) else LinkOptions.DEFAULT
+        val result = src.host.managementInlet.call.connect(srcRef, outletName, dst.ref, inletName, options)
         return when (result) {
             is civictech.cell.link.LinkResult.Connected -> {
                 val linkRef = UUID.randomUUID().toString()
