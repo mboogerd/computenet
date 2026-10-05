@@ -292,6 +292,7 @@ class ApplyContext(
 
             override fun recordCommittedSwap(waveState: OutletWaveState) {
                 val event = TopoEvent.Promote(
+                    gate = gate,
                     incumbent = incumbent,
                     candidate = candidate,
                     outlet = outletName,
@@ -386,6 +387,7 @@ class ApplyContext(
 
             override fun recordCommittedSwap(waveState: OutletWaveState) {
                 val event = TopoEvent.Promote(
+                    gate = null,
                     incumbent = ref,
                     candidate = ref,
                     outlet = outletName,
@@ -425,6 +427,9 @@ class ApplyContext(
             ?: error("promotion replay names missing incumbent ${event.incumbent}")
         val candidate = cells[event.candidate]
             ?: error("promotion replay names missing candidate ${event.candidate}")
+        val gate = event.gate?.let { ref ->
+            cells[ref] ?: error("promotion replay gate $ref is not live")
+        } ?: error("single-instance promotion replay has no gate")
         val migrator = candidate as? StateMigrating
             ?: error("promotion replay candidate ${event.candidate} is not StateMigrating")
         val stateful = incumbent as? civictech.cell.Stateful
@@ -450,10 +455,17 @@ class ApplyContext(
         cells.remove(event.incumbent)
         journalBindings.remove(event.incumbent)
         fold.record(event)
+        // The Promote record is written before live COMMIT turns the gate green. On
+        // recovery the record represents that completed commit, so green it before
+        // any following frame tail is delivered. Keeping those frames inside their
+        // replay provenance lets same-journal duplicate suppression see the copies
+        // that the gate re-derives for the already-replayed candidate inlet.
+        Promotion.completeRecoveredGate(gate)
     }
 
     /** Recovery-side reuse-ref swap: no gate and no journal write, only the recorded COMMIT. */
     private fun applyReplicatedPromote(event: TopoEvent.Promote) {
+        check(event.gate == null) { "replicated promotion replay must not name a membrane gate" }
         check(event.incumbent == event.candidate) {
             "replicated promotion replay must reuse one ref: ${event.incumbent} != ${event.candidate}"
         }

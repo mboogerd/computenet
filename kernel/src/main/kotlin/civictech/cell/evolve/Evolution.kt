@@ -199,6 +199,18 @@ object Promotion {
     }
 
     /**
+     * Complete the green step represented by a recovered single-instance Promote record.
+     * The graph package calls through this seam rather than depending directly on membrane:
+     * TrafficLight ownership remains here with the promotion protocol.
+     */
+    internal fun completeRecoveredGate(gate: Cell) {
+        @Suppress("UNCHECKED_CAST")
+        val trafficLight = gate as? TrafficLightApi<Any>
+            ?: error("promotion replay gate ${gate.ref} is not a live TrafficLightApi")
+        trafficLight.controlInlet.call.setGreen()
+    }
+
+    /**
      * Promote [candidate] over [incumbent] behind [gate], despawning the
      * retired incumbent from [host] only after a successful COMMIT.
      *
