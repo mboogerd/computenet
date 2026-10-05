@@ -50,7 +50,10 @@ internal class ApplyContextTopologyProvider(
  * ```
  *
  * The selector is evaluated once at spawn, so [GraphSpec.apply] binds a
- * `journalId` before calling the host's spawn path.
+ * `journalId` before calling the host's spawn path. A promotion traffic gate
+ * without an explicit `journalId` is bound to [topology]: its colour is part
+ * of the durable promotion transaction even though ordinary gate traffic is
+ * not application state.
  */
 class ApplyContext(
     val host: ManagedHost,
@@ -164,6 +167,9 @@ class ApplyContext(
             bind(event.ref, journals[journalId] ?: throw missingJournal(event.handle, journalId))
         }
         val cell = prepared ?: event.factory.create(event.ref)
+        if (event.journalId == null && topology != null && Promotion.isDurableGate(cell)) {
+            bind(event.ref, topology)
+        }
         requireBoundRef(event.handle, IdentityBinding.Exact(event.ref), event.ref, cell.ref)
         val spawned = if (event.replicated) {
             val service = replication ?: throw missingReplication(event.handle)

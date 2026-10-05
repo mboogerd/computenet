@@ -30,9 +30,11 @@ import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import civictech.testkit.forEachSeed
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.Serializable
@@ -326,6 +328,36 @@ class JournaledPromotionRecoveryTest {
         record is DecodedJournalRecord.Topology && record.events.singleOrNull() is TopoEvent.Promote
     }
 
+    private fun recoverPromoted(compacted: Boolean): Triple<World, Refs, List<Long>> {
+        val seed = if (compacted) 902L else 901L
+        val journal = InMemoryJournal()
+        val refs = refs()
+        val before = world(seed, journal)
+        build(before, refs)
+        drive(before, refs, 1..5, Random(seed))
+        before.context.promote(
+            gate = refs.gate,
+            incumbent = refs.incumbent,
+            candidate = refs.candidate,
+            outletName = "outlet",
+            downstream = listOf(refs.collector to "inlet"),
+        )
+        drive(before, refs, 6..7, Random(seed + 1))
+        if (compacted) before.host.checkpoint(journal)
+        drive(before, refs, 8..9, Random(seed + 2))
+        val preCrash = collector(refs).received.toList()
+        preCrash.last() shouldBe 45L
+
+        val recovered = world(seed, journal)
+        val recovery = recovered.context.recover(journal)
+        recovered.controller.runToIdle()
+        recovery.awaitApplied(30_000)
+        recovered.controller.runToIdle()
+        collector(refs).received shouldBe preCrash
+        recovered.deadLetters.shouldBeEmpty()
+        return Triple(recovered, refs, preCrash)
+    }
+
     private fun assertRecovery(seed: Long) {
         val journal = InMemoryJournal()
         val refs = refs()
@@ -435,6 +467,72 @@ class JournaledPromotionRecoveryTest {
         recovered.host.portAt(refs.incumbent, "inlet") shouldBe null
         collector(refs).received shouldBe expected
         recovered.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a recovered red gate suppresses replayed history before reopening`() {
+        val journal = InMemoryJournal()
+        val refs = refs()
+        val before = world(911, journal)
+        build(before, refs)
+        drive(before, refs, 1..5, Random(911))
+        val preCrash = collector(refs).received.toList()
+        preCrash shouldBe listOf(1L, 3L, 6L, 10L, 15L)
+
+        val recovered = world(911, journal)
+        val recovery = recovered.context.recover(journal)
+        recovered.controller.runToIdle()
+        recovery.awaitApplied(30_000)
+        recovered.controller.runToIdle()
+        collector(refs).received shouldBe preCrash
+
+        feed(recovered, refs, 6)
+        recovered.controller.runToIdle()
+        gate(recovered, refs).controlInlet.call.setGreen()
+        recovered.controller.runToIdle()
+
+        collector(refs).received shouldBe preCrash + 21L
+        recovered.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a checkpoint refuses to compact a red gate with parked work`() {
+        val journal = InMemoryJournal()
+        val refs = refs()
+        val before = world(912, journal)
+        build(before, refs)
+        gate(before, refs).controlInlet.call.setRed()
+        feed(before, refs, 1)
+        before.controller.runToIdle()
+
+        val failure = shouldThrow<IllegalStateException> {
+            before.host.checkpoint(journal)
+        }
+        failure.message shouldContain "parked invocation"
+
+        gate(before, refs).controlInlet.call.setGreen()
+        before.controller.runToIdle()
+        collector(refs).received shouldBe listOf(1L)
+        before.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a recovered promoted gate stays green across checkpoint compaction`() {
+        listOf(false, true).forEach { compacted ->
+            withClue("post-promotion checkpoint compacted=$compacted") {
+                val (recovered, refs, preCrash) = recoverPromoted(compacted)
+
+                gate(recovered, refs).snapshot() shouldBe true
+                gate(recovered, refs).controlInlet.call.setGreen()
+                recovered.controller.runToIdle()
+                collector(refs).received shouldBe preCrash
+
+                feed(recovered, refs, 10)
+                recovered.controller.runToIdle()
+                collector(refs).received shouldBe preCrash + 55L
+                recovered.deadLetters.shouldBeEmpty()
+            }
+        }
     }
 
     /**

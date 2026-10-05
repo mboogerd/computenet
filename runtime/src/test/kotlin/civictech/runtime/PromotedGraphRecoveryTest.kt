@@ -91,6 +91,7 @@ class PromotedGraphRecoveryTest {
             first.mainHost.quiescence().await(10_000, "post-promotion drive")
             val preCrash = collector(first).received.toList()
             assertEquals(36L, preCrash.last(), "1..8 sum before the crash")
+            first.mainHost.checkpoint(first.journals.values.single())
             first.close()
 
             second = Runtime.boot(manifest, "solo", spec)
