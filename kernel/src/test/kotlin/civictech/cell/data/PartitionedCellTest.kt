@@ -1,6 +1,7 @@
 package civictech.cell.data
 
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.host.ManagedHost
@@ -386,6 +387,44 @@ class PartitionedCellTest {
                 assertEquals(expected, mapFold(board), "replica $index board diverged after repartition on seed $seed")
             }
         }
+    }
+
+    @Test
+    fun `peer gossip reaches the organelle gossip path so a replica emits under its own source`() {
+        // 7afo4-D9 step 2 / D7: incoming gossip goes to the organelle's deltaInlet, whose
+        // MapDelta is ORIGINATED (93 I-14 Rule S2: each replica is its own source). Routing
+        // it to the organelle's inlet instead would relay the writer's wave verbatim.
+        val controller = SimulationController(71)
+        val peers = List(2) { Peer(controller) }
+        Peering.loopback(peers[0].side, peers[1].side)
+        val logicalId = UUID.nameUUIDFromBytes("replicated-partitioned-source".toByteArray())
+        val cells = peers.mapIndexed { index, peer -> spawn(peer, CellRef(logicalId, index.toLong())) }
+        val sources = cells.map { cell ->
+            val seen = mutableListOf<Pair<MapDelta<String, Long>, UUID?>>()
+            cell.outlet.subscribe(
+                Use.fixed(
+                    Propagate<MapDelta<String, Long>> { seen += it to CurrentContext.get()?.timestamp?.sourceId },
+                    PortRef.generate(),
+                ),
+            )
+            seen
+        }
+        controller.runToIdle()
+
+        inlet(peers[0], cells[0].ref).propagate(SetDelta(adds = mapOf("b6" to setOf(tag(1)))))
+        controller.runToIdle()
+
+        // Organelles are deliberately unaddressable; read their outlet sources reflectively.
+        @Suppress("UNCHECKED_CAST")
+        val organelleSources = (
+            PartitionedCell::class.java.getDeclaredField("shards").apply { isAccessible = true }
+                .get(cells[1]) as List<GroupByCell<String, String, Long, Long>>
+            ).map { (it.outlet as FanOutlet<Propagate<MapDelta<String, Long>>>).waveState().sourceId }
+        val relayed = sources[1].single { it.first.puts["b"] == 6L }.second
+        assertTrue(
+            relayed in organelleSources,
+            "replica 1 relayed wave source $relayed instead of originating under one of its organelles $organelleSources",
+        )
     }
 
     @Test
