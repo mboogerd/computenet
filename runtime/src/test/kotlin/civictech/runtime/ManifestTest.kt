@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -17,6 +18,8 @@ class ManifestTest {
 
     @Test
     fun `manifest round-trips through JSON and loads from a file`() {
+        val policyFile = tempDir.resolve("policy.json")
+        Files.writeString(policyFile, "{}")
         val manifest = Manifest(
             mapOf(
                 "a" to NodeSpec(
@@ -27,7 +30,7 @@ class ManifestTest {
                     journalDir = "run/a",
                     replica = 7,
                     peerName = "peer-a",
-                    budget = "policy.json",
+                    budget = policyFile.toFile().absolutePath,
                     journalTopology = true,
                 ),
             ),
@@ -38,6 +41,38 @@ class ManifestTest {
         val file = tempDir.resolve("manifest.json")
         Files.writeString(file, encoded)
         assertEquals(manifest, Manifest.load(file.toFile()))
+    }
+
+    @Test
+    fun `a relative budget path resolves against the manifest directory`() {
+        Files.writeString(tempDir.resolve("policy.json"), "{}")
+        val manifestFile = tempDir.resolve("manifest.json")
+        Files.writeString(manifestFile, """{"nodes":{"a":{"budget":"policy.json"}}}""")
+
+        val loaded = Manifest.load(manifestFile.toFile())
+
+        assertEquals(
+            File(tempDir.toFile(), "policy.json").path,
+            loaded.nodes.getValue("a").budget,
+        )
+    }
+
+    @Test
+    fun `a budget naming a missing file is refused during parse`() {
+        val failure = invalid(
+            """{"nodes":{"a":{"budget":"definitely-missing-policy.json"}}}""",
+        )
+        assertViolation(failure, "nodes[a].budget", "not found")
+    }
+
+    @Test
+    fun `a budget naming a missing file is refused during load`() {
+        val manifestFile = tempDir.resolve("manifest.json")
+        Files.writeString(manifestFile, """{"nodes":{"a":{"budget":"missing.json"}}}""")
+        val failure = assertThrows<InvalidManifestException> {
+            Manifest.load(manifestFile.toFile())
+        }
+        assertViolation(failure, "nodes[a].budget", "not found")
     }
 
     @Test
