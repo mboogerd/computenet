@@ -191,12 +191,15 @@ class AlignedDrainBarrier internal constructor(
  * aligned. Attach before the graph starts writing if the very first snapshot
  * must be aligned too.
  *
- * **Bridged (two-JVM) coverage.** `EdgeOpen`/`EdgeClose` and `Progress` already
- * cross the wire as frames (20/22 §Completeness, CP-A2), so a remote arm is
- * expected to settle exactly as a local one — but that path is **not covered by
- * a test here**: `:kernel` cannot depend on `:wire` (transport neutrality), and
- * this cell's tests live in `:kernel`. Bridged alignment is an explicit,
- * untested limitation of this delivery.
+ * **Bridged (two-host frame-bridge) coverage.** `AlignedObserveBridgedTest`
+ * proves the remote-arm invariant over the in-process `BridgeEgressCell` /
+ * `BridgeIngressCell` frame bridge, using `bridgeTo` / `bridgeFrom` alongside
+ * the local arm. `EdgeOpen`/`EdgeClose` and `Progress` cross as frames (20/22
+ * §Completeness, CP-A2), including an absorbing remote final wave; the test
+ * also checks that visibility handles add no frame, and runs under seeded
+ * protocol-frame duplication as a stressor, not a discriminator (see its class
+ * KDoc). The `:wire`
+ * WebSocket transport is exercised by its consumers, not here.
  *
  * ### Threading
  *
