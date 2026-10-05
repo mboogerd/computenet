@@ -143,6 +143,7 @@ class EvolveOrchestratorTest {
         (1..3).forEach(run::emit)
 
         handle.advance() shouldBe EvolutionHandle.State.ROLLED_BACK
+        run.idle()
         handle.reason!!.shouldContain("candidate state transfer boom")
         (run.host.portAt(run.candidate.ref, "outlet") != null) shouldBe true
 
