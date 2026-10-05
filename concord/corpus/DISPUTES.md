@@ -4023,17 +4023,26 @@ test names below were checked with `git grep -n` at that commit.
   - `KE2-29 - a final wave swallowed remotely settles through bridged Progress`;
   - `control - without negotiated Progress the final remote wave remains buffered`;
   - `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`;
-  - `bridged Stall then Resume on one link are handled in wire order`.
+  - `bridged Stall then Resume on one link are handled in wire order` (on a
+    single `ManagedHost` and a `WireEdgeLink`, not the frame bridge: it pins
+    the host-side fix this feature landed, which stages wire-arrived frontier
+    markers through the target's data FIFO so a bridged `Progress` cannot
+    overtake the data it orders).
   The companion `GlitchFreeBridgedDiamondTest` also pins bridged frontier
   ordering, absorb-ack settlement, and protocol-frame duplication controls.
 - **[KE2-30] clause status**: `[KE2-28]` identity and filtered cases are
   shown by the two `KE2-28` methods above; its point-consistent control is
   shown by `control - the same bridged topology tears under point-consistent observation`;
   `[KE2-29]` is shown by `KE2-29 - a final wave swallowed remotely settles through bridged Progress`
-  with its no-`Progress` control; duplicated protocol frames are shown by
-  the seeded `PROTOCOL_ONLY` bridge schedule in the two `KE2-28` methods,
-  with the active-duplicator control shown by `BS-16 CHA1-61 - the per-seed outcome vector survives the retrofit, is blind to a dead duplicator, and ungating it diverges`
-  in `GlitchFreeBridgedDiamondTest`; `[KE2-24]` is shown by
+  with its no-`Progress` control; duplicated protocol frames are exercised,
+  not discriminated: the two `KE2-28` methods run under the seeded
+  `PROTOCOL_ONLY` duplicator on the Near→Far leg, but neutralising it can
+  leave them green, so a green seed is not evidence a duplicate occurred
+  (the test's class KDoc). The discriminating control for the duplicator
+  primitive is `BS-6` in `testkit`'s `DuplicateFaultTest`, and arm 3 of
+  `BS-16 CHA1-61 - the per-seed outcome vector survives the retrofit, is blind to a dead duplicator, and ungating it diverges`
+  in `GlitchFreeBridgedDiamondTest` shows the same duplicator, ungated,
+  firing in the harness this test's `Net` copies; `[KE2-24]` is shown by
   `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`.
 - **Resolves**: a named-inlet cross-host link binding in `KernelDriverDist`,
   together with the `[22-GF-03]`-shaped corpus check that exercises its

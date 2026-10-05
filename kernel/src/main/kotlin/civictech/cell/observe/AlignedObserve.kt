@@ -195,9 +195,10 @@ class AlignedDrainBarrier internal constructor(
  * proves the remote-arm invariant over the in-process `BridgeEgressCell` /
  * `BridgeIngressCell` frame bridge, using `bridgeTo` / `bridgeFrom` alongside
  * the local arm. `EdgeOpen`/`EdgeClose` and `Progress` cross as frames (20/22
- * §Completeness, CP-A2), including an absorbing remote final wave; the test's
- * seeded protocol-frame duplication and visibility-handle parity checks cover
- * the corresponding idempotence and no-extra-frame conditions. The `:wire`
+ * §Completeness, CP-A2), including an absorbing remote final wave; the test
+ * also checks that visibility handles add no frame, and runs under seeded
+ * protocol-frame duplication as a stressor, not a discriminator (see its class
+ * KDoc). The `:wire`
  * WebSocket transport is exercised by its consumers, not here.
  *
  * ### Threading
