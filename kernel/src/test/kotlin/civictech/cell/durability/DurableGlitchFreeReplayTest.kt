@@ -355,48 +355,50 @@ class DurableGlitchFreeReplayTest {
         val checkpointAfter = 3
         val replayedWaves = (checkpointAfter + 1)..preCrashWaves
         forEachSeed(0L until 100L) { seed ->
-            val result = runSession(
-                seed,
-                replayAsBaseline = true,
-                deriveStableRefs = false,
-                checkpointAfter = checkpointAfter,
-            )
-            val obs = result.observations
-            val checkpointHighWater = result.checkpointHighWater!!
-            val replay = obs.filter { it.baseline }
-            val live = obs.filter { !it.baseline }
+            for (deriveStableRefs in listOf(false, true)) {
+                val result = runSession(
+                    seed,
+                    replayAsBaseline = true,
+                    deriveStableRefs = deriveStableRefs,
+                    checkpointAfter = checkpointAfter,
+                )
+                val obs = result.observations
+                val checkpointHighWater = result.checkpointHighWater!!
+                val replay = obs.filter { it.baseline }
+                val live = obs.filter { !it.baseline }
 
-            // The checkpoint has a real non-zero outlet high-water, and the
-            // restored source lane is the one observed before the crash.
-            (checkpointHighWater > 0L).shouldBeTrue()
-            result.preCrashHighWater shouldBe checkpointHighWater
-            result.recoveredSourceId shouldBe result.preCrashSourceId
-            result.postRecoveryProbeTimestamps.size shouldBe resumeWaves
-            result.postRecoveryProbeTimestamps.all { it.sourceId == result.preCrashSourceId }.shouldBeTrue()
-            result.postRecoveryProbeTimestamps.all { it.counter > checkpointHighWater }.shouldBeTrue()
-            result.postRecoveryProbeTimestamps.map { it.counter } shouldBe
-                (checkpointHighWater + 1..checkpointHighWater + resumeWaves.toLong()).toList()
-            result.recoveredHighWater shouldBe result.postRecoveryProbeTimestamps.last().counter
+                // The checkpoint has a real non-zero outlet high-water, and the
+                // restored source lane is the one observed before the crash.
+                (checkpointHighWater > 0L).shouldBeTrue()
+                result.preCrashHighWater shouldBe checkpointHighWater
+                result.recoveredSourceId shouldBe result.preCrashSourceId
+                result.postRecoveryProbeTimestamps.size shouldBe resumeWaves
+                result.postRecoveryProbeTimestamps.all { it.sourceId == result.preCrashSourceId }.shouldBeTrue()
+                result.postRecoveryProbeTimestamps.all { it.counter > checkpointHighWater }.shouldBeTrue()
+                result.postRecoveryProbeTimestamps.map { it.counter } shouldBe
+                    (checkpointHighWater + 1..checkpointHighWater + resumeWaves.toLong()).toList()
+                result.recoveredHighWater shouldBe result.postRecoveryProbeTimestamps.last().counter
 
-            // The compacted journal contributes only the post-checkpoint tail
-            // to the replayed cone, and every replayed frame is a J baseline.
-            replay.size shouldBe replayedWaves.count()
-            replay.map { it.n }.toSet() shouldBe replayedWaves.toSet()
-            replay.all { it.label == "J" }.shouldBeTrue()
+                // The compacted journal contributes only the post-checkpoint tail
+                // to the replayed cone, and every replayed frame is a J baseline.
+                replay.size shouldBe replayedWaves.count()
+                replay.map { it.n }.toSet() shouldBe replayedWaves.toSet()
+                replay.all { it.label == "J" }.shouldBeTrue()
 
-            // Live traffic remains glitch-free: every post-recovery wave is a
-            // complete pair under one timestamp. The join's timestamp is the
-            // upstream source context; the epoch-probe assertions above are
-            // the direct observation of J's post-recovery outlet counters.
-            live.groupBy { it.n }.forEach { (_, group) ->
-                group.map { it.label }.toSet() shouldBe setOf("J", "V")
-                group.map { it.ts }.toSet().size shouldBe 1
+                // Live traffic remains glitch-free: every post-recovery wave is a
+                // complete pair under one timestamp. The join's timestamp is the
+                // upstream source context; the epoch-probe assertions above are
+                // the direct observation of J's post-recovery outlet counters.
+                live.groupBy { it.n }.forEach { (_, group) ->
+                    group.map { it.label }.toSet() shouldBe setOf("J", "V")
+                    group.map { it.ts }.toSet().size shouldBe 1
+                }
+                live.map { it.n }.toSet() shouldBe ((preCrashWaves + 1)..(preCrashWaves + resumeWaves)).toSet()
+
+                // Released observations equal the batch recompute over tail + live.
+                obs.map { it.label to it.n }.sortedWith(compareBy({ it.second }, { it.first })) shouldBe
+                    oracle(replayedWaves).sortedWith(compareBy({ it.second }, { it.first }))
             }
-            live.map { it.n }.toSet() shouldBe ((preCrashWaves + 1)..(preCrashWaves + resumeWaves)).toSet()
-
-            // Released observations equal the batch recompute over tail + live.
-            obs.map { it.label to it.n }.sortedWith(compareBy({ it.second }, { it.first })) shouldBe
-                oracle(replayedWaves).sortedWith(compareBy({ it.second }, { it.first }))
         }
     }
 
