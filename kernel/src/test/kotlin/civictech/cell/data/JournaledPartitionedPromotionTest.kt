@@ -478,11 +478,11 @@ class JournaledPartitionedPromotionTest {
             run.disjoint.shouldBeTrue()
             (!run.surfacedUndelivered).shouldBeTrue()
             run.pullUnion.groupBy { key(it) }.keys shouldBe run.batch.keys
+            run.shard0RecoveredClass shouldBe CandidateShardCell::class.java // the hosted cell's runtime class
+            run.shard1LiveClass shouldBe CandidateShardCell::class.java
             run.shard0RecoveredVersion shouldBe 2 // the journal respawned the candidate, not the incumbent
             run.shard0RecoveredFoldFactory shouldBe CandidateShardFactory::class.java
             run.shard1Version shouldBe 2
-            run.shard0RecoveredClass shouldBe CandidateShardCell::class.java // the hosted cell's runtime class
-            run.shard1LiveClass shouldBe CandidateShardCell::class.java
             run.handshakesStable.shouldBeTrue()
         }
     }
