@@ -17,10 +17,14 @@
 # runs, `final-view(l): expected [5] but read [12,25,3,5]` — identical to the
 # pre-fix reading t4od7.8 observed. `jv` stays `{"20": 3, "30": 1}` (the
 # window's own journal reconstructs its state and floor).
-# (b) `journal-window` made volatile in `KernelDriverDur` (REC-01's mutation
-# (1)): NOT RUN for this file — the driver is outside this task's file claim.
-# Note a volatile window has no journal to rebuild from here, so it would
-# redden `jv` as it does for REC-01.
+# (b) `journal-window` made volatile in `KernelDriverDur` (removed from
+# `JOURNALED_TYPES`, REC-01's mutation (1); measured 2026-10-05 in task review,
+# darwin/arm64, `-Pconcord.profiles=dur --rerun --no-build-cache`): fails on 20
+# of 20 runs, `final-view(l): expected [5] but read []`. Unlike REC-01, `jv`
+# stays green here (inferred, not traced: with no checkpoint the source's
+# full-history re-emission refills the rebuilt window, so window 20 still ends
+# with three elements); only the lost floor shows, admitting 5 instead of
+# late-dropping it. So only `l` discriminates this mutation in this file.
 #
 id: 24-WL-REC-02
 title: An evicting window recovered by full journal replay, with no checkpoint, converges to the pre-crash fold and its late outlet carries only the genuinely late add
