@@ -1,8 +1,11 @@
 package civictech.cell.observe
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
+import civictech.cell.control.StallNotice
+import civictech.cell.control.StallReason
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
@@ -12,16 +15,21 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.LinkResult
+import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.cell.protocol.ProtocolId
+import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.wire.BridgeEgressCell
 import civictech.cell.wire.BridgeIngressCell
 import civictech.cell.wire.PortAddress
+import civictech.cell.wire.WireEdgeLink
 import civictech.cell.wire.WireCodec
 import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
@@ -34,6 +42,8 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.Collections
 import java.util.Random
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * KE2-28/KE2-29 (spec 20/22): an [AlignedCompositeCell] whose `remote` arm
@@ -378,6 +388,49 @@ class AlignedObserveBridgedTest {
             (run.bufferedWaves >= 1).shouldBeTrue()
             ((run.current.getValue("local") as Set<*>).contains(9)) shouldBe false
         }
+    }
+
+    private class SuspensionProbe(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<Int>>())
+    }
+
+    /**
+     * Pins the host side of this task's bridged-frontier staging: a wire-arrived
+     * `Stall` joins the target's staged FIFO, so its `Resume` must join it too.
+     * With `Resume` left on the protocol band it overtakes the still-staged
+     * `Stall` (observed `[Resume, Stall]`) and a DEGRADE frontier keeps the edge
+     * suspended for good.
+     */
+    @Test
+    fun `bridged Stall then Resume on one link are handled in wire order`() {
+        val controller = SimulationController(0)
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = LocationRegistry())
+        val probe = SuspensionProbe()
+        host.managementInlet.call.spawn(probe)
+        while (controller.step()) Unit
+        val seen = CopyOnWriteArrayList<Any>()
+        ProtocolSupport.of(probe.inlet).handle(Protocols.Suspension) { _, message -> seen += message }
+        val link = WireEdgeLink(
+            id = UUID.randomUUID(),
+            from = PortRef.generate(),
+            to = PortRef.generate(probe.ref),
+            fromAddr = PortAddress(CellRef(UUID.randomUUID()), "outlet"),
+            toAddr = PortAddress(probe.ref, "inlet"),
+        )
+        fun frame(message: Any) = HostedPortInvocation(
+            cellRef = probe.ref,
+            portName = "inlet",
+            type = HostedPortInvocation.Type.PORT_PROTOCOL,
+            invocation = Invocation("", emptyList(), emptyList()),
+            protocolId = Protocols.Suspension,
+            protocolLink = link,
+            protocolMessage = message,
+        )
+        val stall = StallNotice.Stall(StallReason.SUSPENDED)
+        host.enqueueHostedInvocation(frame(stall))
+        host.enqueueHostedInvocation(frame(StallNotice.Resume))
+        while (controller.step()) Unit
+        seen.toList() shouldBe listOf(stall, StallNotice.Resume)
     }
 
     private inline fun <T> withClue(vararg clue: Any?, block: () -> T): T =

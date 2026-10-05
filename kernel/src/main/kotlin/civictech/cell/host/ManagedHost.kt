@@ -1184,16 +1184,23 @@ open class ManagedHost(
      * protocol band would let them overtake data already staged at band 20.
      * [AttentionScheduler]'s per-cell FIFO is a superset of that per-link FIFO.
      *
-     * Other wire protocols, including handshakes/capability traffic and
-     * `StallNotice.Resume`, stay on their descriptor band. In-process protocol
-     * delivery has no [civictech.cell.wire.WireEdgeLink] and is unchanged.
+     * Only frames arriving at the link's consumer end (`toAddr`) qualify: that
+     * is the end the link's data reaches, so an upstream-bound frame (an
+     * `EdgeClose` sent back to the producer) has no data to stay ordered with.
+     * `StallNotice.Resume` joins `Stall`: were `Stall` staged and `Resume`
+     * left on the protocol band, a `Resume` arriving behind a still-staged
+     * `Stall` on the same link would be handled first, leaving the edge
+     * stalled. Other wire protocols, including handshakes/capability traffic,
+     * stay on their descriptor band. In-process protocol delivery has no
+     * [civictech.cell.wire.WireEdgeLink] and is unchanged.
      */
     private fun isBridgedFrontierMarker(hostedInvocation: HostedPortInvocation): Boolean {
-        if (hostedInvocation.protocolLink !is civictech.cell.wire.WireEdgeLink) return false
+        val link = hostedInvocation.protocolLink as? civictech.cell.wire.WireEdgeLink ?: return false
+        if (link.toAddr.cell != hostedInvocation.cellRef || link.toAddr.port != hostedInvocation.portName) return false
         return when (hostedInvocation.protocolId) {
             Protocols.TopologyOrder -> hostedInvocation.protocolMessage is EdgeEvent
             Protocols.Progress -> hostedInvocation.protocolMessage is civictech.cell.control.Progress
-            Protocols.Suspension -> hostedInvocation.protocolMessage is StallNotice.Stall
+            Protocols.Suspension -> hostedInvocation.protocolMessage is StallNotice
             else -> false
         }
     }
