@@ -114,9 +114,7 @@ class Admit(
             invocation.args.forEach(Proxy::discharge)
             return
         }
-        descriptor.exclusiveParameters.forEach { index ->
-            if (index < invocation.args.size) Proxy.discharge(invocation.args[index])
-        }
+        Proxy.dischargeMarked(descriptor, invocation.args)
     }
 
     override fun offer(invocation: Invocation) {

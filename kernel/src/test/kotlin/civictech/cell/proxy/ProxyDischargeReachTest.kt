@@ -28,6 +28,42 @@ class DmwlHolder(val any: Any)
 
 class DmwlDerived(val held: Owned<String>)
 
+/**
+ * A HAND-BUILT descriptor that says `exclusive = true` and leaves `exclusiveParameters` at its
+ * default — the shape concord's `ExclusiveSourceCell` and inspect's `OwnedIntakeDescriptor`
+ * register. It names no position, so the bounded walk must fall back to every argument rather
+ * than discharge nothing.
+ */
+interface HandBuiltExclusive {
+    fun accept(value: Owned<String>)
+}
+
+object HandBuiltExclusiveDescriptor {
+    private val registered by lazy {
+        val fqn = HandBuiltExclusive::class.java.name.replace('$', '.')
+        val jvm = "(L${Owned::class.java.name.replace('.', '/')};)V"
+        val method = civictech.nature.MethodDescriptor(
+            methodId = civictech.nature.StableHash.of("$fqn#accept$jvm"),
+            name = "accept",
+            jvmDescriptor = jvm,
+            exclusive = true,
+        )
+        civictech.nature.ContractRegistry.register(
+            object : civictech.nature.ContractModule {
+                override val contracts = listOf(
+                    civictech.nature.ContractDescriptor(
+                        civictech.nature.StableHash.of(fqn), fqn, management = false, methods = listOf(method),
+                    ),
+                )
+            },
+            civictech.nature.ModuleId("kernel-test:hand-built-exclusive"),
+        )
+        true
+    }
+
+    fun ensureRegistered() = check(registered)
+}
+
 class ProxyDischargeReachTest {
 
     @Test
@@ -39,6 +75,16 @@ class ProxyDischargeReachTest {
 
         isLive(item) shouldBe false
         isLive(foreign) shouldBe true
+    }
+
+    @Test
+    fun `a hand-built exclusive descriptor with no marked positions still discharges its arguments`() {
+        HandBuiltExclusiveDescriptor.ensureRegistered()
+        val item = Owned("item")
+
+        Proxy.discharging(HandBuiltExclusive::class.java).accept(item)
+
+        isLive(item) shouldBe false
     }
 
     // ------------------------------------------------------------------

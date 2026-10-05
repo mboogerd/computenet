@@ -6,6 +6,7 @@ import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.nature.ContractRegistry
 import civictech.nature.JvmDescriptors
+import civictech.nature.MethodDescriptor
 import civictech.gen.wire.ProxyRegistry
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Modifier
@@ -110,15 +111,29 @@ object Proxy {
         // computenet-dmwl: only the descriptor-marked parameter positions are walked, so a
         // supertype-declared parameter the compile-time scan did not mark is never opened.
         val exclusiveMethods = descriptor.methods.filter { it.exclusive }.associate {
-            (it.name to it.jvmDescriptor) to it.exclusiveParameters
+            (it.name to it.jvmDescriptor) to it
         }
         return fromClass(clazz) { _, method, args ->
             exclusiveMethods[method.name to JvmDescriptors.of(method)]?.let { marked ->
-                val values = args.orEmpty()
-                marked.forEach { index -> if (index < values.size) discharge(values[index]) }
+                dischargeMarked(marked, args.orEmpty().asList())
             }
             null
         }
+    }
+
+    /**
+     * Discharges the arguments [method] marks exclusive (computenet-dmwl). A descriptor that
+     * claims `exclusive` but names no position — hand-built, not generated, so it never went
+     * through the scan that fills `exclusiveParameters` — has no positions to bound the walk
+     * by, and walks every argument: an exclusive with no consumer is the worse failure
+     * (computenet-h6sf), so an inconsistent descriptor must not silently discharge nothing.
+     */
+    internal fun dischargeMarked(method: MethodDescriptor, args: List<Any?>) {
+        if (method.exclusive && method.exclusiveParameters.isEmpty()) {
+            args.forEach(::discharge)
+            return
+        }
+        method.exclusiveParameters.forEach { index -> if (index < args.size) discharge(args[index]) }
     }
 
     /**
