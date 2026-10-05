@@ -118,14 +118,15 @@ internal class C9AssertionFailure(
  * assertion — that is `[CHA2-26]` in its strict form.
  *
  * **The limit, stated where it is load-bearing.** The exclusive leg is a *volatile* (off-host)
- * sink, not the journaled one. A journaled frame is Java-serialised
- * (`HostDurability.kt`: `ObjectOutputStream(it).use { out -> out.writeObject(record) }`), and
- * neither `Owned` nor [TrackedExclusive] is `Serializable`, so an exclusive payload cannot ride a
- * write-ahead journal at all. What the accounting therefore covers is every exclusive this graph
- * mints; what it cannot cover is an exclusive crossing a durability boundary, because no such
- * payload is constructible. That is a property of the kernel's journal encoding, not a gap in the
- * rig — and it is why this suite does not claim to retire the C-11 siblings' bespoke-assertion
- * deviation on the durable plane, only to run its own sweeps under the rig's accounting.
+ * sink, not the journaled one. `HostDurability.journalFrame` writes a `RECORD_FRAME` as
+ * `byteArrayOf(RECORD_FRAME) + WireCodec.encode(hostedInvocation)` (`HostDurability.kt:557`),
+ * but this graph's exclusive outlet is consumed by a plain off-host consumer and never enters
+ * that journaled host intake. The accounting therefore covers every exclusive this graph mints,
+ * but this suite does not exercise an exclusive crossing a durability boundary or its replay.
+ * That is a routing limit of this graph at the current journal encoding, not a claim that no
+ * exclusive payload is constructible or can cross a write-ahead journal — and it is why this
+ * suite does not claim to retire the C-11 siblings' bespoke-assertion deviation on the durable
+ * plane, only to run its own sweeps under the rig's accounting.
  *
  * **And the sharper statement, so a green ledger is not read as evidence it is not:** no fault in
  * this suite can perturb the exclusive leg at all. `RestartAtFrontierFault` and `JournalFault` act

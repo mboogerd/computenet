@@ -2,6 +2,8 @@ package civictech.cell.proxy
 
 import civictech.cell.Leased
 import civictech.cell.Owned
+import civictech.gen.wire.Contract
+import civictech.gen.wire.Key
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -16,7 +18,74 @@ import org.junit.jupiter.api.assertThrows
  * something that never owned it — so every test here is paired with its
  * opposite, and no fix may make one green by reddening the other.
  */
+/** computenet-dmwl: parameter 0 is exclusive; parameter 1 is declared `Holder(Any)`, invisible to the scan. */
+@Contract
+interface DmwlPush {
+    fun push(@Key item: Owned<String>, holder: DmwlHolder)
+}
+
+class DmwlHolder(val any: Any)
+
+class DmwlDerived(val held: Owned<String>)
+
+/**
+ * A HAND-BUILT descriptor that says `exclusive = true` and leaves `exclusiveParameters` at its
+ * default — the shape concord's `ExclusiveSourceCell` and inspect's `OwnedIntakeDescriptor`
+ * register. It names no position, so the bounded walk must fall back to every argument rather
+ * than discharge nothing.
+ */
+interface HandBuiltExclusive {
+    fun accept(value: Owned<String>)
+}
+
+object HandBuiltExclusiveDescriptor {
+    private val registered by lazy {
+        val fqn = HandBuiltExclusive::class.java.name.replace('$', '.')
+        val jvm = "(L${Owned::class.java.name.replace('.', '/')};)V"
+        val method = civictech.nature.MethodDescriptor(
+            methodId = civictech.nature.StableHash.of("$fqn#accept$jvm"),
+            name = "accept",
+            jvmDescriptor = jvm,
+            exclusive = true,
+        )
+        civictech.nature.ContractRegistry.register(
+            object : civictech.nature.ContractModule {
+                override val contracts = listOf(
+                    civictech.nature.ContractDescriptor(
+                        civictech.nature.StableHash.of(fqn), fqn, management = false, methods = listOf(method),
+                    ),
+                )
+            },
+            civictech.nature.ModuleId("kernel-test:hand-built-exclusive"),
+        )
+        true
+    }
+
+    fun ensureRegistered() = check(registered)
+}
+
 class ProxyDischargeReachTest {
+
+    @Test
+    fun `a supertype-declared parameter holding a runtime exclusive is not consumed by the discharging proxy`() {
+        val item = Owned("item")
+        val foreign = Owned("foreign")
+
+        Proxy.discharging(DmwlPush::class.java).push(item, DmwlHolder(DmwlDerived(foreign)))
+
+        isLive(item) shouldBe false
+        isLive(foreign) shouldBe true
+    }
+
+    @Test
+    fun `a hand-built exclusive descriptor with no marked positions still discharges its arguments`() {
+        HandBuiltExclusiveDescriptor.ensureRegistered()
+        val item = Owned("item")
+
+        Proxy.discharging(HandBuiltExclusive::class.java).accept(item)
+
+        isLive(item) shouldBe false
+    }
 
     // ------------------------------------------------------------------
     // Fixtures
@@ -175,6 +244,36 @@ class ProxyDischargeReachTest {
         already.take()
 
         Proxy.discharge(already)
+    }
+
+    @Test
+    fun `a returnToPool that throws propagates and is not counted as a double discharge`() {
+        val before = Proxy.doubleDischarges
+        val leased = Leased("x") { throw IllegalStateException("pool") }
+
+        assertThrows<IllegalStateException> { Proxy.discharge(leased) }
+
+        Proxy.doubleDischarges shouldBe before
+        leased.isReleased shouldBe true
+    }
+
+    @Test
+    fun `discharges counts each successful consume and release once`() {
+        val beforeDischarges = Proxy.discharges
+        val beforeDoubleDischarges = Proxy.doubleDischarges
+        val owned = Owned("owned")
+        val leased = Leased("leased") {}
+        val payload = listOf<Any>(owned, leased)
+
+        Proxy.discharge(payload)
+
+        Proxy.discharges shouldBe beforeDischarges + 2
+        Proxy.doubleDischarges shouldBe beforeDoubleDischarges
+
+        Proxy.discharge(payload)
+
+        Proxy.discharges shouldBe beforeDischarges + 2
+        Proxy.doubleDischarges shouldBe beforeDoubleDischarges + 2
     }
 
     // ------------------------------------------------------------------
