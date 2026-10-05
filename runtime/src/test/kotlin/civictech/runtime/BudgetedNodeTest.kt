@@ -33,6 +33,7 @@ import civictech.economy.TokenBucketLedger
 import civictech.testkit.awaitUntil
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.junit.jupiter.api.Assertions.assertAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertSame
@@ -92,39 +93,45 @@ class BudgetedNodeTest {
                 run.b.registry.deliver(attention(run.aMembrane.ref, version = offset + 1L))
             }
 
-            awaitUntil("node a reports the fourth Attention assertion as one denial", CONVERGENCE_MS) {
-                run.deadLetters.size == 1
+            awaitUntil("node a settles all four Attention assertions", CONVERGENCE_MS) {
+                run.observed.size + run.deadLetters.size == 4
             }
 
             // This assertion is deliberately first: the Runtime crossing must carry b's
             // transport-vouched stamp. Without it there is no principal whose bootstrap
             // the node ledger could charge, and adding identity wiring here would hide that.
-            assertEquals(PeerId("b"), run.deadLetters.single().denial?.principal)
-
-            awaitUntil("node a accounts three admissions and one refusal", CONVERGENCE_MS) {
-                run.observed.size == 3 &&
-                    run.aMembrane.boundaryDenials["attention"]!!.denialCount == 1L &&
-                    (run.a.budget as TokenBucketLedger).snapshot().let { snapshot ->
-                        snapshot.admitted[ClaimClass.Attention] == 3L &&
-                            snapshot.bucket(PeerId("b"), ClaimClass.Attention)?.balance == 0L &&
-                            snapshot.denied[ClaimClass.Attention]?.get(DenialReason.BUDGET_EXHAUSTED) == 1L
-                    }
-            }
-
-            assertEquals(listOf(1L, 2L, 3L), run.observed.map(Attention::version))
-            val denial = requireNotNull(run.deadLetters.single().denial)
-            assertEquals(DenialReason.BUDGET_EXHAUSTED, denial.reason)
-            assertEquals(BoundarySeam.PROTOCOL_AUTHORITY, denial.seam)
-            assertEquals(Protocols.Attention.name, denial.subject)
-
+            val denial = run.deadLetters.singleOrNull()?.denial
             val snapshot = (run.a.budget as TokenBucketLedger).snapshot()
-            assertEquals(3L, snapshot.admitted[ClaimClass.Attention])
-            assertEquals(0L, snapshot.bucket(PeerId("b"), ClaimClass.Attention)?.balance)
-            assertEquals(
-                1L,
-                snapshot.denied[ClaimClass.Attention]?.get(DenialReason.BUDGET_EXHAUSTED),
+            assertAll(
+                "the Runtime crossing charges b's three-token Attention bootstrap",
+                { assertEquals(PeerId("b"), denial?.principal, "the Runtime peering carried no principal to charge") },
+                {
+                    assertEquals(
+                        listOf(1L, 2L, 3L),
+                        run.observed.map(Attention::version),
+                        "the fourth assertion was admitted after b's bootstrap was exhausted",
+                    )
+                },
+                {
+                    assertEquals(
+                        1L,
+                        run.aMembrane.boundaryDenials["attention"]!!.denialCount,
+                        "the membrane did not account the surplus assertion",
+                    )
+                },
+                { assertEquals(DenialReason.BUDGET_EXHAUSTED, denial?.reason) },
+                { assertEquals(BoundarySeam.PROTOCOL_AUTHORITY, denial?.seam) },
+                { assertEquals(Protocols.Attention.name, denial?.subject) },
+                { assertEquals(3L, snapshot.admitted[ClaimClass.Attention]) },
+                { assertEquals(0L, snapshot.bucket(PeerId("b"), ClaimClass.Attention)?.balance) },
+                {
+                    assertEquals(
+                        1L,
+                        snapshot.denied[ClaimClass.Attention]?.get(DenialReason.BUDGET_EXHAUSTED),
+                    )
+                },
+                { assertEquals(0L, run.a.mainHost.supervisionAccounting().restarts) },
             )
-            assertEquals(0L, run.a.mainHost.supervisionAccounting().restarts)
 
             setOps(run.a).add("apple")
             awaitUntil("node b observes apple after node a refused the surplus Attention", CONVERGENCE_MS) {
