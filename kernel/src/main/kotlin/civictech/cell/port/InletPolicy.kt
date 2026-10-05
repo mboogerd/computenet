@@ -95,6 +95,30 @@ class Admit(
         this.release = release
     }
 
+    /**
+     * Discharge only the descriptor-marked exclusive positions (computenet-dmwl), so a
+     * supertype-declared argument the scan did not mark is not opened. With no resolvable
+     * descriptor (ids null, or an un-annotated contract) there is no scan to match, so every
+     * argument is walked as before: an exclusive with no consumer is the worse failure
+     * (computenet-h6sf).
+     */
+    private fun dischargeDropped(invocation: Invocation) {
+        val contractId = invocation.contractId
+        val methodId = invocation.methodId
+        val descriptor = if (contractId != null && methodId != null) {
+            civictech.nature.ContractRegistry.method(contractId, methodId)
+        } else {
+            null
+        }
+        if (descriptor == null) {
+            invocation.args.forEach(Proxy::discharge)
+            return
+        }
+        descriptor.exclusiveParameters.forEach { index ->
+            if (index < invocation.args.size) Proxy.discharge(invocation.args[index])
+        }
+    }
+
     override fun offer(invocation: Invocation) {
         if (admits(invocation)) {
             release(invocation)
@@ -107,7 +131,7 @@ class Admit(
         // has exactly one consumer, so an admit-drop was unrecoverable loss.
         // Consistent with the other two sanitizers (DeadLetters, Evolution's
         // discharging proxy).
-        invocation.args.forEach(Proxy::discharge)
+        dischargeDropped(invocation)
         onDrop(invocation)
         if (mintsProgressAck) mintAck(invocation)
     }

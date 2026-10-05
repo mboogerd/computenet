@@ -420,7 +420,10 @@ class ContractProcessor(
                     val name = fn.simpleName.asString()
                     val descriptor = resolver.mapToJvmSignature(fn)
                         ?: error("no JVM signature for $fqn#$name")
-                    val exclusive = fn.parameters.any { carriesExclusive(it.type.resolve()) }
+                    val exclusiveParameters = fn.parameters.mapIndexedNotNull { index, parameter ->
+                        index.takeIf { carriesExclusive(parameter.type.resolve()) }
+                    }
+                    val exclusive = exclusiveParameters.isNotEmpty()
                     val keyIndexes = fn.parameters.mapIndexedNotNull { index, parameter ->
                         index.takeIf { parameter.annotations.any { it.annotationType.resolve().declaration.qualifiedName?.asString() == KEY_ANNOTATION } }
                     }
@@ -430,14 +433,15 @@ class ContractProcessor(
                         fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.MAGNITUDE_MARKER) },
                         fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.REPLICABLE_MARKER) },
                         keyIndex,
+                        exclusiveParameters,
                     )
                 }
                 .sortedBy { it.methodId }
                 .forEach { m ->
                     add(
-                        "%T(methodId·=·%LL, name·=·%S, jvmDescriptor·=·%S, exclusive·=·%L, magnitude·=·%L, idempotentMerge·=·%L, keyIndex·=·%L),\n",
+                        "%T(methodId·=·%LL, name·=·%S, jvmDescriptor·=·%S, exclusive·=·%L, magnitude·=·%L, idempotentMerge·=·%L, keyIndex·=·%L, exclusiveParameters·=·listOf(%L)),\n",
                         MethodDescriptor::class.asClassName(), m.methodId, m.name, m.jvmDescriptor, m.exclusive,
-                        m.magnitude, m.idempotentMerge, m.keyIndex,
+                        m.magnitude, m.idempotentMerge, m.keyIndex, m.exclusiveParameters.joinToString(", "),
                     )
                 }
             add("⇤)),\n")
