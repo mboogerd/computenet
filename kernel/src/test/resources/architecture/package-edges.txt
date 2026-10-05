@@ -167,9 +167,11 @@ graph -> durability
 graph -> evolve
 graph -> host
 graph -> link
+graph -> membrane
 graph -> nature
 graph -> port
 graph -> replication
+graph -> verify
 host -> cell
 host -> control
 host -> durability
