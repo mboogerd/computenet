@@ -113,6 +113,49 @@ class ChargeIdempotencyTest {
     }
 
     @Test
+    fun `8s74x - undoing a zero-price admission forgets its key, so a retry is a fresh admission`() {
+        val free = TokenBucketLedger(
+            EconomicPolicy.placeholder().copy(
+                prices = EconomicPolicy.placeholder().prices + (ClaimClass.Spawn to 0L),
+                unvouchedBootstrap = mapOf(ClaimClass.Spawn to 5L),
+                retention = EconomicPolicy.Retention(idleNanos = 1_000, maxBuckets = 3, recentKeys = 2),
+            ).applied(),
+            { now },
+            "idem-scope-free",
+        )
+        fun claim() = BudgetClaim(PeerStamp(PeerId("z")), ClaimClass.Spawn, key = "k1")
+
+        // A zero-price bucket's window has no public observable (no debit to compare, and a
+        // replay counts as admitted too), so read it directly: does the bucket hold "k1"?
+        fun windowHoldsK1(): Boolean {
+            val buckets = TokenBucketLedger::class.java.getDeclaredField("buckets")
+                .apply { isAccessible = true }.get(free) as Map<*, *>
+            val bucket = buckets.values.single()!!
+            val tokens = bucket.javaClass.getDeclaredField("recentTokens")
+                .apply { isAccessible = true }.get(bucket) as Map<*, *>?
+            return tokens?.containsKey("k1") == true
+        }
+
+        val first = free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        windowHoldsK1() shouldBe true
+        // Replay while the key is in the window: admitted, but its undo is a no-op.
+        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>().undo()
+        windowHoldsK1() shouldBe true
+
+        // The real admission's undo (which takes the bucket's monitor) forgets the key.
+        first.undo()
+        windowHoldsK1() shouldBe false
+
+        // So the same-key retry is a fresh admission that records the key again, and its own
+        // undo is real: it forgets the key once more.
+        val retry = free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        windowHoldsK1() shouldBe true
+        retry.undo()
+        windowHoldsK1() shouldBe false
+        free.snapshot().admitted[ClaimClass.Spawn] shouldBe 3
+    }
+
+    @Test
     fun `sb9v1 - undoing a real hold's release forgets its key, so a retry with the same key holds again`() {
         val l = TokenBucketLedger(
             EconomicPolicy.placeholder().copy(
