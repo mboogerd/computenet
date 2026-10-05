@@ -122,7 +122,25 @@ private fun isSubtype(type: KSType, marker: String): Boolean {
         ?.any { isSubtype(it.resolve(), marker) } == true
 }
 
-/** Descriptor scans include nested payloads, matching the established ownership scan. */
+/**
+ * `carriesMarker` deliberately remains an `isSubtype`/type-argument scan; it is
+ * not widened to the declared-property walk used by [carriesExclusive]. A
+ * nested `Magnitude`/`Replicable` missed here changes a monotonicity or merge
+ * classification, but `Proxy.discharge` never acts on those bits. A missed
+ * `Owned`/`Leased`, in contrast, can silently drop an exclusive payload and
+ * violate the named ownership invariant. The exclusive walk has already needed
+ * four reach corrections (`computenet-woto`, `computenet-zyg1`,
+ * `computenet-h6sf`, `computenet-dmwl`), so a second declared-property scan
+ * would duplicate that defect family.
+ *
+ * The answer changes if a payload nests a `Magnitude` inside a plain data class
+ * used as a contract parameter on a cycle edge that relies on damping. The
+ * current demo grep finds seven direct `Magnitude` implementors in
+ * `demo/agora/.../Deltas.kt` and `demo/deliberate/.../{Cells,Sensitivity}.kt`,
+ * no `Replicable` declaration, and no nested marker payload; this is the
+ * deliberate no-widen decision recorded by `computenet-6qe8`, decided under
+ * `computenet-z88w1`.
+ */
 private fun carriesMarker(type: KSType, marker: String): Boolean =
     isSubtype(type, marker) || type.arguments.any { argument ->
         argument.type?.resolve()?.let { carriesMarker(it, marker) } == true
