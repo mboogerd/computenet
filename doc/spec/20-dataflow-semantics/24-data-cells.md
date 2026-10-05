@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class built (96 §E1, `OrMapCell`/`TaggedMapDelta`); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`); lateness/waterline eviction built for `GroupByCell` and the join family, with source retirement, the generative lateness harness and `:demo:slotfinder` adoption (§Lateness and waterlines; 96 §E4.1-E4.6, E4.6 = `computenet-fh1fo`); concord corpus coverage of `[24-WL-*]` landed (`computenet-t4od7`), every id covered except `[24-WL-04]`/`[24-WL-15]`/`[24-WL-17]`/`[24-WL-18]`, filed in `concord/corpus/DISPUTES.md`)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class built (96 §E1, `OrMapCell`/`TaggedMapDelta`); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`); lateness/waterline eviction built for `GroupByCell` and the join family, with source retirement, the generative lateness harness and `:demo:slotfinder` adoption (§Lateness and waterlines; 96 §E4.1-E4.6, E4.6 = `computenet-fh1fo`); concord corpus coverage of `[24-WL-*]` landed (`computenet-t4od7`), every id covered except `[24-WL-04]`/`[24-WL-15]`/`[24-WL-17]`/`[24-WL-18]`, filed in `concord/corpus/DISPUTES.md`); GroupByCell/PartitionedCell replicate by membership gossip (`Gossiping`, computenet-7afo4)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.leftJoin`/`rightJoin`/`fullJoin` (outer joins)
 
@@ -516,18 +516,22 @@ excluded (Ubiquitous).
   be only eventually consistent — a transient overlap of `(a, null)` and
   `(a, b)` rows for the same key MAY be observed before convergence
   (State-driven).
-- **Replication story: recompute, not gossip.** The output is single-writer
-  `MapDelta` (its documented contract, satisfied by construction), so
-  `GroupByCell` is not `Replicable` — and needn't be: aggregates are
-  deterministic functions of convergent membership, so each peer derives its
-  own from its replicated input and all converge at idle with zero
-  aggregate-level coordination. `[24-OP-GROUPBY-06]` `GroupByCell`'s outlet
-  SHALL be single-writer `MapDelta` and `GroupByCell` SHALL NOT be
-  `Replicable`; each peer SHALL derive its own aggregate from its
-  replicated input, converging at idle with zero aggregate-level
-  coordination (Ubiquitous). Gossipable aggregate outputs (per-source
-  keyed cumulative sums, `PnCounterDelta` generalized) stay deferred with
-  trigger: *first aggregate-only replica under input-size pressure*.
+- **Replication story: two routes.** (i) *membership-replicated recompute*:
+  `GroupByCell` is `Gossiping<SetDelta<E>>` — replicas gossip their tagged
+  input membership on `membership`/`deltaInlet` and each recomputes its
+  aggregate; its `MapDelta` outlet stays single-writer per instance, each
+  replica its own wave source (93 I-14 Rule S2); it is NOT `Replicable` (the
+  idempotent-merge class the KSP marker stamps), so a non-idempotent producer
+  may still link into its inlet. (ii) *mergeable aggregate gossip*:
+  `MergeableGroupByCell` for commutative, idempotent accumulators. A
+  `GroupByCell` with a lateness declaration refuses replication at spawn
+  (`[24-WL-18]`). `[24-OP-GROUPBY-06]` `GroupByCell`'s outlet SHALL be
+  single-writer `MapDelta` and `GroupByCell` SHALL NOT be `Replicable`; each
+  replica SHALL derive its own aggregate from its replicated (gossiped) input
+  membership, converging at idle with zero aggregate-level coordination
+  (Ubiquitous). Gossipable aggregate outputs (per-source keyed cumulative sums,
+  `PnCounterDelta` generalized) stay deferred with trigger: *first
+  aggregate-only replica under input-size pressure*.
 
 ⚠ GAP (G-44): Single-writer replication (leader→follower log-shipping)
 defers its liveness half: no automatic leader election, no failure
@@ -871,6 +875,10 @@ evicting locally while a peer still gossips below the floor would re-admit
 ghosts. Stability-scoped reclamation already exists (`StabilityReclaim`), but
 nothing relates a waterline floor to the stable frontier, so its existence
 does not by itself lift the restriction.
+The restriction is enforced at spawn — `Replication.replicate` refuses a
+`GroupByCell` constructed with a lateness declaration, naming `[24-WL-18]` —
+and at the eviction seam for any cell that would be admitted to replication
+(evictable xor replicable).
 
 ## Partitioned state
 
@@ -991,11 +999,13 @@ partitioning must not become a second distribution mechanism, and doesn't:
   partition and MUST re-apply it after every (re)placement, since
   supervision is per-host and does not migrate.
 - **Replication composes per organelle — same knob, wider interest.** A
-  mergeable organelle joins its own gossip mesh (40/42) independently by
-  widening its `Interest` to overlap peers: a shard that also keeps replicas is
-  the **sharded-replication** setting (42), reached by overlapping partial
-  interest, not by a second mechanism. The composite never coordinates
-  replication.
+  `PartitionedCell` replicates as one composite instance per peer — organelle
+  membership gossips through the membrane's `membership`/`deltaInlet`, each
+  replica routes and recomputes locally, `repartition` is per replica, and
+  organelles are never registry-published (so `[24-PART-01]` holds per replica
+  by construction); per-organelle hosted instances with overlapping interest
+  (the sharded-replication setting) remain the
+  `ShardCell`/`PartitionedShardSet` route (PN-4).
 
 ~~⚠ GAP (G-56): PartitionedCell's adopted design leaves its distribution edges
 open.~~ **Resolved by design (superseded by 42 §Interest-scoped instance
