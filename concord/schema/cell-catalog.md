@@ -103,6 +103,11 @@ driver-side by W4-B and recorded in `concord/corpus/DISPUTES.md` §"How it is dr
 the durable evicting-window pipeline) — the journaled twins of the core `window` and
 `count-view`, with no new op or descriptor field.
 
+The named-journal and durable-replica placement rules below are the proposed
+schema extension in `computenet-elc` under feature `computenet-u7mox`; they await
+the maintainer's grant and the separate typed-field/driver task described in
+`scenario.md` §`journal`.
+
 | id | ops | semantic |
 |---|---|---|
 | `journal-set-source` | `add`, `remove` | The durable `set-source`: an observed-remove set whose accepted ops tee to the write-ahead journal, so a crash replays them. Its outlet's wave identity is replay-stable (ref-derived `sourceId`; the epoch is journaled at checkpoint and rewound on recovery), which is what lets a downstream `effect-sink` recognise a replayed re-emission as already-acted (`24-DUR-04`/`24-DUR-05`). A member of the set-source family above — an unkeyed `effect-count` accepts it as a direct upstream. |
@@ -110,16 +115,33 @@ the durable evicting-window pipeline) — the journaled twins of the core `windo
 | `effect-sink` | — | The **effect boundary**: a journaled sink that fires one external effect per delivered added element, **keyed by that element**, into the log `effect-count` reads. Guarded by the `Effectful` processed frontier, so an invocation at or behind the frontier — replayed or live-duplicated — is suppressed instead of re-fired (`24-DUR-05`). Required by the unkeyed `effect-count` derivation. One of two `retransmit` targets the kernel binding admits — the other is a `replica-of` replica's `Replicable.deltaInlet`, where the dot algebra decides the duplicate instead (`scenario.md`'s driver-capability note). It is also the kernel binding's only `drive-stamped` target (`computenet-8ohq`) — the admitted twin, where an external actor's lane position IS judged by that same frontier — and its only `drive-contextless` target (`computenet-em9i`), for the same reason: an effect boundary reads a delta's added elements and decides on the message context, so a delivery carrying none is judged by the `Effectful` admission rule (`24-DUR-06`) rather than by a tag the scenario never named. |
 | `journal-window` | — | The durable tumbling `window` (computenet-t4od7.8): the same cell the core `window` id binds with `kind: tumbling` — `window: {kind: tumbling, size}`, `agg`, `lateness?`, ports `inlet`/`outlet` and, with `lateness`, `waterline`/`late` — but journaled, so a checkpoint carries its per-window state **and its waterline floor**. A recovered window therefore neither re-creates a window evicted before the checkpoint nor re-admits an add below the restored floor (`22-REC-01`, `24-WL-05`, `24-WL-07`). `kind: sliding` is refused. Its elements travel through the write-ahead journal, whose codec encodes scalar elements but not list-valued ones, so a `dur` scenario feeds it bare event times (an integer is its own head) rather than `[at, value]` pairs. |
 | `journal-count-view` | — | The durable `count-view`: a journaled per-key count fold recovered from its checkpoint plus the journal tail, the count twin of `journal-set-view`. Observed through the ordinary view checks. |
-| `journal` | — | The **crash handle**: a controller pseudo-cell, not a real cell (no ports, no links, no ops). `despawn`-ing it crashes and recovers the whole durable host in one step — every live instance discarded, the graph rebuilt under the same refs, then recovered from the surviving journal. A `snapshot` of a journaled cell lowers to a host checkpoint (state + frontier compaction). |
+| `journal` | — | The **crash handle**: a controller pseudo-cell, not a real cell (no ports, no links, no ops). Its optional `journal:` names the journal it recovers (absent ⇒ `default`). `despawn`-ing **any** controller crashes the whole durable host — every live instance is discarded and the graph rebuilt under the same refs — then recovers **only** that controller's journal; two controllers therefore express staged recovery. A `snapshot` of a journaled cell checkpoints that cell's journal only (state + frontier compaction). |
 
-`set-source`, `set-view`, `quorum-set` and `waterline` may also be placed on `host: dur`. There
-they are **volatile** members of the durable host — rebuilt fresh on a crash, never
-journaled or replayed. A volatile `waterline` recomputes its floor from live traffic
-only: a journaled source's replayed re-emission reaches it as a baseline, which a
-waterline ignores, so across a crash it is the evicting cell's restored floor that
-keeps late-dropping (`24-WL-REC-01`). That is how per-cell durability is expressed
-(`24-DUR-01`/`24-DUR-03`), and the volatile fan-in is what a journaled arm replays
-*into* (`24-REPLAY-01`; with `glitch-free: true`, `DUR-GF-01`).
+The five journaled catalog ids above always tee to a journal: absent `journal:`
+means the one named `default`, while a non-empty value selects that named
+journal. `set-source`, `set-view`, `quorum-set`, `waterline`, `partition` and
+`count-view` may also be placed on `host: dur`. Without `journal:` they are
+**volatile** members of the durable host — rebuilt fresh on a crash, never
+journaled or replayed; with it they tee to the named journal. A journaled
+`partition` cannot be checkpointed because it is not `Stateful` (`snapshot` is
+refused), so recovery is whole-tail replay. Its elements MUST be scalars: the
+write-ahead codec encodes scalar elements but not list-valued ones, the same
+limit recorded for `journal-window`.
+
+A volatile `waterline` recomputes its floor from live traffic only: a journaled
+source's replayed re-emission reaches it as a baseline, which a waterline
+ignores, so across a crash it is the evicting cell's restored floor that keeps
+late-dropping (`24-WL-REC-01`). That is how per-cell durability is expressed
+(`24-DUR-01`/`24-DUR-03`), and the volatile fan-in is what a journaled arm
+replays *into* (`24-REPLAY-01`; with `glitch-free: true`, `DUR-GF-01`).
+
+`replica-of` is legal on a `host: dur` `set-source` or
+`journal-set-source`. The replica joins the logical group exactly as on a dist
+host and is journaled exactly when the type/`journal:` rule above says so. After
+a crash, the rebuilt instance is re-replicated before its journal is replayed.
+Its fold is exposed through a co-hosted volatile companion, so
+`replicas-converge` and `views-converge` apply. A scenario using this placement
+is `profile: dur`.
 
 These six bind in `KernelDriverDur` rather than `KernelCatalog`, so they are absent
 from the core/dist binding table below. A link among `dur` cells may name `inlet:`/`outlet:`
