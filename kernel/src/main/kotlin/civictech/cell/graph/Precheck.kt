@@ -206,6 +206,17 @@ fun GraphSpec.precheck(boundary: List<BoundaryLink> = emptyList(), live: LiveVie
             is ConnectStep -> planned += scratch.connect(step)
             is UnlinkStep -> planned += scratch.unlink(step)
             is DespawnStep -> planned += scratch.despawn(step)
+            is PromoteStep -> planned += PlannedStep(
+                step.handle,
+                step.handle,
+                PlannedAction.PROMOTE,
+                emptySet(),
+                StepCheck.Refused(
+                    RefusalCode.POLICY_DENIAL,
+                    "promote step '${step.handle}': cold precheck of a promotion is the write plane's " +
+                        "(computenet-8joqm)",
+                ),
+            )
             is InstanceSetStep -> {
                 val lowered = try {
                     step.lower()

@@ -4,6 +4,9 @@ import civictech.cell.CellRef
 import civictech.cell.Cell
 import civictech.cell.data.Replicable
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.Evolve
+import civictech.cell.evolve.EvolutionHandle
+import civictech.cell.evolve.EvolutionHooks
 import civictech.cell.evolve.Promotion
 import civictech.cell.evolve.PromotionJournal
 import civictech.cell.evolve.PromotionJudge
@@ -17,11 +20,13 @@ import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
+import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.replication.Replication
+import civictech.cell.verify.InvariantCell
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -239,6 +244,118 @@ class ApplyContext(
         downstream: List<Pair<CellRef, String>>,
         judge: PromotionJudge? = null,
     ) {
+        val prepared = prepareSinglePromotion(gate, incumbent, candidate, outletName, downstream)
+
+        Promotion.promote(
+            host = host,
+            gate = prepared.gate,
+            incumbent = prepared.incumbent,
+            candidate = prepared.candidate,
+            outletName = outletName,
+            downstream = prepared.downstream,
+            judge = judge,
+            journal = prepared.journal,
+        )
+        cells.remove(incumbent)
+        journalBindings.remove(incumbent)
+    }
+
+    /** Lower one declarative [PromoteStep] onto the live evolution pipeline. */
+    fun evolve(step: PromoteStep): EvolutionHandle {
+        val gateRef = evolutionRef(step.gate, "gate")
+        val incumbentRef = evolutionRef(step.incumbent, "incumbent")
+        val candidateRef = evolutionRef(step.candidate, "candidate")
+        val downstream = step.downstream.map { (handle, inlet) ->
+            evolutionRef(handle, "downstream") to inlet
+        }
+        val prepared = prepareSinglePromotion(
+            gateRef,
+            incumbentRef,
+            candidateRef,
+            step.outletName,
+            downstream,
+        )
+        if (!prepared.candidateSpawn.shadow) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "candidate '${step.candidate}' must be declared shadow = true",
+            )
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val gate = prepared.gate as? TrafficLightApi<Any>
+            ?: throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "gate '${step.gate}' (${prepared.gate.ref}) is not a live TrafficLightApi",
+            )
+        val gates = step.gates.map { invariantFor(it, "gate") }
+        val baseline = step.baseline?.let { handle ->
+            val ref = evolutionRef(handle, "baseline")
+            val spawn = live().spawns[ref]
+                ?: throw Promotion.PromotionAborted(
+                    "PRECHECK",
+                    "baseline '$handle' ($ref) has no recorded spawn",
+                )
+            if (!spawn.shadow) {
+                throw Promotion.PromotionAborted(
+                    "PRECHECK",
+                    "baseline '$handle' must be declared shadow = true",
+                )
+            }
+            Evolve.Baseline(
+                twin = cells.getValue(ref),
+                gates = step.baselineGates.map { invariantFor(it, "baseline gate") },
+            )
+        }
+        val hooks = object : EvolutionHooks {
+            override val journal: PromotionJournal = prepared.journal
+
+            override fun despawnShadow(host: ManagedHost, ref: CellRef) {
+                val event = TopoEvent.Despawn(ref)
+                journalTopology(listOf(event))
+                applyDespawn(event)
+            }
+
+            override fun promoted(incumbent: CellRef) {
+                cells.remove(incumbent)
+                journalBindings.remove(incumbent)
+            }
+        }
+
+        return Evolve.run(
+            host = host,
+            gate = gate,
+            incumbent = prepared.incumbent,
+            candidate = prepared.candidate,
+            outletName = step.outletName,
+            downstream = prepared.downstream,
+            policy = step.policy,
+            gates = gates,
+            baseline = baseline,
+            hooks = hooks,
+        )
+    }
+
+    private data class PreparedSinglePromotion(
+        val gate: Cell,
+        val incumbent: Cell,
+        val candidate: Cell,
+        val candidateSpawn: TopoEvent.Spawn,
+        val downstream: List<Use<*>>,
+        val journal: PromotionJournal,
+    )
+
+    /**
+     * Shared, side-effect-free PRECHECK and journal seam for both the legacy
+     * direct promotion entry point and declarative evolution lowering.
+     */
+    private fun prepareSinglePromotion(
+        gate: CellRef,
+        incumbent: CellRef,
+        candidate: CellRef,
+        outletName: String,
+        downstream: List<Pair<CellRef, String>>,
+    ): PreparedSinglePromotion {
         val before = live()
         val gateCell = cells[gate]
             ?: throw Promotion.PromotionAborted("PRECHECK", "gate $gate is not a live TrafficLightApi")
@@ -284,7 +401,6 @@ class ApplyContext(
                 )
         }
         val priorLinks = before.links.values.filter { it.from == incumbent || it.to == incumbent }
-
         val promotionJournal = object : PromotionJournal {
             override fun checkpointBeforeStateHandoff() {
                 incumbentJournal?.let(host::checkpoint)
@@ -306,19 +422,35 @@ class ApplyContext(
                 synchronizeActiveLinksAfterPromotion(event, priorLinks)
             }
         }
-
-        Promotion.promote(
-            host = host,
-            gate = gateCell,
-            incumbent = incumbentCell,
-            candidate = candidateCell,
-            outletName = outletName,
-            downstream = uses,
-            judge = judge,
-            journal = promotionJournal,
+        return PreparedSinglePromotion(
+            gateCell,
+            incumbentCell,
+            candidateCell,
+            candidateSpawn,
+            uses,
+            promotionJournal,
         )
-        cells.remove(incumbent)
-        journalBindings.remove(incumbent)
+    }
+
+    private fun evolutionRef(handle: String, role: String): CellRef {
+        val ref = try {
+            refFor(handle)
+        } catch (_: IllegalStateException) {
+            throw Promotion.PromotionAborted("PRECHECK", "$role handle '$handle' is not live")
+        }
+        if (cells[ref] == null) {
+            throw Promotion.PromotionAborted("PRECHECK", "$role handle '$handle' ($ref) is not live")
+        }
+        return ref
+    }
+
+    private fun invariantFor(handle: String, role: String): InvariantCell<*, *> {
+        val ref = evolutionRef(handle, role)
+        return cells.getValue(ref) as? InvariantCell<*, *>
+            ?: throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "$role handle '$handle' ($ref) is not an InvariantCell",
+            )
     }
 
     /**
@@ -550,4 +682,5 @@ data class AppliedGraph(
     val families: Map<String, KeyedCells<*>>,
     val links: Map<String, Link>,
     val inputs: Map<String, Map<String, DurableInput>> = emptyMap(),
+    val evolutions: Map<String, EvolutionHandle> = emptyMap(),
 )

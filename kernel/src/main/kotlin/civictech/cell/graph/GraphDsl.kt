@@ -4,6 +4,8 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.evolve.Effectful
+import civictech.cell.evolve.EvolutionHandle
+import civictech.cell.evolve.PromotionPolicy
 import civictech.cell.evolve.Shadow
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
@@ -163,6 +165,35 @@ data class UnlinkStep(val from: String, val outlet: String, val to: String, val 
 
 /** Unlinks every live edge touching [handle], then removes that cell and frees its handle. */
 data class DespawnStep(val handle: String) : GraphStep
+
+/**
+ * Declarative request to run the live evolution pipeline over cells already
+ * named by this graph. Unlike topology steps, this emits no [TopoEvent] while
+ * applying the spec: the eventual accept/reject hooks record the committed
+ * promotion or rejected shadow despawn at the point the decision is made.
+ */
+data class PromoteStep(
+    val handle: String,
+    val incumbent: String,
+    val candidate: String,
+    val gate: String,
+    val outletName: String,
+    val downstream: List<Pair<String, String>>,
+    val policy: PromotionPolicy,
+    val gates: List<String>,
+    val baseline: String? = null,
+    val baselineGates: List<String> = emptyList(),
+) : GraphStep {
+    init {
+        require(handle.isNotBlank()) { "promote step handle must not be blank" }
+        require(incumbent.isNotBlank()) { "promote step '$handle': incumbent must not be blank" }
+        require(candidate.isNotBlank()) { "promote step '$handle': candidate must not be blank" }
+        require(gate.isNotBlank()) { "promote step '$handle': gate must not be blank" }
+        require((baseline != null) == policy.baseline) {
+            "promote step '$handle': baseline must be supplied exactly when policy.baseline is true"
+        }
+    }
+}
 
 /**
  * PN-13 — one instance's declared slot in a heterogeneous instance set (spec
@@ -364,11 +395,12 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val occupied = (context.handles.keys + context.live().families.keys).toMutableSet()
         val familyHandles = context.live().families.keys.toMutableSet()
         val events = ArrayList<TopoEvent>(lowered.size)
-        val preparedReplicas = mutableMapOf<Int, Cell>()
+        val eventSteps = ArrayList<GraphStep>(lowered.size)
+        val preparedReplicas = mutableMapOf<String, Cell>()
         val displayKeys = mutableMapOf<Int, String>()
         fun resolve(handle: String): CellRef = active[handle]
             ?: throw IllegalStateException("unknown handle '$handle'")
-        lowered.forEachIndexed { index, step ->
+        lowered.forEach { step ->
             when (step) {
                 is SpawnStep -> {
                     check(occupied.add(step.handle)) { "duplicate handle '${step.handle}'" }
@@ -401,29 +433,32 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                                         "(built ${cell.javaClass.name})",
                                 )
                             }
-                            preparedReplicas[index] = cell
+                            preparedReplicas[step.handle] = cell
                         }
                     }
+                    eventSteps += step
                 }
 
                 is ConnectStep -> {
                     val key = stepKey(step)
                     if (step.from in familyHandles) throw familyLinkRefusal(step.from, key)
                     if (step.to in familyHandles) throw familyLinkRefusal(step.to, key)
-                    displayKeys[index] = key
+                    displayKeys[events.size] = key
                     events += TopoEvent.Connect(
                         resolve(step.from), step.outlet, resolve(step.to), step.inlet, step.options,
                     )
+                    eventSteps += step
                 }
 
                 is UnlinkStep -> {
                     val key = stepKey(step)
                     if (step.from in familyHandles) throw familyLinkRefusal(step.from, key)
                     if (step.to in familyHandles) throw familyLinkRefusal(step.to, key)
-                    displayKeys[index] = key
+                    displayKeys[events.size] = key
                     events += TopoEvent.Unlink(
                         resolve(step.from), step.outlet, resolve(step.to), step.inlet,
                     )
+                    eventSteps += step
                 }
 
                 is DespawnStep -> {
@@ -431,6 +466,20 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         ?: throw IllegalStateException("unknown handle '${step.handle}'")
                     occupied.remove(step.handle)
                     events += TopoEvent.Despawn(ref)
+                    eventSteps += step
+                }
+
+                is PromoteStep -> {
+                    check(occupied.add(step.handle)) { "duplicate handle '${step.handle}'" }
+                    buildList {
+                        add(step.incumbent)
+                        add(step.candidate)
+                        add(step.gate)
+                        addAll(step.downstream.map { it.first })
+                        addAll(step.gates)
+                        step.baseline?.let(::add)
+                        addAll(step.baselineGates)
+                    }.forEach(::resolve)
                 }
 
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
@@ -446,9 +495,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         events.forEachIndexed { index, event ->
             when (event) {
                 is TopoEvent.Spawn -> {
-                    val ref = context.applySpawn(event, preparedReplicas[index])
+                    val ref = context.applySpawn(event, preparedReplicas[event.handle])
                     refs[event.handle] = ref
-                    val step = lowered[index] as SpawnStep
+                    val step = eventSteps[index] as SpawnStep
                     if (step.inputs.isNotEmpty()) {
                         inputs[event.handle] = step.inputs.associateWith { name ->
                             context.host.durableInput(ref, name)
@@ -479,7 +528,10 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val links = deltaLinks.mapNotNull { (key, topologyKey) ->
             context.linkFor(topologyKey)?.let { key to it }
         }.toMap()
-        return AppliedGraph(refs.toMap(), families.toMap(), links, inputs.toMap())
+        val evolutions = lowered.filterIsInstance<PromoteStep>().associate { step ->
+            step.handle to context.evolve(step)
+        }
+        return AppliedGraph(refs.toMap(), families.toMap(), links, inputs.toMap(), evolutions)
     }
 
     /**
@@ -506,6 +558,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         }
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.shadow }?.let { step ->
             throw unsupportedShadow(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
+        lowered.filterIsInstance<PromoteStep>().firstOrNull()?.let { step ->
+            throw unsupportedPromote(step.handle, "applyTo(Use<HostManagementApi>)")
         }
         val refs = mutableMapOf<String, CellRef>()
         val links = mutableMapOf<String, Link>()
@@ -552,6 +607,8 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     }
                     host.call.despawn(ref)
                 }
+
+                is PromoteStep -> error("PromoteStep must be refused before applyTo")
 
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
@@ -673,6 +730,13 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     progress.onStep(StepEvent(index, key, results.getValue(key)))
                 }
 
+                is PromoteStep -> {
+                    results[step.handle] = StepResult.Rejected(
+                        "promote step '${step.handle}' is not supported by applyRemote",
+                    )
+                    progress.onStep(StepEvent(index, step.handle, results.getValue(step.handle)))
+                }
+
                 // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
                 is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
             }
@@ -740,6 +804,10 @@ private fun unsupportedInputs(handle: String, path: String): IllegalStateExcepti
 
 private fun unsupportedShadow(handle: String, path: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'shadow' cannot be applied by $path; use apply(ApplyContext)",
+)
+
+private fun unsupportedPromote(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "promote step '$handle' is not supported by $path; use apply(ApplyContext)",
 )
 
 internal fun suppressShadow(cell: Cell) {
@@ -977,6 +1045,43 @@ class GraphBuilder private constructor(
             linkSteps[stepKey(step)] = step
         }
         steps += step
+    }
+
+    /**
+     * Declare and start one live evolution over cells already spawned through
+     * this builder. The graph records only the declarative request; the
+     * returned handle drives the existing shadow/judge/swap pipeline.
+     */
+    fun promote(
+        handle: String,
+        incumbent: CellHandle,
+        candidate: CellHandle,
+        gate: CellHandle,
+        outletName: String,
+        downstream: List<Pair<CellHandle, String>>,
+        policy: PromotionPolicy,
+        gates: List<CellHandle>,
+        baseline: CellHandle? = null,
+        baselineGates: List<CellHandle> = emptyList(),
+    ): EvolutionHandle {
+        require(names.add(handle)) { "duplicate handle '$handle'" }
+        val step = PromoteStep(
+            handle = handle,
+            incumbent = incumbent.name,
+            candidate = candidate.name,
+            gate = gate.name,
+            outletName = outletName,
+            downstream = downstream.map { (cell, inlet) -> cell.name to inlet },
+            policy = policy,
+            gates = gates.map(CellHandle::name),
+            baseline = baseline?.name,
+            baselineGates = baselineGates.map(CellHandle::name),
+        )
+        val applyContext = context
+            ?: throw unsupportedPromote(handle, "graph(Use<HostManagementApi>)")
+        val evolution = applyContext.evolve(step)
+        steps += step
+        return evolution
     }
 
     /** Detaches and records an edge this builder connected earlier. */
