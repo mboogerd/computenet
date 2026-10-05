@@ -3979,3 +3979,62 @@ test names below were checked with `git grep -n` at that commit.
   exposed by the catalog. Both are schema changes.
 - **Revisit trigger**: a catalog form for per-inlet frontier gating, or a
   check vocabulary change that adds prefix folds over map views.
+
+## 22-OBS-BRIDGED — bridged aligned observation ([KE2-28]..[KE2-30], BS-16): kernel-test-covered, no in-corpus driver binding
+
+### 22-OBS-BRIDGED-01 (a remote aligned arm settles the local sink) — **`driver-binding-gap`**
+
+- **Category**: `driver-binding-gap`.
+- **Requirement**: `[22-OBS-01]`, with the bridged frontier condition in
+  `[22-GF-03]` and the `[KE2-28]`/`[KE2-29]`/`[KE2-24]` feature clauses.
+- **Missing capability**: **cross-host aligned observation, no in-corpus driver binding**.
+  `KernelDriverDist.connectCrossHost` binds only
+  primary-`inlet` targets through `FanOutlet.streamTo` (with no `EdgeOpen`).
+  An `aligned-view` exposes one inlet per named member view and no primary
+  `inlet`, so the `dist` driver rejects this target; even a widened
+  `streamTo` binding would bypass the aligned frontier's edge-open handshake
+  and leave the arm's deltas unmatched. The missing runtime/corpus capability
+  is a named-inlet `bridgeTo`/`bridgeFrom` cross-host binding, plus a
+  `[22-GF-03]`-shaped corpus check for it.
+- **Behaviour it would carry**: Given an `aligned-view` with one member on a
+  second host, when a source wave reaches a local member and a remote member
+  over the bridge, every composite is the same per-source prefix as the
+  all-local case; a remote filter that absorbs the final wave settles by its
+  bridged `Progress` ack, and registering visibility handles adds no frame or
+  protocol lane.
+- **Scenario it would have been**: `22-OBS-BRIDGED-01.yaml`, `profile: dist`,
+  `covers: [22-OBS-01]`, with an `aligned-view` whose one member is hosted on
+  a second host.
+- **Why it cannot be checked honestly today**: the `dist` driver has no
+  binding for an `aligned-view` member inlet. Authoring the scenario over a
+  same-host stand-in would not exercise the bridge, while authoring it over
+  the available cross-host `streamTo` path would not install the frontier
+  edge it claims to test. That would make the scenario appear to cover
+  `[22-OBS-01]` without checking bridged completeness.
+- **What was NOT done instead**: no same-host stand-in was dressed as a
+  bridge, and no weakened scenario was authored. No scenario YAML or
+  `CONCORDANCE.md` row claims this corpus coverage.
+- **What is not lost**: the kernel proof is pinned by
+  `AlignedObserveBridgedTest`, over the in-process full-duplex frame bridge
+  and its Near/C/Far managed-host topology:
+  - `KE2-28 - an identity remote arm publishes exactly the local prefix for every wave`;
+  - `KE2-28 - an even-filtering remote arm publishes exactly the filtered local prefix`;
+  - `control - the same bridged topology tears under point-consistent observation`;
+  - `KE2-29 - a final wave swallowed remotely settles through bridged Progress`;
+  - `control - without negotiated Progress the final remote wave remains buffered`;
+  - `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`;
+  - `bridged Stall then Resume on one link are handled in wire order`.
+  The companion `GlitchFreeBridgedDiamondTest` also pins bridged frontier
+  ordering, absorb-ack settlement, and protocol-frame duplication controls.
+- **[KE2-30] clause status**: `[KE2-28]` identity and filtered cases are
+  shown by the two `KE2-28` methods above; its point-consistent control is
+  shown by `control - the same bridged topology tears under point-consistent observation`;
+  `[KE2-29]` is shown by `KE2-29 - a final wave swallowed remotely settles through bridged Progress`
+  with its no-`Progress` control; duplicated protocol frames are shown by
+  the seeded `PROTOCOL_ONLY` bridge schedule in the two `KE2-28` methods,
+  with the active-duplicator control shown by `BS-16 CHA1-61 - the per-seed outcome vector survives the retrofit, is blind to a dead duplicator, and ungating it diverges`
+  in `GlitchFreeBridgedDiamondTest`; `[KE2-24]` is shown by
+  `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`.
+- **Resolves**: a named-inlet cross-host link binding in `KernelDriverDist`,
+  together with the `[22-GF-03]`-shaped corpus check that exercises its
+  `EdgeOpen`/`EdgeClose`/`Progress` ordering and aligned-view completeness.
