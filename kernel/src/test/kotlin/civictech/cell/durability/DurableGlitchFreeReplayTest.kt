@@ -56,6 +56,9 @@ import java.util.*
  * branch below covers outlet-wave restoration plus the remaining tail. Fresh
  * epoch succession × glitch-free is covered by `EpochTransitionFreshMintTest`
  * and `RestartReBaselineTest`, not by this durable-replay fixture.
+ * All five methods use the same checkpointable [StatefulMapperCell] for the
+ * journaled arm; only the two checkpointed methods exercise its checkpoint
+ * state and outlet-wave records.
  */
 class DurableGlitchFreeReplayTest {
 
@@ -101,6 +104,8 @@ class DurableGlitchFreeReplayTest {
     ) : Cell, Stateful {
         val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
         val outlet = registerPort("outlet", FanOutlet.create<Consumer<Pair<String, Int>>>())
+        /** An unlinked journaled outlet whose spontaneous timestamps make outlet-wave restore observable. */
+        val epochProbe = registerPort("epochProbe", FanOutlet.create<Consumer<Int>>())
         private val received = mutableListOf<Int>()
 
         init {
@@ -145,6 +150,7 @@ class DurableGlitchFreeReplayTest {
         val checkpointHighWater: Long?,
         val recoveredSourceId: UUID,
         val recoveredHighWater: Long,
+        val postRecoveryProbeTimestamps: List<Timestamp>,
     )
 
     private fun runSession(
@@ -194,6 +200,14 @@ class DurableGlitchFreeReplayTest {
                 hostVol.managementInlet.call.spawn(o)
                 controller.runToIdle()
 
+                // The checkpointed branch needs a real, non-zero outlet high-water.
+                // This unlinked outlet belongs to the journaled Stateful producer,
+                // so checkpoint/recovery must preserve its source lane without
+                // adding a wave to the diamond's observations.
+                if (checkpointAfter != null) {
+                    j.epochProbe.originate { provide(0) }
+                }
+
                 // A fans one wave to both arms through the durable host's queue — so BOTH
                 // arms' intakes are on the crashing host (the volatile arm's in-flight
                 // deliveries are lost with it), and A→J is written to the WAL.
@@ -226,12 +240,12 @@ class DurableGlitchFreeReplayTest {
                 repeat(rnd.nextInt(4)) { controller.step() }
                 if (checkpointAfter == n) {
                     controller.runToIdle()
-                    checkpointHighWater = preCrash.journaled.outlet.waveState().highWater
+                    checkpointHighWater = preCrash.journaled.epochProbe.waveState().highWater
                     preCrash.host.checkpoint(journal)
                 }
             }
             controller.runToIdle()
-            val preCrashWave = preCrash.journaled.outlet.waveState()
+            val preCrashWave = preCrash.journaled.epochProbe.waveState()
 
             // CRASH: every host, cell, queue, and link is discarded — only the journal survives.
             observations.clear() // measure the post-recovery world only
@@ -240,14 +254,23 @@ class DurableGlitchFreeReplayTest {
             recovered.host.replayAsBaseline = replayAsBaseline
             recovered.host.recoverFrom(journal) // replay the durable arm's frames
             controller.runToIdle()
-            val recoveredWave = recovered.journaled.outlet.waveState()
+            val postRecoveryProbeTimestamps = mutableListOf<Timestamp>()
+            if (checkpointAfter != null) {
+                recovered.journaled.epochProbe.observe(PortRef.generate()) {
+                    postRecoveryProbeTimestamps += it.timestamp
+                }
+            }
 
             // resume live traffic on the rebuilt source lane
             for (n in (preCrashWaves + 1)..(preCrashWaves + resumeWaves)) {
                 recovered.source.emit(n)
                 repeat(rnd.nextInt(4)) { controller.step() }
+                if (checkpointAfter != null) {
+                    recovered.journaled.epochProbe.originate { provide(n) }
+                }
             }
             controller.runToIdle()
+            val recoveredWave = recovered.journaled.epochProbe.waveState()
 
             return SessionResult(
                 observations = observations.toList(),
@@ -256,6 +279,7 @@ class DurableGlitchFreeReplayTest {
                 checkpointHighWater = checkpointHighWater,
                 recoveredSourceId = recoveredWave.sourceId,
                 recoveredHighWater = recoveredWave.highWater,
+                postRecoveryProbeTimestamps = postRecoveryProbeTimestamps.toList(),
             )
         } finally {
             PortIdentities.deriveRefs = previousDerive
@@ -334,7 +358,7 @@ class DurableGlitchFreeReplayTest {
             val result = runSession(
                 seed,
                 replayAsBaseline = true,
-                deriveStableRefs = true,
+                deriveStableRefs = false,
                 checkpointAfter = checkpointAfter,
             )
             val obs = result.observations
@@ -342,14 +366,17 @@ class DurableGlitchFreeReplayTest {
             val replay = obs.filter { it.baseline }
             val live = obs.filter { !it.baseline }
 
-            // The checkpoint restores J's exact epoch and rewinds it to the
-            // recorded high-water before the tail is replayed.
+            // The checkpoint has a real non-zero outlet high-water, and the
+            // restored source lane is the one observed before the crash.
+            (checkpointHighWater > 0L).shouldBeTrue()
+            result.preCrashHighWater shouldBe checkpointHighWater
             result.recoveredSourceId shouldBe result.preCrashSourceId
-            (result.preCrashHighWater >= checkpointHighWater).shouldBeTrue()
-            // The checkpoint restores the outlet to its checkpoint high-water;
-            // replaying the retained tail then advances it back to the
-            // pre-crash high-water on the same source epoch.
-            result.recoveredHighWater shouldBe result.preCrashHighWater
+            result.postRecoveryProbeTimestamps.size shouldBe resumeWaves
+            result.postRecoveryProbeTimestamps.all { it.sourceId == result.preCrashSourceId }.shouldBeTrue()
+            result.postRecoveryProbeTimestamps.all { it.counter > checkpointHighWater }.shouldBeTrue()
+            result.postRecoveryProbeTimestamps.map { it.counter } shouldBe
+                (checkpointHighWater + 1..checkpointHighWater + resumeWaves.toLong()).toList()
+            result.recoveredHighWater shouldBe result.postRecoveryProbeTimestamps.last().counter
 
             // The compacted journal contributes only the post-checkpoint tail
             // to the replayed cone, and every replayed frame is a J baseline.
@@ -359,15 +386,13 @@ class DurableGlitchFreeReplayTest {
 
             // Live traffic remains glitch-free: every post-recovery wave is a
             // complete pair under one timestamp. The join's timestamp is the
-            // upstream source context, so compare its counters with J's
-            // checkpoint high-water while the outlet state above proves J's
-            // preserved source identity.
+            // upstream source context; the epoch-probe assertions above are
+            // the direct observation of J's post-recovery outlet counters.
             live.groupBy { it.n }.forEach { (_, group) ->
                 group.map { it.label }.toSet() shouldBe setOf("J", "V")
                 group.map { it.ts }.toSet().size shouldBe 1
             }
             live.map { it.n }.toSet() shouldBe ((preCrashWaves + 1)..(preCrashWaves + resumeWaves)).toSet()
-            live.filter { it.label == "J" }.all { it.ts.counter > checkpointHighWater }.shouldBeTrue()
 
             // Released observations equal the batch recompute over tail + live.
             obs.map { it.label to it.n }.sortedWith(compareBy({ it.second }, { it.first })) shouldBe
