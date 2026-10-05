@@ -14,6 +14,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.notifyDownstream
 import civictech.cell.port.FanOutlet
+import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
 import civictech.cell.link.sliceTo
@@ -881,10 +882,18 @@ class Replication(
         localReplicas[ref.id]?.remove(incumbent)
         hostOf.remove(ref)
         linked.keys.filter { it.first == ref }.toList().forEach { linked.remove(it) }
-        host.managementInlet.call.despawn(ref)
-        // recovery: republish the candidate under the SAME ref and re-establish
-        // this peer's gossip + watermark tracking (companion reused).
-        replicate(candidate, host)
+        // Promotion COMMIT is an explicit management operation (spec 34
+        // decision 5, [ECO1-DEN-08]), not a new resource request by the peer
+        // whose stamp happens to surround promoteReplica. PRECHECK has already
+        // re-authorized every moved link against its establishing identity;
+        // clear only that ambient caller stamp while the local swap despawns and
+        // re-spawns, then let CurrentPeer restore it for the caller.
+        CurrentPeer.withStamp(null) {
+            host.managementInlet.call.despawn(ref)
+            // recovery: republish the candidate under the SAME ref and re-establish
+            // this peer's gossip + watermark tracking (companion reused).
+            replicate(candidate, host)
+        }
     }
 
     /**

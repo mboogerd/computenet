@@ -8,6 +8,7 @@ import civictech.cell.CellRef
 import civictech.cell.ClaimClass
 import civictech.cell.DenialReason
 import civictech.cell.RecordingLedger
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.evolve.Promotion
 import civictech.cell.host.DrainAndMigrateTest.CounterProxy
@@ -16,8 +17,6 @@ import civictech.cell.link.AuthLevel
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
 import civictech.cell.replication.Replication
-import civictech.cell.repro.ExpectedFailure
-import civictech.cell.repro.withSignature
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
@@ -65,13 +64,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * Promotion of links established under a remote stamp would charge Link; that
  * is `computenet-8aboz`'s (decision `5o1rf-D8`), out of scope here.
  *
- * **The promotion swap is a standing defect, not a pass** (`computenet-4yvsx`,
- * found by this task). A stamped `promoteReplica` re-spawns the candidate
- * through `Replication.rebind` -> `replicate` -> `managementInlet.call.spawn`
- * on the caller's own thread, which charges Spawn — and, refused, throws out of
- * COMMIT after the incumbent was despawned. Its two tests are
- * [ExpectedFailure]s keyed on [PROMOTION_SPAWN]; the seven other operations
- * are the green tests. Per the task's non-goals, no main source is changed here.
+ * **Promotion COMMIT is internal management work** (`computenet-4yvsx`). A
+ * stamped `promoteReplica` reaches `Replication.rebind`, whose candidate
+ * re-spawn must not inherit the requesting principal's ambient stamp. The
+ * regression tests cover both claim-free completion and the former half-done
+ * state in which the incumbent was despawned before the candidate's Spawn
+ * claim was refused.
  */
 class BudgetManagementExemptionTest {
 
@@ -222,10 +220,16 @@ class BudgetManagementExemptionTest {
      * on `promo`, then `promoteReplica` under q's stamp with a same-ref
      * candidate. No downstream link is established under a remote stamp (class
      * KDoc), so PRECHECK's re-authorization is local. Everything after the
-     * setup runs inside [withSignature]: an escaping exception is turned into
-     * an assertion so the only way this fails is the recorded one.
+     * setup is observed directly: no failure may escape and the candidate must
+     * be the hosted replica after COMMIT.
      */
-    private fun runPromotion(hosts: Hosts, clean: () -> Unit) {
+    private data class PromotionAttempt(
+        val logicalId: UUID,
+        val candidate: SetCell<String>,
+        val failure: Throwable?,
+    )
+
+    private fun attemptPromotion(hosts: Hosts, clean: () -> Unit): PromotionAttempt {
         val controller = hosts.controller
         val promo = hosts.promo
         val replication = Replication(hosts.registry)
@@ -234,38 +238,40 @@ class BudgetManagementExemptionTest {
         controller.runToIdle()
         clean()
 
-        withSignature(PROMOTION_SPAWN) {
-            val candidate = SetCell<String>(CellRef(logicalId, 0))
-            val escaped = asQ {
-                runCatching {
-                    Promotion.promoteReplica(promo, replication, incumbent, candidate)
-                    controller.runToIdle()
-                }.exceptionOrNull()
-            }
-            escaped.shouldBeNull()
-            clean()
-            hosts.registry.instances.replicasOf(logicalId) shouldBe setOf(candidate.ref)
-            promo.lookup<Any>(candidate.ref).shouldNotBeNull()
+        val candidate = SetCell<String>(CellRef(logicalId, 0))
+        val failure = asQ {
+            val result = runCatching {
+                Promotion.promoteReplica(promo, replication, incumbent, candidate)
+                controller.runToIdle()
+            }.exceptionOrNull()
+            CurrentPeer.get() shouldBe q // rebind's local reset restores its caller
+            result
         }
+        return PromotionAttempt(logicalId, candidate, failure)
+    }
+
+    private fun assertCandidateHosted(hosts: Hosts, attempt: PromotionAttempt) {
+        hosts.registry.instances.replicasOf(attempt.logicalId) shouldBe setOf(attempt.candidate.ref)
+        val api = hosts.promo.lookup<SetApi<String>>(attempt.candidate.ref).shouldNotBeNull()
+        api.inlet.call.add("candidate-hosted")
+        hosts.controller.runToIdle()
+        attempt.candidate.membership() shouldBe setOf("candidate-hosted")
+    }
+
+    private fun runPromotion(hosts: Hosts, clean: () -> Unit) {
+        val attempt = attemptPromotion(hosts, clean)
+        attempt.failure.shouldBeNull()
+        clean()
+        assertCandidateHosted(hosts, attempt)
+        clean()
     }
 
     /**
-     * BS-10 / [ECO1-DEN-08], the promotion swap, behavioural half — **a standing
-     * defect** (`computenet-4yvsx`): `promoteReplica` COMMIT re-spawns the
-     * candidate through `Replication.rebind` -> `replicate` ->
-     * `managementInlet.call.spawn` on the CALLER's thread, so under a stamp it
-     * constructs a Spawn claim (a direct call, not the SimulationController
-     * stamp leak). Against a refusing ledger it throws `BudgetRefusedException`
-     * after the incumbent was already despawned. When the fix lands this test
-     * passes and the extension turns it red: remove the annotation then.
+     * BS-10 / [ECO1-DEN-08], the promotion swap, behavioural half. COMMIT
+     * re-spawns through `Replication.rebind`; that internal management work
+     * must not inherit the CALLER's stamp or construct a Spawn claim.
      */
     @Test
-    @ExpectedFailure(
-        signature = PROMOTION_SPAWN,
-        reason = "promoteReplica under a stamp charges Spawn for the re-spawned candidate in COMMIT",
-        owner = "computenet-4yvsx",
-        filedAs = "bead:computenet-4yvsx",
-    )
     fun `a promotion swap for an exhausted principal succeeds and records no claim`() {
         val ledgers = mutableMapOf<String, RecordingLedger>()
         val hosts = hosts { scope -> refuseAll(scope).also { ledgers[scope] = it } }
@@ -275,14 +281,8 @@ class BudgetManagementExemptionTest {
         }
     }
 
-    /** The promotion swap, structural half — the same standing defect (`computenet-4yvsx`). */
+    /** The promotion swap, structural half. */
     @Test
-    @ExpectedFailure(
-        signature = PROMOTION_SPAWN,
-        reason = "promoteReplica under a stamp calls the ledger (Spawn) for the re-spawned candidate",
-        owner = "computenet-4yvsx",
-        filedAs = "bead:computenet-4yvsx",
-    )
     fun `a promotion swap never calls a ledger that throws for any non-Spawn claim`() {
         val ledgers = mutableMapOf<String, CountingLedger>()
         val hosts = hosts { scope -> structural().also { ledgers[scope] = it } }
@@ -292,8 +292,22 @@ class BudgetManagementExemptionTest {
         }
     }
 
-    private companion object {
-        /** The [ExpectedFailure] token for `computenet-4yvsx`. */
-        const val PROMOTION_SPAWN = "ECO1-DEN-08-PROMOTION-SPAWN"
+    /** Regression for the former non-atomic COMMIT failure (`computenet-4yvsx`). */
+    @Test
+    fun `a promotion swap never leaves the incumbent gone and the candidate unhosted`() {
+        val ledgers = mutableMapOf<String, RecordingLedger>()
+        val hosts = hosts { scope -> refuseAll(scope).also { ledgers[scope] = it } }
+        val attempt = attemptPromotion(hosts) {
+            for (h in hosts.all) h.boundaryDenialCount() shouldBe 0L
+            for ((scope, l) in ledgers) (scope to l.charges.toList()) shouldBe (scope to emptyList<BudgetClaim>())
+        }
+
+        // Inspect the post-COMMIT topology before the exception assertion: on
+        // the old path Spawn was refused after despawn, so these two checks
+        // exposed the half-done swap instead of stopping at the thrown refusal.
+        assertCandidateHosted(hosts, attempt)
+        attempt.failure.shouldBeNull()
+        for (h in hosts.all) h.boundaryDenialCount() shouldBe 0L
+        for ((scope, l) in ledgers) (scope to l.charges.toList()) shouldBe (scope to emptyList<BudgetClaim>())
     }
 }
