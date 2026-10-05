@@ -242,11 +242,13 @@ private data class RestartOutletWaveRecord(
 
 /**
  * Additive qfi22-D10 record: a supervised RESTART that occurred in the WAL tail.
- * [triggerFramePayload] is the exact `WireCodec` payload of the invocation whose
- * failure caused the transition, so recovery applies this event only when replay
- * reaches that same failure — never merely because the record was decoded ahead
- * of asynchronously delivered frames. [outlets] are the fresh epochs minted before
- * the live [civictech.cell.ReBaselineEmitting.reBaseline] call.
+ * When present, [triggerFramePayload] is the exact `WireCodec` payload of the
+ * journaled invocation whose failure caused the transition, so recovery applies
+ * this event only when replay reaches that same failure. A null payload records a
+ * boundary caused by a never-journaled metadata invocation; recovery stages that
+ * boundary at this record's journal position instead of trying to serialize or
+ * replay-match the trigger. [outlets] are the fresh epochs minted before the live
+ * [civictech.cell.ReBaselineEmitting.reBaseline] call.
  *
  * A separate type, rather than a field on [CheckpointRecord], keeps journals written
  * before this change byte-for-byte readable: they contain no type-8 record and take
@@ -254,7 +256,7 @@ private data class RestartOutletWaveRecord(
  */
 private data class RestartRecord(
     val cellRef: CellRef,
-    val triggerFramePayload: ByteArray,
+    val triggerFramePayload: ByteArray?,
     val generation: Long,
     val supersedes: Set<UUID>,
     val outlets: List<RestartOutletWaveRecord>,
@@ -263,7 +265,7 @@ private data class RestartRecord(
 /** In-kernel decoded view of [RestartRecord]; external readers see additive type 8 as unknown. */
 internal data class DecodedRestart(
     val cellRef: CellRef,
-    val triggerFramePayload: ByteArray,
+    val triggerFramePayload: ByteArray?,
     val generation: Long,
     val supersedes: Set<UUID>,
     val outlets: List<OutletWave>,
@@ -462,6 +464,7 @@ internal class HostDurability(
     private val cellsView: () -> Map<CellRef, Cell>,
     private val deadLetter: (String) -> Unit,
     private val submit: (HostedPortInvocation) -> Unit,
+    private val submitRestartBoundary: (DecodedRestart, Journal) -> Unit = { _, _ -> },
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
     /**
      * Runs its argument while holding the host's `dataLock`, handing it every
@@ -517,10 +520,9 @@ internal class HostDurability(
     private val journaledFrames = IdentityHashMap<HostedPortInvocation, ByteArray>()
 
     /**
-     * Type-8 RESTART events decoded during recovery, held until the exact triggering
-     * replay frame fails on the host scheduler. Recovery stages all frames before any
-     * of them can deliver, so applying the record in the decode loop would move the
-     * epoch boundary ahead of the frame that caused it.
+     * Trigger-bearing type-8 events decoded during recovery, held until the exact
+     * replay frame fails on the host scheduler. Triggerless events are staged through
+     * [submitRestartBoundary] at their journal position instead.
      */
     private val replayedRestarts = IdentityHashMap<Journal, MutableList<DecodedRestart>>()
 
@@ -658,8 +660,12 @@ internal class HostDurability(
                 // complete one.
                 try {
                     JournalRecords.decodeRestart(record)?.let { restart ->
-                        synchronized(replayedRestarts) {
-                            replayedRestarts.getOrPut(journal, ::mutableListOf) += restart
+                        if (restart.triggerFramePayload == null) {
+                            submitRestartBoundary(restart, journal)
+                        } else {
+                            synchronized(replayedRestarts) {
+                                replayedRestarts.getOrPut(journal, ::mutableListOf) += restart
+                            }
                         }
                         return@forEachIndexed
                     }
@@ -730,8 +736,9 @@ internal class HostDurability(
         if (journal !== replayed.journal) return null
         return synchronized(replayedRestarts) {
             val pending = replayedRestarts[replayed.journal] ?: return@synchronized null
-            val index = pending.indexOfFirst {
-                it.cellRef == frame.cellRef && it.triggerFramePayload.contentEquals(replayed.payload)
+            val index = pending.indexOfFirst { restart ->
+                restart.cellRef == frame.cellRef &&
+                    restart.triggerFramePayload?.contentEquals(replayed.payload) == true
             }
             if (index < 0) null else pending.removeAt(index)
         }
@@ -792,7 +799,8 @@ internal class HostDurability(
     /**
      * Write the fresh-epoch half of one live supervised RESTART before its
      * `ReBaseline` can become visible. A replay of the same journal never appends:
-     * it consumes the existing record through [takeReplayedRestart].
+     * it consumes the existing record through [takeReplayedRestart] or through
+     * the triggerless boundary staged by [submitRestartBoundary].
      */
     fun journalRestart(
         trigger: HostedPortInvocation,
@@ -802,13 +810,13 @@ internal class HostDurability(
     ) {
         val journal = cellJournalSelector(trigger.cellRef) ?: return
         if (trigger.replayOf === journal) return
-        // Only the exact bytes the intake already appended. Re-encoding here runs
-        // after the handler failed and may therefore encounter an `Owned` argument the
-        // handler already consumed; durability must never touch that exclusive twice.
-        // A trigger with no appended bytes (a never-journaled `PORT_PROTOCOL` frame,
-        // which `WireCodec.encode` refuses for an in-process link) is absent from the
-        // journal, so replay could never match a record for it: write none.
-        val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] } ?: return
+        // Reuse exact bytes when the intake appended them. Re-encoding here runs after
+        // the handler failed and may therefore encounter an `Owned` argument the handler
+        // already consumed; durability must never touch that exclusive twice. A
+        // never-journaled metadata trigger therefore carries no payload. Its type-8
+        // record is still an ordered boundary in the journal, and recovery stages the
+        // boundary itself instead of trying to replay-match absent trigger bytes.
+        val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] }
         journal.append(
             journalRecord(
                 RECORD_RESTART,

@@ -303,7 +303,7 @@ class OutletHighWaterRecoveryTest {
         restartRecord.cellRef shouldBe relayRef
         restartRecord.generation shouldBe 1L
         restartRecord.supersedes shouldBe liveRestartNotices.single().reBaseline?.supersedes
-        val trigger = WireCodec.decode(restartRecord.triggerFramePayload)
+        val trigger = WireCodec.decode(checkNotNull(restartRecord.triggerFramePayload))
         trigger.cellRef shouldBe relayRef
         trigger.portName shouldBe "inlet"
         trigger.invocation.args.single() shouldBe Int.MIN_VALUE
@@ -352,19 +352,22 @@ class OutletHighWaterRecoveryTest {
     }
 
     /**
-     * computenet-49i65 review: the type-8 write must not make a RESTART fail that
-     * completed before it. A `PORT_PROTOCOL` frame is never journaled (`accept`
-     * returns before the tee), so a metadata-plane handler failure on a journaled
-     * RESTART cell has no appended bytes to name as its trigger. Re-encoding it
-     * instead threw `PORT_PROTOCOL requires a WireEdgeLink` out of supervision,
-     * after `onDeactivate` and before `onActivate`/`reBaseline`. Such a trigger
-     * could never be matched on replay anyway, so no record is written.
+     * computenet-49i65 review: a `PORT_PROTOCOL` frame is never journaled
+     * (`accept` returns before the tee), so a metadata-plane handler failure has
+     * no appended bytes to name as its trigger. Re-encoding it instead threw
+     * `PORT_PROTOCOL requires a WireEdgeLink` out of supervision. Type 8 records
+     * a triggerless ordered boundary in that case: supervision never serializes
+     * the metadata frame, while recovery can still rotate to the recorded epoch
+     * before replaying the post-restart tail.
      */
     @Test
-    fun `a metadata-plane failure on a journaled RESTART cell completes the restart and writes no type-8 record`() {
+    fun `a metadata-plane RESTART writes an ordered boundary and survives crash recovery`() {
         val controller = SimulationController(seed = 29)
         val journal = InMemoryJournal()
-        val world = World(controller, journal, CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()), mutableListOf())
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val world = World(controller, journal, relayRef, notifierRef, effects)
         controller.runToIdle()
         world.feed(1)
         controller.runToIdle()
@@ -395,8 +398,38 @@ class OutletHighWaterRecoveryTest {
         controller.runToIdle()
 
         world.host.supervisionAccounting().restarts shouldBe 1
-        (world.relay.outlet.waveState().sourceId != preRestartSource).shouldBeTrue()
+        val postRestartSource = world.relay.outlet.waveState().sourceId
+        val postRestartNoticeSource = world.relay.restartOutlet.waveState().sourceId
+        (postRestartSource != preRestartSource).shouldBeTrue()
         notices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
-        journal.replay().mapNotNull(JournalRecords::decodeRestart) shouldBe emptyList()
+        val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        restartRecord.cellRef shouldBe relayRef
+        restartRecord.triggerFramePayload shouldBe null
+        restartRecord.generation shouldBe 1L
+        restartRecord.supersedes shouldBe notices.single().reBaseline?.supersedes
+        restartRecord.outlets.associate { it.portName to it.sourceId } shouldBe mapOf(
+            "outlet" to postRestartSource,
+            "restartOutlet" to postRestartNoticeSource,
+        )
+        restartRecord.outlets.all { it.highWater == 0L }.shouldBeTrue()
+
+        world.feed(2)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2)
+
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        val recoveredNotices = mutableListOf<MessageContext>()
+        after.relay.restartOutlet.observe(PortRef.generate()) { recoveredNotices += it }
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        effects shouldBe listOf(1, 2)
+        after.host.supervisionAccounting().restarts shouldBe 1
+        after.host.generationOf(relayRef) shouldBe 1L
+        after.relay.outlet.waveState().sourceId shouldBe postRestartSource
+        after.relay.outlet.waveState().highWater shouldBe 1L
+        recoveredNotices.single().timestamp.sourceId shouldBe postRestartNoticeSource
+        recoveredNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
     }
 }
