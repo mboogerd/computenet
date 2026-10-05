@@ -9,6 +9,7 @@ import civictech.cell.host.RoutedInletResolution
 import civictech.cell.host.TopologyIndex
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.CurrentPeer
+import civictech.cell.link.LinkDryRun
 import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
@@ -578,9 +579,10 @@ private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
      */
     private fun policyCheck(c: LinkCandidate): StepCheck.Refused? {
         val request = LinkRequest(c.outlet.ref, c.inlet.ref, CurrentPeer.get(), c.options.role)
-        val rejected = (c.inlet as? Linked)?.linking?.reject(request)
-            ?: (c.outlet as? Linked)?.linking?.reject(request)
-            ?: return null
+        val rejected = LinkDryRun.during {
+            (c.inlet as? Linked)?.linking?.reject(request)
+                ?: (c.outlet as? Linked)?.linking?.reject(request)
+        } ?: return null
         return rejected.toRefused(RefusalCode.POLICY_DENIAL)
     }
 }
