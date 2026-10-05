@@ -29,6 +29,9 @@ dependencies {
     // computenet-gyvli.3: WsPeerTransportContractTest subclasses the seam's
     // executable contract, civictech.testkit.PeerTransportContract.
     testImplementation(project(":testkit"))
+    // computenet-xbs8t.3: test scope only — :wire main must not depend on
+    // :economy; [ECO1-PAR-09r] is verified over a real socket here.
+    testImplementation(project(":economy"))
 }
 
 // The burst/stress probes read `wire.burst.*` and `wire.stress.*` from the JVM
