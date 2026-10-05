@@ -57,13 +57,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * respawned the candidate, not the incumbent) and its replayed topology fold names
  * the candidate factory; shard 1 likewise after its own promotion.
  *
- * **Limit on "candidate's class".** [ShardCell] is a final class and the
- * router/[PartitionedShardSet] API is typed to it, so the candidate cannot be a
- * distinct JVM subclass without editing `ShardCell.kt`, which is outside this
- * task's claim. The candidate is therefore a [ShardCell] built by
- * [CandidateShardFactory] (a distinct factory class), and "is the candidate" is
- * witnessed by (a) the factory that built the live object and (b) the
- * `TopoEvent.Spawn` factory class in the context's recovered fold.
+ * **Candidate class.** [ShardCell] is `open` for this test; the candidate is
+ * [CandidateShardCell], and the oracle asserts the runtime class of the hosted
+ * live cell held by the shard's [ApplyContext] (read reflectively from its cell
+ * table) after the crash/recovery and after shard 1's promotion, alongside the
+ * recovered fold's spawn factory class.
  *
  * **Handshake counts, honestly read.** With hand-partitioned [ShardCell]s there
  * is no composite membrane, so `[24-PART-01]`'s external-link guarantee (a
@@ -120,6 +118,20 @@ class JournaledPartitionedPromotionTest {
         }
     }
 
+    /** The version-marked candidate: a distinct runtime class (ShardCell is `open` for this, uwt8b.3). */
+    private class CandidateShardCell(ref: CellRef, interest: Interest) :
+        ShardCell<String>(ref, { shardKey(it) }, interest)
+
+    /**
+     * The live object [ApplyContext] holds for [ref] (its private cell table, read
+     * reflectively): the hosted instance itself, independent of factory bookkeeping.
+     */
+    private fun liveCell(context: ApplyContext, ref: CellRef): Cell {
+        val field = ApplyContext::class.java.getDeclaredField("cells").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        return (field.get(context) as Map<CellRef, Cell>).getValue(ref)
+    }
+
     private class IncumbentShardFactory(private val interest: Interest) : TypedCellFactory<ShardCell<String>> {
         override fun create(ref: CellRef): ShardCell<String> =
             ShardCell<String>(ref, { shardKey(it) }, interest).also { built[ref] = Built(it, 1) }
@@ -127,7 +139,7 @@ class JournaledPartitionedPromotionTest {
 
     private class CandidateShardFactory(private val interest: Interest) : TypedCellFactory<ShardCell<String>> {
         override fun create(ref: CellRef): ShardCell<String> =
-            ShardCell<String>(ref, { shardKey(it) }, interest).also { built[ref] = Built(it, 2) }
+            CandidateShardCell(ref, interest).also { built[ref] = Built(it, 2) }
     }
 
     private class Input {
@@ -361,6 +373,8 @@ class JournaledPartitionedPromotionTest {
         val surfacedUndelivered: Boolean,
         val checkpointsEqualBatch: Boolean,
         val shard0RecoveredVersion: Int?,
+        val shard0RecoveredClass: Class<*>?,
+        val shard1LiveClass: Class<*>?,
         val shard0RecoveredFoldFactory: Class<*>?,
         val shard1Version: Int?,
         val handshakesStable: Boolean,
@@ -407,12 +421,14 @@ class JournaledPartitionedPromotionTest {
         repeat(7) { tick() }
 
         var shard0Version: Int? = null
+        var shard0Class: Class<*>? = null
         var shard0FoldFactory: Class<*>? = null
         if (crashShard0) {
             mesh.quiesce()
             stableAcross { mesh.crashAndRecover(0) }
             val ref = mesh.nodes[0].cell.ref
             shard0Version = built.getValue(ref).version
+            shard0Class = liveCell(mesh.nodes[0].context, ref).javaClass
             shard0FoldFactory = mesh.nodes[0].context.live().spawns.getValue(ref).factory.javaClass
             checkpointPull()
             repeat(4) { tick() }
@@ -441,6 +457,8 @@ class JournaledPartitionedPromotionTest {
             surfacedUndelivered = surfacedUndelivered,
             checkpointsEqualBatch = checkpointsEqualBatch,
             shard0RecoveredVersion = shard0Version,
+            shard0RecoveredClass = shard0Class,
+            shard1LiveClass = if (mode == Mode.REUSE_REF) mesh.nodes[1].cell.ref.let { liveCell(mesh.nodes[1].context, it).javaClass } else null,
             shard0RecoveredFoldFactory = shard0FoldFactory,
             shard1Version = built[mesh.nodes[1].cell.ref]?.version,
             handshakesStable = handshakesStable,
@@ -463,6 +481,8 @@ class JournaledPartitionedPromotionTest {
             run.shard0RecoveredVersion shouldBe 2 // the journal respawned the candidate, not the incumbent
             run.shard0RecoveredFoldFactory shouldBe CandidateShardFactory::class.java
             run.shard1Version shouldBe 2
+            run.shard0RecoveredClass shouldBe CandidateShardCell::class.java // the hosted cell's runtime class
+            run.shard1LiveClass shouldBe CandidateShardCell::class.java
             run.handshakesStable.shouldBeTrue()
         }
     }
