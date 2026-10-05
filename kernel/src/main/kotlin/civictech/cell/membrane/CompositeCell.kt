@@ -9,6 +9,7 @@ import civictech.cell.BudgetClaim
 import civictech.cell.BudgetLedger
 import civictech.cell.BudgetOutcome
 import civictech.cell.Cell
+import civictech.cell.graph.LinkDryRun
 import civictech.cell.CellRef
 import civictech.cell.ClaimClass
 import civictech.cell.CurrentContext
@@ -258,6 +259,9 @@ abstract class CompositeCell(
      */
     private fun linkBudgetPolicy(denials: BoundaryDenialSink): LinkPolicy = LinkPolicy { request ->
         val ledger = budget ?: return@LinkPolicy null
+        // A cold precheck dry run (Precheck.policyCheck) is not a handshake: no claim, no denial.
+        // Promotion re-authorization is deliberately NOT a dry run (66m-D11, computenet-8aboz); see LinkDryRun.
+        if (LinkDryRun.isActive()) return@LinkPolicy null
         val stamp = CurrentPeer.stamp()?.takeIf { it.id == request.identity } ?: return@LinkPolicy null
         val claim = BudgetClaim(stamp, ClaimClass.Link, key = request)
         when (val outcome = ledger.chargeOrFail(claim, scope = "membrane:$ref")) {
