@@ -1177,14 +1177,41 @@ open class ManagedHost(
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
         synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
 
+    /**
+     * True only for the bridged frontier markers that spec 20/22 requires to
+     * retain their wire link's FIFO position against data. The bridge delivers
+     * frames here in order, but submitting these markers at their descriptor's
+     * protocol band would let them overtake data already staged at band 20.
+     * [AttentionScheduler]'s per-cell FIFO is a superset of that per-link FIFO.
+     *
+     * Other wire protocols, including handshakes/capability traffic and
+     * `StallNotice.Resume`, stay on their descriptor band. In-process protocol
+     * delivery has no [civictech.cell.wire.WireEdgeLink] and is unchanged.
+     */
+    private fun isBridgedFrontierMarker(hostedInvocation: HostedPortInvocation): Boolean {
+        if (hostedInvocation.protocolLink !is civictech.cell.wire.WireEdgeLink) return false
+        return when (hostedInvocation.protocolId) {
+            Protocols.TopologyOrder -> hostedInvocation.protocolMessage is EdgeEvent
+            Protocols.Progress -> hostedInvocation.protocolMessage is civictech.cell.control.Progress
+            Protocols.Suspension -> hostedInvocation.protocolMessage is StallNotice.Stall
+            else -> false
+        }
+    }
+
     private fun accept(hostedInvocation: HostedPortInvocation, skipJournalTee: Boolean = false) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             require(hostedInvocation.invocation.context == null) { "protocol invocations must carry null MessageContext" }
             val id = requireNotNull(hostedInvocation.protocolId) { "PORT_PROTOCOL requires protocolId" }
             val descriptor = requireNotNull(ProtocolRegistry.protocol(id.name)) { "unknown protocol ${id.name}" }
             // The metadata plane remains available while data intake is closed or
-            // saturated and uses the protocol's scheduler band, not data staging.
-            scheduler.submit(descriptor.band) { deliver(hostedInvocation) }
+            // saturated. Bridged frontier markers alone join the target cell's
+            // staged FIFO so their wire order against data survives host scheduling;
+            // unrelated protocol traffic keeps its descriptor's scheduler band.
+            if (isBridgedFrontierMarker(hostedInvocation)) {
+                stageForDataDispatch(hostedInvocation)
+            } else {
+                scheduler.submit(descriptor.band) { deliver(hostedInvocation) }
+            }
             return
         }
         val isManagement = hostedInvocation.type == HostedPortInvocation.Type.PORT_MANAGEMENT
