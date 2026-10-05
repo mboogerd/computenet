@@ -815,6 +815,9 @@ open class ManagedHost(
     private val stagedLinkCloseMarkers =
         Collections.newSetFromMap(IdentityHashMap<HostedPortInvocation, Boolean>())
 
+    /** Triggerless type-8 records staged at their live boundary on their cell's data FIFO. */
+    private val stagedRestartBoundaries = IdentityHashMap<HostedPortInvocation, DecodedRestart>()
+
     /**
      * Batched dispatch only ([dispatchBatch] `> 1`): true while a [drainBatch]
      * task is submitted-and-not-yet-finished. Guarded by [dataLock]; never read
@@ -894,6 +897,7 @@ open class ManagedHost(
         cellsView = { cells },
         deadLetter = { message -> deadLetter(null, message) },
         submit = ::enqueueHostedInvocation,
+        submitRestartBoundary = ::stageReplayedRestartBoundary,
         awaitOnManagementBand = { action -> enqueueAwaiting(0, action) },
         underIntakeLock = { action ->
             synchronized(dataLock) {
@@ -1182,6 +1186,57 @@ open class ManagedHost(
         if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()
     }
 
+    /**
+     * A never-journaled metadata failure has no replayable trigger frame. Its
+     * type-8 record is therefore represented during recovery by an internal
+     * marker in the same per-cell FIFO as the surrounding journal frames. When
+     * live metadata scheduling overtook already-staged data, [precededFrames]
+     * names that replayed suffix and the marker is moved immediately ahead of
+     * it. The marker itself carries no protocol payload and is intercepted by
+     * [deliver] before ordinary port lookup.
+     */
+    private fun stageReplayedRestartBoundary(
+        restart: DecodedRestart,
+        journal: Journal,
+        precededFrames: List<HostedPortInvocation>,
+    ) {
+        val marker = HostedPortInvocation(
+            cellRef = restart.cellRef,
+            portName = "",
+            type = HostedPortInvocation.Type.PORT_PROTOCOL,
+            invocation = Invocation("", emptyList(), emptyList()),
+            replayOf = journal,
+        )
+        synchronized(dataLock) {
+            stagedRestartBoundaries[marker] = restart
+            attentionScheduler.stage(marker)
+            if (precededFrames.isNotEmpty()) {
+                val preceded = Collections.newSetFromMap(
+                    IdentityHashMap<HostedPortInvocation, Boolean>(),
+                ).also { it.addAll(precededFrames) }
+                val queue: MutableCollection<Pair<Long, HostedPortInvocation>> =
+                    attentionScheduler.dataQueues[restart.cellRef]
+                        ?: attentionScheduler.attentionParked[restart.cellRef]
+                        ?: error("restart boundary for ${restart.cellRef} has no staged cell queue")
+                val ordered = queue.toMutableList()
+                val markerEntry = ordered.singleOrNull { it.second === marker }
+                    ?: error("restart boundary marker for ${restart.cellRef} was not staged exactly once")
+                check(ordered.count { preceded.contains(it.second) } == precededFrames.size) {
+                    "restart boundary for ${restart.cellRef} cannot find every preceded replay frame"
+                }
+                ordered.remove(markerEntry)
+                val boundaryIndex = ordered.indexOfFirst { preceded.contains(it.second) }
+                check(boundaryIndex >= 0) {
+                    "restart boundary for ${restart.cellRef} has no preceded replay frame"
+                }
+                ordered.add(boundaryIndex, markerEntry)
+                queue.clear()
+                queue.addAll(ordered)
+            }
+        }
+        if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()
+    }
+
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
         synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
 
@@ -1365,7 +1420,9 @@ open class ManagedHost(
     private fun journalTee(hostedInvocation: HostedPortInvocation) {
         val journal = portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) ?: return
         if (hostedInvocation.replayOf === journal) return
-        journal.append(hostDurability.journalFrame(hostedInvocation))
+        val record = hostDurability.journalFrame(hostedInvocation)
+        journal.append(record)
+        hostDurability.rememberJournaledFrame(hostedInvocation, record)
     }
 
     /**
@@ -1744,6 +1801,12 @@ open class ManagedHost(
 
     private suspend fun deliver(hostedInvocation: HostedPortInvocation) {
         val cellRef = hostedInvocation.cellRef
+        synchronized(dataLock) { stagedRestartBoundaries.remove(hostedInvocation) }?.let { restart ->
+            val cell = cells[cellRef]
+                ?: return deadLetter(null, "restart boundary names unknown cell $cellRef", hostedInvocation)
+            restartCell(cellRef, cell, hostedInvocation, restart)
+            return
+        }
         var retainCheckpointSequence = false
         try {
         // A supervised cell parks only its data/ordinary management traffic.
@@ -2059,33 +2122,12 @@ open class ManagedHost(
                         cell,
                         StallNotice.Stall(StallReason.DEAD_LETTERED, hostedInvocation.invocation.context?.timestamp),
                     )
-                SupervisionPolicy.RESTART -> {
-                    // state-restore, never input-replay (spec 23 R6): the failing
-                    // invocation (and any Owned/Leased it carried) is not re-driven
-                    notifyDownstream(cell, StallNotice.Stall(StallReason.RESTARTING))
-                    restartCount.incrementAndGet()
-                    // R1 (93 I-22): bump the host-held generation before reactivation —
-                    // a checkpoint restore can never roll it back
-                    generations[cellRef] = generationOf(cellRef) + 1
-                    cell.onDeactivate(ctx)
-                    // R1/S1 (spec 20/22, 93 I-14): fresh emission epoch per outlet —
-                    // post-restart tags and waves alias nothing pre-crash. Collect the
-                    // superseded source ids to seed the ReBaseline.supersedes list.
-                    val supersedes = PortRegistry.of(cell).names().mapNotNull { name ->
-                        when (val port = PortRegistry.of(cell)[name]) {
-                            is FanOutlet<*> -> port.mintFreshEpoch()
-                            else -> null
-                        }
-                    }.toSet()
-                    cell.onActivate(ctx)
-                    // R3 (93 I-22): restore-the-freshest-available checkpoint — the
-                    // spawn-time local checkpoint is the degenerate non-durable case
-                    checkpoints[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
-                    // R2/R4 (93 I-22): RESTART completes with a re-baseline over the
-                    // ordinary catch-up path — push-authoritative for a single-writer root
-                    if (cell is ReBaselineEmitting) cell.reBaseline(supersedes, supersede = true)
-                    notifyDownstream(cell, StallNotice.Resume)
-                }
+                SupervisionPolicy.RESTART -> restartCell(
+                    cellRef,
+                    cell,
+                    hostedInvocation,
+                    hostDurability.takeReplayedRestart(hostedInvocation),
+                )
                 SupervisionPolicy.SUSPEND -> {
                     // V2-KERNEL: idempotent, exactly like [HostManagementApi.suspend].
                     // This branch IS reachable on an already-suspended cell: the
@@ -2104,10 +2146,84 @@ open class ManagedHost(
             }
         }
         } finally {
+            if (hostedInvocation.replayOf != null) hostDurability.forgetReplayedFrame(hostedInvocation)
+            if (portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) != null) {
+                hostDurability.forgetJournaledFrame(hostedInvocation)
+            }
             if (!retainCheckpointSequence && hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
                 synchronized(dataLock) { checkpointSequences.remove(hostedInvocation) }
             }
         }
+    }
+
+    /** Apply one live, replay-matched, or triggerless durable RESTART boundary. */
+    private fun restartCell(
+        cellRef: CellRef,
+        cell: Cell,
+        trigger: HostedPortInvocation,
+        replayedRestart: DecodedRestart?,
+    ) {
+        // state-restore, never input-replay (spec 23 R6): the failing
+        // invocation (and any Owned/Leased it carried) is not re-driven
+        notifyDownstream(cell, StallNotice.Stall(StallReason.RESTARTING))
+        restartCount.incrementAndGet()
+        // R1 (93 I-22): bump the host-held generation before reactivation —
+        // a checkpoint restore can never roll it back. A type-8 record
+        // carries the value a crashed host had already exposed.
+        val nextGeneration = replayedRestart?.generation ?: generationOf(cellRef) + 1
+        generations[cellRef] = maxOf(generationOf(cellRef), nextGeneration)
+        cell.onDeactivate(ctx)
+        // R1/S1 (spec 20/22, 93 I-14): fresh emission epoch per outlet —
+        // post-restart tags and waves alias nothing pre-crash. Collect the
+        // superseded source ids to seed the ReBaseline.supersedes list. During
+        // journal replay, adopt the exact epochs recorded by the live RESTART;
+        // minting recovery-only ids would make the replay-derived tail differ
+        // from the direct frames already in the journal and double-fire effects.
+        val minted = linkedMapOf<String, OutletWaveState>()
+        val supersedes = if (replayedRestart == null) {
+            PortRegistry.of(cell).names().mapNotNull { name ->
+                when (val port = PortRegistry.of(cell)[name]) {
+                    is FanOutlet<*> -> port.mintFreshEpoch().also { minted[name] = port.waveState() }
+                    else -> null
+                }
+            }.toSet()
+        } else {
+            val recorded = replayedRestart.outlets.associateBy { it.portName }
+            PortRegistry.of(cell).names().forEach { name ->
+                val port = PortRegistry.of(cell)[name]
+                if (port is FanOutlet<*>) {
+                    val wave = recorded[name]
+                    if (wave == null) {
+                        // Additive cell evolution: an outlet absent when this
+                        // record was written has no historical lane to restore.
+                        port.mintFreshEpoch()
+                    } else {
+                        port.adoptWaveState(OutletWaveState(wave.sourceId, wave.highWater))
+                    }
+                }
+            }
+            replayedRestart.supersedes
+        }
+        if (replayedRestart == null) {
+            // Write ahead of activation/re-baseline visibility. For a replayed
+            // frame from an older journal this is an intentional no-op, keeping
+            // the pre-type-8 behavior exactly unchanged. A never-journaled trigger
+            // writes a triggerless ordered boundary without serializing the frame.
+            hostDurability.journalRestart(
+                trigger,
+                nextGeneration,
+                supersedes,
+                minted,
+            )
+        }
+        cell.onActivate(ctx)
+        // R3 (93 I-22): restore-the-freshest-available checkpoint — the
+        // spawn-time local checkpoint is the degenerate non-durable case
+        checkpoints[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
+        // R2/R4 (93 I-22): RESTART completes with a re-baseline over the
+        // ordinary catch-up path — push-authoritative for a single-writer root
+        if (cell is ReBaselineEmitting) cell.reBaseline(supersedes, supersede = true)
+        notifyDownstream(cell, StallNotice.Resume)
     }
 
     /**

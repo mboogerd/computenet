@@ -4,15 +4,25 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.MessageContext
+import civictech.cell.ReBaselineEmitting
 import civictech.cell.evolve.Effectful
+import civictech.cell.control.Attention
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.JournalRecords
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.SupervisionPolicy
+import civictech.cell.link.Link
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
+import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -41,16 +51,22 @@ import java.util.UUID
 class OutletHighWaterRecoveryTest {
 
     /** The journaled source whose outlet wave identity must survive the crash. */
-    class RelayCell(override val ref: CellRef) : Cell {
+    class RelayCell(override val ref: CellRef) : Cell, ReBaselineEmitting {
         val outlet = registerPort("outlet", FanOutlet.create<Consumer<Int>>())
+        val restartOutlet = registerPort("restartOutlet", FanOutlet.create<Consumer<String>>())
         val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
 
         init {
             inlet.serve(object : Consumer<Int> {
                 override fun provide(input: Int) {
+                    if (input == Int.MIN_VALUE) throw IllegalStateException("restart requested")
                     outlet.call.provide(input)
                 }
             })
+        }
+
+        override fun reBaseline(supersedes: Set<UUID>, supersede: Boolean) {
+            restartOutlet.reBaseline(supersedes, supersede) { provide("restart") }
         }
     }
 
@@ -96,6 +112,7 @@ class OutletHighWaterRecoveryTest {
         init {
             host.managementInlet.call.spawn(notifier)
             host.managementInlet.call.spawn(relay)
+            host.managementInlet.call.supervise(relay.ref, SupervisionPolicy.RESTART)
             // source -> sink through the host intake, so the sink's inlet sees a
             // journaled frame carrying the source outlet's MessageContext
             val sink = (HostedCellProxy.create(notifierRef, host, NotifierProxy::class.java)
@@ -238,5 +255,267 @@ class OutletHighWaterRecoveryTest {
         controller.runToIdle()
         effects.count { it == 4 } shouldBe 1
         effects shouldBe listOf(1, 2, 3, 4)
+    }
+
+    /**
+     * computenet-49i65 / qfi22-D10: a RESTART after the last checkpoint is part
+     * of the durable history. Recovery must reproduce that exact epoch boundary,
+     * not mint a third epoch while replaying the invocation that originally
+     * failed. The tail then re-derives under the source ids the network actually
+     * observed, so the `Effectful` frontier suppresses its direct replay instead
+     * of seeing recovery-only positions and firing twice.
+     */
+    @Test
+    fun `RESTART after the last checkpoint survives crash recovery with its epoch and ReBaseline announcement`() {
+        val controller = SimulationController(seed = 23)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        before.feed(1)
+        before.feed(2)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2)
+
+        // The checkpoint captures the original durable epoch. Everything below
+        // it is the WAL tail that must replay across the RESTART boundary.
+        before.host.checkpoint(journal)
+        val preRestartSource = before.relay.outlet.waveState().sourceId
+
+        val liveRestartNotices = mutableListOf<MessageContext>()
+        before.relay.restartOutlet.observe(PortRef.generate()) { liveRestartNotices += it }
+        before.feed(Int.MIN_VALUE)
+        controller.runToIdle()
+        before.host.supervisionAccounting().restarts shouldBe 1
+
+        val postRestartSource = before.relay.outlet.waveState().sourceId
+        val postRestartNoticeSource = before.relay.restartOutlet.waveState().sourceId
+        (postRestartSource != preRestartSource).shouldBeTrue()
+        liveRestartNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+
+        // The fix is deliberately one additive record: exact triggering frame,
+        // host generation, superseded lanes, and the fresh epoch per outlet.
+        val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart)
+            .single()
+        restartRecord.cellRef shouldBe relayRef
+        restartRecord.precedesFrameCount shouldBe 0
+        restartRecord.generation shouldBe 1L
+        restartRecord.supersedes shouldBe liveRestartNotices.single().reBaseline?.supersedes
+        val trigger = WireCodec.decode(checkNotNull(restartRecord.triggerFramePayload))
+        trigger.cellRef shouldBe relayRef
+        trigger.portName shouldBe "inlet"
+        trigger.invocation.args.single() shouldBe Int.MIN_VALUE
+        restartRecord.outlets.associate { it.portName to it.sourceId } shouldBe mapOf(
+            "outlet" to postRestartSource,
+            "restartOutlet" to postRestartNoticeSource,
+        )
+        restartRecord.outlets.all { it.highWater == 0L }.shouldBeTrue()
+
+        before.feed(3)
+        before.feed(4)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2, 3, 4)
+
+        // Compatibility control: this is the exact journal an older build would
+        // have written — same checkpoint and frames, with the additive type-8
+        // record absent. Its replay keeps the pre-change behavior (including the
+        // known duplicate); the new kernel neither invents a record nor silently
+        // changes the meaning of those existing bytes.
+        val legacyJournal = InMemoryJournal().also { legacy ->
+            legacy.reset(journal.replay().filter { JournalRecords.decodeRestart(it) == null })
+        }
+        val legacyEffects = mutableListOf(1, 2, 3, 4)
+        val legacy = World(controller, legacyJournal, relayRef, notifierRef, legacyEffects)
+        controller.runToIdle()
+        legacy.host.recoverFrom(legacyJournal)
+        controller.runToIdle()
+        legacyEffects shouldBe listOf(1, 2, 3, 4, 3, 4)
+        legacyJournal.replay().mapNotNull(JournalRecords::decodeRestart) shouldBe emptyList()
+
+        // CRASH: only the journal survives. Observe recovery itself, not the live
+        // announcement above, so a silent reconstruction cannot satisfy the test.
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        val recoveredRestartNotices = mutableListOf<MessageContext>()
+        after.relay.restartOutlet.observe(PortRef.generate()) { recoveredRestartNotices += it }
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        effects shouldBe listOf(1, 2, 3, 4)
+        after.host.generationOf(relayRef) shouldBe 1L
+        after.relay.outlet.waveState().sourceId shouldBe postRestartSource
+        after.relay.outlet.waveState().highWater shouldBe 2L
+        recoveredRestartNotices.single().timestamp.sourceId shouldBe postRestartNoticeSource
+        recoveredRestartNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+    }
+
+    /**
+     * computenet-49i65 review: a `PORT_PROTOCOL` frame is never journaled
+     * (`accept` returns before the tee), so a metadata-plane handler failure has
+     * no appended bytes to name as its trigger. Re-encoding it instead threw
+     * `PORT_PROTOCOL requires a WireEdgeLink` out of supervision. Type 8 records
+     * a triggerless ordered boundary in that case: supervision never serializes
+     * the metadata frame, while recovery can still rotate to the recorded epoch
+     * before replaying the post-restart tail.
+     */
+    @Test
+    fun `a metadata-plane RESTART writes an ordered boundary and survives crash recovery`() {
+        val controller = SimulationController(seed = 29)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val world = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        world.feed(1)
+        controller.runToIdle()
+        val notices = mutableListOf<MessageContext>()
+        world.relay.restartOutlet.observe(PortRef.generate()) { notices += it }
+        val preRestartSource = world.relay.outlet.waveState().sourceId
+
+        ProtocolSupport.of(world.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = world.relay.inlet.ref
+            override val to = world.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+
+        // The metadata task runs at band 0 and overtakes this already-journaled
+        // data frame, which remains staged at band 20. Live scheduling is the
+        // contract: the RESTART boundary therefore precedes frame 2 even though
+        // its type-8 record is appended after frame 2's WAL record.
+        world.feed(2)
+        world.host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                world.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+
+        world.host.supervisionAccounting().restarts shouldBe 1
+        val postRestartSource = world.relay.outlet.waveState().sourceId
+        val postRestartNoticeSource = world.relay.restartOutlet.waveState().sourceId
+        (postRestartSource != preRestartSource).shouldBeTrue()
+        notices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+        val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        restartRecord.cellRef shouldBe relayRef
+        restartRecord.triggerFramePayload shouldBe null
+        restartRecord.precedesFrameCount shouldBe 1
+        restartRecord.generation shouldBe 1L
+        restartRecord.supersedes shouldBe notices.single().reBaseline?.supersedes
+        restartRecord.outlets.associate { it.portName to it.sourceId } shouldBe mapOf(
+            "outlet" to postRestartSource,
+            "restartOutlet" to postRestartNoticeSource,
+        )
+        restartRecord.outlets.all { it.highWater == 0L }.shouldBeTrue()
+
+        effects shouldBe listOf(1, 2)
+        world.feed(3)
+        controller.runToIdle()
+        val liveEffects = effects.toList()
+        val liveWave = world.relay.outlet.waveState()
+        liveEffects shouldBe listOf(1, 2, 3)
+        liveWave.sourceId shouldBe postRestartSource
+        liveWave.highWater shouldBe 2L
+
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        val recoveredNotices = mutableListOf<MessageContext>()
+        after.relay.restartOutlet.observe(PortRef.generate()) { recoveredNotices += it }
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        effects shouldBe liveEffects
+        after.host.supervisionAccounting().restarts shouldBe 1
+        after.host.generationOf(relayRef) shouldBe 1L
+        after.relay.outlet.waveState() shouldBe liveWave
+        recoveredNotices.single().timestamp.sourceId shouldBe postRestartNoticeSource
+        recoveredNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+
+        after.feed(4)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2, 3, 4)
+        effects.count { it == 4 } shouldBe 1
+    }
+
+    /**
+     * computenet-srkyq review: the frames a metadata-plane RESTART overtakes may be
+     * REPLAYED frames still staged by an earlier recovery, not only live-journaled
+     * ones. They are records of the same journal, so a second recovery must put the
+     * boundary ahead of them too; otherwise it replays them on the old epoch, recovers
+     * a short fresh-epoch high-water and suppresses the next live effect ([KFX-11]).
+     */
+    @Test
+    fun `a metadata-plane RESTART that overtakes replayed frames survives a second crash`() {
+        val controller = SimulationController(seed = 37)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val first = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        first.feed(1)
+        first.feed(2)
+        controller.runToIdle()
+
+        // Crash 1. Recovery only STAGES frames 1 and 2; the failing metadata task
+        // (band 0) runs ahead of both (band 20) and restarts the relay first.
+        val recovering = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        recovering.host.recoverFrom(journal)
+        ProtocolSupport.of(recovering.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = recovering.relay.inlet.ref
+            override val to = recovering.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+        recovering.host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                recovering.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+        recovering.host.supervisionAccounting().restarts shouldBe 1
+        journal.replay().mapNotNull(JournalRecords::decodeRestart).single().precedesFrameCount shouldBe 2
+        recovering.feed(3)
+        controller.runToIdle()
+        // liveEffects includes recovery 1's own re-derivations of 1 and 2 on the fresh
+        // epoch (a restart mid-recovery does that on origin/main too); this test pins
+        // only that the second recovery reproduces the live run and loses nothing.
+        val liveEffects = effects.toList()
+        val liveWave = recovering.relay.outlet.waveState()
+
+        // Crash 2.
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        effects shouldBe liveEffects
+        after.relay.outlet.waveState() shouldBe liveWave
+        after.feed(4)
+        controller.runToIdle()
+        effects shouldBe liveEffects + 4
     }
 }

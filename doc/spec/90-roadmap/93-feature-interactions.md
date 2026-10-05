@@ -8359,6 +8359,36 @@ ReBaseline<D>(
 )
 ```
 
+> **Durable RESTART tail (qfi22-D10, landed).** A RESTART after a journal's
+> last checkpoint is itself durable history. The host appends one additive
+> `RECORD_RESTART` (type 8) before the live re-baseline becomes visible:
+> `Restart(cellRef, triggerFramePayload?, precedesFrameCount, generation, supersedes,
+> outlets[{portName, sourceId, highWater}])`. The trigger is the exact encoded
+> invocation whose failure caused the transition when that invocation was
+> journaled; recovery stages journal frames asynchronously, so the record is
+> held until that same replayed frame fails, then the host adopts the recorded
+> outlet epochs and generation and emits the same `ReBaseline`. A metadata-plane
+> trigger is never journaled and therefore carries no trigger payload. Under the
+> intake lock, its type-8 append records how many already-journaled, still-pending
+> frames of that cell the live metadata task overtook. Per-cell FIFO makes those
+> frames the suffix of the cell's preceding journal frames, so recovery inserts an
+> internal boundary marker immediately ahead of that replayed suffix (or at the
+> record position when the count is zero). Thus replay rotates the epoch before the
+> same frames as live scheduling without changing that scheduling, and the host
+> never tries to encode the in-process protocol frame. Applying a trigger-bearing
+> record immediately when decoded would move its epoch boundary ahead of earlier
+> staged frames; always placing a triggerless boundary at the record position would
+> instead put it after frames the live band-0 restart overtook. Recording only a
+> final high-water would likewise lose the supersession announcement.
+> The separate record type is the compatibility mechanism: a journal written
+> before type 8 contains no such record and follows its previous replay path
+> unchanged; widening the serialized checkpoint would instead make old blobs
+> undecodable. A later checkpoint may compact the event away because
+> `RECORD_OUTLET_WAVE` then carries the resulting epoch/high-water as an
+> ordinary preserved recovery. `OutletHighWaterRecoveryTest` pins the tail
+> case: no `Effectful` double-fire, the exact post-RESTART epoch survives, and
+> recovery re-announces its `ReBaseline`.
+
 `ReBaseline.state` is exactly the state-as-delta-from-empty the `onLinked` catch-up already
 unicasts (`20/21 §Pull`, "a snapshot IS a delta"). It is not a new wire type; it is a
 catch-up carrying a `supersede` bit and the producer's current `SourceId`.
