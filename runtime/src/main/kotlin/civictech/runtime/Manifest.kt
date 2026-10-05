@@ -33,6 +33,14 @@ data class Manifest(
                     "journalTopology requires journalDir",
                 )
             }
+            node.budget?.let { budget ->
+                if (!File(budget).isFile) {
+                    violations += ManifestViolation(
+                        "nodes[$name].budget",
+                        "budget policy file not found: '$budget'",
+                    )
+                }
+            }
             node.dial.forEachIndexed { index, targetName ->
                 val target = nodes[targetName]
                 when {
@@ -78,11 +86,32 @@ data class Manifest(
     companion object {
         private val json = Json { ignoreUnknownKeys = false }
 
-        /** Decode and validate [text], failing once with every topology violation. */
-        fun parse(text: String): Manifest = json.decodeFromString(serializer(), text).validated()
+        /**
+         * Decode and validate [text], failing once with every topology violation. A relative budget path
+         * resolves against the manifest file's directory when loaded from a file, else the working directory;
+         * a missing file is a [ManifestViolation].
+         */
+        fun parse(text: String): Manifest = decode(text).validated()
 
-        /** Read, decode and validate [file]. */
-        fun load(file: File): Manifest = parse(file.readText())
+        /**
+         * Read, decode and validate [file]. A relative budget path resolves against the manifest file's directory,
+         * else the working directory; a missing file is a [ManifestViolation].
+         */
+        fun load(file: File): Manifest =
+            decode(file.readText()).resolvingBudgets(file.absoluteFile.parentFile).validated()
+
+        private fun decode(text: String): Manifest = json.decodeFromString(serializer(), text)
+
+        private fun Manifest.resolvingBudgets(directory: File): Manifest = copy(
+            nodes = nodes.mapValues { (_, node) ->
+                val budget = node.budget
+                if (budget == null || File(budget).isAbsolute) {
+                    node
+                } else {
+                    node.copy(budget = File(directory, budget).path)
+                }
+            },
+        )
     }
 }
 
@@ -97,6 +126,10 @@ data class NodeSpec(
     val journalDir: String? = null,
     val replica: Long? = null,
     val peerName: String? = null,
+    /**
+     * Optional economic policy file. A relative path resolves against the manifest file's directory when loaded
+     * from a file, else the working directory; a missing file is a [ManifestViolation].
+     */
     val budget: String? = null,
     val journalTopology: Boolean = false,
 )
