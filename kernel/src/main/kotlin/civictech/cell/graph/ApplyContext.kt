@@ -4,7 +4,11 @@ import civictech.cell.CellRef
 import civictech.cell.Cell
 import civictech.cell.data.Replicable
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.Promotion
+import civictech.cell.evolve.PromotionJournal
+import civictech.cell.evolve.PromotionJudge
 import civictech.cell.evolve.Shadow
+import civictech.cell.evolve.StateMigrating
 import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.DurableInput
 import civictech.cell.host.KeyedCells
@@ -13,6 +17,10 @@ import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.OutletWaveState
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import civictech.cell.replication.Replication
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -54,6 +62,7 @@ class ApplyContext(
     private val journalBindings = ConcurrentHashMap<CellRef, Journal>()
     private val fold = MutableTopologyFold()
     private val activeLinks = mutableMapOf<TopologyLinkKey, Link>()
+    private val cells = ConcurrentHashMap<CellRef, Cell>()
     private val familyInstances = mutableMapOf<String, KeyedCells<*>>()
     private var replayDepth = 0
 
@@ -127,6 +136,7 @@ class ApplyContext(
             is TopoEvent.Connect -> applyConnect(event)
             is TopoEvent.Unlink -> applyUnlink(event)
             is TopoEvent.Despawn -> applyDespawn(event)
+            is TopoEvent.Promote -> applyPromote(event)
             is TopoEvent.Family -> applyFamily(event)
             is TopoEvent.FamilyKey -> {
                 host.recoverFamilyKey(event.namespace, event.key)
@@ -173,6 +183,7 @@ class ApplyContext(
         check(spawned == event.ref) {
             "spawn step '${event.handle}' materialized $spawned instead of pinned ref ${event.ref}"
         }
+        cells[event.ref] = cell
         fold.record(event)
         return spawned
     }
@@ -210,7 +221,162 @@ class ApplyContext(
             link.unlink()
         }
         host.managementInlet.call.despawn(event.ref)
+        cells.remove(event.ref)
+        journalBindings.remove(event.ref)
         fold.record(event)
+    }
+
+    /**
+     * Journal-aware T0/T1 promotion (uwt8b-D7..D10). Both live objects are
+     * resolved from the refs materialized by this context; callers do not need
+     * to retain implementation objects across a runtime composition boundary.
+     */
+    fun promote(
+        gate: CellRef,
+        incumbent: CellRef,
+        candidate: CellRef,
+        outletName: String,
+        downstream: List<Pair<CellRef, String>>,
+        judge: PromotionJudge? = null,
+    ) {
+        val before = live()
+        val gateCell = cells[gate]
+            ?: throw Promotion.PromotionAborted("PRECHECK", "gate $gate is not a live TrafficLightApi")
+        val incumbentCell = cells[incumbent]
+            ?: throw Promotion.PromotionAborted("PRECHECK", "incumbent $incumbent is not live")
+        val candidateCell = cells[candidate]
+            ?: throw Promotion.PromotionAborted("PRECHECK", "candidate $candidate is not live")
+        val incumbentSpawn = before.spawns[incumbent]
+            ?: throw Promotion.PromotionAborted("PRECHECK", "incumbent $incumbent has no recorded spawn")
+        val candidateSpawn = before.spawns[candidate]
+            ?: throw Promotion.PromotionAborted("PRECHECK", "candidate $candidate has no recorded spawn")
+        if (incumbentSpawn.replicated || candidateSpawn.replicated) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "ApplyContext.promote is the single-instance path; replicated promotion uses promoteReplica",
+            )
+        }
+        val incumbentJournal = journalFor(incumbent)
+        val candidateJournal = journalFor(candidate)
+        if (incumbentJournal !== candidateJournal) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "incumbent $incumbent and candidate $candidate must share one journal binding",
+            )
+        }
+        if (incumbentJournal != null && topology !== incumbentJournal) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "journaled promotion requires the incumbent journal to be this context's topology journal",
+            )
+        }
+        if (incumbentJournal != null && (candidateCell !is StateMigrating || incumbentCell !is civictech.cell.Stateful)) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "journaled promotion requires a T0/T1 StateMigrating candidate and Stateful incumbent",
+            )
+        }
+        val uses = downstream.map { (ref, inletName) ->
+            host.portAt(ref, inletName) as? Use<*>
+                ?: throw Promotion.PromotionAborted(
+                    "PRECHECK",
+                    "downstream $ref.$inletName is not a live usable inlet",
+                )
+        }
+        val priorLinks = before.links.values.filter { it.from == incumbent || it.to == incumbent }
+
+        val promotionJournal = object : PromotionJournal {
+            override fun checkpointBeforeStateHandoff() {
+                incumbentJournal?.let(host::checkpoint)
+            }
+
+            override fun recordCommittedSwap(waveState: OutletWaveState) {
+                val event = TopoEvent.Promote(
+                    incumbent = incumbent,
+                    candidate = candidate,
+                    outlet = outletName,
+                    candidateFactory = candidateSpawn.factory,
+                    replicated = false,
+                    sourceId = waveState.sourceId,
+                    highWater = waveState.highWater,
+                )
+                if (incumbentJournal != null) journalTopology(listOf(event))
+                fold.record(event)
+                synchronizeActiveLinksAfterPromotion(event, priorLinks)
+            }
+        }
+
+        Promotion.promote(
+            host = host,
+            gate = gateCell,
+            incumbent = incumbentCell,
+            candidate = candidateCell,
+            outletName = outletName,
+            downstream = uses,
+            judge = judge,
+            journal = promotionJournal,
+        )
+        cells.remove(incumbent)
+        journalBindings.remove(incumbent)
+    }
+
+    /** Replay applies the completed swap directly; it never buffers or invokes Promotion.promote. */
+    private fun applyPromote(event: TopoEvent.Promote) {
+        check(!event.replicated && event.incumbent != event.candidate) {
+            "replicated/reuse-ref promotion replay is handled by ApplyContext.promoteReplica"
+        }
+        val before = live()
+        val incumbent = cells[event.incumbent]
+            ?: error("promotion replay names missing incumbent ${event.incumbent}")
+        val candidate = cells[event.candidate]
+            ?: error("promotion replay names missing candidate ${event.candidate}")
+        val migrator = candidate as? StateMigrating
+            ?: error("promotion replay candidate ${event.candidate} is not StateMigrating")
+        val stateful = incumbent as? civictech.cell.Stateful
+            ?: error("promotion replay incumbent ${event.incumbent} is not Stateful")
+        val outlet = host.portAt(event.candidate, event.outlet) as? FanOutlet<*>
+            ?: error("promotion replay candidate ${event.candidate} has no fan-out '${event.outlet}'")
+
+        migrator.importFrom(stateful.snapshot())
+        outlet.adoptWaveState(OutletWaveState(event.sourceId, event.highWater))
+
+        before.links.values.filter { it.from == event.incumbent || it.to == event.incumbent }.forEach { edge ->
+            val key = TopologyLinkKey.of(edge)
+            val link = synchronized(activeLinks) { activeLinks.remove(key) }
+                ?: error("promotion replay: fold contains live link '$key' with no link object")
+            link.unlink()
+        }
+        before.links.values
+            .filter { it.from == event.incumbent && it.outlet == event.outlet }
+            .map { it.copy(from = event.candidate) }
+            .forEach(::applyConnect)
+
+        host.managementInlet.call.despawn(event.incumbent)
+        cells.remove(event.incumbent)
+        journalBindings.remove(event.incumbent)
+        fold.record(event)
+    }
+
+    private fun synchronizeActiveLinksAfterPromotion(
+        event: TopoEvent.Promote,
+        priorLinks: List<TopoEvent.Connect>,
+    ) {
+        synchronized(activeLinks) {
+            priorLinks.forEach { activeLinks.remove(TopologyLinkKey.of(it)) }
+            val installed = (host.portAt(event.candidate, event.outlet) as? FanOutlet<*>)
+                ?.linking
+                ?.links
+                .orEmpty()
+            priorLinks
+                .filter { it.from == event.incumbent && it.outlet == event.outlet }
+                .map { it.copy(from = event.candidate) }
+                .forEach { edge ->
+                    installed.firstOrNull {
+                        it.from == PortRef.of(edge.from, edge.outlet) &&
+                            it.to == PortRef.of(edge.to, edge.inlet)
+                    }?.let { activeLinks[TopologyLinkKey.of(edge)] = it }
+                }
+        }
     }
 
     private fun applyFamily(event: TopoEvent.Family) {

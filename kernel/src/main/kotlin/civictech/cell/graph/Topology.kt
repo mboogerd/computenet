@@ -3,6 +3,7 @@ package civictech.cell.graph
 import civictech.cell.CellRef
 import civictech.cell.link.LinkOptions
 import java.io.Serializable
+import java.util.UUID
 
 /**
  * One journaled topology mutation. Every endpoint is a concrete [CellRef]: handles are
@@ -36,6 +37,21 @@ sealed interface TopoEvent : Serializable {
     ) : TopoEvent
 
     data class Despawn(val ref: CellRef) : TopoEvent
+
+    /**
+     * One completed promotion swap in the durability plane (uwt8b-D8). The
+     * source id and high-water are flattened here because every persisted
+     * [TopoEvent] field must itself be Java-serializable.
+     */
+    data class Promote(
+        val incumbent: CellRef,
+        val candidate: CellRef,
+        val outlet: String,
+        val candidateFactory: CellFactory,
+        val replicated: Boolean,
+        val sourceId: UUID,
+        val highWater: Long,
+    ) : TopoEvent
 
     data class Family(
         val handle: String,
@@ -138,6 +154,7 @@ internal class MutableTopologyFold {
             is TopoEvent.Connect -> links[TopologyLinkKey.of(event)] = event
             is TopoEvent.Unlink -> links.remove(TopologyLinkKey.of(event))
             is TopoEvent.Despawn -> remove(event.ref)
+            is TopoEvent.Promote -> recordPromotion(event)
         }
     }
 
@@ -159,5 +176,34 @@ internal class MutableTopologyFold {
         spawns.remove(ref)
         handles.entries.removeIf { it.value == ref }
         links.entries.removeIf { (_, edge) -> edge.from == ref || edge.to == ref }
+    }
+
+    private fun recordPromotion(event: TopoEvent.Promote) {
+        val incumbentSpawn = checkNotNull(spawns[event.incumbent]) {
+            "promotion names missing incumbent ${event.incumbent}"
+        }
+        if (event.incumbent == event.candidate) {
+            spawns[event.incumbent] = incumbentSpawn.copy(
+                factory = event.candidateFactory,
+                replicated = event.replicated,
+                shadow = false,
+            )
+            return
+        }
+
+        val candidateSpawn = checkNotNull(spawns[event.candidate]) {
+            "promotion names missing candidate ${event.candidate}"
+        }
+        val redirected = links.values
+            .filter { it.from == event.incumbent && it.outlet == event.outlet }
+            .map { it.copy(from = event.candidate) }
+
+        remove(event.incumbent)
+        spawns[event.candidate] = candidateSpawn.copy(
+            factory = event.candidateFactory,
+            replicated = event.replicated,
+            shadow = false,
+        )
+        redirected.forEach { links[TopologyLinkKey.of(it)] = it }
     }
 }
