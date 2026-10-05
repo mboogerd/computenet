@@ -17,6 +17,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
+import civictech.cell.port.OutletWaveState
 import civictech.cell.port.Use
 import civictech.cell.proxy.Proxy
 import civictech.nature.ContractRegistry
@@ -39,6 +40,21 @@ interface Effectful
 interface StateMigrating {
     /** [prior] is the previous instance's [Stateful.snapshot] output. */
     fun importFrom(prior: Serializable)
+}
+
+/**
+ * Durability seam for the two journal boundaries inside a promotion COMMIT.
+ * The owner checkpoints after PREPARE has closed the gate but before state is
+ * handed off, then records the completed swap after every relink and the gate
+ * drop succeeded but before green replays buffered traffic (uwt8b-D7..D10).
+ *
+ * This interface deliberately lives in `cell.evolve`: the swap protocol stays
+ * independent of the graph/journal representation that implements the seam.
+ */
+interface PromotionJournal {
+    fun checkpointBeforeStateHandoff()
+
+    fun recordCommittedSwap(waveState: OutletWaveState)
 }
 
 /**
@@ -162,6 +178,39 @@ object Promotion {
         RuntimeException("promotion aborted at $phase: $message", cause)
 
     /**
+     * Graph/runtime entry point that keeps the concrete membrane type behind
+     * the evolution package boundary. The typed overload below remains the
+     * protocol implementation used by callers that already hold a gate API.
+     */
+    internal fun promote(
+        host: ManagedHost,
+        gate: Cell,
+        incumbent: Cell,
+        candidate: Cell,
+        outletName: String,
+        downstream: List<Use<*>>,
+        judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
+    ) {
+        @Suppress("UNCHECKED_CAST")
+        val trafficLight = gate as? TrafficLightApi<Any>
+            ?: throw PromotionAborted("PRECHECK", "gate ${gate.ref} is not a live TrafficLightApi")
+        promote(host, trafficLight, incumbent, candidate, outletName, downstream, judge, journal)
+    }
+
+    /**
+     * Complete the green step represented by a recovered single-instance Promote record.
+     * The graph package calls through this seam rather than depending directly on membrane:
+     * TrafficLight ownership remains here with the promotion protocol.
+     */
+    internal fun completeRecoveredGate(gate: Cell) {
+        @Suppress("UNCHECKED_CAST")
+        val trafficLight = gate as? TrafficLightApi<Any>
+            ?: error("promotion replay gate ${gate.ref} is not a live TrafficLightApi")
+        trafficLight.controlInlet.call.setGreen()
+    }
+
+    /**
      * Promote [candidate] over [incumbent] behind [gate], despawning the
      * retired incumbent from [host] only after a successful COMMIT.
      *
@@ -180,6 +229,7 @@ object Promotion {
         outletName: String,
         downstream: List<Use<*>>,
         judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
     ) {
         // 1. PRECHECK — no side effects, freely abortable. Admission is
         // decided strictly before the window, so mid-swap rejection cannot
@@ -227,6 +277,7 @@ object Promotion {
             // 3. COMMIT — non-vetoing: the admission decision was PRECHECK's,
             // so nothing here may newly reject; a thrown exception here is an
             // infrastructure fault, not a veto, and triggers rollback below.
+            journal?.checkpointBeforeStateHandoff()
             if (migrates) {
                 (candidate as StateMigrating).importFrom((incumbent as Stateful).snapshot())
                 // preserved-epoch adoption (spec 20/22 §Source identity, 93
@@ -258,6 +309,11 @@ object Promotion {
             // all future traffic reach the candidate only
             dropIncumbentFromGate(gate, incumbent)
             droppedIncumbentFromGate = true
+
+            // The durability record is the last fallible COMMIT step. A
+            // failure here still reverses every relink and restores the gate;
+            // success means the journal can only describe the complete swap.
+            journal?.recordCommittedSwap(to.waveState())
 
             // 4a. green: replay the parked window and remove the gate from
             // the per-message path.
@@ -318,6 +374,7 @@ object Promotion {
         candidate: civictech.cell.data.Replicable<*>,
         outletName: String = "outlet",
         judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
     ) {
         // PRECHECK — decided strictly before any state mutation.
         if (judge != null) {
@@ -356,8 +413,13 @@ object Promotion {
             )
         }
         // COMMIT — the rebind (reuse-ref crash-recovery); surviving replicas play
-        // the retained incumbent and re-feed the candidate.
+        // the retained incumbent and re-feed the candidate. A journaled caller
+        // checkpoints only after every PRECHECK has passed, then records only a
+        // completed rebind. With no seam this remains the original two-statement
+        // path: no checkpoint, no topology record, no durability cost.
+        journal?.checkpointBeforeStateHandoff()
         replication.rebind(incumbent, candidate, host)
+        journal?.recordCommittedSwap(to.waveState())
     }
 
     /**
