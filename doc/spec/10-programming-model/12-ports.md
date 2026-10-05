@@ -1,6 +1,6 @@
 # 12 — Ports
 
-> **Status**: Specified (core); multiplex and cardinality enforcement partial (metadata plane, link roles, effect axis, and descriptor bits decided in [93](../90-roadmap/93-feature-interactions.md), unimplemented)
+> **Status**: Specified (core); core cardinality and in-host Consume/Observe tap enforcement are implemented; multiplex/metadata-plane behavior and the remaining descriptor refinements are partial (see G-13, G-35, and G-60)
 > **Sources**: ADR — Computelet Kernel, ADR — Task Connectivity, ADR — Anatomy of Cellular Programs, ADR 3
 > **Implementation**: `civictech.cell.port.*` (Port, Inlet, Outlet, FanInlet, FanOutlet, OneToOnePort, Serve, Use, Subscribe, LinkTo, LinkFrom, delegates)
 
@@ -72,9 +72,11 @@ of every fan-in inlet of an `Effectful` cell) from the *only* suppression
 mode to a coarse fallback layered underneath it. The `Effectful` cell marker
 is retained as that fallback for opaque, non-portable I/O inside served
 logic: such a cell is still replaced wholesale in shadow mode and terminates
-judgeability downstream of itself. The rest of the 93 I-17 observation
-membrane — downstream-only taps, SCC-closed cuts, gate-invariant consistency
-points — remains undecided/unbuilt; see 50/52.
+judgeability downstream of itself. The remaining 93 I-17 observation-membrane
+rules — downstream-only shadow cuts, SCC-closed cuts, and gate-invariant
+consistency points — remain undecided/unbuilt; this is distinct from the
+implemented Consume/Observe tap primitive described in 20/23 and below. See
+50/52.
 
 ## The Inlet/Outlet duality
 
@@ -128,7 +130,8 @@ Rules (normative):
    enforcement).
 2. [12-EXCL-01] Fan-out MUST be rejected at link time when the contract's payload types
    carry exclusive ownership (`Owned`, `Leased`) — see 20/23. This refusal
-   binds **Consume** links only (decided in 93 I-20, unimplemented): a
+   binds **Consume** links only (decided in 93 I-20 and implemented for
+   in-host attachments): a
    downstream attachment is either a *Consume* link (receives the declared
    payload form, bears the consume-once/release obligation, counted by the
    exclusive funnel) or an *Observe* link / tap (receives a KSP-generated
@@ -136,10 +139,11 @@ Rules (normative):
    counted). `FanOutlet.tap(observer)` — equivalently a
    `LinkRole { Consume, Observe }` on the 10/13 handshake — is the decided
    surface.
-   ⚠ EARS-GAP: the Consume/Observe scoping is decided but unimplemented; the
-   currently landed behavior (M5.6) rejects *any* second subscriber on an
-   `Owned`/`Leased`-carrying outlet, not only a second Consume link — unclear
-   which behavior a scenario should assert against until Observe/tap ships.
+   ⚠ EARS-GAP: the in-host Consume/Observe distinction, SPSC exemption, and
+   tap-before-consumer dispatch are implemented. The remaining G-47 surface
+   is KSP-derived Borrowed-contract projection and link-time validation,
+   attach-forward-only catch-up semantics, and the copy-fork/cloneability
+   contract for mutable exclusive shadow candidates.
 3. [12-FANIN-01] Multi-producer inlets are permitted only where the cell declares merge
    semantics (e.g. `UnionSetCell` ref-counting) — "unions may explicitly
    allow multiple producers".
@@ -157,11 +161,16 @@ contracts — rule 2 above is enforced, 20/23.)*
 A NoOp-served shadow inlet whose contract carries `Owned`/`Leased` MUST be a
 *discharging* sink — `Owned` → `take()`-and-drop, `Leased` → `release()` —
 generated from the same exclusive bit (decided in 93 I-20). *(Conflict C-11
-resolved, `computenet-ulss` + `computenet-3jv2` — the discharging sink is
-landed (`Proxy.discharging`/`Shadow.suppress`, 50/52, 20/23). A platform
-container other than `Map`/`Iterable`/`Array` — `Pair`/`Triple`/`Result`/
-`Optional` — is still marked exclusive by the scan and then skipped by the
-walk, filed as `computenet-woto`.)*
+resolved. The closed history is: `computenet-woto` added explicit accessors
+for `Pair`/`Triple`/`Result`/`Optional` and walked the value of an outer
+`Owned`; `computenet-zyg1` extended that walk through a `Leased` value after a
+successful release; `computenet-h6sf` stopped at function and
+synthetic/hidden capture carriers and counted already-discharged exclusives
+without swallowing them; `computenet-dmwl` bounded discharging proxies and
+ADMIT drops to descriptor-marked parameter positions; and `computenet-u6np`
+added accounting predicates, the successful-discharge counter, and
+propagation of pool-callback failures. Remaining named residuals are recorded
+in 20/23's `Proxy.discharge` KDoc.)*
 
 Cardinality is per-instance and per-link — never a cross-replica-set budget
 (decided in 93 I-25, replication machinery unimplemented). For a replicated
