@@ -74,11 +74,11 @@ sealed interface PromotionVerdict {
  * Evaluates a [PromotionPolicy] against observed waves and gate violations
  * (spec 53 "Judgment is declarative policy", G-50): the declarative
  * replacement for hand-checking `violations.shouldBeEmpty()` before calling
- * [Promotion.promote]. A judge is a plain accumulator, not a cell — wire an
- * [civictech.cell.verify.InvariantCell]'s `violations` outlet (or several,
- * one per named gate) into [observeCandidateViolation] /
- * [observeIncumbentViolation], and call [observeCandidateWave] once per
- * production wave the candidate has shadowed.
+ * [Promotion.promote]. [Evolve.run] performs the standard composition: it
+ * wires each [civictech.cell.verify.InvariantCell]'s `violations` outlet into
+ * this judge and observes the candidate's production waves. Low-level callers
+ * may still wire those outlets into [observeCandidateViolation] /
+ * [observeIncumbentViolation] and call [observeCandidateWave] by hand.
  *
  * **Differential shadow** (policy.baseline = true): the candidate must both
  * satisfy [PromotionPolicy.threshold] on its own violation count AND be no
