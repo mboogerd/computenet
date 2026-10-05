@@ -1,0 +1,350 @@
+package civictech.cell.evolve
+
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.Propagate
+import civictech.cell.host.ManagedHost
+import civictech.cell.membrane.Principal
+import civictech.cell.membrane.TrafficLightApi
+import civictech.cell.membrane.currentPrincipal
+import civictech.cell.port.CycleHead
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortRef
+import civictech.cell.port.PortRegistry
+import civictech.cell.port.Use
+import civictech.cell.verify.InvariantCell
+import civictech.cell.verify.Violation
+import java.util.concurrent.TimeUnit
+
+/** Authority consulted before an evolution starts and before every attempt to advance it. */
+fun interface EvolutionAuthority {
+    /** A refusal reason, or `null` when [principal] may evolve this graph. */
+    fun refuse(principal: Principal): String?
+
+    companion object {
+        /** The local-first default from spec 53: local callers pass; remote-stamped callers do not. */
+        val LocalTrustedOnly = EvolutionAuthority { principal ->
+            when (principal) {
+                Principal.LocalTrusted -> null
+                is Principal.Peer -> "remote principal ${principal.id} may not trigger evolution"
+            }
+        }
+    }
+}
+
+/**
+ * Integration seam for graph-owned durability and bookkeeping. The kernel default performs
+ * the ordinary host despawn and has no journal or additional promotion bookkeeping.
+ */
+interface EvolutionHooks {
+    val journal: PromotionJournal?
+        get() = null
+
+    fun despawnShadow(host: ManagedHost, ref: CellRef) {
+        host.managementInlet.call.despawn(ref)
+    }
+
+    fun promoted(incumbent: CellRef) {}
+}
+
+/** A running shadow/judge/promotion orchestration. */
+interface EvolutionHandle {
+    enum class State {
+        SHADOWING,
+        JUDGED_ACCEPT,
+        PROMOTING,
+        PROMOTED,
+        REJECTED,
+        ROLLED_BACK,
+    }
+
+    val state: State
+    val reason: String?
+    val candidateRef: CellRef
+    val baselineRef: CellRef?
+
+    fun verdict(): PromotionVerdict
+
+    /** Evaluate the current verdict and, when settled, perform its terminal action. */
+    fun advance(): State
+
+    /** Poll [advance] until the handle is terminal or [timeoutMillis] elapses. */
+    fun await(timeoutMillis: Long): State
+}
+
+/**
+ * The kernel composition entry point for live evolution (spec 52/53): shadow the candidate,
+ * wire invariant violations into one [PromotionJudge], observe candidate waves, and drive the
+ * existing [Promotion] swap only after the judge accepts.
+ */
+object Evolve {
+    class Refused(reason: String) : RuntimeException(reason)
+
+    /** Incumbent-side differential shadow and the gates that judge it. */
+    data class Baseline(
+        val twin: Cell,
+        val gates: List<InvariantCell<*, *>>,
+    )
+
+    fun <T : Any> run(
+        host: ManagedHost,
+        gate: TrafficLightApi<T>,
+        incumbent: Cell,
+        candidate: Cell,
+        outletName: String,
+        downstream: List<Use<*>>,
+        policy: PromotionPolicy,
+        gates: List<InvariantCell<*, *>>,
+        baseline: Baseline? = null,
+        authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly,
+        hooks: EvolutionHooks? = null,
+    ): EvolutionHandle {
+        checkAuthority(authority)
+        validateGates(policy, gates, baseline)
+
+        val judge = PromotionJudge(policy, cycleHead = incumbent as? CycleHead<*>)
+        @Suppress("UNCHECKED_CAST")
+        val gateOutlet = gate.dataOutlet as? FanOutlet<T>
+            ?: throw Refused("gates: the traffic-light data outlet must be a FanOutlet")
+
+        spawnIfNeeded(host, candidate, outletName)
+        val candidateInputs = tapShadow(gateOutlet, candidate)
+
+        baseline?.let { spawnIfNeeded(host, it.twin, outletName) }
+        val baselineInputs = baseline?.let { tapShadow(gateOutlet, it.twin) }.orEmpty()
+
+        val violationSubscriptions = mutableListOf<ViolationSubscription>()
+        gates.forEach { invariant ->
+            violationSubscriptions += subscribeViolations(invariant, judge::observeCandidateViolation)
+        }
+        baseline?.gates?.forEach { invariant ->
+            violationSubscriptions += subscribeViolations(invariant, judge::observeIncumbentViolation)
+        }
+
+        val candidateOutlet = outlet(candidate, outletName)
+        val observerRef = PortRef.generate()
+        candidateOutlet.observe(observerRef) { judge.observeCandidateWave() }
+
+        return Handle(
+            host = host,
+            gate = gate,
+            gateOutlet = gateOutlet,
+            incumbent = incumbent,
+            candidate = candidate,
+            candidateInputs = candidateInputs,
+            candidateOutlet = candidateOutlet,
+            outletName = outletName,
+            downstream = downstream,
+            judge = judge,
+            observerRef = observerRef,
+            violationSubscriptions = violationSubscriptions,
+            baseline = baseline,
+            baselineInputs = baselineInputs,
+            authority = authority,
+            hooks = hooks ?: object : EvolutionHooks {},
+        )
+    }
+
+    private fun checkAuthority(authority: EvolutionAuthority) {
+        authority.refuse(currentPrincipal())?.let { reason ->
+            throw Refused("authority: $reason")
+        }
+    }
+
+    private fun validateGates(
+        policy: PromotionPolicy,
+        gates: List<InvariantCell<*, *>>,
+        baseline: Baseline?,
+    ) {
+        val expected = policy.gates.toSet()
+        val supplied = gates.map { it.name }.toSet()
+        if (expected != supplied) {
+            throw Refused("gates: policy names $expected but candidate gates are $supplied")
+        }
+        if (policy.baseline) {
+            val required = baseline
+                ?: throw Refused("baseline: the policy requires a differential baseline")
+            val baselineNames = required.gates.map { it.name }.toSet()
+            if (baselineNames != expected) {
+                throw Refused("baseline: policy gates $expected but baseline gates are $baselineNames")
+            }
+        } else if (baseline != null) {
+            throw Refused("baseline: a twin was supplied but the policy does not enable a baseline")
+        }
+    }
+
+    private fun spawnIfNeeded(host: ManagedHost, cell: Cell, outletName: String) {
+        if (host.portAt(cell.ref, outletName) == null) Shadow.spawn(host, cell)
+    }
+
+    private fun <T : Any> tapShadow(gateOutlet: FanOutlet<T>, shadow: Cell): List<PortRef> {
+        val tapped = mutableListOf<PortRef>()
+        val ports = PortRegistry.of(shadow)
+        ports.names().forEach { name ->
+            val inlet = ports[name]
+            if (inlet is FanInlet<*> && inlet.clazz == gateOutlet.clazz) {
+                @Suppress("UNCHECKED_CAST")
+                gateOutlet.subscribe(inlet as Use<T>)
+                tapped += inlet.ref
+            }
+        }
+        return tapped
+    }
+
+    private fun subscribeViolations(
+        invariant: InvariantCell<*, *>,
+        observe: (Violation) -> Unit,
+    ): ViolationSubscription {
+        val ref = PortRef.generate()
+        invariant.violations.subscribe(Use.fixed(object : Propagate<Violation> {
+            override fun propagate(value: Violation) = observe(value)
+        }, ref))
+        return ViolationSubscription(invariant.violations, ref)
+    }
+
+    private fun outlet(cell: Cell, name: String): FanOutlet<*> =
+        PortRegistry.of(cell)[name] as? FanOutlet<*>
+            ?: throw Refused("gates: candidate ${cell.ref} has no fan-out outlet '$name'")
+
+    private data class ViolationSubscription(
+        val outlet: FanOutlet<Propagate<Violation>>,
+        val ref: PortRef,
+    )
+
+    private class Handle<T : Any>(
+        private val host: ManagedHost,
+        private val gate: TrafficLightApi<T>,
+        private val gateOutlet: FanOutlet<T>,
+        private val incumbent: Cell,
+        private val candidate: Cell,
+        private val candidateInputs: List<PortRef>,
+        private val candidateOutlet: FanOutlet<*>,
+        private val outletName: String,
+        private val downstream: List<Use<*>>,
+        private val judge: PromotionJudge,
+        private val observerRef: PortRef,
+        private val violationSubscriptions: List<ViolationSubscription>,
+        private val baseline: Baseline?,
+        private val baselineInputs: List<PortRef>,
+        private val authority: EvolutionAuthority,
+        private val hooks: EvolutionHooks,
+    ) : EvolutionHandle {
+        @Volatile
+        override var state: EvolutionHandle.State = EvolutionHandle.State.SHADOWING
+            private set
+
+        @Volatile
+        private var terminalReason: String? = null
+
+        override val reason: String?
+            get() = terminalReason
+
+        override val candidateRef: CellRef = candidate.ref
+        override val baselineRef: CellRef? = baseline?.twin?.ref
+
+        override fun verdict(): PromotionVerdict = judge.verdict()
+
+        @Synchronized
+        override fun advance(): EvolutionHandle.State {
+            checkAuthority(authority)
+            if (state.isTerminal()) return state
+
+            return when (val verdict = judge.verdict()) {
+                PromotionVerdict.Pending -> {
+                    state = EvolutionHandle.State.SHADOWING
+                    state
+                }
+                is PromotionVerdict.Reject -> reject(verdict.reason)
+                PromotionVerdict.Accept -> promote()
+            }
+        }
+
+        override fun await(timeoutMillis: Long): EvolutionHandle.State {
+            require(timeoutMillis >= 0) { "timeoutMillis must be non-negative" }
+            val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+            val started = System.nanoTime()
+            while (!state.isTerminal() && System.nanoTime() - started < timeoutNanos) {
+                advance()
+                if (!state.isTerminal()) {
+                    val elapsed = System.nanoTime() - started
+                    val remainingMillis = TimeUnit.NANOSECONDS.toMillis((timeoutNanos - elapsed).coerceAtLeast(0))
+                    if (remainingMillis > 0) Thread.sleep(minOf(10, remainingMillis))
+                }
+            }
+            return state
+        }
+
+        private fun reject(reason: String): EvolutionHandle.State {
+            detachJudgment()
+            detachInputs(candidateInputs)
+            hooks.despawnShadow(host, candidate.ref)
+            baseline?.let { differential ->
+                detachInputs(baselineInputs)
+                hooks.despawnShadow(host, differential.twin.ref)
+            }
+            terminalReason = reason
+            state = EvolutionHandle.State.REJECTED
+            return state
+        }
+
+        private fun promote(): EvolutionHandle.State {
+            state = EvolutionHandle.State.JUDGED_ACCEPT
+            state = EvolutionHandle.State.PROMOTING
+            try {
+                Promotion.promote(
+                    host = host,
+                    gate = gate,
+                    incumbent = incumbent,
+                    candidate = candidate,
+                    outletName = outletName,
+                    downstream = downstream,
+                    judge = judge,
+                    journal = hooks.journal,
+                )
+            } catch (aborted: Promotion.PromotionAborted) {
+                if (!aborted.isCommitAbort()) {
+                    state = EvolutionHandle.State.JUDGED_ACCEPT
+                    throw aborted
+                }
+                detachJudgment()
+                baseline?.let { differential ->
+                    detachInputs(baselineInputs)
+                    hooks.despawnShadow(host, differential.twin.ref)
+                }
+                terminalReason = aborted.message
+                state = EvolutionHandle.State.ROLLED_BACK
+                return state
+            }
+
+            detachJudgment()
+            baseline?.let { differential ->
+                detachInputs(baselineInputs)
+                hooks.despawnShadow(host, differential.twin.ref)
+            }
+            hooks.promoted(incumbent.ref)
+            state = EvolutionHandle.State.PROMOTED
+            return state
+        }
+
+        private fun detachJudgment() {
+            candidateOutlet.untap(observerRef)
+            violationSubscriptions.forEach { subscription ->
+                subscription.outlet.unsubscribe(subscription.ref)
+            }
+        }
+
+        private fun detachInputs(refs: List<PortRef>) {
+            refs.forEach(gateOutlet::unsubscribe)
+        }
+
+        private fun EvolutionHandle.State.isTerminal(): Boolean =
+            this == EvolutionHandle.State.PROMOTED ||
+                this == EvolutionHandle.State.REJECTED ||
+                this == EvolutionHandle.State.ROLLED_BACK
+
+        /** [PromotionAborted] deliberately exposes its phase through its stable typed message. */
+        private fun Promotion.PromotionAborted.isCommitAbort(): Boolean =
+            message?.startsWith("promotion aborted at COMMIT:") == true
+    }
+}
