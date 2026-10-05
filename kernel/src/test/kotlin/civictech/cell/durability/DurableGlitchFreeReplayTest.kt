@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.CurrentContext
 import civictech.cell.MapperCell
+import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.host.ManagedHost
@@ -22,6 +23,7 @@ import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import java.io.Serializable
 import java.util.*
 
 /**
@@ -87,6 +89,38 @@ class DurableGlitchFreeReplayTest {
         }
     }
 
+    /**
+     * The durable arm must contribute recoverable state at a checkpoint. Its
+     * input high-water is the minimal state needed to make the checkpoint
+     * meaningful; the outlet wave record still carries the emission epoch and
+     * counter that the preserved-epoch assertion exercises.
+     */
+    private class StatefulMapperCell(
+        private val label: String,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell, Stateful {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        val outlet = registerPort("outlet", FanOutlet.create<Consumer<Pair<String, Int>>>())
+        private val received = mutableListOf<Int>()
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    received += input
+                    outlet.call.provide(label to input)
+                }
+            })
+        }
+
+        override fun snapshot(): Serializable = ArrayList(received)
+
+        @Suppress("UNCHECKED_CAST")
+        override fun restore(state: Serializable) {
+            received.clear()
+            received += state as List<Int>
+        }
+    }
+
     private interface MapperProxy {
         val inlet: Use<Consumer<Int>>
     }
@@ -101,7 +135,7 @@ class DurableGlitchFreeReplayTest {
     private data class Built(
         val host: ManagedHost,
         val source: Source,
-        val journaled: MapperCell<Int, Pair<String, Int>>,
+        val journaled: StatefulMapperCell,
     )
 
     private data class SessionResult(
@@ -149,7 +183,7 @@ class DurableGlitchFreeReplayTest {
                 val hostVol = ManagedHost(scheduler = controller.scheduler())
 
                 val a = Source(consumerInt)
-                val j = MapperCell<Int, Pair<String, Int>>(f = { "J" to it }, ref = jRef)
+                val j = StatefulMapperCell("J", ref = jRef)
                 val v = MapperCell<Int, Pair<String, Int>>(f = { "V" to it }, ref = vRef)
                 val d = GlitchFreeCell(consumerPair, ref = dRef, mode = GlitchFreeCell.WaveMode.WAIT)
                 val o = Observer(consumerPair, observations, ref = oRef)
@@ -171,11 +205,11 @@ class DurableGlitchFreeReplayTest {
                 // Handshake first (fires EdgeOpen so the frontier knows the arm), then reroute
                 // delivery over the queue (the diamond wiring of GlitchFreeDiamondTest).
                 val routedJoin = hostVol.lookup<JoinProxy>(dRef)!!.inlet.call
-                for (arm in listOf(j, v)) {
-                    (arm.outlet.linkTo(d.inlet as LinkFrom<Consumer<Pair<String, Int>>>)
+                for (armOutlet in listOf(j.outlet, v.outlet)) {
+                    (armOutlet.linkTo(d.inlet as LinkFrom<Consumer<Pair<String, Int>>>)
                         is LinkResult.Connected).shouldBeTrue()
-                    arm.outlet.unsubscribe(d.inlet.ref)
-                    arm.outlet.subscribe(Use.fixed(routedJoin, d.inlet.ref))
+                    armOutlet.unsubscribe(d.inlet.ref)
+                    armOutlet.subscribe(Use.fixed(routedJoin, d.inlet.ref))
                 }
                 // the observer sits behind the join, direct on the volatile host's task
                 d.outlet.subscribe(Use.fixed(o.inlet.call, o.inlet.ref))
@@ -312,7 +346,10 @@ class DurableGlitchFreeReplayTest {
             // recorded high-water before the tail is replayed.
             result.recoveredSourceId shouldBe result.preCrashSourceId
             (result.preCrashHighWater >= checkpointHighWater).shouldBeTrue()
-            result.recoveredHighWater shouldBe checkpointHighWater
+            // The checkpoint restores the outlet to its checkpoint high-water;
+            // replaying the retained tail then advances it back to the
+            // pre-crash high-water on the same source epoch.
+            result.recoveredHighWater shouldBe result.preCrashHighWater
 
             // The compacted journal contributes only the post-checkpoint tail
             // to the replayed cone, and every replayed frame is a J baseline.
