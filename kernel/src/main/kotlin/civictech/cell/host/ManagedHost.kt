@@ -815,7 +815,7 @@ open class ManagedHost(
     private val stagedLinkCloseMarkers =
         Collections.newSetFromMap(IdentityHashMap<HostedPortInvocation, Boolean>())
 
-    /** Triggerless type-8 records staged in journal order on their cell's data FIFO. */
+    /** Triggerless type-8 records staged at their live boundary on their cell's data FIFO. */
     private val stagedRestartBoundaries = IdentityHashMap<HostedPortInvocation, DecodedRestart>()
 
     /**
@@ -1189,11 +1189,17 @@ open class ManagedHost(
     /**
      * A never-journaled metadata failure has no replayable trigger frame. Its
      * type-8 record is therefore represented during recovery by an internal
-     * marker in the same per-cell FIFO as the surrounding journal frames. The
-     * marker itself carries no protocol payload and is intercepted by [deliver]
-     * before ordinary port lookup.
+     * marker in the same per-cell FIFO as the surrounding journal frames. When
+     * live metadata scheduling overtook already-staged data, [precededFrames]
+     * names that replayed suffix and the marker is moved immediately ahead of
+     * it. The marker itself carries no protocol payload and is intercepted by
+     * [deliver] before ordinary port lookup.
      */
-    private fun stageReplayedRestartBoundary(restart: DecodedRestart, journal: Journal) {
+    private fun stageReplayedRestartBoundary(
+        restart: DecodedRestart,
+        journal: Journal,
+        precededFrames: List<HostedPortInvocation>,
+    ) {
         val marker = HostedPortInvocation(
             cellRef = restart.cellRef,
             portName = "",
@@ -1204,6 +1210,29 @@ open class ManagedHost(
         synchronized(dataLock) {
             stagedRestartBoundaries[marker] = restart
             attentionScheduler.stage(marker)
+            if (precededFrames.isNotEmpty()) {
+                val preceded = Collections.newSetFromMap(
+                    IdentityHashMap<HostedPortInvocation, Boolean>(),
+                ).also { it.addAll(precededFrames) }
+                val queue: MutableCollection<Pair<Long, HostedPortInvocation>> =
+                    attentionScheduler.dataQueues[restart.cellRef]
+                        ?: attentionScheduler.attentionParked[restart.cellRef]
+                        ?: error("restart boundary for ${restart.cellRef} has no staged cell queue")
+                val ordered = queue.toMutableList()
+                val markerEntry = ordered.singleOrNull { it.second === marker }
+                    ?: error("restart boundary marker for ${restart.cellRef} was not staged exactly once")
+                check(ordered.count { preceded.contains(it.second) } == precededFrames.size) {
+                    "restart boundary for ${restart.cellRef} cannot find every preceded replay frame"
+                }
+                ordered.remove(markerEntry)
+                val boundaryIndex = ordered.indexOfFirst { preceded.contains(it.second) }
+                check(boundaryIndex >= 0) {
+                    "restart boundary for ${restart.cellRef} has no preceded replay frame"
+                }
+                ordered.add(boundaryIndex, markerEntry)
+                queue.clear()
+                queue.addAll(ordered)
+            }
         }
         if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()
     }
