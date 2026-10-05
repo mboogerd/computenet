@@ -125,19 +125,34 @@ class ChargeIdempotencyTest {
         )
         fun claim() = BudgetClaim(PeerStamp(PeerId("z")), ClaimClass.Spawn, key = "k1")
 
-        val first = free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
-        // Replay while the key is in the window: admitted, but a no-op undo.
-        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>().undo()
-        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        // A zero-price bucket's window has no public observable (no debit to compare, and a
+        // replay counts as admitted too), so read it directly: does the bucket hold "k1"?
+        fun windowHoldsK1(): Boolean {
+            val buckets = TokenBucketLedger::class.java.getDeclaredField("buckets")
+                .apply { isAccessible = true }.get(free) as Map<*, *>
+            val bucket = buckets.values.single()!!
+            val tokens = bucket.javaClass.getDeclaredField("recentTokens")
+                .apply { isAccessible = true }.get(bucket) as Map<*, *>?
+            return tokens?.containsKey("k1") == true
+        }
 
-        // The real admission's undo takes the monitor and forgets the key.
+        val first = free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
+        windowHoldsK1() shouldBe true
+        // Replay while the key is in the window: admitted, but its undo is a no-op.
+        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>().undo()
+        windowHoldsK1() shouldBe true
+
+        // The real admission's undo (which takes the bucket's monitor) forgets the key.
         first.undo()
+        windowHoldsK1() shouldBe false
+
+        // So the same-key retry is a fresh admission that records the key again, and its own
+        // undo is real: it forgets the key once more.
         val retry = free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
-        // A fresh admission has a real undo: undoing it forgets the key again, so the next
-        // charge is once more a recorded admission rather than a replay (no-op undo).
+        windowHoldsK1() shouldBe true
         retry.undo()
-        free.charge(claim()).shouldBeInstanceOf<BudgetOutcome.Admitted>()
-        free.snapshot().admitted[ClaimClass.Spawn] shouldBe 5
+        windowHoldsK1() shouldBe false
+        free.snapshot().admitted[ClaimClass.Spawn] shouldBe 3
     }
 
     @Test
