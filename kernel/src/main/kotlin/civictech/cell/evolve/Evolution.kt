@@ -17,6 +17,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
+import civictech.cell.port.OutletWaveState
 import civictech.cell.port.Use
 import civictech.cell.proxy.Proxy
 import civictech.nature.ContractRegistry
@@ -39,6 +40,21 @@ interface Effectful
 interface StateMigrating {
     /** [prior] is the previous instance's [Stateful.snapshot] output. */
     fun importFrom(prior: Serializable)
+}
+
+/**
+ * Durability seam for the two journal boundaries inside a promotion COMMIT.
+ * The owner checkpoints after PREPARE has closed the gate but before state is
+ * handed off, then records the completed swap after every relink and the gate
+ * drop succeeded but before green replays buffered traffic (uwt8b-D7..D10).
+ *
+ * This interface deliberately lives in `cell.evolve`: the swap protocol stays
+ * independent of the graph/journal representation that implements the seam.
+ */
+interface PromotionJournal {
+    fun checkpointBeforeStateHandoff()
+
+    fun recordCommittedSwap(waveState: OutletWaveState)
 }
 
 /**
@@ -180,6 +196,7 @@ object Promotion {
         outletName: String,
         downstream: List<Use<*>>,
         judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
     ) {
         // 1. PRECHECK — no side effects, freely abortable. Admission is
         // decided strictly before the window, so mid-swap rejection cannot
@@ -227,6 +244,7 @@ object Promotion {
             // 3. COMMIT — non-vetoing: the admission decision was PRECHECK's,
             // so nothing here may newly reject; a thrown exception here is an
             // infrastructure fault, not a veto, and triggers rollback below.
+            journal?.checkpointBeforeStateHandoff()
             if (migrates) {
                 (candidate as StateMigrating).importFrom((incumbent as Stateful).snapshot())
                 // preserved-epoch adoption (spec 20/22 §Source identity, 93
@@ -258,6 +276,11 @@ object Promotion {
             // all future traffic reach the candidate only
             dropIncumbentFromGate(gate, incumbent)
             droppedIncumbentFromGate = true
+
+            // The durability record is the last fallible COMMIT step. A
+            // failure here still reverses every relink and restores the gate;
+            // success means the journal can only describe the complete swap.
+            journal?.recordCommittedSwap(to.waveState())
 
             // 4a. green: replay the parked window and remove the gate from
             // the per-message path.
