@@ -1112,6 +1112,14 @@ open class ManagedHost(
         get() = hostDurability.replayAsBaseline
         set(value) { hostDurability.replayAsBaseline = value }
 
+    /**
+     * Test-only qfi22-D7/D8 control; production always suppresses exact
+     * same-journal replay duplicates at the intake.
+     */
+    internal var suppressReplayedDuplicates: Boolean
+        get() = hostDurability.suppressReplayedDuplicates
+        set(value) { hostDurability.suppressReplayedDuplicates = value }
+
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
         // computenet-xy7w4 D1: a frame accepted while a replayed frame's delivery is on
         // this thread is derived from it — it inherits that replay's provenance, so a
@@ -1307,6 +1315,19 @@ open class ManagedHost(
         // that traversal can reach another host's enqueueHostedInvocation
         // and ITS dataLock, so it must run only after this lock releases.
         val announce = synchronized(dataLock) {
+            // qfi22-D7/D8, the delivery complement of journalTee's append rule:
+            // a frame J would not append because it derives from replay of J is
+            // also a frame J already delivers when this exact target-port
+            // position occurred in J. Drop that derived duplicate before it is
+            // positioned or staged. A crash-window derivation absent from J has
+            // no recorded position and therefore continues through normally.
+            if (hostDurability.suppressesReplayedDuplicate(hostedInvocation)) {
+                // A suppressed delivery has no downstream consumer. Discharge
+                // exclusive arguments here rather than silently losing them;
+                // the Recovery suppression counter makes the drop observable.
+                hostedInvocation.invocation.args.forEach(Proxy::discharge)
+                return
+            }
             val newlyPositioned = !checkpointSequences.containsKey(hostedInvocation)
             if (newlyPositioned) checkpointSequences[hostedInvocation] = ++nextCheckpointSequence
             try {
@@ -1330,6 +1351,12 @@ open class ManagedHost(
      * frame whose target tees to a DIFFERENT journal is appended there as live, because that
      * journal may never have received it (in flight at the crash) — see
      * `ReplayProvenanceTest` R-B'. Caller holds [dataLock].
+     *
+     * Its delivery complement is checked beside this tee in [accept]: a
+     * same-journal replay derivation at an exact target-port position the
+     * journal already submitted is not only skipped here, but suppressed from
+     * staging — a frame J would not append because J already holds it is a
+     * frame J already delivers (qfi22-D7/D8).
      *
      * Keyed on the target `(cellRef, portName)` (computenet-xy7w4 D4), not the cell alone:
      * a per-port selector may journal one inlet of a cell and leave a sibling inlet
@@ -1537,10 +1564,14 @@ open class ManagedHost(
     /** Recover with the services and cumulative topology fold supplied by [context]. */
     fun recoverFrom(journal: Journal, context: ApplyContext): Recovery {
         require(context.host === this) { "recovery ApplyContext belongs to a different ManagedHost" }
-        val frames = withRecoveryRecordLoop {
+        val staged = withRecoveryRecordLoop {
             context.replaying { hostDurability.recoverFrom(journal, context) }
         }
-        return Recovery(frames, scheduler.quiescence())
+        return Recovery(
+            replayedFrames = staged.replayedFrames,
+            replayDuplicateSuppressionCount = staged.suppressedReplayDuplicates::get,
+            quiescence = scheduler.quiescence(),
+        )
     }
 
     /**

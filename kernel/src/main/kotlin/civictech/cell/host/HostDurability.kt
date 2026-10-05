@@ -20,8 +20,10 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
+import java.util.IdentityHashMap
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val RECORD_FRAME: Byte = 1
 private const val RECORD_CHECKPOINT: Byte = 2
@@ -36,6 +38,32 @@ internal data class CheckpointFrame(
     val sequence: Long,
     val invocation: HostedPortInvocation,
 )
+
+/** The synchronous staging result that [ManagedHost] exposes as a [Recovery]. */
+internal data class StagedRecovery(
+    val replayedFrames: Int,
+    val suppressedReplayDuplicates: AtomicInteger,
+)
+
+/** Exact replayed positions for one journal recovery, grouped by target port. */
+private class ReplayedPositions {
+    private val byPort = mutableMapOf<Pair<CellRef, String>, MutableMap<Timestamp, Int>>()
+    val suppressedDuplicates = AtomicInteger()
+
+    @Synchronized
+    fun record(cellRef: CellRef, portName: String, timestamp: Timestamp) {
+        val positions = byPort.getOrPut(cellRef to portName, ::mutableMapOf)
+        positions[timestamp] = positions.getOrDefault(timestamp, 0) + 1
+    }
+
+    @Synchronized
+    fun consume(cellRef: CellRef, portName: String, timestamp: Timestamp): Boolean {
+        val positions = byPort[cellRef to portName] ?: return false
+        val occurrences = positions[timestamp] ?: return false
+        if (occurrences == 1) positions.remove(timestamp) else positions[timestamp] = occurrences - 1
+        return true
+    }
+}
 
 /**
  * `[24-DUR-08]`'s bound: the most discharged-baseline positions
@@ -392,6 +420,28 @@ internal class HostDurability(
     var replayAsBaseline = true
 
     /**
+     * Test-only control for qfi22-D7/D8. Production suppresses a replay-derived
+     * frame when its exact target-port position was already submitted from the
+     * same journal. Setting this false restores the former double-delivery path
+     * so [civictech.cell.durability.JournaledEdgeReplayOnceTest] can prove the
+     * predicate discriminates.
+     */
+    var suppressReplayedDuplicates = true
+
+    /**
+     * The latest recovery's replayed positions per [Journal], identity-keyed
+     * because journal provenance and selectors use `===`. A journal's table is
+     * removed at the start of its next [recoverFrom], rebuilt off to the side so
+     * direct replay submissions cannot match it, then published before the host
+     * releases its recovery dispatch gate. Until the next recovery, it remains
+     * available for every asynchronously staged consequence of this one.
+     * Occurrence counts preserve a diamond's legitimate repeated delivery of one
+     * exact position, including a crash after only some edge copies reached the
+     * journal. Each table is bounded by that recovery's context-bearing frame tail.
+     */
+    private val replayedPositions = IdentityHashMap<Journal, ReplayedPositions>()
+
+    /**
      * Processed-frontier (G-59, fixes C-9; spec 20/24, 30/31, 50/52): per
      * [civictech.cell.evolve.Effectful] inlet `(cellRef, portName)`, the last applied
      * `Timestamp` per source — durable via [FrontierRecord]/[CheckpointRecord] so both
@@ -441,15 +491,29 @@ internal class HostDurability(
      * restores exactly those cells and re-delivers nothing to volatile cells
      * that were never written. Recover each distinct journal once.
      *
+     * A context-bearing frame submitted to a port whose selector is this exact
+     * [journal] records its timestamp for the complementary intake rule: if
+     * replaying an upstream frame later re-derives that same position into that
+     * same port, the journal's direct frame already delivers it, so the derived
+     * duplicate is suppressed. Recording happens only AFTER [submit], which lets
+     * the direct journal frame itself enter the intake before its position becomes
+     * suppressible. Contextless roots record nothing; positions absent from the
+     * journal remain deliverable for the crash window.
+     *
      * Returns the number of `Frame` records submitted (checkpoint, frontier,
-     * discharge and outlet-wave records are applied in place and not counted).
+     * discharge and outlet-wave records are applied in place and not counted)
+     * together with this recovery's asynchronously updated suppression counter.
      * Submission only STAGES a frame; delivery is a later scheduler task —
-     * [ManagedHost.recoverFrom] wraps this count in a [Recovery] whose
-     * `awaitApplied` fences on that delivery.
+     * [ManagedHost.recoverFrom] exposes both on a [Recovery] whose [Recovery.awaitApplied]
+     * fences on that delivery.
      */
-    fun recoverFrom(journal: Journal, applier: TopologyApplier? = null): Int {
+    fun recoverFrom(journal: Journal, applier: TopologyApplier? = null): StagedRecovery {
         var frames = 0
         var checkpointCatchUpPendingAt: Int? = null
+        val positions = ReplayedPositions()
+        synchronized(replayedPositions) {
+            replayedPositions.remove(journal)
+        }
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
         // itself is stamped up front (below) so a reactive re-emission inherits
@@ -475,12 +539,16 @@ internal class HostDurability(
                     applier?.checkpointRestored()
                     checkpointCatchUpPendingAt = null
                 }
-                submit(
-                    WireCodec.decode(payload).let { frame ->
-                        (if (scope == null) frame else frame.baselined(scope))
-                            .copy(replayFrontier = scope, replayOf = journal)
+                val frame = WireCodec.decode(payload).let { decoded ->
+                    (if (scope == null) decoded else decoded.baselined(scope))
+                        .copy(replayFrontier = scope, replayOf = journal)
+                }
+                submit(frame)
+                frame.invocation.context?.timestamp?.let { timestamp ->
+                    if (journalSelector(frame.cellRef, frame.portName) === journal) {
+                        positions.record(frame.cellRef, frame.portName, timestamp)
                     }
-                )
+                }
                 frames++
             }
             records.forEachIndexed { index, record ->
@@ -537,7 +605,31 @@ internal class HostDurability(
                 }
             }
         }
-        return frames
+        // ManagedHost's recovery record-loop gate still prevents data dispatch here.
+        // Publish only after every direct frame has entered the intake, so even two
+        // direct records with the same target and timestamp are both delivered.
+        synchronized(replayedPositions) {
+            replayedPositions[journal] = positions
+        }
+        return StagedRecovery(frames, positions.suppressedDuplicates)
+    }
+
+    /**
+     * qfi22-D7/D8's host-intake predicate. Call while holding the host's
+     * `dataLock`, beside the journal tee: live frames have no [HostedPortInvocation.replayOf]
+     * and never consult the set; another journal or a volatile target cannot
+     * match; a contextless frame has no exact position to match. A true result
+     * is counted on the [Recovery] belonging to the recorded-position set.
+     */
+    fun suppressesReplayedDuplicate(frame: HostedPortInvocation): Boolean {
+        if (!suppressReplayedDuplicates) return false
+        val journal = frame.replayOf ?: return false
+        if (journalSelector(frame.cellRef, frame.portName) !== journal) return false
+        val timestamp = frame.invocation.context?.timestamp ?: return false
+        val positions = synchronized(replayedPositions) { replayedPositions[journal] } ?: return false
+        if (!positions.consume(frame.cellRef, frame.portName, timestamp)) return false
+        positions.suppressedDuplicates.incrementAndGet()
+        return true
     }
 
     /**
