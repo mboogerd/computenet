@@ -3,8 +3,10 @@ package civictech.runtime
 import civictech.cell.BudgetLedger
 import civictech.cell.CellRef
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.PromotionJudge
 import civictech.cell.graph.AppliedGraph
 import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DurableInput
@@ -441,6 +443,48 @@ object Runtime {
             placement = next
             return applied
         }
+
+        /**
+         * Journaled T0/T1 promotion of the incumbent behind [incumbent] to the shadow cell behind
+         * [candidate], resolved through [refs] and delegated to [ApplyContext.promote]. On a
+         * `journalTopology` node the swap is checkpointed and recorded as a `TopoEvent.Promote`, so
+         * a re-[Runtime.boot] on the same journal directory recovers the post-promotion topology.
+         * [downstream] names `(handle, inletName)` pairs the candidate's outlet takes over.
+         */
+        fun promote(
+            gate: String,
+            incumbent: String,
+            candidate: String,
+            outletName: String,
+            downstream: List<Pair<String, String>>,
+            judge: PromotionJudge? = null,
+        ) {
+            applyContext.promote(
+                gate = handleRef(gate),
+                incumbent = handleRef(incumbent),
+                candidate = handleRef(candidate),
+                outletName = outletName,
+                downstream = downstream.map { (handle, inlet) -> handleRef(handle) to inlet },
+                judge = judge,
+            )
+        }
+
+        /**
+         * Journaled rolling promotion of this node's replica behind [handle] to [candidate], reusing
+         * the replica's ref ([ApplyContext.promoteReplica]); each peer promotes and journals its own
+         * rebind.
+         */
+        fun promoteReplica(
+            handle: String,
+            candidate: CellFactory,
+            outletName: String = "outlet",
+            judge: PromotionJudge? = null,
+        ) {
+            applyContext.promoteReplica(handleRef(handle), candidate, outletName, judge)
+        }
+
+        private fun handleRef(handle: String): CellRef =
+            requireNotNull(applyContext.handles[handle]) { "runtime node '$name' has no live handle '$handle'" }
 
         /** Register inspector naming/link extras; only meaningful before [open]. */
         @Synchronized
