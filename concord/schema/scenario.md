@@ -120,7 +120,8 @@ optional descriptor param the driver binds. The v1 named params:
 | `glitch-free` | request wave-aligned semantics on a fan-in cell (`true`) |
 | `inlet-mode` | inlet admission policy (`single-writer`, `fan-in`) |
 | `host` | host placement (dist profile) |
-| `replica-of` | logical replica-group id (dist profile) |
+| `journal` | proposed non-empty journal name for a cell/controller on `host: dur` — see below |
+| `replica-of` | logical replica-group id (dist profile); proposed also on a `host: dur` `set-source`/`journal-set-source`, with the durable placement and recovery semantics below |
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
 | `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
@@ -130,6 +131,47 @@ optional descriptor param the driver binds. The v1 named params:
 unchanged (all optional; `window` absent on every non-`window` cell). The parser
 stays lenient — an unknown key is ignored — so promoting a further param to a
 typed field remains a schema-change ticket.
+
+#### `journal` (`computenet-elc`, feature `computenet-u7mox`)
+
+**Status.** Proposed — awaiting the maintainer's grant. This is the
+single-writer schema review in `computenet-elc`, under feature
+`computenet-u7mox`; after the grant, the separate driver task adds the typed
+`CellSpec.journal` field and named-journal binding under `concord/src/`, then
+rewrites this status to Landed.
+
+`journal` is an optional string whose value, when present, MUST be non-empty.
+It selects durability by placement and catalog type:
+
+| placement and type | absent | present (`journal: name`) |
+|---|---|---|
+| `host: dur`; `journal-set-source`, `journal-set-view`, `effect-sink`, `journal-window`, `journal-count-view` | tee to `default` | tee to the named journal |
+| `host: dur`; `set-source`, `set-view`, `quorum-set`, `waterline`, `partition`, `count-view` | volatile: never journaled or replayed | tee to the named journal |
+| `host: dur`; `journal` controller | recover `default` | recover the named journal |
+
+On a cell not placed on `host: dur`, or when its value is anything other than a
+non-empty string, `journal` is refused as `UnsupportedCatalogBinding`; it is
+never silently ignored. A `snapshot` of a journaled cell checkpoints only that
+cell's journal. A journaled `partition` is the honest exception: it is not
+`Stateful`, so `snapshot` on it is refused and recovery replays its whole
+journal tail.
+
+`despawn` of **any** `journal` controller crashes the whole durable host: every
+live instance is discarded, the graph is rebuilt under the same refs, and
+`recoverFrom` is invoked for **only** that controller's journal. Two controllers
+therefore express staged recovery — recover `a`, assert, then recover `b`.
+
+`replica-of` is additionally legal on a `host: dur` `set-source` or
+`journal-set-source`. The cell joins its logical replica group exactly as on a
+dist host; its durability follows the table above. After a crash it is first
+re-replicated on the rebuilt host and then its named journal is replayed. Its
+fold is read through a co-hosted volatile companion, so `replicas-converge` and
+`views-converge` apply. A scenario using this placement is `profile: dur`.
+
+This extension is additive. Every existing `dur` scenario carries no
+`journal:` and keeps byte-identical meaning: the durable host has one journal
+named `default`; the five journaled catalog types and the controller use it,
+while the volatile-capable types remain volatile.
 
 #### `window` (R2-B, `24-OP-WINDOW-01`/`-02`)
 
@@ -238,12 +280,12 @@ not a set source, and a `connect`/`disconnect` into the operator are refused.
 
 #### `interest` (W4-A followup, `42-INTEREST-01`)
 
-A `replica-of` cell may additionally declare an interest-scoped instance-set
-assignment (spec 40/42 §Interest-scoped instance sets) — the demand predicate the
-kernel's gossip linker consults to decide whether a link forms between two
-replicas of the same logical id, and to filter each emission to the target's
-interest. Absent ⇒ the kernel default, `Interest.Total` (plain replication,
-byte-identical to a `replica-of` cell with no `interest:`).
+A dist-profile `replica-of` cell may additionally declare an interest-scoped
+instance-set assignment (spec 40/42 §Interest-scoped instance sets) — the demand
+predicate the kernel's gossip linker consults to decide whether a link forms
+between two replicas of the same logical id, and to filter each emission to the
+target's interest. Absent ⇒ the kernel default, `Interest.Total` (plain
+replication, byte-identical to a `replica-of` cell with no `interest:`).
 
 ```yaml
 - {id: r1, type: set-source, of: string, host: h1, replica-of: shared, interest: {slots: [0], total-slots: 2}}
@@ -782,11 +824,9 @@ effect per delivered added element, keyed by the element). Anything else refuses
 - a direct upstream declares **`replica-of`**. A replicated set can gain elements
   no `add` names, by merging a peer's delta — a feed from outside the script
   entirely — so the derived set would omit them and an element that fired zero
-  times would pass over vacuously. No `type:`/`replica-of` combination reaches
-  this refusal under today's kernel driver (an `effect-sink` binds only in the
-  `dur` driver, which never reads `replica-of`); it is a scenario-level guard
-  kept so that a driver which later did honour `replica-of` on a durable cell
-  meets a refusal rather than a silent vacuous pass (computenet-cr7g);
+  times would pass over vacuously. The proposed durable `replica-of` placement
+  above makes this refusal reachable; the guard ensures that binding meets a
+  refusal rather than a silent vacuous pass (computenet-cr7g);
 - the topology into the cone moves mid-script (`connect`/`disconnect` whose `to` is
   in the cone);
 - any cell in the cone is `despawn`ed, `restart`ed or `restore`d;
