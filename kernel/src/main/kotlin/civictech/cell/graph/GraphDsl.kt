@@ -473,6 +473,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     deltaLinks.entries.removeIf { (_, key) -> key.from == event.ref || key.to == event.ref }
                 }
                 is TopoEvent.FamilyKey -> error("GraphSpec does not emit FamilyKey directly")
+                is TopoEvent.Promote -> error("GraphSpec does not emit Promote directly")
             }
         }
         val links = deltaLinks.mapNotNull { (key, topologyKey) ->

@@ -4624,6 +4624,24 @@ continuity is lost but glitch-freedom is not violated. The fallback MUST announc
 itself: the candidate emits the `ReBaseline` notice (I-22) naming A's superseded
 `sourceId`s, making the succession wave-observable (I-14 Rule S5) rather than silent.
 
+##### Durability of the swap (N27 x N24 x N17)
+
+> **Reconciled** (2026-10-05, computenet-uwt8b): promoting a journaled cell is the
+> T0/T1 preserved-epoch swap above, the only journaled form. Inside the red window,
+> after PREPARE drains and before state handoff, COMMIT first checkpoints the journal;
+> after every relink succeeds and before green, it appends one `TopoEvent.Promote`.
+> An aborted swap appends nothing, so recovery sees the whole swap or none of it.
+> Recovery applies topology records synchronously but only STAGES frames for later
+> delivery; replay-time state transfer would copy empty state, then the candidate's
+> own pre-swap frames would land on top. The checkpoint instead folds those frames
+> into snapshots, leaving only the post-swap tail after the record. Replicated cells
+> use reuse-ref per peer: each peer journals its rebind under the unchanged ref, so a
+> peer killed mid-roll recovers as the candidate and re-converges by ordinary merge.
+> The swap stays `EdgeEvent`-free; `Promote` is the I-7 durability plane, not the wave plane.
+> **Open residual** (computenet-gmlrc, uwt8b-D13): a replicated `PartitionedCell`'s
+> promotion unit is undecided: 53-STATE-04 swaps per organelle, but the composite
+> publishes no ref-addressed organelle for `promoteReplica`.
+
 ##### Multiplex / protocol continuity (N3×N23, N3×N27)
 
 A relink re-targets every generic protocol stacked on the link at once. This is

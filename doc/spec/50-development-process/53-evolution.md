@@ -153,6 +153,9 @@ the post-retire checkpoint).
 (management-preempts-data single-consumer serialization; no global lock, no
 coordinator) and emits no topology event: an instance swap leaves the
 logical edge set intact, so downstream wave completeness never observes it.
+A journaled host nevertheless appends the committed swap as a `TopoEvent.Promote`
+durability record (93 I-7), after the COMMIT checkpoint and before green; it is a
+recovery record, not a wave-observable `EdgeEvent`.
 A remote candidate is first migrated onto the membrane host so the swap
 stays a purely local transaction; remote inbound links re-resolve through
 registry re-announcement, in-flight remote traffic parking at the bridge for
@@ -341,6 +344,9 @@ unchanged, and a graph that never opts into replicated promotion is unaffected.
 COMMIT is the rebind (reuse-ref crash-recovery). [53-REPL-03] Inbound gossip arriving during
 the object swap parks at the registry on the despawn's unpublish and replays on
 the candidate's republish, so no peer delta is lost.
+Each peer journals its own rebind the same way, so a peer killed mid-roll
+recovers as its candidate under the reused ref and re-converges with peers still
+on the incumbent by ordinary merge.
 
 **Partitioned nodes extend by the same rolling form, shard-by-shard.** A
 partitioned node's shards are ref-addressed instances (PN-6); promoting one is
