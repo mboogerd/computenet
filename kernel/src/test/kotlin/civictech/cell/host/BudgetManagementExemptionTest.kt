@@ -58,11 +58,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * block. Every other operation, and its `runToIdle()`, runs INSIDE the stamp,
  * so the leak is present there and the no-claim assertion is the stronger one.
  *
- * **Promotion uses locally-established downstream links** (no handshake under
- * a remote stamp), so PRECHECK's re-authorization (`LinkSupport.reauthorize`)
- * offers a local identity and `linkBudgetPolicy` constructs no Link claim.
- * Promotion of links established under a remote stamp would charge Link; that
- * is `computenet-8aboz`'s (decision `5o1rf-D8`), out of scope here.
+ * **The promotion fixture establishes no downstream link under a remote
+ * stamp.** Link re-authorization/accounting for remote-established links is
+ * `computenet-8aboz`'s (decision `5o1rf-D8`), out of scope here.
  *
  * **Promotion COMMIT is internal management work** (`computenet-4yvsx`). A
  * stamped `promoteReplica` reaches `Replication.rebind`, whose candidate
@@ -219,9 +217,8 @@ class BudgetManagementExemptionTest {
      * The promotion swap for `principal-q`: an incumbent replica spawned LOCALLY
      * on `promo`, then `promoteReplica` under q's stamp with a same-ref
      * candidate. No downstream link is established under a remote stamp (class
-     * KDoc), so PRECHECK's re-authorization is local. Everything after the
-     * setup is observed directly: no failure may escape and the candidate must
-     * be the hosted replica after COMMIT.
+     * KDoc). Everything after the setup is observed directly: no failure may
+     * escape and the candidate must be the hosted replica after COMMIT.
      */
     private data class PromotionAttempt(
         val logicalId: UUID,
