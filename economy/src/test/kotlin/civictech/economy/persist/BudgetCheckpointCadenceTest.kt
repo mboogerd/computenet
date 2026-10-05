@@ -84,15 +84,19 @@ class BudgetCheckpointCadenceTest {
     fun `charges and undos never write a checkpoint` () {
         val store = SpyStore()
         val ledger = ledger()
+        // Hand the ledger the store once, so a ledger that kept it and wrote per charge
+        // would be visible here; without this tick the spy is unreachable from charge.
+        ledger.tick(store, now = 0L)!!.sequence shouldBe 1L
+        store.writes shouldBe 1
         val admissions = (0 until 1_000).map { key ->
             ledger.charge(
                 BudgetClaim(PeerStamp(PeerId("peer")), ClaimClass.Attention, key = key),
             ).shouldBeInstanceOf<BudgetOutcome.Admitted>()
         }
 
-        store.writes shouldBe 0
+        store.writes shouldBe 1
         admissions.forEach { it.undo() }
-        store.writes shouldBe 0
+        store.writes shouldBe 1
     }
 
     @Test
