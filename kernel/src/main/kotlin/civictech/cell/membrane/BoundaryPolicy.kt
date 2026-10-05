@@ -74,13 +74,22 @@ fun currentPrincipal(): Principal =
  * Per-[ProtocolId] flow-time authority (spec 40/43 seam 3): a floor on
  * [AuthLevel], an attention [ceiling] band (clamps an asserted level, the
  * fold/band-gating untouched), and a per-[Principal] [ratePerWindow] anti-
- * Sybil throttle. All default open (P7).
+ * Sybil throttle. When [windowNanos] is declared the throttle resets on a
+ * fixed window and retains at most [maxTrackedPrincipals] principals for this
+ * protocol; a null window preserves the original per-lifetime count. All
+ * default open (P7).
  */
 data class ProtocolAuthority(
     val minAuth: AuthLevel = AuthLevel.TransportVouched,
     val ceiling: AttentionBand? = null,
     val ratePerWindow: Int? = null,
-)
+    val windowNanos: Long? = null,
+    val maxTrackedPrincipals: Int = 1024,
+) {
+    init {
+        require(maxTrackedPrincipals >= 1) { "maxTrackedPrincipals must be at least 1" }
+    }
+}
 
 /**
  * A named, registered pure `Delta -> Delta` transform (spec 40/43): never a

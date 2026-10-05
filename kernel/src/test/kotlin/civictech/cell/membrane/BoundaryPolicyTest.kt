@@ -1,5 +1,6 @@
 package civictech.cell.membrane
 
+import civictech.cell.BoundaryDenials
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Frozen
@@ -31,6 +32,8 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import civictech.cell.data.delta.SetDelta
 
@@ -446,6 +449,282 @@ class BoundaryPolicyTest {
 
         // BS-14: not a fault.
         host.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    @Test
+    fun `BS-11w a principal over the limit in an earlier window is admitted in the next`() {
+        val controller = SimulationController(seed = 22)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val organelle = SetCell<String>()
+        val membrane = object : CompositeCell() {
+            var now = 0L
+            override val boundaryClock: () -> Long = { now }
+            val exposedOutlet = mediateOutlet(
+                "exposedOutlet",
+                "outlet",
+                organelle.outlet,
+                policy = BoundaryPolicy(
+                    protocolAuthority = mapOf(
+                        Protocols.Attention to ProtocolAuthority(
+                            ratePerWindow = 2,
+                            windowNanos = 1_000L,
+                        ),
+                    ),
+                ),
+            )
+        }
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+        val link = (
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+                as LinkResult.Connected
+            ).link
+
+        val observedVersions = mutableListOf<Long>()
+        ProtocolSupport.of(membrane.exposedOutlet).handle(Protocols.Attention) { _, message ->
+            observedVersions += (message as Attention).version
+        }
+
+        val alice = PeerId("alice")
+        fun send(version: Long) {
+            CurrentPeer.with(alice) {
+                Protocols.sendUpstream(link, Protocols.Attention, Attention(AttentionBand.HIGH.level, version))
+            }
+        }
+
+        send(1)
+        send(2)
+        send(3)
+        controller.runToIdle()
+
+        membrane.now = 1_000L
+        send(4)
+        send(5)
+        controller.runToIdle()
+
+        observedVersions.toSet() shouldBe setOf(1L, 2L, 4L, 5L)
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        letters.single().description shouldContain "alice"
+        letters.single().description shouldContain "RATE"
+        letters.none { it.description.contains("bob") } shouldBe true
+        host.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    @Test
+    fun `BS-11b the rate map is bounded independently of principals observed`() {
+        val controller = SimulationController(seed = 23)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val organelle = SetCell<String>()
+        val membrane = object : CompositeCell() {
+            var now = 0L
+            override val boundaryClock: () -> Long = { now }
+            val exposedOutlet = mediateOutlet(
+                "exposedOutlet",
+                "outlet",
+                organelle.outlet,
+                policy = BoundaryPolicy(
+                    protocolAuthority = mapOf(
+                        Protocols.Attention to ProtocolAuthority(
+                            ratePerWindow = 2,
+                            windowNanos = 1_000L,
+                            maxTrackedPrincipals = 2,
+                        ),
+                    ),
+                ),
+            )
+        }
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+        val link = (
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+                as LinkResult.Connected
+            ).link
+
+        val observedVersions = mutableListOf<Long>()
+        ProtocolSupport.of(membrane.exposedOutlet).handle(Protocols.Attention) { _, message ->
+            observedVersions += (message as Attention).version
+        }
+        val filter = ProtocolSupport.of(membrane.exposedOutlet).inboundFilter as ProtocolAuthorityFilter
+        val peers = (0 until 100).map { PeerId("peer-$it") }
+
+        peers.forEachIndexed { index, peer ->
+            CurrentPeer.with(peer) {
+                Protocols.sendUpstream(
+                    link,
+                    Protocols.Attention,
+                    Attention(AttentionBand.HIGH.level, index.toLong() + 1L),
+                )
+            }
+            (filter.trackedEntryCount(Protocols.Attention) <= 2) shouldBe true
+        }
+        controller.runToIdle()
+
+        observedVersions.size shouldBe 100
+        membrane.boundaryDenials["exposedOutlet"]!!.denialCount shouldBe 0L
+        filter.trackedEntryCount(Protocols.Attention) shouldBe 2
+
+        val evicted = peers.first { peer ->
+            !filter.isTracked(
+                Protocols.Attention,
+                Principal.Peer(peer, AuthLevel.TransportVouched),
+            )
+        }
+        listOf(1_001L, 1_002L, 1_003L).forEach { version ->
+            CurrentPeer.with(evicted) {
+                Protocols.sendUpstream(
+                    link,
+                    Protocols.Attention,
+                    Attention(AttentionBand.HIGH.level, version),
+                )
+            }
+            (filter.trackedEntryCount(Protocols.Attention) <= 2) shouldBe true
+        }
+        controller.runToIdle()
+
+        observedVersions.contains(1_001L) shouldBe true
+        observedVersions.contains(1_002L) shouldBe true
+        observedVersions.contains(1_003L) shouldBe false
+        membrane.boundaryDenials["exposedOutlet"]!!.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        letters.single().description shouldContain evicted.name
+        letters.single().description shouldContain "RATE"
+        host.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    @Test
+    fun `elapsed rate windows are evicted before a live window`() {
+        var now = 0L
+        val filter = ProtocolAuthorityFilter(
+            authorities = mapOf(
+                Protocols.Attention to ProtocolAuthority(
+                    ratePerWindow = 2,
+                    windowNanos = 1_000L,
+                    maxTrackedPrincipals = 2,
+                ),
+            ),
+            denials = BoundaryDenials().sinkFor("rate"),
+            budgetScope = "test",
+            budget = { null },
+            clock = { now },
+        )
+        val oldest = Principal.Peer(PeerId("oldest"), AuthLevel.TransportVouched)
+        val live = Principal.Peer(PeerId("live"), AuthLevel.TransportVouched)
+        val arriving = Principal.Peer(PeerId("arriving"), AuthLevel.TransportVouched)
+        fun send(principal: Principal.Peer, version: Long) {
+            CurrentPeer.with(principal.id) {
+                filter(Protocols.Attention, Attention(AttentionBand.HIGH.level, version))
+            }
+        }
+
+        send(oldest, 1)
+        now = 500L
+        send(live, 2)
+        now = 1_000L
+        send(arriving, 3)
+
+        filter.isTracked(Protocols.Attention, oldest) shouldBe false
+        filter.isTracked(Protocols.Attention, live) shouldBe true
+        filter.isTracked(Protocols.Attention, arriving) shouldBe true
+        filter.trackedEntryCount(Protocols.Attention) shouldBe 2
+    }
+
+    @Test
+    fun `no declared window preserves lifetime counts and never evicts`() {
+        val denials = BoundaryDenials().sinkFor("rate")
+        val filter = ProtocolAuthorityFilter(
+            authorities = mapOf(
+                Protocols.Attention to ProtocolAuthority(
+                    ratePerWindow = 1,
+                    maxTrackedPrincipals = 1,
+                ),
+            ),
+            denials = denials,
+            budgetScope = "test",
+            budget = { null },
+            clock = { error("a lifetime rate must not read the boundary clock") },
+        )
+        val alice = PeerId("alice")
+        val bob = PeerId("bob")
+        fun send(peer: PeerId, version: Long): Any? = CurrentPeer.with(peer) {
+            filter(Protocols.Attention, Attention(AttentionBand.HIGH.level, version))
+        }
+
+        send(alice, 1) shouldBe Attention(AttentionBand.HIGH.level, 1)
+        send(bob, 2) shouldBe Attention(AttentionBand.HIGH.level, 2)
+        send(alice, 3) shouldBe null
+
+        filter.trackedEntryCount(Protocols.Attention) shouldBe 2
+        denials.denialCount shouldBe 1L
+    }
+
+    @Test
+    fun `concurrent frames for one principal update one atomic rate count`() {
+        val denials = BoundaryDenials().sinkFor("rate")
+        val limit = 25
+        val workers = 8
+        val framesPerWorker = 20
+        val filter = ProtocolAuthorityFilter(
+            authorities = mapOf(
+                Protocols.Attention to ProtocolAuthority(
+                    ratePerWindow = limit,
+                    windowNanos = 1_000L,
+                ),
+            ),
+            denials = denials,
+            budgetScope = "test",
+            budget = { null },
+            clock = { 0L },
+        )
+        val admitted = AtomicInteger()
+        val ready = CountDownLatch(workers)
+        val start = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(workers)
+        try {
+            val futures = (0 until workers).map { worker ->
+                executor.submit {
+                    ready.countDown()
+                    start.await()
+                    repeat(framesPerWorker) { frame ->
+                        CurrentPeer.with(PeerId("alice")) {
+                            val version = (worker * framesPerWorker + frame).toLong()
+                            if (filter(
+                                    Protocols.Attention,
+                                    Attention(AttentionBand.HIGH.level, version),
+                                ) != null
+                            ) {
+                                admitted.incrementAndGet()
+                            }
+                        }
+                    }
+                }
+            }
+            ready.await()
+            start.countDown()
+            futures.forEach { it.get() }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        admitted.get() shouldBe limit
+        denials.denialCount shouldBe (workers * framesPerWorker - limit).toLong()
+        filter.trackedEntryCount(Protocols.Attention) shouldBe 1
+    }
+
+    @Test
+    fun `ProtocolAuthority requires at least one tracked principal slot`() {
+        assertThrows<IllegalArgumentException> {
+            ProtocolAuthority(maxTrackedPrincipals = 0)
+        }
     }
 
     @Test
