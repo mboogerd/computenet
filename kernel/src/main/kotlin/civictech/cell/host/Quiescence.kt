@@ -123,12 +123,21 @@ fun HostScheduler.quiescence(): Quiescence {
  * priority 0 and overtakes the still-staged replay frames, but carries them into
  * the compacted journal (computenet-xy7w4 D3) — yet compacts less: call
  * [awaitApplied] first to compact the whole replayed tail.
+ *
+ * [suppressedReplayDuplicates] is updated while the staged replay cascades are
+ * delivered. Read it after [isApplied] becomes true (or after [awaitApplied])
+ * for the final count. Its backing recovery session remains stable even after
+ * a later recovery replaces the host's replay-position set.
  */
 class Recovery internal constructor(
     /** The number of journal `Frame` records the replay submitted; checkpoint, frontier, discharge and outlet-wave records are not frames. */
     val replayedFrames: Int,
+    private val replayDuplicateSuppressionCount: () -> Int,
     private val quiescence: Quiescence,
 ) {
+    /** Exact same-journal replay derivations suppressed because their target-port positions were already replayed directly. */
+    val suppressedReplayDuplicates: Int get() = replayDuplicateSuppressionCount()
+
     /** True once every replayed frame and its same-host cascade has been delivered. */
     val isApplied: Boolean get() = quiescence.isReached
 

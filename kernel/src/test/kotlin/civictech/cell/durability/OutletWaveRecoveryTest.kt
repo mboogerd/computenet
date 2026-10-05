@@ -282,6 +282,54 @@ class OutletWaveRecoveryTest {
     }
 
     /**
+     * BS-22 checkpointed arm (`[KFX-12]`, `[KFX-13]`, `[24-DUR-04]`) — the
+     * no-`ReBaseline` half of the preserved-epoch rule, pinned on the branch
+     * that restores the epoch from `RECORD_OUTLET_WAVE` rather than re-deriving
+     * it from a full-WAL replay. A restore that went through `mintFreshEpoch`
+     * and announced a `ReBaseline` would keep the sourceId assertions green
+     * only by luck; this asserts the absence head-on, on the tail replay and on
+     * live traffic after recovery.
+     */
+    @Test
+    fun `BS-22 checkpointed - recovery restores the epoch and announces no ReBaseline`() {
+        val controller = SimulationController(seed = 16)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        before.feed(1)
+        before.feed(2)
+        controller.runToIdle()
+        before.host.checkpoint(journal) // 1 and 2 leave the WAL; only the checkpoint carries the counter
+        before.feed(3)
+        controller.runToIdle()
+        val observedSourceId = before.sourceId()
+        before.highWater() shouldBe 3L
+
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        val seen = mutableListOf<MessageContext>()
+        after.relay.outlet.observe(PortRef.generate()) { seen += it }
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        after.sourceId() shouldBe observedSourceId
+        after.highWater() shouldBe 3L
+        (seen.isNotEmpty()).shouldBeTrue() // the tail replay re-emitted, so the check below is not vacuous
+        seen.none { it.reBaseline != null }.shouldBeTrue()
+
+        after.feed(4)
+        controller.runToIdle()
+        seen.map { it.timestamp.sourceId }.toSet() shouldBe setOf(observedSourceId)
+        seen.none { it.reBaseline != null }.shouldBeTrue()
+        (seen.last().timestamp.counter > 3L).shouldBeTrue()
+        effects shouldBe listOf(1, 2, 3, 4)
+    }
+
+    /**
      * The restore point records the epoch **in force**, not the derived one
      * (`[KFX-10]`/`[KFX-11]`, and `[KFX-14]`/`[KFX-15]` read from the recovery side).
      *
