@@ -31,13 +31,14 @@
 # is gone, so the rebuilt waterline's first live floor (3) admits 5 into a
 # re-created window 0 and window 20 ends as {28, 29}: `jv` reads
 # `{"20": 2, "30": 1}` and `l` reads `[]`. Both checks redden.
-# (2) The `snapshot` step deleted (no checkpoint, the whole WAL replays): `jv`
-# still reads `{"20": 3, "30": 1}` — the window's own full journal
-# reconstructs its state and floor — which is recovery by replay alone, not
-# the checkpoint-restore this file is about. `l` reddens, reading
-# `[12, 25, 3, 5]`: the source's full-history re-emission reaches the window
-# after its replayed floor is back at 26, so the historical 3, 12 and 25 are
-# late-dropped as duplicates onto `late`.
+# (2) The `snapshot` step deleted (no checkpoint, the whole WAL replays) now
+# PASSES: `jv` reads `{"20": 3, "30": 1}` (the window's own full journal
+# reconstructs its state and floor) and `l` reads `[5]`. Before the host intake
+# delivered a journaled->journaled tail once (qfi22-D7/D8, computenet-qfi22.1),
+# `l` read `[12, 25, 3, 5]`: the source's full-history re-emission reached the
+# window after its replayed floor was back at 26 and the historical 3, 12 and
+# 25 were late-dropped as duplicates. That variant is filed as its own scenario,
+# `24-WL-REC-02`, which carries the measured discriminator for the kernel rule.
 #
 # Two corrections to the breakdown's sketch, both measured. The CHECKPOINT
 # is taken `on: s`, not `on: jw`: `snapshot` of a journaled cell is a
