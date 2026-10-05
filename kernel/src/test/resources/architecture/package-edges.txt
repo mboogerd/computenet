@@ -187,7 +187,6 @@ link -> port
 link -> protocol
 membrane -> cell
 membrane -> control
-membrane -> graph
 membrane -> link
 membrane -> port
 membrane -> protocol

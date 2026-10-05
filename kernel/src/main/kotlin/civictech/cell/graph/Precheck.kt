@@ -9,6 +9,7 @@ import civictech.cell.host.RoutedInletResolution
 import civictech.cell.host.TopologyIndex
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.CurrentPeer
+import civictech.cell.link.LinkDryRun
 import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
@@ -583,36 +584,6 @@ private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
                 ?: (c.outlet as? Linked)?.linking?.reject(request)
         } ?: return null
         return rejected.toRefused(RefusalCode.POLICY_DENIAL)
-    }
-}
-
-/**
- * Thread-scoped marker that the `LinkPolicy` walk running on this thread is a
- * cold dry run ([policyCheck] under `GraphSpec.precheck`), not a handshake.
- * Policies with side effects — the Link budget arm (`CompositeCell.linkBudgetPolicy`,
- * `computenet-fh9cc`) — must not charge or account a denial while it is set.
- *
- * Decision (computenet-fh9cc, acceptance clause 3): this marks
- * [Precheck.policyCheck][policyCheck] ONLY. Promotion re-authorization
- * (`LinkSupport.reauthorize` / `Evolution.reauthorizeRebinds`) is a CHARGE, not
- * a dry run (66m-D11; `computenet-8aboz` lets it be budget-charged once the
- * establishing stamp is retained), so those callers never set this flag even
- * though they share the `reject` walk.
- */
-internal object LinkDryRun {
-    private val active = ThreadLocal.withInitial { false }
-
-    /** True while the current thread is inside [during]. */
-    fun isActive(): Boolean = active.get()
-
-    fun <R> during(block: () -> R): R {
-        val previous = active.get()
-        active.set(true)
-        try {
-            return block()
-        } finally {
-            active.set(previous)
-        }
     }
 }
 

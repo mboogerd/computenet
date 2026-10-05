@@ -9,7 +9,6 @@ import civictech.cell.BudgetClaim
 import civictech.cell.BudgetLedger
 import civictech.cell.BudgetOutcome
 import civictech.cell.Cell
-import civictech.cell.graph.LinkDryRun
 import civictech.cell.CellRef
 import civictech.cell.ClaimClass
 import civictech.cell.CurrentContext
@@ -23,6 +22,7 @@ import civictech.cell.control.StallReason
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.CurrentPeer
+import civictech.cell.link.LinkDryRun
 import civictech.cell.link.LinkPolicy
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
