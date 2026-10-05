@@ -245,9 +245,12 @@ private data class RestartOutletWaveRecord(
  * When present, [triggerFramePayload] is the exact `WireCodec` payload of the
  * journaled invocation whose failure caused the transition, so recovery applies
  * this event only when replay reaches that same failure. A null payload records a
- * boundary caused by a never-journaled metadata invocation; recovery stages that
- * boundary at this record's journal position instead of trying to serialize or
- * replay-match the trigger. [outlets] are the fresh epochs minted before the live
+ * boundary caused by a never-journaled metadata invocation. [precedesFrameCount]
+ * records how many already-journaled, still-pending frames of [cellRef] that
+ * metadata-plane RESTART overtook. Per-cell FIFO makes those frames the suffix of
+ * this journal's preceding frames for the cell, so recovery can stage the boundary
+ * immediately ahead of that suffix without serializing or replay-matching the
+ * trigger. [outlets] are the fresh epochs minted before the live
  * [civictech.cell.ReBaselineEmitting.reBaseline] call.
  *
  * A separate type, rather than a field on [CheckpointRecord], keeps journals written
@@ -257,6 +260,7 @@ private data class RestartOutletWaveRecord(
 private data class RestartRecord(
     val cellRef: CellRef,
     val triggerFramePayload: ByteArray?,
+    val precedesFrameCount: Int,
     val generation: Long,
     val supersedes: Set<UUID>,
     val outlets: List<RestartOutletWaveRecord>,
@@ -266,6 +270,7 @@ private data class RestartRecord(
 internal data class DecodedRestart(
     val cellRef: CellRef,
     val triggerFramePayload: ByteArray?,
+    val precedesFrameCount: Int,
     val generation: Long,
     val supersedes: Set<UUID>,
     val outlets: List<OutletWave>,
@@ -370,6 +375,7 @@ object JournalRecords {
             DecodedRestart(
                 restart.cellRef,
                 restart.triggerFramePayload,
+                restart.precedesFrameCount,
                 restart.generation,
                 restart.supersedes,
                 restart.outlets.map { DecodedRestart.OutletWave(it.portName, it.sourceId, it.highWater) },
@@ -464,7 +470,8 @@ internal class HostDurability(
     private val cellsView: () -> Map<CellRef, Cell>,
     private val deadLetter: (String) -> Unit,
     private val submit: (HostedPortInvocation) -> Unit,
-    private val submitRestartBoundary: (DecodedRestart, Journal) -> Unit = { _, _ -> },
+    private val submitRestartBoundary:
+        (DecodedRestart, Journal, List<HostedPortInvocation>) -> Unit = { _, _, _ -> },
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
     /**
      * Runs its argument while holding the host's `dataLock`, handing it every
@@ -596,6 +603,7 @@ internal class HostDurability(
         var frames = 0
         var checkpointCatchUpPendingAt: Int? = null
         val positions = ReplayedPositions()
+        val submittedFrames = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
         synchronized(replayedPositions) {
             replayedPositions.remove(journal)
         }
@@ -643,6 +651,7 @@ internal class HostDurability(
                     forgetReplayedFrame(frame)
                     throw e
                 }
+                submittedFrames.getOrPut(frame.cellRef, ::mutableListOf) += frame
                 frame.invocation.context?.timestamp?.let { timestamp ->
                     if (journalSelector(frame.cellRef, frame.portName) === journal) {
                         positions.record(frame.cellRef, frame.portName, timestamp)
@@ -661,7 +670,17 @@ internal class HostDurability(
                 try {
                     JournalRecords.decodeRestart(record)?.let { restart ->
                         if (restart.triggerFramePayload == null) {
-                            submitRestartBoundary(restart, journal)
+                            val preceding = submittedFrames[restart.cellRef].orEmpty()
+                            require(restart.precedesFrameCount <= preceding.size) {
+                                "restart boundary for ${restart.cellRef} precedes " +
+                                    "${restart.precedesFrameCount} frames, but only " +
+                                    "${preceding.size} preceding frames were replayed"
+                            }
+                            submitRestartBoundary(
+                                restart,
+                                journal,
+                                preceding.takeLast(restart.precedesFrameCount),
+                            )
                         } else {
                             synchronized(replayedRestarts) {
                                 replayedRestarts.getOrPut(journal, ::mutableListOf) += restart
@@ -813,24 +832,42 @@ internal class HostDurability(
         // Reuse exact bytes when the intake appended them. Re-encoding here runs after
         // the handler failed and may therefore encounter an `Owned` argument the handler
         // already consumed; durability must never touch that exclusive twice. A
-        // never-journaled metadata trigger therefore carries no payload. Its type-8
-        // record is still an ordered boundary in the journal, and recovery stages the
-        // boundary itself instead of trying to replay-match absent trigger bytes.
-        val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] }
-        journal.append(
-            journalRecord(
-                RECORD_RESTART,
-                RestartRecord(
-                    trigger.cellRef,
-                    triggerPayload,
-                    generation,
-                    supersedes,
-                    outlets.entries.sortedBy { it.key }.map { (portName, state) ->
-                        RestartOutletWaveRecord(portName, state.sourceId, state.highWater)
-                    },
+        // never-journaled metadata trigger therefore carries no payload.
+        //
+        // Snapshot the pending suffix and append its boundary under the intake lock.
+        // That keeps the count tied to exactly the frames already present before type 8:
+        // an accept cannot land between the snapshot and the record append. The per-cell
+        // FIFO makes the pending frames a suffix, so the count is enough to recover their
+        // exact position even when two invocations have byte-identical payloads.
+        underIntakeLock { pending ->
+            val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] }
+            val precedesFrameCount = if (triggerPayload != null) {
+                0
+            } else {
+                synchronized(journaledFrames) {
+                    pending.count { (_, invocation) ->
+                        invocation.cellRef == trigger.cellRef &&
+                            journalSelector(invocation.cellRef, invocation.portName) === journal &&
+                            journaledFrames.containsKey(invocation)
+                    }
+                }
+            }
+            journal.append(
+                journalRecord(
+                    RECORD_RESTART,
+                    RestartRecord(
+                        trigger.cellRef,
+                        triggerPayload,
+                        precedesFrameCount,
+                        generation,
+                        supersedes,
+                        outlets.entries.sortedBy { it.key }.map { (portName, state) ->
+                            RestartOutletWaveRecord(portName, state.sourceId, state.highWater)
+                        },
+                    ),
                 ),
-            ),
-        )
+            )
+        }
     }
 
     /** The current in-memory cursor for one named durable input. */

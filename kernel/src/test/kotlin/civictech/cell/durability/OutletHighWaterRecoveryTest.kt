@@ -301,6 +301,7 @@ class OutletHighWaterRecoveryTest {
         val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart)
             .single()
         restartRecord.cellRef shouldBe relayRef
+        restartRecord.precedesFrameCount shouldBe 0
         restartRecord.generation shouldBe 1L
         restartRecord.supersedes shouldBe liveRestartNotices.single().reBaseline?.supersedes
         val trigger = WireCodec.decode(checkNotNull(restartRecord.triggerFramePayload))
@@ -384,6 +385,12 @@ class OutletHighWaterRecoveryTest {
             override val to = world.relay.inlet.ref
             override fun unlink() = Unit
         }
+
+        // The metadata task runs at band 0 and overtakes this already-journaled
+        // data frame, which remains staged at band 20. Live scheduling is the
+        // contract: the RESTART boundary therefore precedes frame 2 even though
+        // its type-8 record is appended after frame 2's WAL record.
+        world.feed(2)
         world.host.enqueueHostedInvocation(
             HostedPortInvocation(
                 world.relay.ref,
@@ -405,6 +412,7 @@ class OutletHighWaterRecoveryTest {
         val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
         restartRecord.cellRef shouldBe relayRef
         restartRecord.triggerFramePayload shouldBe null
+        restartRecord.precedesFrameCount shouldBe 1
         restartRecord.generation shouldBe 1L
         restartRecord.supersedes shouldBe notices.single().reBaseline?.supersedes
         restartRecord.outlets.associate { it.portName to it.sourceId } shouldBe mapOf(
@@ -413,9 +421,14 @@ class OutletHighWaterRecoveryTest {
         )
         restartRecord.outlets.all { it.highWater == 0L }.shouldBeTrue()
 
-        world.feed(2)
-        controller.runToIdle()
         effects shouldBe listOf(1, 2)
+        world.feed(3)
+        controller.runToIdle()
+        val liveEffects = effects.toList()
+        val liveWave = world.relay.outlet.waveState()
+        liveEffects shouldBe listOf(1, 2, 3)
+        liveWave.sourceId shouldBe postRestartSource
+        liveWave.highWater shouldBe 2L
 
         val after = World(controller, journal, relayRef, notifierRef, effects)
         controller.runToIdle()
@@ -424,12 +437,16 @@ class OutletHighWaterRecoveryTest {
         after.host.recoverFrom(journal)
         controller.runToIdle()
 
-        effects shouldBe listOf(1, 2)
+        effects shouldBe liveEffects
         after.host.supervisionAccounting().restarts shouldBe 1
         after.host.generationOf(relayRef) shouldBe 1L
-        after.relay.outlet.waveState().sourceId shouldBe postRestartSource
-        after.relay.outlet.waveState().highWater shouldBe 1L
+        after.relay.outlet.waveState() shouldBe liveWave
         recoveredNotices.single().timestamp.sourceId shouldBe postRestartNoticeSource
         recoveredNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+
+        after.feed(4)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2, 3, 4)
+        effects.count { it == 4 } shouldBe 1
     }
 }
