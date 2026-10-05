@@ -3,6 +3,7 @@ package civictech.cell.data.delta
 import civictech.cell.ReBaselineNotice
 import civictech.cell.Timestamp
 import java.io.Serializable
+import java.util.LinkedHashSet
 import java.util.UUID
 
 /**
@@ -229,11 +230,26 @@ internal class TagState<E>(
      * tombstones to carry (D-UNION) it becomes the two-map list instead, so
      * a checkpoint-restored merge point keeps its tombstones and a
      * re-delivered writer catch-up still cannot resurrect a removed element.
-     * Additive: the single-map form is emitted verbatim whenever there are no
-     * tombstones, and [restore] accepts both.
+     * When a dead-source fence exists, the additive structured form carries
+     * the live map, optional tombstones, and an OrMapCell-style `"dead"`
+     * entry. [restore] accepts both the structured form and both legacy forms.
      */
     fun snapshot(): Serializable {
         val liveOut = HashMap(live.mapValues { HashSet(it.value) })
+
+        // Preserve the established bare-map/list shapes for snapshots without
+        // a dead lane. Existing state readers depend on those shapes, while a
+        // supersession needs an explicit entry just like OrMapCell's snapshot.
+        if (deadSources.isNotEmpty()) {
+            val structured = HashMap<String, Serializable>()
+            structured["live"] = liveOut
+            if (tombstones.isNotEmpty()) {
+                structured["tombstones"] = HashMap(tombstones.mapValues { HashSet(it.value) })
+            }
+            structured["dead"] = LinkedHashSet(deadSources)
+            return structured
+        }
+
         if (tombstones.isEmpty()) return liveOut
         return arrayListOf<Serializable>(liveOut, HashMap(tombstones.mapValues { HashSet(it.value) }))
     }
@@ -241,11 +257,25 @@ internal class TagState<E>(
     fun restore(state: Serializable) {
         live.clear()
         tombstones.clear()
-        if (state is List<*>) {
-            restoreInto(live, state[0])
-            restoreInto(tombstones, state.getOrNull(1))
-        } else {
-            restoreInto(live, state)
+        deadSources.clear()
+
+        when {
+            state is Map<*, *> && state["live"] is Map<*, *> -> {
+                restoreInto(live, state["live"])
+                restoreInto(tombstones, state["tombstones"])
+                @Suppress("UNCHECKED_CAST")
+                (state["dead"] as? Set<UUID>)?.let { deadSources += it }
+            }
+            state is List<*> -> {
+                restoreInto(live, state[0])
+                restoreInto(tombstones, state.getOrNull(1))
+            }
+            else -> {
+                // Origin/main snapshots were the bare live map and therefore
+                // carry no dead-source knowledge: restoring one resets the
+                // fence to empty, just as a fresh instance would.
+                restoreInto(live, state)
+            }
         }
     }
 
