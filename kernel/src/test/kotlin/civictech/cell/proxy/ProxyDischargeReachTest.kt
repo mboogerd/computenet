@@ -177,6 +177,36 @@ class ProxyDischargeReachTest {
         Proxy.discharge(already)
     }
 
+    @Test
+    fun `a returnToPool that throws propagates and is not counted as a double discharge`() {
+        val before = Proxy.doubleDischarges
+        val leased = Leased("x") { throw IllegalStateException("pool") }
+
+        assertThrows<IllegalStateException> { Proxy.discharge(leased) }
+
+        Proxy.doubleDischarges shouldBe before
+        leased.isReleased shouldBe true
+    }
+
+    @Test
+    fun `discharges counts each successful consume and release once`() {
+        val beforeDischarges = Proxy.discharges
+        val beforeDoubleDischarges = Proxy.doubleDischarges
+        val owned = Owned("owned")
+        val leased = Leased("leased") {}
+        val payload = listOf<Any>(owned, leased)
+
+        Proxy.discharge(payload)
+
+        Proxy.discharges shouldBe beforeDischarges + 2
+        Proxy.doubleDischarges shouldBe beforeDoubleDischarges
+
+        Proxy.discharge(payload)
+
+        Proxy.discharges shouldBe beforeDischarges + 2
+        Proxy.doubleDischarges shouldBe beforeDoubleDischarges + 2
+    }
+
     // ------------------------------------------------------------------
     // Defect 3 — UNDER-REACH through platform containers (computenet-woto).
     //
