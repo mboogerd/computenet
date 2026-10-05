@@ -449,4 +449,73 @@ class OutletHighWaterRecoveryTest {
         effects shouldBe listOf(1, 2, 3, 4)
         effects.count { it == 4 } shouldBe 1
     }
+
+    /**
+     * computenet-srkyq review: the frames a metadata-plane RESTART overtakes may be
+     * REPLAYED frames still staged by an earlier recovery, not only live-journaled
+     * ones. They are records of the same journal, so a second recovery must put the
+     * boundary ahead of them too; otherwise it replays them on the old epoch, recovers
+     * a short fresh-epoch high-water and suppresses the next live effect ([KFX-11]).
+     */
+    @Test
+    fun `a metadata-plane RESTART that overtakes replayed frames survives a second crash`() {
+        val controller = SimulationController(seed = 37)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val first = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        first.feed(1)
+        first.feed(2)
+        controller.runToIdle()
+
+        // Crash 1. Recovery only STAGES frames 1 and 2; the failing metadata task
+        // (band 0) runs ahead of both (band 20) and restarts the relay first.
+        val recovering = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        recovering.host.recoverFrom(journal)
+        ProtocolSupport.of(recovering.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = recovering.relay.inlet.ref
+            override val to = recovering.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+        recovering.host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                recovering.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+        recovering.host.supervisionAccounting().restarts shouldBe 1
+        journal.replay().mapNotNull(JournalRecords::decodeRestart).single().precedesFrameCount shouldBe 2
+        recovering.feed(3)
+        controller.runToIdle()
+        // liveEffects includes recovery 1's own re-derivations of 1 and 2 on the fresh
+        // epoch (a restart mid-recovery does that on origin/main too); this test pins
+        // only that the second recovery reproduces the live run and loses nothing.
+        val liveEffects = effects.toList()
+        val liveWave = recovering.relay.outlet.waveState()
+
+        // Crash 2.
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        effects shouldBe liveEffects
+        after.relay.outlet.waveState() shouldBe liveWave
+        after.feed(4)
+        controller.runToIdle()
+        effects shouldBe liveEffects + 4
+    }
 }

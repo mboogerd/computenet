@@ -844,11 +844,19 @@ internal class HostDurability(
             val precedesFrameCount = if (triggerPayload != null) {
                 0
             } else {
+                // A frame replayed from this same journal and not yet delivered is also one
+                // of its records: a metadata RESTART during recovery overtakes it exactly as
+                // it would a live-journaled one.
                 synchronized(journaledFrames) {
-                    pending.count { (_, invocation) ->
-                        invocation.cellRef == trigger.cellRef &&
-                            journalSelector(invocation.cellRef, invocation.portName) === journal &&
-                            journaledFrames.containsKey(invocation)
+                    synchronized(replayedFrames) {
+                        pending.count { (_, invocation) ->
+                            invocation.cellRef == trigger.cellRef &&
+                                journalSelector(invocation.cellRef, invocation.portName) === journal &&
+                                (
+                                    journaledFrames.containsKey(invocation) ||
+                                        replayedFrames[invocation]?.journal === journal
+                                    )
+                        }
                     }
                 }
             }
