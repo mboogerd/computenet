@@ -17,7 +17,6 @@ import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
-import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRef
@@ -428,10 +427,8 @@ class ApplyContext(
             ?: error("promotion replay names missing incumbent ${event.incumbent}")
         val candidate = cells[event.candidate]
             ?: error("promotion replay names missing candidate ${event.candidate}")
-        @Suppress("UNCHECKED_CAST")
         val gate = event.gate?.let { ref ->
-            cells[ref] as? TrafficLightApi<Any>
-                ?: error("promotion replay gate $ref is not a live TrafficLightApi")
+            cells[ref] ?: error("promotion replay gate $ref is not live")
         } ?: error("single-instance promotion replay has no gate")
         val migrator = candidate as? StateMigrating
             ?: error("promotion replay candidate ${event.candidate} is not StateMigrating")
@@ -463,7 +460,7 @@ class ApplyContext(
         // any following frame tail is delivered. Keeping those frames inside their
         // replay provenance lets same-journal duplicate suppression see the copies
         // that the gate re-derives for the already-replayed candidate inlet.
-        gate.controlInlet.call.setGreen()
+        Promotion.completeRecoveredGate(gate)
     }
 
     /** Recovery-side reuse-ref swap: no gate and no journal write, only the recorded COMMIT. */
