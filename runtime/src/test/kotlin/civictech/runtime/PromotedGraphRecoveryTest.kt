@@ -15,6 +15,7 @@ import civictech.cell.data.delta.TagLaneContinuity
 import civictech.cell.evolve.StateMigrating
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
+import civictech.cell.graph.DespawnStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.SpawnStep
@@ -112,6 +113,33 @@ class PromotedGraphRecoveryTest {
             second?.close()
             first.close()
         }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `an incumbent retired without a promotion still makes the original spec stale`() {
+        singleCaptured.clear()
+        val manifest = Manifest(
+            mapOf(
+                "solo" to NodeSpec(
+                    journalDir = tempDir.resolve("solo").toString(),
+                    journalTopology = true,
+                ),
+            ),
+        )
+        val spec = singleSpec(UUID.randomUUID())
+        Runtime.boot(manifest, "solo", spec).use { first ->
+            first.apply(GraphSpec(listOf(DespawnStep("incumbent"))))
+        }
+
+        // The same-logical shadow candidate is still declared and live, but still shadow:
+        // no Promote retired the incumbent, so recovery must keep refusing the stale spec.
+        val outcome = runCatching { Runtime.boot(manifest, "solo", spec) }
+        outcome.getOrNull()?.close()
+        val failure = outcome.exceptionOrNull()
+            ?: throw AssertionError("recovery accepted a spec whose incumbent was despawned, not promoted")
+        assertInstanceOf(IllegalStateException::class.java, failure)
+        assertTrue(failure.message!!.contains("missing handle 'incumbent'"), failure.message)
     }
 
     // --- two nodes: replicated SetCell, b promotes its replica -----------------------------
