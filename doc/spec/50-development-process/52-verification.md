@@ -1,6 +1,6 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9; the Effectful processed-frontier, W2.6 — live *continuous* production shadowing still awaits a long-running runtime; the replica-convergence invariant harness with its departed-stream rule, W3.3; the lateness harness, KE4.6; observation membrane, exclusive-payload discharge + taps, and monitor bands remain design decided in 93, unimplemented)
+> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9; the Effectful processed-frontier, W2.6 — live *continuous* production shadowing still awaits a long-running runtime; the replica-convergence invariant harness with its departed-stream rule, W3.3; the lateness harness, KE4.6; exclusive-payload discharge and in-host tap observation are implemented; the observation-membrane refinements and monitor bands remain design decided in 93, unimplemented)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
 > **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); `cell.verify.ReplicaConvergence` (replica-convergence invariant harness); seeded harness = `cell.host.SimulationController`
 
@@ -140,7 +140,7 @@ sink double-fires.
 
 *(Observation membrane — decided in 93 I-17; suppression-granularity half
 implemented (computenet-3jv2), amending the granularity of the resolved G-32
-mechanism above; the rest of the membrane below is still unimplemented)*:
+mechanism above; the remaining membrane rules below are still unimplemented)*:
 effect classification refines from the cell marker to a contract flag —
 `@Contract(effect = true)` on world-touching boundary contracts, emitted by
 the same KSP scan as the management flag (12). **Implemented**: suppression
@@ -152,7 +152,7 @@ rule above no longer deletes the emissions a judge needs for a mid-graph
 effectful cell). The `Effectful` cell marker demotes to a coarse fallback for
 opaque in-logic I/O: such a cell is still replaced wholesale by a NoOp/mock
 instance and terminates judgeability downstream of itself, flagged at cut
-construction. **Still unimplemented**, the further membrane rules: **taps
+construction. **Still unimplemented**, the further membrane rules: **shadow edges
 are downstream-only** — the shadow-side port
 negotiates no upstream protocol capabilities, so shadow-raised attention or
 state-requests drop at the membrane and a read-only shadow can never summon
@@ -169,8 +169,8 @@ evaluation points — glitch-free per-wave evaluation (20/22) when their
 inlets share an upstream fork, convergence-at-quiescence for independent
 sources.
 
-*(Exclusive payloads in shadow mode — decided in 93 I-20; the discharging-sink
-half implemented, tap observation still unbuilt, G-47 below)*:
+*(Exclusive payloads in shadow mode — decided in 93 I-20; discharging sinks
+and in-host tap observation implemented, with G-47 refinements below)*:
 [52-DISCH-01] NoOp-serving an inlet whose contract carries an exclusive payload MUST
 install a **discharging** sink, not a plain drop: `Owned` →
 `take()`-and-drop (consume-once satisfied), `Leased` → `release()` (buffer
@@ -181,20 +181,23 @@ fired before the sole consumer and uncounted by the SPSC rule, so
 invariants, shadows, and judges watch an exclusive pipeline without
 contending for consumption.
 
-*(Conflict C-11 resolved, `computenet-ulss` + `computenet-3jv2` — the core
-landed, two narrow residuals filed. `Shadow.spawn` discharges Owned/Leased
-payloads via `Proxy.discharging` rather than dropping them, and the exclusive
-bit's KSP scan and the discharge walk both reach an exclusive nested in a
-plain payload object, not only `Map`/`Iterable`/`Array`. Still filed, not
-fixed: a platform container outside those three shapes —
-`Pair`/`Triple`/`Result`/`Optional` — is marked exclusive by the scan and then
-skipped by the walk (`computenet-woto`); the walk can also over-reach through
-a non-payload reference an argument happens to hold (`computenet-h6sf`).)*
+*(Conflict C-11 resolved. The closed history is: `computenet-woto` added
+explicit accessors for `Pair`/`Triple`/`Result`/`Optional` and walked the value
+of an outer `Owned`; `computenet-zyg1` extended that walk through a `Leased`
+value after a successful release; `computenet-h6sf` stopped at function and
+synthetic/hidden capture carriers and counted already-discharged exclusives
+without swallowing them; `computenet-dmwl` bounded discharging proxies and
+ADMIT drops to descriptor-marked parameter positions; and
+`computenet-u6np` added accounting predicates, the successful-discharge
+counter, and propagation of pool-callback failures. The remaining named
+residuals are those in `Proxy.discharge`'s KDoc.)*
 
-⚠ GAP (G-47): the uncounted read-only Tap (a Borrowed projection fired
-before the sole consumer) that lets invariants/shadows/judges observe
-exclusive flows is adopted but unbuilt — projection derivation, catch-up,
-and copy-fork are open. *Proposal*: KSP derives Borrowed-projected observer
+⚠ GAP (G-47): the in-host uncounted read-only Tap attachment is implemented:
+Observe-role links are admitted outside the SPSC count and fire before the
+sole consumer. The remaining gap is the full Borrowed projection contract
+surface — KSP projection derivation and link-time validation — plus catch-up
+semantics and the copy-fork/cloneability contract for mutable exclusive
+shadow candidates. *Proposal*: KSP derives Borrowed-projected observer
 descriptors from exclusive-carrying contracts (nested/generic payloads,
 link-time validation that a tap's contract equals the outlet projection);
 taps on exclusive flows are attach-forward-only (no retained history to
