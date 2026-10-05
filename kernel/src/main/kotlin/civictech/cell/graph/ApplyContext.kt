@@ -320,10 +320,105 @@ class ApplyContext(
         journalBindings.remove(incumbent)
     }
 
+    /**
+     * Journal-aware rolling promotion of one replicated instance behind its
+     * existing [ref]. The candidate is constructed only after the live fold and
+     * journal binding have passed PRECHECK; [Promotion.promoteReplica] owns the
+     * actual rebind and invokes the checkpoint/record seam around its COMMIT.
+     */
+    fun promoteReplica(
+        ref: CellRef,
+        candidateFactory: CellFactory,
+        outletName: String = "outlet",
+        judge: PromotionJudge? = null,
+    ) {
+        val before = live()
+        val service = replication
+            ?: throw Promotion.PromotionAborted("PRECHECK", "replicated promotion requires a Replication service")
+        val incumbentCell = cells[ref]
+            ?: throw Promotion.PromotionAborted("PRECHECK", "incumbent $ref is not live")
+        val incumbent = incumbentCell as? Replicable<*>
+            ?: throw Promotion.PromotionAborted("PRECHECK", "incumbent $ref is not Replicable")
+        val incumbentSpawn = before.spawns[ref]
+            ?: throw Promotion.PromotionAborted("PRECHECK", "incumbent $ref has no recorded spawn")
+        if (!incumbentSpawn.replicated) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "ApplyContext.promoteReplica requires a replicated spawn for $ref",
+            )
+        }
+        val candidateCell = try {
+            candidateFactory.create(ref)
+        } catch (e: Exception) {
+            throw Promotion.PromotionAborted("PRECHECK", "candidate factory failed for $ref: ${e.message}", e)
+        }
+        if (candidateCell.ref != ref) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "candidate factory built ${candidateCell.ref}; replicated promotion must reuse incumbent $ref",
+            )
+        }
+        val candidate = candidateCell as? Replicable<*>
+            ?: throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "candidate factory built non-Replicable ${candidateCell.javaClass.name}",
+            )
+        val incumbentJournal = journalFor(ref)
+        if (incumbentJournal != null && topology !== incumbentJournal) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "journaled promotion requires the incumbent journal to be this context's topology journal",
+            )
+        }
+        if (incumbentJournal != null &&
+            (incumbentCell !is civictech.cell.Stateful || candidateCell !is civictech.cell.Stateful)
+        ) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "journaled replicated promotion requires Stateful incumbent and candidate",
+            )
+        }
+
+        val promotionJournal = object : PromotionJournal {
+            override fun checkpointBeforeStateHandoff() {
+                incumbentJournal?.let(host::checkpoint)
+            }
+
+            override fun recordCommittedSwap(waveState: OutletWaveState) {
+                val event = TopoEvent.Promote(
+                    incumbent = ref,
+                    candidate = ref,
+                    outlet = outletName,
+                    candidateFactory = candidateFactory,
+                    replicated = true,
+                    sourceId = waveState.sourceId,
+                    highWater = waveState.highWater,
+                )
+                if (incumbentJournal != null) journalTopology(listOf(event))
+                fold.record(event)
+            }
+        }
+
+        Promotion.promoteReplica(
+            host = host,
+            replication = service,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            judge = judge,
+            journal = promotionJournal,
+        )
+        cells[ref] = candidateCell
+    }
+
     /** Replay applies the completed swap directly; it never buffers or invokes Promotion.promote. */
     private fun applyPromote(event: TopoEvent.Promote) {
-        check(!event.replicated && event.incumbent != event.candidate) {
-            "replicated/reuse-ref promotion replay is handled by ApplyContext.promoteReplica"
+        if (event.replicated) {
+            applyReplicatedPromote(event)
+            return
+        }
+        check(event.incumbent != event.candidate) {
+            "single-instance promotion replay requires distinct incumbent and candidate refs"
         }
         val before = live()
         val incumbent = cells[event.incumbent]
@@ -354,6 +449,33 @@ class ApplyContext(
         host.managementInlet.call.despawn(event.incumbent)
         cells.remove(event.incumbent)
         journalBindings.remove(event.incumbent)
+        fold.record(event)
+    }
+
+    /** Recovery-side reuse-ref swap: no gate and no journal write, only the recorded COMMIT. */
+    private fun applyReplicatedPromote(event: TopoEvent.Promote) {
+        check(event.incumbent == event.candidate) {
+            "replicated promotion replay must reuse one ref: ${event.incumbent} != ${event.candidate}"
+        }
+        val ref = event.incumbent
+        val service = replication ?: error("replicated promotion replay requires a Replication service")
+        val incumbentCell = cells[ref]
+            ?: error("replicated promotion replay names missing incumbent $ref")
+        val incumbent = incumbentCell as? Replicable<*>
+            ?: error("replicated promotion replay incumbent $ref is not Replicable")
+        val candidateCell = event.candidateFactory.create(ref)
+        requireBoundRef("promotion replay candidate", IdentityBinding.Exact(ref), ref, candidateCell.ref)
+        val candidate = candidateCell as? Replicable<*>
+            ?: error("replicated promotion replay candidate $ref is not Replicable")
+
+        // rebind restores the checkpoint-restored incumbent snapshot into the
+        // candidate before replacing the hosted object, then ordinary replicate
+        // re-establishes gossip and the retained watermark row under the same ref.
+        service.rebind(incumbent, candidate, host)
+        val outlet = host.portAt(ref, event.outlet) as? FanOutlet<*>
+            ?: error("replicated promotion replay candidate $ref has no fan-out '${event.outlet}'")
+        outlet.adoptWaveState(OutletWaveState(event.sourceId, event.highWater))
+        cells[ref] = candidateCell
         fold.record(event)
     }
 
