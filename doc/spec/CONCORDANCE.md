@@ -80,7 +80,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 22-LIVE-01 | 22-LIVE-01 | covered |
 | 22-OBS-01 | 22-OBS-01 | covered |
 | 22-OBS-02 | 22-OBS-02 | covered |
-| 22-REC-01 | 24-WL-REC-01 | covered |
+| 22-REC-01 | 24-WL-REC-01, 24-WL-REC-02 | covered |
 | 22-SRC-01 | 22-SOURCE-ID-01 | covered |
 | 24-AGG-01 | 24-OP-GROUPBY-01, 24-OP-GROUPBY-02, 24-OP-GROUPBY-03 | covered |
 | 24-BOUND-01 | 24-BOUND-01 | covered |
@@ -153,7 +153,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 24-WL-04 | — | gap |
 | 24-WL-05 | 24-WL-CATCHUP-01, 24-WL-REC-01 | covered |
 | 24-WL-06 | 24-WL-LATE-01 | covered |
-| 24-WL-07 | 24-WL-JOINLOW-01, 24-WL-LATE-01 | covered |
+| 24-WL-07 | 24-WL-JOINLOW-01, 24-WL-LATE-01, 24-WL-REC-02 | covered |
 | 24-WL-08 | 24-WL-DEL-01 | covered |
 | 24-WL-09 | 24-WL-DEL-01, 24-WL-JOIN-01 | covered |
 | 24-WL-10 | 24-WL-JOIN-01, 24-WL-LATE-01 | covered |
