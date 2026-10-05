@@ -330,6 +330,14 @@ object JournalRecords {
  * here and reads [alreadyProcessed]/[advanceAndJournalFrontier] from its own
  * `deliver` (which stays on the host).
  *
+ * Recovery re-delivers each frame the selected journal actually holds through
+ * the ordinary intake. When replay of an upstream frame also re-derives a frame
+ * that this same journal already submitted directly to the same target port,
+ * the intake suppresses one derived occurrence at that exact timestamp
+ * (qfi22-D7/D8). It does not suppress a position absent from the journal, a
+ * contextless frame, or a derivation targeting a volatile port or another
+ * journal; those remain the crash-window and cross-journal delivery paths.
+ *
  * ## Cross-build replay IS a supported path, and the journal header is what gates it
  *
  * Decided under computenet-ldfg. Replaying a journal or checkpoint written by a
