@@ -515,6 +515,27 @@ out=$(SCRATCH="$CTRL/scratch" "$SCRIPT" computenet-e 2>&1); rc=$?
   && ok "a slot within budget claims as before" \
   || bad "open slot: rc=$rc out=$out"
 
+# --- 2jx46: a long-running session writes its epic's CHILDREN, never the epic
+# row. Its holder is old (HOLDER_MAX_AGE_S=0 ages every token), its claimed
+# child is quiet, the epic row is quiet, and nothing is within the 15m hot
+# window — but a closed child it stamped was written 40 minutes ago.
+two_jx() { # minutes-ago of the holder's newest child write
+  h="someone-else:$live_pid:$live_start"; w=$(date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "-$1 min" +%Y-%m-%dT%H:%M:%SZ)
+  printf '[{"id":"computenet-e.3","parent":"computenet-e","status":"in_progress","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"%s"}},{"id":"computenet-e.4","parent":"computenet-e","status":"closed","updated_at":"%s","metadata":{"holder":"%s"}}]' "$h" "$w" "$h" > "$CTRL/list.json"
+  printf '[{"id":"computenet-e","status":"in_progress","assignee":"testbox","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"%s"}}]' "$h" > "$CTRL/show.json"
+}
+fixture; two_jx 40
+out=$(HOLDER_MAX_AGE_S=0 "$SCRIPT" --release computenet-e --observed "someone-else:$live_pid:$live_start" STALE 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "^KEPT" <<<"$out" && ! grep -qE -- "--status=open|^comment" "$BD_LOG"; } \
+  && ok "--release keeps an old-token epic whose holder wrote a child 40m ago" \
+  || bad "2jx46 live: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+fixture; two_jx 300
+out=$(HOLDER_MAX_AGE_S=0 "$SCRIPT" --release computenet-e --observed "someone-else:$live_pid:$live_start" STALE 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "--status=open" "$BD_LOG"; } \
+  && ok "--release still frees an old-token epic whose holder has not written for 5h (residue)" \
+  || bad "2jx46 residue: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
 # --- --release records what it saw before it clears it (computenet-60f8) -----
 fixture; desc_rows "someone-else:99999:Tue Jan  1 00:00:00 2020"
 out=$("$SCRIPT" --release computenet-e --observed "old:1:x" DEAD 2>&1); rc=$?

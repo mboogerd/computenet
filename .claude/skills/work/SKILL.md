@@ -79,7 +79,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `sweep-stale-claims.sh` | `[--hours N] [--dry-run]` — reopens this machine's task claims abandoned by a dead run |
 | `sweep-merged-prs.sh` | `[--dry-run] [--limit N]` — closes beads whose PR merged after their session; removes their worktrees (holder-blind) |
 | `reclaim-worktrees.sh` | `[--dry-run] [--min-age-minutes N]` — removes worktrees of closed beads, when provably safe |
-| `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 15min reads LIVE, not STALE) |
+| `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 2h reads LIVE, not STALE) |
 | `resumable-epics.sh` | `(no arguments)` — epics holding a feature left `in_progress` |
 | `undefer-unblocked.sh` | `[--dry-run]` — reopens deferred epics whose `undefers:<epic>` blockers all closed |
 | `close-bead.sh` | `<bead-id> [bd-close-args...]` — closes a bead, then immediately runs the undefer sweep so a blocked epic reopens at close time, not at the next session's startup check |
