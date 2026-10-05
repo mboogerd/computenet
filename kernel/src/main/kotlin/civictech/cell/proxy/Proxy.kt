@@ -6,6 +6,7 @@ import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.nature.ContractRegistry
 import civictech.nature.JvmDescriptors
+import civictech.nature.MethodDescriptor
 import civictech.gen.wire.ProxyRegistry
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Modifier
@@ -107,15 +108,32 @@ object Proxy {
         val descriptor = requireNotNull(ContractRegistry.descriptor(clazz)) {
             "A discharging proxy requires a generated contract descriptor for ${clazz.name}"
         }
-        val exclusiveMethods = descriptor.methods.filter { it.exclusive }.mapTo(mutableSetOf()) {
-            it.name to it.jvmDescriptor
+        // computenet-dmwl: only the descriptor-marked parameter positions are walked, so a
+        // supertype-declared parameter the compile-time scan did not mark is never opened.
+        val exclusiveMethods = descriptor.methods.filter { it.exclusive }.associate {
+            (it.name to it.jvmDescriptor) to it
         }
         return fromClass(clazz) { _, method, args ->
-            if ((method.name to JvmDescriptors.of(method)) in exclusiveMethods) {
-                args.orEmpty().forEach(::discharge)
+            exclusiveMethods[method.name to JvmDescriptors.of(method)]?.let { marked ->
+                dischargeMarked(marked, args.orEmpty().asList())
             }
             null
         }
+    }
+
+    /**
+     * Discharges the arguments [method] marks exclusive (computenet-dmwl). A descriptor that
+     * claims `exclusive` but names no position — hand-built, not generated, so it never went
+     * through the scan that fills `exclusiveParameters` — has no positions to bound the walk
+     * by, and walks every argument: an exclusive with no consumer is the worse failure
+     * (computenet-h6sf), so an inconsistent descriptor must not silently discharge nothing.
+     */
+    internal fun dischargeMarked(method: MethodDescriptor, args: List<Any?>) {
+        if (method.exclusive && method.exclusiveParameters.isEmpty()) {
+            args.forEach(::discharge)
+            return
+        }
+        method.exclusiveParameters.forEach { index -> if (index < args.size) discharge(args[index]) }
     }
 
     /**
@@ -133,24 +151,20 @@ object Proxy {
      * `[SEC1-20]` accounting for [discharge] (computenet-h6sf): the number of times the walk
      * met an exclusive that was **already** consumed or released.
      *
-     * The walk cannot throw out of a cleanup path (see [discharge]'s KDoc), and it also must
-     * not *mask* a double-discharge — `FanOutlet`'s KDoc treats discharge-exactly-once as the
-     * `[SEC1-20]` invariant. So the occurrence is neither propagated nor swallowed: it is
-     * counted, the same counted-tripwire shape `civictech.cell.port.InletPolicy.unackedDrops`
-     * and `civictech.cell.consistency.WaveFrontier.unmatchedDrops` use for their own silent
-     * exits. A host or test that requires the invariant asserts this stays at its prior value.
+     * The walk derives this from the non-consuming state predicates on [Owned] and [Leased],
+     * so an already-discharged obligation is neither propagated nor swallowed: it is counted,
+     * the same counted-tripwire shape `civictech.cell.port.InletPolicy.unackedDrops` and
+     * `civictech.cell.consistency.WaveFrontier.unmatchedDrops` use for their own silent exits.
+     * A host or test that requires the invariant asserts this stays at its prior value.
      *
      * Process-wide and monotonic — it is a tripwire, not a per-invocation result — so read it
      * as a delta across the operation under test, never as an absolute.
      *
-     * **Limit, stated where the number is:** the count is derived from an
-     * [IllegalStateException] out of `Owned.take()`/`Leased.release()`, which is precisely the
-     * consume-once/release-once `check` today, but `Leased.release` also invokes its
-     * `returnToPool` callback under the same guard. A pool callback that itself threw
-     * `IllegalStateException` would be counted here as a double-discharge (and swallowed).
-     * Pooling is unbuilt (`Ownership.kt`, "G-21 phase 3"), so no such callback exists in this
-     * repository today; making the distinction exact needs a non-consuming state predicate on
-     * `Owned`/`Leased` themselves, which is filed separately.
+     * **Limit, stated where the number is:** this count is predicate-derived and exact for
+     * this walk: it moves only when the walk meets an [Owned] whose [Owned.isConsumed] is true
+     * or a [Leased] whose [Leased.isReleased] is true. A `returnToPool` callback that throws
+     * [IllegalStateException] is not a double-discharge: [Leased.release] has already marked
+     * the lease released, and the callback exception propagates out of the walk.
      *
      * **Second limit, and it is a deliberate exclusion (computenet-1ffh):** this counts
      * arrivals at *this walk* only. `civictech.cell.host.DeadLetters.sanitizeForDeadLetter`
@@ -165,8 +179,8 @@ object Proxy {
      * - capture first, [discharge] second: delta **2** (one per outer wrapper, booked by
      *   this walk's own already-consumed branches).
      *
-     * Symmetrizing that — narrowing the sanitizer's `runCatching` the way [consuming] is
-     * narrowed and incrementing this counter there — was considered and **rejected**,
+     * Symmetrizing that — narrowing the sanitizer's `runCatching` and incrementing this
+     * counter there — was considered and **rejected**,
      * because capture legitimately runs *after* a correct, single discharge of the same
      * arguments on ordinary paths, so the increment would fire where nothing was consumed
      * twice:
@@ -193,7 +207,16 @@ object Proxy {
      */
     val doubleDischarges: Long get() = doubleDischargeCount.get()
 
+    /**
+     * Number of exclusives successfully consumed or released by [discharge]. Process-wide and
+     * monotonic; read as a delta for the operation under test. This is the observable for the
+     * discharged fate: it does not count [Owned.consume] at the bridge egress (a transfer), or
+     * `DeadLetters.sanitizeForDeadLetter`'s `freeze()`/`release()` (the dead-letter fate).
+     */
+    val discharges: Long get() = dischargeCount.get()
+
     private val doubleDischargeCount = java.util.concurrent.atomic.AtomicLong()
+    private val dischargeCount = java.util.concurrent.atomic.AtomicLong()
 
     /**
      * C-11 residual 1 (computenet-ulss, 93 I-6 / I-8): the walk reaches an exclusive nested
@@ -286,14 +309,10 @@ object Proxy {
      *   runs on suppression and denial paths, where discharging the fields that *are*
      *   reachable is strictly better than propagating out of a cleanup.
      * - **An already-consumed exclusive is counted, not thrown and not swallowed**
-     *   (computenet-h6sf, defect 2). `Owned.take()`/`Leased.release()` used to propagate out
-     *   of here, which on `Proxy.discharging`'s handler and
-     *   `civictech.cell.port.InletPolicy.offer` — both `args.forEach(::discharge)`, unguarded
-     *   — abandoned the *remaining* arguments and fields undischarged: a cleanup path that
-     *   silently drops the rest of an exclusive payload. Wrapping the consumption in a blanket
-     *   `runCatching` would fix that by masking `[SEC1-20]` double-discharge instead, so the
-     *   occurrence is recorded on [doubleDischarges] and the walk continues. Read that
-     *   counter's KDoc for what it does and does not distinguish.
+     *   (computenet-h6sf, defect 2). The non-consuming state predicates let the walk record
+     *   the occurrence on [doubleDischarges] and continue, while a successful [take] or
+     *   [Leased.release] increments [discharges]. A blanket `runCatching` around either
+     *   operation would instead mask a user [Leased] pool callback failure.
      *
      * ## Why the reach is *not* narrowed further (the decision, computenet-h6sf)
      *
@@ -321,23 +340,40 @@ object Proxy {
      * So the rule is: **the runtime walk's reach is exactly the compile-time scan's reach**.
      * If those two disagree, the divergence is the bug, in whichever direction it points.
      *
-     * **Where the rule is not yet exact, stated here rather than in a report.** The scan
-     * reads *declared* types; this walk reads *runtime* classes, and the two cannot be made
-     * to coincide by a stop list alone. The compiler-generated-carrier stops above and in
-     * [dischargeFields] close the cases that were measured. One residual is known and
-     * remains: a parameter declared as a supertype (`Any`, an interface) whose runtime value
-     * is a class holding an `Owned` is invisible to the scan — which therefore does not mark
-     * the method exclusive at all — yet is opened and consumed here if the method is
-     * exclusive for some *other* parameter. Measured 2026-08-17 under review
-     * (`Holder(val any: Any)` holding a class with an `Owned` property: consumed). Closing it
-     * needs the walk to be descriptor-driven rather than purely reflective; filed separately,
-     * not done here.
+     * **Where the rule is exact, and where it is not (computenet-dmwl).** The scan reads
+     * *declared* types and this walk reads *runtime* classes, so they cannot be made to
+     * coincide by a stop list alone. Reach is therefore bounded per **parameter**: the
+     * descriptor's `exclusiveParameters` names the positions whose declared type carries an
+     * exclusive, and both [discharging] and the ADMIT drop (`Admit.offer`) discharge only
+     * those. A parameter declared as a supertype (`Any`, an interface) that the scan did not
+     * mark is never opened, even when its runtime value holds an `Owned`. Two residuals remain,
+     * neither in scope of that task: (i) inside a *marked* parameter, a supertype-declared
+     * FIELD is still opened by its runtime class; (ii) the other `args.forEach(Proxy::discharge)`
+     * sites — `ManagedHost` refusals, `LocationRegistry.refuseRetired`,
+     * `BoundaryDenials.dischargeRefusedArgs`, `DeadLetters.sanitizeForDeadLetter` — still walk
+     * every argument.
      */
     private fun discharge(value: Any?, seen: MutableSet<Any>) {
         if (value == null || !seen.add(value)) return
         when (value) {
-            is Owned<*> -> consuming { value.take() }?.let { discharge(it, seen) }
-            is Leased<*> -> consuming { value.release() }?.let { discharge(value.value, seen) }
+            is Owned<*> -> {
+                if (value.isConsumed) {
+                    doubleDischargeCount.incrementAndGet()
+                } else {
+                    val taken = value.take()
+                    dischargeCount.incrementAndGet()
+                    discharge(taken, seen)
+                }
+            }
+            is Leased<*> -> {
+                if (value.isReleased) {
+                    doubleDischargeCount.incrementAndGet()
+                } else {
+                    value.release()
+                    dischargeCount.incrementAndGet()
+                    discharge(value.value, seen)
+                }
+            }
             is Map<*, *> -> value.forEach { (key, item) ->
                 discharge(key, seen)
                 discharge(item, seen)
@@ -359,25 +395,6 @@ object Proxy {
             else -> dischargeFields(value, seen)
         }
     }
-
-    /**
-     * Runs one exclusive's consumption so that an already-discharged obligation neither
-     * escapes into the cleanup path nor disappears — see [doubleDischarges]. The catch is
-     * deliberately narrow (`IllegalStateException`, around the consumption alone) rather than
-     * a `runCatching` over the walk: any other failure is not a double-discharge and must
-     * still surface.
-     *
-     * Returns what the consumption yielded, or `null` when it was already discharged, so
-     * `Owned.take()`'s moved value can be walked in turn (computenet-woto) without the caller
-     * having to distinguish the two outcomes again.
-     */
-    private inline fun <T> consuming(consume: () -> T): T? =
-        try {
-            consume()
-        } catch (_: IllegalStateException) {
-            doubleDischargeCount.incrementAndGet()
-            null
-        }
 
     /**
      * The field walk behind [discharge]'s `else` branch.

@@ -4,6 +4,11 @@ import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Timestamp
+import civictech.cell.proxy.DmwlDerived
+import civictech.cell.proxy.DmwlHolder
+import civictech.cell.proxy.DmwlPush
+import civictech.cell.proxy.HandBuiltExclusive
+import civictech.cell.proxy.HandBuiltExclusiveDescriptor
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -66,5 +71,31 @@ class AdmitDischargeTest {
         inlet.call.accept(Owned("spontaneous"))
 
         admit.unackedDrops shouldBe 1
+    }
+
+    // computenet-dmwl: the drop discharges only descriptor-marked positions.
+    @Test
+    fun `an admit drop does not consume a runtime exclusive behind a supertype-declared parameter`() {
+        val inlet = FanInlet(DmwlPush::class.java)
+        inlet.install(Admit(admits = { false }))
+
+        val item = Owned("item")
+        val foreign = Owned("foreign")
+        inlet.call.push(item, DmwlHolder(DmwlDerived(foreign)))
+
+        shouldThrow<IllegalStateException> { item.take() }
+        foreign.take() shouldBe "foreign"
+    }
+
+    @Test
+    fun `an admit drop on a hand-built exclusive descriptor with no marked positions discharges every argument`() {
+        HandBuiltExclusiveDescriptor.ensureRegistered()
+        val inlet = FanInlet(HandBuiltExclusive::class.java)
+        inlet.install(Admit(admits = { false }))
+
+        val item = Owned("item")
+        inlet.call.accept(item)
+
+        shouldThrow<IllegalStateException> { item.take() }
     }
 }
