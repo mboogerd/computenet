@@ -4,15 +4,19 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.MessageContext
+import civictech.cell.ReBaselineEmitting
 import civictech.cell.evolve.Effectful
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.JournalRecords
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.SupervisionPolicy
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -41,16 +45,22 @@ import java.util.UUID
 class OutletHighWaterRecoveryTest {
 
     /** The journaled source whose outlet wave identity must survive the crash. */
-    class RelayCell(override val ref: CellRef) : Cell {
+    class RelayCell(override val ref: CellRef) : Cell, ReBaselineEmitting {
         val outlet = registerPort("outlet", FanOutlet.create<Consumer<Int>>())
+        val restartOutlet = registerPort("restartOutlet", FanOutlet.create<Consumer<String>>())
         val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
 
         init {
             inlet.serve(object : Consumer<Int> {
                 override fun provide(input: Int) {
+                    if (input == Int.MIN_VALUE) throw IllegalStateException("restart requested")
                     outlet.call.provide(input)
                 }
             })
+        }
+
+        override fun reBaseline(supersedes: Set<UUID>, supersede: Boolean) {
+            restartOutlet.reBaseline(supersedes, supersede) { provide("restart") }
         }
     }
 
@@ -96,6 +106,7 @@ class OutletHighWaterRecoveryTest {
         init {
             host.managementInlet.call.spawn(notifier)
             host.managementInlet.call.spawn(relay)
+            host.managementInlet.call.supervise(relay.ref, SupervisionPolicy.RESTART)
             // source -> sink through the host intake, so the sink's inlet sees a
             // journaled frame carrying the source outlet's MessageContext
             val sink = (HostedCellProxy.create(notifierRef, host, NotifierProxy::class.java)
@@ -238,5 +249,99 @@ class OutletHighWaterRecoveryTest {
         controller.runToIdle()
         effects.count { it == 4 } shouldBe 1
         effects shouldBe listOf(1, 2, 3, 4)
+    }
+
+    /**
+     * computenet-49i65 / qfi22-D10: a RESTART after the last checkpoint is part
+     * of the durable history. Recovery must reproduce that exact epoch boundary,
+     * not mint a third epoch while replaying the invocation that originally
+     * failed. The tail then re-derives under the source ids the network actually
+     * observed, so the `Effectful` frontier suppresses its direct replay instead
+     * of seeing recovery-only positions and firing twice.
+     */
+    @Test
+    fun `RESTART after the last checkpoint survives crash recovery with its epoch and ReBaseline announcement`() {
+        val controller = SimulationController(seed = 23)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        before.feed(1)
+        before.feed(2)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2)
+
+        // The checkpoint captures the original durable epoch. Everything below
+        // it is the WAL tail that must replay across the RESTART boundary.
+        before.host.checkpoint(journal)
+        val preRestartSource = before.relay.outlet.waveState().sourceId
+
+        val liveRestartNotices = mutableListOf<MessageContext>()
+        before.relay.restartOutlet.observe(PortRef.generate()) { liveRestartNotices += it }
+        before.feed(Int.MIN_VALUE)
+        controller.runToIdle()
+        before.host.supervisionAccounting().restarts shouldBe 1
+
+        val postRestartSource = before.relay.outlet.waveState().sourceId
+        val postRestartNoticeSource = before.relay.restartOutlet.waveState().sourceId
+        (postRestartSource != preRestartSource).shouldBeTrue()
+        liveRestartNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
+
+        // The fix is deliberately one additive record: exact triggering frame,
+        // host generation, superseded lanes, and the fresh epoch per outlet.
+        val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart)
+            .single()
+        restartRecord.cellRef shouldBe relayRef
+        restartRecord.generation shouldBe 1L
+        restartRecord.supersedes shouldBe liveRestartNotices.single().reBaseline?.supersedes
+        val trigger = WireCodec.decode(restartRecord.triggerFramePayload)
+        trigger.cellRef shouldBe relayRef
+        trigger.portName shouldBe "inlet"
+        trigger.invocation.args.single() shouldBe Int.MIN_VALUE
+        restartRecord.outlets.associate { it.portName to it.sourceId } shouldBe mapOf(
+            "outlet" to postRestartSource,
+            "restartOutlet" to postRestartNoticeSource,
+        )
+        restartRecord.outlets.all { it.highWater == 0L }.shouldBeTrue()
+
+        before.feed(3)
+        before.feed(4)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2, 3, 4)
+
+        // Compatibility control: this is the exact journal an older build would
+        // have written — same checkpoint and frames, with the additive type-8
+        // record absent. Its replay keeps the pre-change behavior (including the
+        // known duplicate); the new kernel neither invents a record nor silently
+        // changes the meaning of those existing bytes.
+        val legacyJournal = InMemoryJournal().also { legacy ->
+            legacy.reset(journal.replay().filter { JournalRecords.decodeRestart(it) == null })
+        }
+        val legacyEffects = mutableListOf(1, 2, 3, 4)
+        val legacy = World(controller, legacyJournal, relayRef, notifierRef, legacyEffects)
+        controller.runToIdle()
+        legacy.host.recoverFrom(legacyJournal)
+        controller.runToIdle()
+        legacyEffects shouldBe listOf(1, 2, 3, 4, 3, 4)
+        legacyJournal.replay().mapNotNull(JournalRecords::decodeRestart) shouldBe emptyList()
+
+        // CRASH: only the journal survives. Observe recovery itself, not the live
+        // announcement above, so a silent reconstruction cannot satisfy the test.
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        val recoveredRestartNotices = mutableListOf<MessageContext>()
+        after.relay.restartOutlet.observe(PortRef.generate()) { recoveredRestartNotices += it }
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        effects shouldBe listOf(1, 2, 3, 4)
+        after.host.generationOf(relayRef) shouldBe 1L
+        after.relay.outlet.waveState().sourceId shouldBe postRestartSource
+        after.relay.outlet.waveState().highWater shouldBe 2L
+        recoveredRestartNotices.single().timestamp.sourceId shouldBe postRestartNoticeSource
+        recoveredRestartNotices.single().reBaseline?.supersedes?.contains(preRestartSource) shouldBe true
     }
 }

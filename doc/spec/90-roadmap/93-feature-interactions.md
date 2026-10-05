@@ -8341,6 +8341,26 @@ ReBaseline<D>(
 )
 ```
 
+> **Durable RESTART tail (qfi22-D10, landed).** A RESTART after a journal's
+> last checkpoint is itself durable history. The host appends one additive
+> `RECORD_RESTART` (type 8) before the live re-baseline becomes visible:
+> `Restart(cellRef, triggerFramePayload, generation, supersedes,
+> outlets[{portName, sourceId, highWater}])`. The trigger is the exact encoded
+> invocation whose failure caused the transition; recovery stages journal
+> frames asynchronously, so the record is held until that same replayed frame
+> fails, then the host adopts the recorded outlet epochs and generation and
+> emits the same `ReBaseline`. Applying it when decoded would move the epoch
+> boundary ahead of its triggering frame and make replay diverge. Recording
+> only a final high-water would likewise lose the supersession announcement.
+> The separate record type is the compatibility mechanism: a journal written
+> before type 8 contains no such record and follows its previous replay path
+> unchanged; widening the serialized checkpoint would instead make old blobs
+> undecodable. A later checkpoint may compact the event away because
+> `RECORD_OUTLET_WAVE` then carries the resulting epoch/high-water as an
+> ordinary preserved recovery. `OutletHighWaterRecoveryTest` pins the tail
+> case: no `Effectful` double-fire, the exact post-RESTART epoch survives, and
+> recovery re-announces its `ReBaseline`.
+
 `ReBaseline.state` is exactly the state-as-delta-from-empty the `onLinked` catch-up already
 unicasts (`20/21 §Pull`, "a snapshot IS a delta"). It is not a new wire type; it is a
 catch-up carrying a `supersede` bit and the producer's current `SourceId`.

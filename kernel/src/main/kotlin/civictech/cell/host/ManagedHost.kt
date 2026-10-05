@@ -1365,7 +1365,9 @@ open class ManagedHost(
     private fun journalTee(hostedInvocation: HostedPortInvocation) {
         val journal = portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) ?: return
         if (hostedInvocation.replayOf === journal) return
-        journal.append(hostDurability.journalFrame(hostedInvocation))
+        val record = hostDurability.journalFrame(hostedInvocation)
+        journal.append(record)
+        hostDurability.rememberJournaledFrame(hostedInvocation, record)
     }
 
     /**
@@ -2064,19 +2066,55 @@ open class ManagedHost(
                     // invocation (and any Owned/Leased it carried) is not re-driven
                     notifyDownstream(cell, StallNotice.Stall(StallReason.RESTARTING))
                     restartCount.incrementAndGet()
+                    val replayedRestart = hostDurability.takeReplayedRestart(hostedInvocation)
                     // R1 (93 I-22): bump the host-held generation before reactivation —
-                    // a checkpoint restore can never roll it back
-                    generations[cellRef] = generationOf(cellRef) + 1
+                    // a checkpoint restore can never roll it back. A type-8 record
+                    // carries the value a crashed host had already exposed.
+                    val nextGeneration = replayedRestart?.generation ?: generationOf(cellRef) + 1
+                    generations[cellRef] = maxOf(generationOf(cellRef), nextGeneration)
                     cell.onDeactivate(ctx)
                     // R1/S1 (spec 20/22, 93 I-14): fresh emission epoch per outlet —
                     // post-restart tags and waves alias nothing pre-crash. Collect the
-                    // superseded source ids to seed the ReBaseline.supersedes list.
-                    val supersedes = PortRegistry.of(cell).names().mapNotNull { name ->
-                        when (val port = PortRegistry.of(cell)[name]) {
-                            is FanOutlet<*> -> port.mintFreshEpoch()
-                            else -> null
+                    // superseded source ids to seed the ReBaseline.supersedes list. During
+                    // journal replay, adopt the exact epochs recorded by the live RESTART;
+                    // minting recovery-only ids would make the replay-derived tail differ
+                    // from the direct frames already in the journal and double-fire effects.
+                    val minted = linkedMapOf<String, OutletWaveState>()
+                    val supersedes = if (replayedRestart == null) {
+                        PortRegistry.of(cell).names().mapNotNull { name ->
+                            when (val port = PortRegistry.of(cell)[name]) {
+                                is FanOutlet<*> -> port.mintFreshEpoch().also { minted[name] = port.waveState() }
+                                else -> null
+                            }
+                        }.toSet()
+                    } else {
+                        val recorded = replayedRestart.outlets.associateBy { it.portName }
+                        PortRegistry.of(cell).names().forEach { name ->
+                            val port = PortRegistry.of(cell)[name]
+                            if (port is FanOutlet<*>) {
+                                val wave = recorded[name]
+                                if (wave == null) {
+                                    // Additive cell evolution: an outlet absent when this
+                                    // record was written has no historical lane to restore.
+                                    port.mintFreshEpoch()
+                                } else {
+                                    port.adoptWaveState(OutletWaveState(wave.sourceId, wave.highWater))
+                                }
+                            }
                         }
-                    }.toSet()
+                        replayedRestart.supersedes
+                    }
+                    if (replayedRestart == null) {
+                        // Write ahead of activation/re-baseline visibility. For a replayed
+                        // frame from an older journal this is an intentional no-op, keeping
+                        // the pre-type-8 behavior exactly unchanged.
+                        hostDurability.journalRestart(
+                            hostedInvocation,
+                            nextGeneration,
+                            supersedes,
+                            minted,
+                        )
+                    }
                     cell.onActivate(ctx)
                     // R3 (93 I-22): restore-the-freshest-available checkpoint — the
                     // spawn-time local checkpoint is the degenerate non-durable case
@@ -2104,6 +2142,10 @@ open class ManagedHost(
             }
         }
         } finally {
+            if (hostedInvocation.replayOf != null) hostDurability.forgetReplayedFrame(hostedInvocation)
+            if (portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) != null) {
+                hostDurability.forgetJournaledFrame(hostedInvocation)
+            }
             if (!retainCheckpointSequence && hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
                 synchronized(dataLock) { checkpointSequences.remove(hostedInvocation) }
             }

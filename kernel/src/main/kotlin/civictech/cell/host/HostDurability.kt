@@ -32,6 +32,7 @@ private const val RECORD_OUTLET_WAVE: Byte = 4
 private const val RECORD_BASELINE: Byte = 5
 private const val RECORD_TOPOLOGY: Byte = 6
 private const val RECORD_INPUT: Byte = 7
+private const val RECORD_RESTART: Byte = 8
 
 /** One accepted-but-undelivered frame and its host-wide acceptance position. */
 internal data class CheckpointFrame(
@@ -232,9 +233,49 @@ private data class InputRecord(
     val frames: List<ByteArray>,
 ) : Serializable
 
+/** One outlet epoch minted by the RESTART captured in [RestartRecord]. */
+private data class RestartOutletWaveRecord(
+    val portName: String,
+    val sourceId: UUID,
+    val highWater: Long,
+) : Serializable
+
 /**
- * One journal record, decoded by [JournalRecords.decode] — the read-side view of the seven
- * record types [HostDurability] writes (computenet-wzbww D2, `[TTD1-02]`). The variants
+ * Additive qfi22-D10 record: a supervised RESTART that occurred in the WAL tail.
+ * [triggerFramePayload] is the exact `WireCodec` payload of the invocation whose
+ * failure caused the transition, so recovery applies this event only when replay
+ * reaches that same failure — never merely because the record was decoded ahead
+ * of asynchronously delivered frames. [outlets] are the fresh epochs minted before
+ * the live [civictech.cell.ReBaselineEmitting.reBaseline] call.
+ *
+ * A separate type, rather than a field on [CheckpointRecord], keeps journals written
+ * before this change byte-for-byte readable: they contain no type-8 record and take
+ * the pre-existing replay-time RESTART path.
+ */
+private data class RestartRecord(
+    val cellRef: CellRef,
+    val triggerFramePayload: ByteArray,
+    val generation: Long,
+    val supersedes: Set<UUID>,
+    val outlets: List<RestartOutletWaveRecord>,
+) : Serializable
+
+/** In-kernel decoded view of [RestartRecord]; external readers see additive type 8 as unknown. */
+internal data class DecodedRestart(
+    val cellRef: CellRef,
+    val triggerFramePayload: ByteArray,
+    val generation: Long,
+    val supersedes: Set<UUID>,
+    val outlets: List<OutletWave>,
+) {
+    data class OutletWave(val portName: String, val sourceId: UUID, val highWater: Long)
+}
+
+/**
+ * One reader-visible journal record, decoded by [JournalRecords.decode] — the read-side
+ * view used outside the kernel (computenet-wzbww D2, `[TTD1-02]`). Additive internal
+ * `RECORD_RESTART` remains [Unknown] to those readers and is decoded semantically by
+ * [JournalRecords.decodeRestart], so their exhaustive handling does not break. The variants
  * carry the payload classes' fields copied out, never the payload classes themselves: those
  * stay `private` because widening their visibility changes their JVM access flags and
  * therefore their *computed* `serialVersionUID`, which would make every existing checkpoint
@@ -289,7 +330,7 @@ sealed interface DecodedJournalRecord {
  */
 object JournalRecords {
     /**
-     * Decode one record as [Journal.replay] returned it. Types 2..7 are deserialized with
+     * Decode one record as [Journal.replay] returned it. Reader-visible types 2..7 are deserialized with
      * exactly the `ObjectInputStream.readObject` + cast recovery always used; whatever that
      * throws propagates **unwrapped**, so [RecoveryIncomplete.cause] keeps its class.
      *
@@ -313,6 +354,24 @@ object JournalRecords {
             RECORD_INPUT -> (readPayload(record) as InputRecord)
                 .let { DecodedJournalRecord.Input(it.cellRef, it.name, it.cursor, it.frames) }
             else -> DecodedJournalRecord.Unknown(type)
+        }
+    }
+
+    /**
+     * Kernel-only semantic decoder for additive type 8. Keeping it out of the public
+     * sealed hierarchy lets existing out-of-kernel readers retain their forward-compatible
+     * `Unknown(8)` path without requiring a same-change exhaustive-`when` edit.
+     */
+    internal fun decodeRestart(record: ByteArray): DecodedRestart? {
+        if (record.firstOrNull() != RECORD_RESTART) return null
+        return (readPayload(record) as RestartRecord).let { restart ->
+            DecodedRestart(
+                restart.cellRef,
+                restart.triggerFramePayload,
+                restart.generation,
+                restart.supersedes,
+                restart.outlets.map { DecodedRestart.OutletWave(it.portName, it.sourceId, it.highWater) },
+            )
         }
     }
 
@@ -449,6 +508,22 @@ internal class HostDurability(
      */
     private val replayedPositions = IdentityHashMap<Journal, ReplayedPositions>()
 
+    /** Original wire payload for each asynchronously delivered replay frame. */
+    private data class ReplayedFrame(val journal: Journal, val payload: ByteArray)
+
+    private val replayedFrames = IdentityHashMap<HostedPortInvocation, ReplayedFrame>()
+
+    /** Exact payload appended for a live frame, retained only until its delivery finishes. */
+    private val journaledFrames = IdentityHashMap<HostedPortInvocation, ByteArray>()
+
+    /**
+     * Type-8 RESTART events decoded during recovery, held until the exact triggering
+     * replay frame fails on the host scheduler. Recovery stages all frames before any
+     * of them can deliver, so applying the record in the decode loop would move the
+     * epoch boundary ahead of the frame that caused it.
+     */
+    private val replayedRestarts = IdentityHashMap<Journal, MutableList<DecodedRestart>>()
+
     /**
      * Processed-frontier (G-59, fixes C-9; spec 20/24, 30/31, 50/52): per
      * [civictech.cell.evolve.Effectful] inlet `(cellRef, portName)`, the last applied
@@ -522,6 +597,12 @@ internal class HostDurability(
         synchronized(replayedPositions) {
             replayedPositions.remove(journal)
         }
+        synchronized(replayedRestarts) {
+            replayedRestarts.remove(journal)
+        }
+        synchronized(replayedFrames) {
+            replayedFrames.entries.removeIf { it.value.journal === journal }
+        }
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
         // itself is stamped up front (below) so a reactive re-emission inherits
@@ -551,7 +632,15 @@ internal class HostDurability(
                     (if (scope == null) decoded else decoded.baselined(scope))
                         .copy(replayFrontier = scope, replayOf = journal)
                 }
-                submit(frame)
+                synchronized(replayedFrames) {
+                    replayedFrames[frame] = ReplayedFrame(journal, payload)
+                }
+                try {
+                    submit(frame)
+                } catch (e: Throwable) {
+                    forgetReplayedFrame(frame)
+                    throw e
+                }
                 frame.invocation.context?.timestamp?.let { timestamp ->
                     if (journalSelector(frame.cellRef, frame.portName) === journal) {
                         positions.record(frame.cellRef, frame.portName, timestamp)
@@ -568,6 +657,12 @@ internal class HostDurability(
                 // the caller cannot mistake a partial replay for a
                 // complete one.
                 try {
+                    JournalRecords.decodeRestart(record)?.let { restart ->
+                        synchronized(replayedRestarts) {
+                            replayedRestarts.getOrPut(journal, ::mutableListOf) += restart
+                        }
+                        return@forEachIndexed
+                    }
                     when (val decoded = JournalRecords.decode(record)) {
                         is DecodedJournalRecord.Frame -> {
                             submitFrame(decoded.payload)
@@ -623,6 +718,44 @@ internal class HostDurability(
     }
 
     /**
+     * Consume the recorded RESTART belonging to [frame], if this replay came from
+     * a type-8-aware journal. Exact payload matching is what makes a newly failing
+     * frame during recovery distinct from the historical failure the journal names.
+     * No match is the compatibility path for an older journal: supervision behaves
+     * exactly as it did before type 8 existed.
+     */
+    fun takeReplayedRestart(frame: HostedPortInvocation): DecodedRestart? {
+        val replayed = synchronized(replayedFrames) { replayedFrames[frame] } ?: return null
+        val journal = frame.replayOf
+        if (journal !== replayed.journal) return null
+        return synchronized(replayedRestarts) {
+            val pending = replayedRestarts[replayed.journal] ?: return@synchronized null
+            val index = pending.indexOfFirst {
+                it.cellRef == frame.cellRef && it.triggerFramePayload.contentEquals(replayed.payload)
+            }
+            if (index < 0) null else pending.removeAt(index)
+        }
+    }
+
+    /** Drop the original-payload association after one replay frame finishes delivery. */
+    fun forgetReplayedFrame(frame: HostedPortInvocation) {
+        synchronized(replayedFrames) { replayedFrames.remove(frame) }
+    }
+
+    /** Remember the already-serialized intake frame so RESTART never re-serializes consumed exclusives. */
+    fun rememberJournaledFrame(frame: HostedPortInvocation, record: ByteArray) {
+        check(record.firstOrNull() == RECORD_FRAME) { "journaled invocation is not a frame record" }
+        synchronized(journaledFrames) {
+            journaledFrames[frame] = record.copyOfRange(1, record.size)
+        }
+    }
+
+    /** Drop the short-lived intake-payload association after delivery. */
+    fun forgetJournaledFrame(frame: HostedPortInvocation) {
+        synchronized(journaledFrames) { journaledFrames.remove(frame) }
+    }
+
+    /**
      * qfi22-D7/D8's host-intake predicate. Call while holding the host's
      * `dataLock`, beside the journal tee: live frames have no [HostedPortInvocation.replayOf]
      * and never consult the set; another journal or a volatile target cannot
@@ -655,6 +788,40 @@ internal class HostDurability(
 
     fun journalFrame(hostedInvocation: HostedPortInvocation): ByteArray =
         byteArrayOf(RECORD_FRAME) + WireCodec.encode(hostedInvocation)
+
+    /**
+     * Write the fresh-epoch half of one live supervised RESTART before its
+     * `ReBaseline` can become visible. A replay of the same journal never appends:
+     * it consumes the existing record through [takeReplayedRestart].
+     */
+    fun journalRestart(
+        trigger: HostedPortInvocation,
+        generation: Long,
+        supersedes: Set<UUID>,
+        outlets: Map<String, OutletWaveState>,
+    ) {
+        val journal = cellJournalSelector(trigger.cellRef) ?: return
+        if (trigger.replayOf === journal) return
+        // Prefer the exact bytes the intake already appended. Re-encoding here runs
+        // after the handler failed and may therefore encounter an `Owned` argument the
+        // handler already consumed; durability must never touch that exclusive twice.
+        val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] }
+            ?: WireCodec.encode(trigger)
+        journal.append(
+            journalRecord(
+                RECORD_RESTART,
+                RestartRecord(
+                    trigger.cellRef,
+                    triggerPayload,
+                    generation,
+                    supersedes,
+                    outlets.entries.sortedBy { it.key }.map { (portName, state) ->
+                        RestartOutletWaveRecord(portName, state.sourceId, state.highWater)
+                    },
+                ),
+            ),
+        )
+    }
 
     /** The current in-memory cursor for one named durable input. */
     fun committedInput(cellRef: CellRef, name: String): Serializable? = cursors[cellRef to name]
