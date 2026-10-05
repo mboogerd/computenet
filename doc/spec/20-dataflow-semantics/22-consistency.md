@@ -1,6 +1,6 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), and `Progress` absorb-acks are implemented both in-process (`cell.control.absorbAck`, CP-A3) and across a bridge, over the handshake-routed bridged open (CP-A2)
+> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), and `Progress` absorb-acks are implemented both in-process (`cell.control.absorbAck`, CP-A3) and across a bridge, over the handshake-routed bridged open (CP-A2)
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext), 93 (feature-interaction resolutions I-1/4/5/11/13/14/18/23/24)
 > **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.FanOutlet`, `cell.consistency.GlitchFreeCell`
 
@@ -127,16 +127,21 @@ announces `ReBaseline`):
 
 Preserved epoch (no `ReBaseline`; the same source lane continues):
 
-- Drain / migration / promotion state transfer — `PromotionWaveStateTest`.
+- Promotion state transfer — `PromotionWaveStateTest`. Drain and
+  migration are listed as preserved above but no test pins their epoch
+  continuity (migration's is part of G-42, below).
 - Durable recovery with a checkpoint (`RECORD_OUTLET_WAVE`, `[KFX-12]`,
   `[24-DUR-04]`) — `OutletWaveRecoveryTest`
-  (`BS-22 - durable recovery is a preserved-epoch continuation, ref-derived and not re-baselined`,
-  `a checkpointed journaled source still fires each delta exactly once across a crash`,
+  (`a checkpointed journaled source still fires each delta exactly once across a crash`,
   `an epoch rotated before the checkpoint is restored as-is, never re-derived over`),
-  `OutletHighWaterRecoveryTest`, scenario `DUR-SRCID-02`.
+  `OutletHighWaterRecoveryTest`, scenario `DUR-SRCID-02`. These pin the
+  restored `sourceId` and counter high-water; none asserts the absence of a
+  `ReBaseline` on this branch.
 - Durable recovery without a checkpoint (ref-derived `sourceId`; full-WAL
   replay re-derives the counter) — `OutletWaveRecoveryTest`
-  (`a journaled source feeding an effectful sink fires each delta exactly once across a crash`),
+  (`BS-22 - durable recovery is a preserved-epoch continuation, ref-derived and not re-baselined`,
+  the one test asserting no `ReBaseline` on recovery, and
+  `a journaled source feeding an effectful sink fires each delta exactly once across a crash`),
   scenario `DUR-SRCID-01`; a pre-KFX-12 journal — `JournalCompatibilityTest`.
 
 Durable recovery is a preserved-epoch continuation with or without a
