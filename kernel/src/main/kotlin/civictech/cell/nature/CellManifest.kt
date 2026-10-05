@@ -3,7 +3,7 @@ package civictech.cell.nature
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.consistency.GlitchFree
-import civictech.cell.data.Replicable
+import civictech.cell.data.Gossiping
 import civictech.cell.partition.Partitioned
 import civictech.nature.Manifest
 
@@ -16,7 +16,7 @@ import civictech.nature.Manifest
  * The marker → tag mapping (all *existing* markers, no new annotation):
  * - [GlitchFree]  → [Manifest.GLITCH_FREE]
  * - [Stateful]    → [Manifest.DURABLE]
- * - [Replicable] or [ReBaselineEmitting] → [Manifest.REPLICATED]
+ * - [Gossiping] or [ReBaselineEmitting] → [Manifest.REPLICATED]
  * - [Partitioned] → [Manifest.PARTITIONED]
  *
  * `PULL_SERVING`/`GATED` (installed-policy natures, not implemented interfaces)
@@ -28,7 +28,7 @@ import civictech.nature.Manifest
 fun manifestOf(clazz: Class<*>): Set<Manifest> = buildSet {
     if (GlitchFree::class.java.isAssignableFrom(clazz)) add(Manifest.GLITCH_FREE)
     if (Stateful::class.java.isAssignableFrom(clazz)) add(Manifest.DURABLE)
-    if (Replicable::class.java.isAssignableFrom(clazz) ||
+    if (Gossiping::class.java.isAssignableFrom(clazz) ||
         ReBaselineEmitting::class.java.isAssignableFrom(clazz)
     ) add(Manifest.REPLICATED)
     if (Partitioned::class.java.isAssignableFrom(clazz)) add(Manifest.PARTITIONED)

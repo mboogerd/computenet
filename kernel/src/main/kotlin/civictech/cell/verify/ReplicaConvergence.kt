@@ -2,7 +2,7 @@ package civictech.cell.verify
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
-import civictech.cell.data.Replicable
+import civictech.cell.data.Gossiping
 import civictech.cell.host.LocationRegistry
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -15,7 +15,7 @@ import java.util.UUID
  * via [civictech.cell.host.InstanceIndex.replicasOf] — folds every replica's stream
  * independently, and asserts the folds agree at quiescence (52 §Replica
  * convergence). Attaching in-process needs no proxy hop: [attach] links
- * directly to a local [Replicable.outlet], exactly like the routed
+ * directly to a local [Gossiping.gossipOutlet], exactly like the routed
  * `deltaInlet` link `civictech.cell.replication.Replication` installs for
  * gossip itself, minus the wire crossing.
  *
@@ -38,11 +38,11 @@ class ReplicaConvergence<D : Any, S>(
     private val folds = linkedMapOf<CellRef, S>()
 
     /** Attach to [replica]'s own delta outlet — one call per known local replica instance. */
-    fun attach(replica: Replicable<D>) {
+    fun attach(replica: Gossiping<D>) {
         val ref = replica.ref
         require(ref.sameLogical(CellRef(logicalId))) { "replica $ref is not of logical id $logicalId" }
         folds[ref] = initial
-        replica.outlet.subscribe(
+        replica.gossipOutlet.subscribe(
             Use.fixed(
                 object : Propagate<D> {
                     override fun propagate(value: D) {

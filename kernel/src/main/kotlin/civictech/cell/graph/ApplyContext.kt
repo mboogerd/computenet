@@ -2,7 +2,7 @@ package civictech.cell.graph
 
 import civictech.cell.CellRef
 import civictech.cell.Cell
-import civictech.cell.data.Replicable
+import civictech.cell.data.Gossiping
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Shadow
 import civictech.cell.host.DecodedJournalRecord
@@ -157,9 +157,9 @@ class ApplyContext(
         requireBoundRef(event.handle, IdentityBinding.Exact(event.ref), event.ref, cell.ref)
         val spawned = if (event.replicated) {
             val service = replication ?: throw missingReplication(event.handle)
-            val replicable = cell as? Replicable<*>
+            val replicable = cell as? Gossiping<*>
                 ?: throw IllegalStateException(
-                    "spawn step '${event.handle}': parameter 'replicated' requires a Replicable cell " +
+                    "spawn step '${event.handle}': parameter 'replicated' requires a replicable (Gossiping) cell " +
                         "(built ${cell.javaClass.name})",
                 )
             service.replicate(replicable, host)
