@@ -84,8 +84,20 @@ class JournaledEdgeReplayOnceTest {
         sinkRef: CellRef,
         deliveries: MutableList<Int>,
         edgeCopies: Int = 1,
+        // null = journal the sink inlet on `journal` like everything else.
+        // `sinkVolatile` leaves it volatile; `sinkJournal` puts it on another journal.
+        sinkVolatile: Boolean = false,
+        sinkJournal: Journal? = null,
     ) {
-        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val host = if (!sinkVolatile && sinkJournal == null) {
+            ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        } else {
+            ManagedHost(
+                scheduler = controller.scheduler(),
+                journal = journal,
+                journalForPort = { ref, _ -> if (ref == sinkRef) sinkJournal else journal },
+            )
+        }
         private val relay = RelayCell(relayRef)
         private val sink = SinkCell(sinkRef, deliveries)
 
@@ -251,6 +263,53 @@ class JournaledEdgeReplayOnceTest {
             recovery.suppressedReplayDuplicates shouldBe 5
         }
     }
+
+    /**
+     * qfi22-D8: only a target port whose selector is the replayed journal J
+     * has replayed positions. J here still holds the sink's frames (written
+     * when the sink was on J), so recovery replays them straight into the
+     * sink's new volatile / other-journal port; the relay's re-derived copies
+     * of those exact positions are a different delivery and must also land.
+     * Mutation M5 (both journal-selector checks removed) suppresses them.
+     */
+    private fun recoverSinkElsewhere(sinkVolatile: Boolean, otherJournal: Boolean) {
+        forEachSeed(0L until 20L) { seed ->
+            val controller = SimulationController(seed)
+            val journal = InMemoryJournal()
+            val deliveries = mutableListOf<Int>()
+            val relayRef = CellRef(UUID(seed, 1L))
+            val sinkRef = CellRef(UUID(seed, 2L))
+
+            val before = World(controller, journal, relayRef, sinkRef, deliveries)
+            controller.runToIdle()
+            (1..3).forEach(before::feed)
+            controller.runToIdle()
+            deliveries shouldBe listOf(1, 2, 3)
+
+            deliveries.clear()
+            val otherJ = if (otherJournal) InMemoryJournal() else null
+            val after = World(
+                controller, journal, relayRef, sinkRef, deliveries,
+                sinkVolatile = sinkVolatile, sinkJournal = otherJ,
+            )
+            controller.runToIdle()
+            val recovery = after.host.recoverFrom(journal)
+            controller.runToIdle()
+
+            // Once replayed directly from J, once re-derived from the relay.
+            deliveries.sorted() shouldBe listOf(1, 1, 2, 2, 3, 3)
+            recovery.suppressedReplayDuplicates shouldBe 0
+            after.host.supervisionAccounting().deadLetters shouldBe 0L
+        }
+    }
+
+    @Test
+    fun `volatile port - a derived frame is delivered, never suppressed, after recovery`() =
+        recoverSinkElsewhere(sinkVolatile = true, otherJournal = false)
+
+    @Test
+    fun `cross journal - a derived frame for a port on another journal is delivered, never suppressed`() =
+        recoverSinkElsewhere(sinkVolatile = false, otherJournal = true)
 
     @Test
     fun `control - with the predicate disabled the sink counts the tail twice`() {
