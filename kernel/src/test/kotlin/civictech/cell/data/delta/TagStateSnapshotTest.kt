@@ -28,7 +28,6 @@ class TagStateSnapshotTest {
         )
 
         val snapshot = state.snapshot()
-        assertEquals(setOf(deadSource), (snapshot as Map<*, *>)["dead"])
 
         val restored = TagState<String>()
         restored.restore(snapshot)
@@ -38,6 +37,10 @@ class TagStateSnapshotTest {
 
         assertEquals(SetDelta<String>(), rejected)
         assertEquals(setOf(freshTag), restored.tags("item"))
+
+        // Older restore code reads only elements 0 and 1 of the list form, so
+        // the fence rides as an extra element rather than a reshaped map.
+        assertEquals(setOf(deadSource), (snapshot as List<*>)[2])
     }
 
     @Test
