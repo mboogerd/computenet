@@ -132,7 +132,7 @@ class ExchangeApp(
         aggregator = Aggregators.sumOf(::amountOf),
     )
 
-    // merge → glitch-free board (CP-A4): a whole-cell fan-in whose inlet carries
+    // partitioned board → glitch-free board (CP-A4): a whole-cell fan-in whose inlet carries
     // WaveFrontier(WAIT). It surfaces the scatter-gathered board as one aligned
     // MapDelta per wave, so the SSE never shows a half-applied shard update.
     @Suppress("UNCHECKED_CAST")
