@@ -437,6 +437,46 @@ class JournaledPromotionRecoveryTest {
         recovered.deadLetters.shouldBeEmpty()
     }
 
+    /**
+     * The shadow candidate normally sees the incumbent's whole input history, so its own
+     * checkpointed state equals the transferred one and cannot tell replay-side transfer from
+     * re-derivation. Here the incumbent alone absorbs one extra input before the swap: only the
+     * T0/T1 transfer (live at COMMIT, and again when replay applies the Promote record) carries it.
+     */
+    @Test
+    fun `recovery carries the transferred incumbent state when the shadow history differs`() {
+        val journal = InMemoryJournal()
+        val refs = refs()
+        val before = world(501, journal)
+        build(before, refs)
+        drive(before, refs, 1..5, Random(501))
+        incumbent(refs).inlet.call.provide(100)
+        before.controller.runToIdle()
+        before.context.promote(
+            gate = refs.gate,
+            incumbent = refs.incumbent,
+            candidate = refs.candidate,
+            outletName = "outlet",
+            downstream = listOf(refs.collector to "inlet"),
+        )
+        drive(before, refs, 6..8, Random(502))
+        // 1..5 = 15, +100 on the incumbent only = 115, then the candidate continues: 121, 128, 136.
+        val preCrash = collector(refs).received.toList()
+        preCrash shouldBe listOf(1L, 3L, 6L, 10L, 15L, 115L, 121L, 128L, 136L)
+
+        val recovered = world(501, journal)
+        val recovery = recovered.context.recover(journal)
+        recovered.controller.runToIdle()
+        recovery.awaitApplied(30_000)
+        recovered.controller.runToIdle()
+
+        collector(refs).received shouldBe preCrash
+        candidate(refs).inlet.call.provide(9)
+        recovered.controller.runToIdle()
+        collector(refs).received.last() shouldBe 145L
+        recovered.deadLetters.shouldBeEmpty()
+    }
+
     @Test
     fun `a failed state import journals no promotion and recovers the incumbent topology`() {
         val journal = InMemoryJournal()
