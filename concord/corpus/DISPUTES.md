@@ -3925,7 +3925,7 @@ test names below were checked with `git grep -n` at that commit.
   throws `UnsupportedCatalogBinding` for every other type. Neither has a
   `waterline` inlet. No production `Replicable` cell exposes a `waterline`
   inlet at all: the seam's refusal (`WaterlineEviction.kt`, `check(host !is
-  Replicable<*>)`) is reachable only through the kernel tests' minimal
+  Gossiping<*> || host.replicationRefusal != null)`) is reachable only through the kernel tests' minimal
   test-only `Replicable` hosts. Since computenet-7afo4, `GroupByCell` is
   `Gossiping` and a `GroupByCell` with a lateness declaration is refused at
   `Replication.replicate` (a production-reachable refusal, pinned by
