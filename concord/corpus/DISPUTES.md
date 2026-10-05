@@ -41,11 +41,12 @@ the scalar half in B2/D-CONCORD once `CoalescingCombineCell` landed (D-COMBINE).
 
 ## Resolved by R1 (dispute-resolution wave)
 
-Five entries below were closed in dispute-resolution wave R1 (two parallel
-tickets, file-merged onto `main`). Each gap named a *real* kernel/oracle
-mechanism that had no scenario surface; R1 built the missing surface (a catalog
-cell, a schema descriptor, or a harness fold) without weakening any check. Their
-full by-scenario entries below are now marked **RESOLVED (R1)**.
+Five entries below were first addressed in dispute-resolution wave R1 (two
+parallel tickets, file-merged onto `main`). Each gap named a *real*
+kernel/oracle mechanism that had no scenario surface; R1 built the missing
+surface (a catalog cell, a schema descriptor, or a harness fold) without
+weakening any check. The remaining `23-SPSC-01` driver binding closed in a
+follow-up; each full by-scenario entry below names the wave that resolved it.
 
 - `42-INTEREST-01` — **RESOLVED** (`schema-gap`). New `interest:` descriptor
   (`InterestSpec` on `CellSpec`, `Scenario.kt`); `CorpusRunner` lowers it to a
@@ -57,13 +58,14 @@ full by-scenario entries below are now marked **RESOLVED (R1)**.
   (`MergeClass.IDEMPOTENT`) via the public `ContractRegistry` seam, so a plain
   default-nature source's `connect` is refused by the kernel's own
   `NatureNegotiation` reconciler (CP-F3) — no schema field, no driver-side fake.
-- `23-SPSC-01` — **RESOLVED, REJECT HALF ONLY** (`schema-gap`). New
+- `23-SPSC-01` — **RESOLVED** (`schema-gap` + `driver-binding-gap`). New
   `exclusive-source`/`exclusive-sink` catalog cells
   (`KernelAdapters.ExclusiveSourceCell`/`ExclusiveSinkCell`) emit a genuine
   `Owned` payload, so a second `Consume` link is refused by the kernel's own
-  `FanOutlet` exclusivity check (M5.6). **The observe/tap ADMIT half remains
-  deferred to G-47** (the driver still does not differentiate `role: observe`
-  from a Consume link — see `13-TAP-01`).
+  `FanOutlet` exclusivity check (M5.6). The core driver now lowers
+  `role: observe` to `LinkOptions(role = Observe)`, so host admission installs
+  the kernel's `FanOutlet.tap` path and admits that link without consuming the
+  exclusive slot.
 - `42-REPL-DEPART-01` — **RESOLVED** (`check-vocabulary-gap`).
   `Checks.replicasConverge` now scopes to *live* replicas — it drops any declared
   replica whose `readView` no longer resolves (the departed-cell signal `despawn`
@@ -122,8 +124,9 @@ glitch-freedom positively. See the "By scenario id" entry.)*
 group-by over `Windows`); `22-WAVE-FANIN-01` — resolved in R2 (set-shaped
 `observations-whole-waves` predicate landed). See the "Resolved by R2" section.)*
 
-*(`12-NEGOTIATE-01`, `23-SPSC-01` (reject half), `24-OP-PRESENCE-01` — resolved
-in R1, see the "Resolved by R1" section above.)*
+*(`12-NEGOTIATE-01`, `24-OP-PRESENCE-01` — resolved in R1;
+`23-SPSC-01` — R1 catalog surface plus the in-host Observe driver-binding
+follow-up. See the "Resolved by R1" section above.)*
 
 **`kernel-gap` / `spec-gap` — capability absent from the kernel, or the decided
 design is unimplemented; deep, implementation-ticket work:**
@@ -297,7 +300,7 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   `12-NEGOTIATE-01.yaml` authored (`connect … expect: rejected` + `final-view` on
   the undisturbed existing view + `no-dead-letters`); passes the sweep.
 
-### `23-SPSC-01` — **RESOLVED (R1, `schema-gap`) — reject half only; ADMIT half still deferred to G-47**
+### `23-SPSC-01` — **RESOLVED (R1 + follow-up, `schema-gap` + `driver-binding-gap`)**
 
 - **Requirement**: `12-EXCL-01` (fan-out MUST be rejected at link time when the
   contract's payload carries exclusive ownership — `Owned`/`Leased`).
@@ -310,14 +313,19 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   `Owned`-parameter contract via the same public `ContractRegistry` seam, so the
   `exclusive` flag `FanOutlet` reads at construction is set), and a second
   `Consume` link is refused by the kernel's own `FanOutlet.linkTo` exclusivity
-  check — not a driver-side fake. Scenario `23-SPSC-01.yaml` authored (`connect …
-  expect: rejected` + first consumer `final-view` + `no-dead-letters`); passes
-  the sweep.
-- **Still deferred (ADMIT half) — G-47**: the observe/tap ADMIT half (a
-  `role: observe`-differentiated tap admitted onto the same exclusive outlet)
-  remains unbuilt: the driver still does not distinguish `role: observe` from a
-  `Consume` link at connect time (see `13-TAP-01`). Only the reject half is
-  covered.
+  check — not a driver-side fake.
+- **How resolved (ADMIT half)**: the core driver's in-host connect path lowers
+  `role: observe` to the host's typed `LinkOptions(role = LinkRole.Observe)`
+  overload. `LinkAdmission` therefore invokes `FanOutlet.tap`, the kernel's
+  genuine uncounted Observe funnel, rather than `FanOutlet.linkTo`; no
+  driver-side admission exception is involved. Scenario `23-SPSC-01.yaml`
+  asserts that connect as `connected`, then asserts a second ordinary Consume
+  connect as `rejected`, while the original consumer's settled delivery and
+  dead-letter-free path remain pinned. `13-TAP-01` continues to pass with its
+  declared Observe link now bound honestly.
+- **Remaining G-47 work is outside this scenario gap**: KSP-derived Borrowed
+  contract projection and validation, attach-forward-only catch-up semantics,
+  and copy-fork/cloneability remain open as recorded in 10/12 and 20/23.
 
 ### `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — **RESOLVED (R2, `schema-gap` + `driver-binding-gap`)**
 
@@ -3910,9 +3918,8 @@ test names below were checked with `git grep -n` at that commit.
   the evicting cell's refused units, for example
   `{type: eviction-refusals, cell: w, exactly: [<window keys>]}`, gated as a
   schema change.
-- **Revisit trigger**: a catalog change that adds an `Owned` set stream, or
-  G-47 (the observe/tap ADMIT half of `exclusive-sink`) reopening the
-  nature/ownership catalog.
+- **Revisit trigger**: a catalog change that adds an `Owned` set stream, or a
+  check-vocabulary change that exposes eviction-refusal diagnostics.
 
 ## `24-WL-18` — a `Replicable` cell evicts nothing, and the dist driver places no replicated evicting cell (`driver-binding-gap`)
 
