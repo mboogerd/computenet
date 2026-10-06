@@ -147,6 +147,10 @@ class GraphApplier(
      */
     private val appliedStances = mutableMapOf<Pair<String, ClaimKey>, Double>()
 
+    // Three separate one-view observations, not one: the builder would join
+    // these folds into a single group (they share the extraction root through
+    // pure hops), and that joined group holds waves at rest. The split is the
+    // disclosed interim for computenet-6ovpx, as in DialogueRuntime.
     private val claimsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
         map("claims", refs.canonicalClaims.ref)
     }
