@@ -67,7 +67,7 @@
 - typed-links / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - typed-links / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
 - typed-links / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
-- typed-links / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/InterestDrivenFamily.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
+- typed-links / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
 - typed-links / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - delta-operators / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - delta-operators / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/declaration/DeclarationIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/ingest/SpendLogIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/SessionLedger.kt
@@ -90,7 +90,7 @@
 - glitch-free-observe / social: demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt
 - glitch-free-observe / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - interest / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
-- interest / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/InterestDrivenFamily.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
+- interest / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
 - durability / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt
 - durability / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
 - durability / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt

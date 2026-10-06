@@ -1511,6 +1511,9 @@ whatever lands. This entry does not implement IC5, IC6, IC12, `topKBy`,
 
 ## F-24 — the kernel joins `Interest` to no spawn path: `InterestDrivenFamily` is the demo-layer join, and it has to run off the host's own thread to do it
 
+> **Status: landed in the kernel (computenet-vb7aq)** — `KeyedFamily(spawnOnInterest = true)`;
+> the demo-side join and executor are gone.
+
 G-id: none — read against G-24 (`doc/spec/90-roadmap/91-gap-analysis.md:58`,
 trigger "placement pressure on one instance"), this entry is about
 instantiation timing and threading, not about load pressure forcing
