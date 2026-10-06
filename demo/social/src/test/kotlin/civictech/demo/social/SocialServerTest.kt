@@ -237,6 +237,9 @@ class SocialServerTest {
     fun `static dimensions are one observation partitioned into four independent groups`() {
         val app = SocialApp(port = 0)
         try {
+            // Exercise the multi-group coordinator dispatcher as well as each
+            // aligned group's dispatcher; stop() must await both layers.
+            app.staticObservation.onChange { }
             assertEquals(
                 linkedMapOf(
                     "tags" to "tags",

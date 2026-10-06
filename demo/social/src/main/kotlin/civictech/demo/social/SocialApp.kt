@@ -275,9 +275,9 @@ class SocialApp(
      *
      * computenet-cpybp / computenet-iltfm: returns only after every observation
      * dispatcher this app caused has terminated, waiting at most
-     * [STOP_DISPATCHER_BOUND_MS] through the sinks' termination handles (see
-     * [SocialGraph.awaitDispatchers]). Only
-     * Both sets share that one deadline. Every other step runs first, so a
+     * [STOP_DISPATCHER_BOUND_MS] through the observations' termination handles
+     * (see [SocialGraph.awaitDispatchers]). Both sets share that one deadline.
+     * Every other step runs first, so a
      * bound overrun still leaves the app fully stopped.
      *
      * @throws IllegalStateException naming the survivors, if any dispatcher is
