@@ -161,11 +161,11 @@ object Evolve {
      * scheduler has drained. At most one settlement fence is pending for this evolution;
      * waves observed before it runs share that fence and settle as one prefix.
      *
-     * Settlement uses [ManagedHost.quiescence], so its one pending fence is an external host
-     * barrier: [ManagedHost.recoverFrom] refuses until the host queue drains it. Conversely,
-     * when recovery is already active or the scheduler is terminated, inability to take the
-     * fence is contained here. The candidate emission still succeeds, but that wave does not
-     * advance the settled prefix.
+     * Settlement uses a kernel-internal recovery-aware host fence. The fence neither blocks
+     * [ManagedHost.recoverFrom] nor completes while recovery has data delivery gated; it
+     * re-arms after the gate lifts so already-observed waves settle without another wave.
+     * A terminated scheduler's refusal is contained here: the candidate emission still
+     * succeeds, but that wave does not advance the settled prefix.
      */
     fun <T : Any> run(
         host: ManagedHost,
@@ -323,16 +323,15 @@ object Evolve {
                     // Observe taps fire before consumers. The lowest-priority fence runs after
                     // this emission's later data-band deliveries. Later waves queued before it
                     // runs are covered too, so they need no fence of their own.
-                    host.quiescence().asFuture().whenComplete { _, failure ->
+                    host.recoveryAwareQuiescence().asFuture().whenComplete { _, failure ->
                         synchronized(lock) {
                             if (failure == null) judge.settleObservation()
                             fencePending = false
                         }
                     }
                 } catch (_: RuntimeException) {
-                    // A recovery record loop or terminated scheduler can refuse the fence.
-                    // FanOutlet.observe propagates callback failures to the emitting cell, so
-                    // containment belongs here at the observation boundary.
+                    // A terminated scheduler can refuse the initial submission. FanOutlet.observe
+                    // propagates callback failures to the emitter, so containment belongs here.
                     fencePending = false
                 }
             }

@@ -6,6 +6,7 @@ import civictech.cell.Consumer
 import civictech.cell.Stateful
 import civictech.cell.control.Magnitude
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.ManagedHost
@@ -353,20 +354,95 @@ class EvolveOrchestratorTest {
     }
 
     @Test
-    fun `recovery refuses while an evolution settlement fence is pending`() {
+    fun `recovery succeeds while an evolution settlement fence is pending`() {
         val run = Run(seed = 17)
-        run.start()
+        val handle = run.start()
         run.submit(1)
         while (run.scheduler.lowestPrioritySubmissions.get() == 0) {
             run.controller.step() shouldBe true
         }
 
-        val refusal = shouldThrow<IllegalStateException> {
-            run.host.recoverFrom(InMemoryJournal())
-        }
+        val recovery = run.host.recoverFrom(InMemoryJournal())
 
-        refusal.message!!.shouldContain("external fence or drain is in flight")
         run.idle()
+        recovery.isApplied shouldBe true
+        handle.verdict() shouldBe PromotionVerdict.Pending
+    }
+
+    @Test
+    fun `a settlement fence that runs during recovery waits for gated deliveries and re-arms`() {
+        val scheduler = RecordingScheduler(VirtualThreadScheduler("evolve-recovery-settlement"))
+        val host = ManagedHost(scheduler = scheduler)
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = BlockingAfterEmitSummer(CellRef(logicalId, instanceId = 1))
+        val candidateGate = nonDecreasingGate()
+        val adapter = InvariantAdapterCell(candidateGate)
+        val view = CollectorCell()
+        val journal = BlockingReplayJournal()
+        val recoveryFailure = AtomicReference<Throwable>()
+        val recoveryDone = CountDownLatch(1)
+
+        try {
+            listOf<Cell>(source, gate, incumbent, candidateGate, adapter, view).forEach {
+                host.managementInlet.call.spawn(it)
+            }
+            host.quiescence().await(5_000, "spawn recovery-settlement graph")
+            val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java) as GateProxy).dataInlet.call
+            val routedInvariant =
+                (HostedCellProxy.create(adapter.ref, host, LongConsumerProxy::class.java) as LongConsumerProxy).inlet.call
+            source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+            gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+            incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+            candidate.outlet.subscribe(Use.fixed(routedInvariant, PortRef.generate()))
+            gate.controlInlet.call.setGreen()
+
+            val handle = Evolve.run(
+                host = host,
+                gate = gate,
+                incumbent = incumbent,
+                candidate = candidate,
+                outletName = "outlet",
+                downstream = listOf(view.inlet),
+                policy = policy().copy(window = ObservationWindow(1)),
+                gates = listOf(candidateGate),
+            )
+            val submissionsBeforeWave = scheduler.lowestPrioritySubmissions.get()
+            val settlementFenceRan = scheduler.expectLowestPriorityRun()
+            source.emit(1)
+            candidate.emitted.await(5, TimeUnit.SECONDS) shouldBe true
+            scheduler.lowestPrioritySubmissions.get() shouldBe submissionsBeforeWave + 1
+
+            val recoveryFenceSubmitted = scheduler.expectManagementSubmission()
+            Thread.ofVirtual().start {
+                try {
+                    host.recoverFrom(journal).awaitApplied(5_000)
+                } catch (failure: Throwable) {
+                    recoveryFailure.set(failure)
+                } finally {
+                    recoveryDone.countDown()
+                }
+            }
+            recoveryFenceSubmitted.await(5, TimeUnit.SECONDS) shouldBe true
+            candidate.release()
+            journal.replayEntered.await(5, TimeUnit.SECONDS) shouldBe true
+            settlementFenceRan.await(5, TimeUnit.SECONDS) shouldBe true
+
+            handle.verdict() shouldBe PromotionVerdict.Pending
+
+            journal.release()
+            recoveryDone.await(5, TimeUnit.SECONDS) shouldBe true
+            recoveryFailure.get() shouldBe null
+            handle.verdict().let { verdict ->
+                (verdict as PromotionVerdict.Reject).reason.shouldContain("violated the promotion policy")
+            }
+        } finally {
+            candidate.release()
+            journal.release()
+            scheduler.shutdown()
+        }
     }
 
     @Test
@@ -646,6 +722,42 @@ class EvolveOrchestratorTest {
         }
     }
 
+    private class BlockingAfterEmitSummer(override val ref: CellRef) : SummingCell {
+        override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
+        val emitted = CountDownLatch(1)
+        private val release = CountDownLatch(1)
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    outlet.call.provide(-input.toLong())
+                    emitted.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "test did not release candidate after emission" }
+                }
+            })
+        }
+
+        fun release() {
+            release.countDown()
+        }
+    }
+
+    private class BlockingReplayJournal : Journal by InMemoryJournal() {
+        val replayEntered = CountDownLatch(1)
+        private val release = CountDownLatch(1)
+
+        override fun replay(): List<ByteArray> {
+            replayEntered.countDown()
+            check(release.await(10, TimeUnit.SECONDS)) { "test did not release journal replay" }
+            return emptyList()
+        }
+
+        fun release() {
+            release.countDown()
+        }
+    }
+
     private class NonIdempotentSummer(override val ref: CellRef) : SummingCell, Promotion.NonIdempotentCatchUp {
         override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
         override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
@@ -745,12 +857,16 @@ class EvolveOrchestratorTest {
         val lowestPrioritySubmissions = AtomicInteger()
         private val refusing = AtomicBoolean()
         private val nextManagementSubmission = AtomicReference<CountDownLatch>()
+        private val nextLowestPriorityRun = AtomicReference<CountDownLatch>()
 
         override fun submit(priority: Int, action: suspend () -> Unit) {
             check(!refusing.get()) { "host scheduler terminated" }
             if (priority == Int.MAX_VALUE) lowestPrioritySubmissions.incrementAndGet()
             if (priority == 0) nextManagementSubmission.getAndSet(null)?.countDown()
-            delegate.submit(priority, action)
+            delegate.submit(priority) {
+                action()
+                if (priority == Int.MAX_VALUE) nextLowestPriorityRun.getAndSet(null)?.countDown()
+            }
         }
 
         fun refuseSubmissions() {
@@ -760,6 +876,12 @@ class EvolveOrchestratorTest {
         fun expectManagementSubmission(): CountDownLatch = CountDownLatch(1).also { latch ->
             check(nextManagementSubmission.compareAndSet(null, latch)) {
                 "a management submission expectation is already armed"
+            }
+        }
+
+        fun expectLowestPriorityRun(): CountDownLatch = CountDownLatch(1).also { latch ->
+            check(nextLowestPriorityRun.compareAndSet(null, latch)) {
+                "a lowest-priority run expectation is already armed"
             }
         }
     }
