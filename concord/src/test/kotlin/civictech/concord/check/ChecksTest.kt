@@ -1911,6 +1911,12 @@ class ChecksTest {
     }
 
     @Test
+    fun `family-holds fails when an extra member is held`() {
+        fail(Checks.familyHolds(FamilyHolds("f", listOf(2L, 3L)), familyCtx(keys = listOf(2L, 3L, 4L))))
+            .message shouldContain "expected [2, 3] but held [2, 3, 4]"
+    }
+
+    @Test
     fun `interest-refusals reports the family declaration tally`() {
         pass(Checks.interestRefusals(InterestRefusals("f", count = 1L), familyCtx(refused = 1L)))
         fail(Checks.interestRefusals(InterestRefusals("f", count = 1L), familyCtx(refused = 0L)))
