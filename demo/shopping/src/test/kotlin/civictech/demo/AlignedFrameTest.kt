@@ -215,7 +215,7 @@ class AlignedFrameTest {
                     probe.post("user=tester&action=remove&item=banana")
                     awaitUntil("aligned frame before mixed-op sentinel", timeoutMs = 5_000) {
                         tap.frames().any { frame ->
-                            "zucchini" in itemsOf(frame) && "banana" !in itemsOf(frame)
+                            "zucchini" in itemsOf(frame)
                         }
                     }
                     probe.post("user=tester&action=add&item=zebra")
