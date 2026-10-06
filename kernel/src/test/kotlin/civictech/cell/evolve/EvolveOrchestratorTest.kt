@@ -27,6 +27,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
@@ -435,9 +436,9 @@ class EvolveOrchestratorTest {
             journal.release()
             recoveryDone.await(5, TimeUnit.SECONDS) shouldBe true
             recoveryFailure.get() shouldBe null
-            handle.verdict().let { verdict ->
-                (verdict as PromotionVerdict.Reject).reason.shouldContain("violated the promotion policy")
-            }
+            handle.verdict()
+                .shouldBeInstanceOf<PromotionVerdict.Reject>()
+                .reason.shouldContain("violated the promotion policy")
         } finally {
             candidate.release()
             journal.release()
