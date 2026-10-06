@@ -156,6 +156,17 @@ object Evolve {
         )
     }
 
+    /**
+     * Start one live evolution and publish candidate observations only after this host's
+     * scheduler has drained. At most one settlement fence is pending for this evolution;
+     * waves observed before it runs share that fence and settle as one prefix.
+     *
+     * Settlement uses [ManagedHost.quiescence], so its one pending fence is an external host
+     * barrier: [ManagedHost.recoverFrom] refuses until the host queue drains it. Conversely,
+     * when recovery is already active or the scheduler is terminated, inability to take the
+     * fence is contained here. The candidate emission still succeeds, but that wave does not
+     * advance the settled prefix.
+     */
     fun <T : Any> run(
         host: ManagedHost,
         gate: TrafficLightApi<T>,
@@ -194,14 +205,8 @@ object Evolve {
 
         val candidateOutlet = outlet(candidate, outletName)
         val observerRef = PortRef.generate()
-        candidateOutlet.observe(observerRef) {
-            judge.observeCandidateWave()
-            // Observe taps fire before consumers. Taking the lowest-priority fence here means
-            // every delivery that this emission enqueues afterwards still runs before the
-            // settlement callback. The callback itself runs synchronously on the thread that
-            // completes the fence future: the host's single scheduler thread.
-            host.quiescence().asFuture().thenRun { judge.settleObservation() }
-        }
+        val settlement = ObservationSettlement(host, judge)
+        candidateOutlet.observe(observerRef) { settlement.observeCandidateWave() }
 
         return Handle(
             host = host,
@@ -300,6 +305,39 @@ object Evolve {
         val outlet: FanOutlet<Propagate<Violation>>,
         val ref: PortRef,
     )
+
+    /** Coalesces every candidate wave covered by the same not-yet-run host drain fence. */
+    private class ObservationSettlement(
+        private val host: ManagedHost,
+        private val judge: PromotionJudge,
+    ) {
+        private val lock = Any()
+        private var fencePending = false
+
+        fun observeCandidateWave() {
+            judge.observeCandidateWave()
+            synchronized(lock) {
+                if (fencePending) return
+                fencePending = true
+                try {
+                    // Observe taps fire before consumers. The lowest-priority fence runs after
+                    // this emission's later data-band deliveries. Later waves queued before it
+                    // runs are covered too, so they need no fence of their own.
+                    host.quiescence().asFuture().whenComplete { _, failure ->
+                        synchronized(lock) {
+                            if (failure == null) judge.settleObservation()
+                            fencePending = false
+                        }
+                    }
+                } catch (_: RuntimeException) {
+                    // A recovery record loop or terminated scheduler can refuse the fence.
+                    // FanOutlet.observe propagates callback failures to the emitting cell, so
+                    // containment belongs here at the observation boundary.
+                    fencePending = false
+                }
+            }
+        }
+    }
 
     private class Handle<T : Any>(
         private val host: ManagedHost,
