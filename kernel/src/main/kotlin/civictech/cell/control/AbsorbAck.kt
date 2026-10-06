@@ -1,7 +1,9 @@
 package civictech.cell.control
 
 import civictech.cell.CurrentContext
+import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 
 /**
@@ -28,4 +30,23 @@ internal fun FanOutlet<*>.absorbAck() {
     if (linking.links.isEmpty()) return
     val ack = Progress(ctx.timestamp.sourceId, ctx.timestamp.counter)
     linking.links.forEach { Protocols.sendDownstream(it, Protocols.Progress, ack) }
+}
+
+/**
+ * Relays an upstream absorb-ack through a transparent operator hop.
+ *
+ * [Progress] is metadata-plane traffic, so forwarding preserves its original
+ * `(sourceId, thru)` watermark verbatim: the hop neither mints a wave nor
+ * rewrites source/tag identity. [ProtocolSupport]'s descriptor-directed relay
+ * fans it over this inlet's owning cell's downstream links and carries a
+ * visited-edge set, so a local cycle cannot amplify the acknowledgement.
+ *
+ * A frontier installed on this inlet is a terminal: local delivery happens
+ * first and the dynamic predicate then suppresses relay. This matters when a
+ * policy is installed after cell construction — one [Progress] must either be
+ * consumed by that frontier or pass through this transparent hop, never both.
+ */
+internal fun FanInlet<*>.relayAbsorbAcks() {
+    val support = ProtocolSupport.of(this)
+    support.relay(Protocols.Progress) { support.handles(Protocols.Progress) }
 }

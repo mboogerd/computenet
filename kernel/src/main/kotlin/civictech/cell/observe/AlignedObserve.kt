@@ -124,6 +124,10 @@ class AlignedDrainBarrier internal constructor(
  * `max`). Completed waves are applied in per-source counter order, and each
  * publishes **one** composite snapshot — effective-only: a completed wave in
  * which no view's [View.apply] reported a change publishes nothing.
+ * Transparent unary operators between an absorber and this sink forward that
+ * exact watermark through [civictech.cell.control.relayAbsorbAcks]; the relay
+ * preserves source/counter identity and stops when an intermediate frontier
+ * consumes the acknowledgement.
  *
  * The condition is [civictech.cell.consistency.WaveFrontier]'s, *mirrored at
  * cell scope* rather than installed as an inlet policy — the same structural
@@ -183,7 +187,10 @@ class AlignedDrainBarrier internal constructor(
  * `byDay` shape of one pipeline); two views fed by *independent* roots will each
  * hold the other's waves until an ack, a later wave, or an unlink shrinks the
  * condition. Same caveat, same cause, as `WaveFrontier` and
- * `CoalescingCombineCell` both document.
+ * `CoalescingCombineCell` both document. An ack remains sufficient across the
+ * relay-enabled `FilterCell` / `GroupByCell` chain used by slotfinder; an
+ * unrecognised transparent hop that does not opt into relay is still part of
+ * the wider G-40/G-13 residual.
  *
  * **Catch-up is arm state, not a wave.** Unwaved traffic (push catch-up, the
  * `onLinked` state-as-delta, context-free sends) and pull-catch-up baselines

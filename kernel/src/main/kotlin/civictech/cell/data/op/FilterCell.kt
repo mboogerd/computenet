@@ -13,6 +13,7 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 
 @CellBase
@@ -36,6 +37,10 @@ class FilterCell<E>(
     private val op = TaggedSetOperator<E>()
 
     init {
+        // A Progress ack means the upstream wave produced no input delta here;
+        // this transparent unary hop therefore has nothing to evaluate and
+        // forwards the same watermark to every downstream edge (G-40/F-15).
+        inlet.relayAbsorbAcks()
         outlet.catchUpOnLinked { if (op.state.size > 0) op.state.asDelta() else null }
     }
 
