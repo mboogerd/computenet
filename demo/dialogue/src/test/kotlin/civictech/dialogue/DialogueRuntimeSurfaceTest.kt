@@ -182,17 +182,17 @@ class DialogueRuntimeSurfaceTest {
         val world = World()
         assertEquals(
             mapOf(
-                "utterances" to "utterances+claimProvenance+relationProvenance",
-                "claimProvenance" to "utterances+claimProvenance+relationProvenance",
-                "relationProvenance" to "utterances+claimProvenance+relationProvenance",
+                "utterances" to "utterances",
+                "claimProvenance" to "claimProvenance",
+                "relationProvenance" to "relationProvenance",
             ),
             world.runtime.observationGroups,
         )
         assertEquals(
             mapOf(
-                "utterances" to DialogueRuntime.sinkRef("utterances+claimProvenance+relationProvenance"),
-                "claimProvenance" to DialogueRuntime.sinkRef("utterances+claimProvenance+relationProvenance"),
-                "relationProvenance" to DialogueRuntime.sinkRef("utterances+claimProvenance+relationProvenance"),
+                "utterances" to DialogueRuntime.sinkRef("utterances"),
+                "claimProvenance" to DialogueRuntime.sinkRef("claimProvenance"),
+                "relationProvenance" to DialogueRuntime.sinkRef("relationProvenance"),
             ),
             world.runtime.observationGroupRefs,
         )
@@ -276,7 +276,7 @@ class DialogueRuntimeSurfaceTest {
         // be visible as its UUID in the journal bytes.
         //
         // HONEST LIMIT (computenet-2aw.5.1, measured): this pins the property
-        // but is NOT mutation-killed. Dropping the joined group id from
+        // but is NOT mutation-killed. Dropping the provenance name from
         // SINK_NAMES — which makes isDurable() call that group durable — leaves
         // every assertion in this method green: no SerializationException is
         // raised (the acceptance criterion predicted one) and the ref still

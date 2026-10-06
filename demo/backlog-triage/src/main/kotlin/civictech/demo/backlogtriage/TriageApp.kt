@@ -248,7 +248,15 @@ class TriageApp(
     private val shell = DemoShell(port)
 
     internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf + metaObservation.current().groupOf
+        get() = observation.current().groupOf
+
+    /**
+     * The MetaRank view is a disclosed interim second observation
+     * (computenet-5otve): its dynamic fan-in can fail to acknowledge an
+     * effective no-op, so it must not hold the builder's other views at rest.
+     */
+    internal val metaObservationGroups: Map<String, String>
+        get() = metaObservation.current().groupOf
 
     private val observation = host.observation {
         set("features", refs.features)
@@ -262,7 +270,8 @@ class TriageApp(
     // not change it emits neither a delta nor an absorb acknowledgement. Keep
     // that non-progressing arm from holding the point-consistent application
     // frame, while still exposing it through the same canonical observation
-    // API and preserving the old /features?algo=meta read model.
+    // API and preserving the old /features?algo=meta read model. This split is
+    // the disclosed interim tracked by computenet-5otve.
     private val metaObservation = host.observation {
         map("rating:meta", refs.ratings.getValue("meta"))
     }

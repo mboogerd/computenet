@@ -10,27 +10,17 @@ import civictech.dialogue.ClaimKey
 import civictech.dialogue.DialogueRuntime
 import civictech.dialogue.DialoguePipeline
 import civictech.dialogue.RelationKey
-import civictech.dialogue.extract.ExtractedClaim
-import civictech.dialogue.extract.ExtractedRelation
-import civictech.dialogue.extract.ExtractedStance
 import civictech.dialogue.mint.ClaimAggregate
-import civictech.dialogue.mint.ClaimMint
 import civictech.dialogue.mint.RelationAggregate
-import civictech.dialogue.mint.RelationMint
 import civictech.dialogue.mint.StanceAggregate
-import civictech.dialogue.mint.StanceProject
-import civictech.dialogue.Utterance
-import civictech.dialogue.mint.claimKey
 
 /**
  * Pipeline stage 8 (epic computenet-2aw §2.2, §2.5 "Stage 8 sink",
  * [AGO1-APPLY-01]..[AGO1-APPLY-07], DESIGN D3 / 2aw.F4-D1): the **sole
  * writer** into the agora graph.
  *
- * It observes the pipeline's direct typed split outputs — claim, relation and
- * stance extractions — and rebuilds the same pure canonical aggregates at the
- * app edge. The direct outputs are used because the final GroupBy/semi-join
- * chain contains pure hops that do not relay progress to an aligned sink.
+ * It observes the pipeline's three canonical folds — `canonicalClaims`,
+ * `canonicalRelations`, `projectedStances` — through one-view observations.
  * When the driver says the graph is at rest, it reconciles those snapshots against a fold-backed
  * [BindingTable] by issuing `AgoraService.createClaim` / `createEdge` /
  * `remove` / `setStance`. Nothing else in `:demo:dialogue` holds an
@@ -157,30 +147,22 @@ class GraphApplier(
      */
     private val appliedStances = mutableMapOf<Pair<String, ClaimKey>, Double>()
 
-    private val stanceAggregator = StanceProject.StanceAggregator()
-    private val claimAggregator = ClaimMint.ClaimAggregator()
-    private val relationAggregator = RelationMint.RelationAggregator()
-
     private val claimsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
-        // The item-kind split is the direct, progress-relaying source; the
-        // later GroupByCell has a pure hop that does not relay absorb
-        // acknowledgements to an aligned sink.
-        set("claims", refs.extractedClaims.ref)
+        map("claims", refs.canonicalClaims.ref)
     }
 
     private val relationsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
-        // The item-kind split is the direct, progress-relaying source; the
-        // later semijoin/fold chain has pure hops that do not relay absorb
-        // acknowledgements to an aligned sink.
-        set("relations", refs.extractedRelations.ref)
+        // canonicalRelations has an ungated SemiJoinCell upstream. Admission
+        // must therefore be explicit at this app edge (computenet-axcyk.5).
+        unchecked("relations")
+        map("relations", refs.canonicalRelations.ref)
     }
 
     private val stancesObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
-        set("stances", refs.extractedStances.ref)
-    }
-
-    private val stanceUtterancesObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
-        set("stanceUtterances", refs.utterances.ref)
+        // projectedStances has an ungated JoinSetCell upstream. Admission
+        // must therefore be explicit at this app edge (computenet-axcyk.5).
+        unchecked("stances")
+        map("stances", refs.projectedStances.ref)
     }
 
     internal val observationGroups: Map<String, String>
@@ -204,57 +186,13 @@ class GraphApplier(
     fun boundRelations(): Set<RelationKey> = bindings.boundRelations()
 
     /** The canonical claim snapshot the next [reconcile] would read. */
-    fun observedClaims(): Map<ClaimKey, ClaimAggregate> =
-        claimsObservation.get<Set<ExtractedClaim>>("claims")
-            .groupBy { claimKey(it.text) }
-            .mapValues { (_, claims) ->
-                claimAggregator.value(
-                    ClaimMint.ClaimAggregator.Acc(
-                        claims.mapTo(mutableSetOf()) { ClaimMint.ClaimAggregator.Contribution(it.text, it.utteranceId) },
-                    ),
-                )
-            }
+    fun observedClaims(): Map<ClaimKey, ClaimAggregate> = claimsObservation.get("claims")
 
     /** The canonical relation snapshot the next [reconcile] would read. */
-    fun observedRelations(): Map<RelationKey, RelationAggregate> {
-        val claimedKeys = observedClaims().keys
-        return relationsObservation.get<Set<ExtractedRelation>>("relations")
-            .flatMap(RelationMint::candidates)
-            .filter { !it.isSelfRelation && it.sourceKey in claimedKeys && it.targetKey in claimedKeys }
-            .groupBy { it.relationKey }
-            .mapValues { (_, candidates) ->
-                relationAggregator.value(
-                    RelationMint.RelationAggregator.Acc(
-                        candidates.mapTo(mutableSetOf()) {
-                            RelationMint.RelationAggregator.Contribution(
-                                it.sourceKey.value,
-                                it.targetKey.value,
-                                it.polarity.name,
-                                it.utteranceId,
-                            )
-                        },
-                    ),
-                )
-            }
-    }
+    fun observedRelations(): Map<RelationKey, RelationAggregate> = relationsObservation.get("relations")
 
     /** The projected-stance snapshot the next [reconcile] would read. */
-    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> {
-        val utterances = stanceUtterancesObservation.get<Set<Utterance>>("stanceUtterances")
-            .associateBy { it.id }
-        return stancesObservation.get<Set<ExtractedStance>>("stances")
-            .mapNotNull { stance -> utterances[stance.utteranceId]?.let { StanceProject.joinRow(stance, it) } }
-            .groupBy { it.speaker to it.key }
-            .mapValues { (_, rows) ->
-                stanceAggregator.value(
-                    StanceProject.StanceAggregator.Acc(
-                        rows.mapTo(mutableSetOf()) {
-                            StanceProject.StanceAggregator.Contribution(it.turn, it.utteranceId, it.value)
-                        },
-                    ),
-                )
-            }
-    }
+    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> = stancesObservation.get("stances")
 
     /**
      * Apply the current canonical snapshots to the agora graph and return
