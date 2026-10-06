@@ -378,13 +378,15 @@ wave it was dropped from. Replica-fed settlement (E3.4) and pull-on-open
 remain unmirrored, and the static-link-set residual (G-13, above) still
 applies — an arm that structurally never carries a source is a phantom
 expected edge for its waves until an ack, a later wave, or an `EdgeClose`
-shrinks the condition. Two boundaries of the shipped guarantee,
-both inherited from `WaveFrontier.offer`: catch-up traffic (the `onLinked`
-state-as-delta, pull baselines) installs as arm state and is admitted to no
-completeness set, and an edge opened mid-stream floors below the waves already
-flushed — so a sink attached while the graph is already writing can transiently
-expose arms seeded at different points; from its first waved delta onward every
-published composite is aligned. `cell.observe.CompositeSink` remains the shipped
+shrinks the condition. Two boundaries of the shipped guarantee, both inherited
+from `WaveFrontier.offer`: catch-up traffic (the `onLinked` state-as-delta,
+pull baselines) installs as arm state and is admitted to no completeness set,
+and an edge opened mid-stream floors below the waves already flushed — so a
+sink attached while the graph is already writing can transiently expose arms
+seeded at different points; the sink publishes, per source, the wave from
+which the guarantee holds in `AlignedComposite.alignedFrom` (the first wave
+released through the completeness set), and catch-up never sets it.
+`cell.observe.CompositeSink` remains the shipped
 point-consistent fallback — honestly documented as not wave-aligned, and the
 right choice when a stalled arm must not delay a read.)*
 
