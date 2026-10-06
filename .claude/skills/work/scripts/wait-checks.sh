@@ -338,9 +338,18 @@ rows=""
 # nothing: under SETTLED the next move would be `gh pr ready`, under
 # TIMEOUT-PENDING another wait on a head that cannot ship (computenet-2jyq,
 # computenet-4zpht).
+# A CANCELLED conclusion (REST rows only) is runner infrastructure — "not
+# acquired by Runner", "received a shutdown signal" — not a test result, and
+# routing it to the red-check path cost a manual log read each time
+# (computenet-lbw1v).
 say_red() {
-  local red
-  red=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '{print $1}' | tr '\n' ' ')
+  local red cancelled
+  red=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '$3 != "cancelled" {print $1}' | tr '\n' ' ')
+  cancelled=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '$3 == "cancelled" {print $1}' | tr '\n' ' ')
+  if [ -n "$cancelled" ]; then
+    echo "wait-checks: CANCELLED — required check(s) cancelled by the runner, not failed: ${cancelled% }"
+    echo "wait-checks: once that run completes, gh run rerun <run-id> --failed (the id is in gh pr checks' URLs), then wait again. Not a recovery.md red check."
+  fi
   [ -n "$red" ] || return 0
   echo "wait-checks: RED — required check(s) FAILED: ${red% }"
   echo "wait-checks: $1 is not a verdict. Do NOT gh pr ready or wait again; go to recovery.md § A red required check."
