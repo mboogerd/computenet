@@ -2,9 +2,11 @@
 # see concord/schema/scenario.md. Resolves the `23-SPSC-01` schema-gap with both
 # halves of the kernel's M5.6/I-20 rule: the source's outlet genuinely carries
 # an `Owned` payload; the Observe link is installed through the kernel's own
-# `FanOutlet.tap` path and admitted without consuming the exclusive slot; and a
-# second Consume link is refused by `FanOutlet.linkTo`. Neither outcome is a
-# driver-side simulation.
+# `FanOutlet.tap` path and admitted without consuming the exclusive slot; its
+# endpoint borrows the payload and counts the observation; and a second Consume
+# link is refused by `FanOutlet.linkTo`. A push after the tap attaches proves the
+# tap observes without stealing from the sole consumer. None of these outcomes
+# is a driver-side simulation.
 id: 23-SPSC-01
 title: An observe tap is admitted beside the sole consumer of an exclusive outlet
 covers: [12-EXCL-01]
@@ -12,13 +14,13 @@ profile: core
 kind: example
 narrative:
   given: an exclusive-outlet source already linked to its sole consumer
-  when: an observe tap and then a second consumer attempt to connect to that outlet
-  then: the observe tap is admitted without taking the exclusive slot, while the second consume link is rejected
+  when: a borrowing observe tap attaches, a second consumer is rejected, and another payload is pushed
+  then: the tap observes without taking the payload or its exclusive slot, and the sole consumer still receives it
 graph:
   cells:
     - {id: src, type: exclusive-source}
     - {id: c1, type: exclusive-sink}
-    - {id: tap, type: exclusive-sink}
+    - {id: tap, type: exclusive-observer}
     - {id: c2, type: exclusive-sink}
   links:
     - {from: src, to: c1}
@@ -27,6 +29,9 @@ script:
   - {type: quiesce}
   - {type: connect, from: src, to: tap, role: observe, expect: connected}
   - {type: connect, from: src, to: c2, expect: rejected}
+  - {type: apply, on: src, op: push, value: observed-and-consumed}
+  - {type: quiesce}
 checks:
-  - {type: final-view, view: c1, equals: 1}
+  - {type: final-view, view: c1, equals: 2}
+  - {type: final-view, view: tap, equals: 1}
   - {type: no-dead-letters}

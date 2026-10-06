@@ -21,6 +21,7 @@ import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.CheckpointReplayPositions
 import civictech.cell.Provenance
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.StateRead
@@ -961,6 +962,7 @@ open class ManagedHost(
 
     /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
     private fun clearSupervision(cellRef: CellRef, cell: Cell) {
+        hostDurability.discardCheckpointReplayPositions(cellRef)
         policies.remove(cellRef)
         checkpoints.remove(cellRef)
         generations.remove(cellRef)
@@ -1719,6 +1721,9 @@ open class ManagedHost(
      */
     fun checkpoint(journal: Journal) = hostDurability.checkpoint(journal)
 
+    internal fun retainedCheckpointReplayPositionCount(): Int =
+        hostDurability.retainedCheckpointReplayPositionCount()
+
     private fun bandOf(cellRef: CellRef): AttentionBand = when {
         attention == null -> AttentionBand.NORMAL
         else -> cells[cellRef]?.let { AttentionSupport.of(it).band } ?: AttentionBand.NORMAL
@@ -2019,16 +2024,20 @@ open class ManagedHost(
                             // computenet-xy7w4 D1: likewise re-install the frame's replay
                             // provenance, so every frame this handler emits into an intake
                             // inherits it (and is not re-journaled into the replayed journal).
-                            civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
-                                civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
-                                    val inletOffer = (port as? FanInlet<*>)?.let { inlet ->
-                                        synchronized(dataLock) { checkpointSequences[hostedInvocation] }
-                                            ?.let { sequence ->
-                                                inlet.offerHosted(hostedInvocation.invocation, sequence)
-                                            }
-                                    } ?: false
-                                    if (!inletOffer) {
-                                        hostedInvocation.invocation.invokeSuspending(port.call)
+                            CheckpointReplayPositions.withCurrentSuspending(
+                                hostDurability.checkpointReplayPositions,
+                            ) {
+                                civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
+                                    civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                                        val inletOffer = (port as? FanInlet<*>)?.let { inlet ->
+                                            synchronized(dataLock) { checkpointSequences[hostedInvocation] }
+                                                ?.let { sequence ->
+                                                    inlet.offerHosted(hostedInvocation.invocation, sequence)
+                                                }
+                                        } ?: false
+                                        if (!inletOffer) {
+                                            hostedInvocation.invocation.invokeSuspending(port.call)
+                                        }
                                     }
                                 }
                             }

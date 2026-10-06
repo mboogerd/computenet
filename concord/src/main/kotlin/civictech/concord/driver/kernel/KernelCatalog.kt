@@ -290,11 +290,13 @@ internal object KernelCatalog {
             // plain default-nature producer's connect is refused by the kernel's
             // real NatureNegotiation (CP-F3) — see KernelAdapters.NatureGatedSinkCell.
             "nature-gate" -> Built(NatureGatedSinkCell())
-            // `exclusive-source`/`exclusive-sink`: an Owned-carrying SPSC outlet
-            // (M5.6) — a second Consume link is refused by the kernel's own
-            // FanOutlet exclusivity check, not a driver-side fake.
+            // `exclusive-source`/`exclusive-sink`/`exclusive-observer`: an
+            // Owned-carrying SPSC outlet (M5.6). A second Consume link is refused
+            // by the kernel's own FanOutlet exclusivity check; the Observe endpoint
+            // borrows without taking so the sole consumer can still receive it.
             "exclusive-source" -> Built(ExclusiveSourceCell())
             "exclusive-sink" -> exclusiveSink()
+            "exclusive-observer" -> exclusiveObserver()
 
             else -> throw UnsupportedCatalogBinding("no kernel binding for catalog cell type '$type'")
         }
@@ -425,6 +427,14 @@ internal object KernelCatalog {
         // delivering thread — no dispatcher hop — so `onChange` here *is* the
         // synchronous settled stream (and its immediate catch-up seeds the log,
         // exactly as [RecordedView]'s constructor does for the folded views).
+        cell.onChange { log += readView(ViewKind.COUNT, it) }
+        return Built(cell, cell, ViewKind.COUNT, observations = log)
+    }
+
+    /** `exclusive-observer`: a running-count view that borrows each `ExclusivePush` delivery. */
+    private fun exclusiveObserver(): Built {
+        val cell = ExclusiveObserverCell()
+        val log = mutableListOf<Value>()
         cell.onChange { log += readView(ViewKind.COUNT, it) }
         return Built(cell, cell, ViewKind.COUNT, observations = log)
     }
