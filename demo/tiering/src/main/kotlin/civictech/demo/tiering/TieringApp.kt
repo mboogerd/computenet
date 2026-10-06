@@ -389,9 +389,12 @@ class TieringApp(
         set("prefs", refs.prefs.ref)
         map("prefAvg", refs.prefAvg.ref)
         // These are existing point-consistent one-view reads over ungated
-        // CombineLatestCell operators. A single view has no mixed-view
-        // alignment risk; the canonical builder currently needs this explicit
-        // admission exception to preserve their immediate publication.
+        // CombineLatestCell operators, which [KE2-09] admission rejects. They
+        // are not gated with emitOnFrontier: each combines independent roots
+        // (fused: vals x prefs; board: fused x the manual OR-map), and
+        // CombineLatestCell's WaveGate suits only a shared-source diamond —
+        // gated, both stop publishing (seven tiering tests red, computenet-axcyk.3).
+        // A single view has no mixed-view alignment risk.
         unchecked("fused")
         map("fused", refs.fused.ref)
         map("manual", refs.manualEffective.ref)
