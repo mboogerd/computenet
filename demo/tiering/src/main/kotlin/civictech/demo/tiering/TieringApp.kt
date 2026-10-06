@@ -395,6 +395,7 @@ class TieringApp(
         unchecked("fused")
         map("fused", refs.fused.ref)
         map("manual", refs.manualEffective.ref)
+        unchecked("board")
         map("board", refs.board.ref)
     }
 
