@@ -90,9 +90,16 @@ data class TopologyFold(
     val families: Map<String, TopologyFamily>,
     val links: Map<TopologyLinkKey, TopoEvent.Connect>,
     val handles: Map<String, CellRef>,
+    /**
+     * Completed distinct-ref promotions retained as recovery provenance after folding. A build
+     * predating this field cannot read a checkpoint that carries one: its fold requires the
+     * incumbent's spawn for every Promote, so a downgrade fails recovery of such a journal.
+     */
+    val promotions: Map<CellRef, TopoEvent.Promote>,
 ) {
     fun events(): List<TopoEvent> = buildList {
         addAll(spawns.values)
+        addAll(promotions.values)
         families.values.forEach { state ->
             add(state.declaration)
             state.keys.forEach { key -> add(TopoEvent.FamilyKey(state.declaration.family.namespace, key)) }
@@ -101,7 +108,7 @@ data class TopologyFold(
     }
 
     companion object {
-        val EMPTY = TopologyFold(emptyMap(), emptyMap(), emptyMap(), emptyMap())
+        val EMPTY = TopologyFold(emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyMap())
     }
 }
 
@@ -119,6 +126,7 @@ internal class MutableTopologyFold {
     private val families = linkedMapOf<String, MutableFamily>()
     private val links = linkedMapOf<TopologyLinkKey, TopoEvent.Connect>()
     private val handles = linkedMapOf<String, CellRef>()
+    private val promotions = linkedMapOf<CellRef, TopoEvent.Promote>()
 
     private data class MutableFamily(val declaration: TopoEvent.Family, val keys: LinkedHashSet<String>)
 
@@ -172,17 +180,27 @@ internal class MutableTopologyFold {
         },
         links = LinkedHashMap(links),
         handles = LinkedHashMap(handles),
+        promotions = LinkedHashMap(promotions),
     )
 
     private fun remove(ref: CellRef) {
         spawns.remove(ref)
         handles.entries.removeIf { it.value == ref }
         links.entries.removeIf { (_, edge) -> edge.from == ref || edge.to == ref }
+        promotions.entries.removeIf { (incumbent, event) -> incumbent == ref || event.candidate == ref }
     }
 
     private fun recordPromotion(event: TopoEvent.Promote) {
-        val incumbentSpawn = checkNotNull(spawns[event.incumbent]) {
-            "promotion names missing incumbent ${event.incumbent}"
+        val incumbentSpawn = spawns[event.incumbent]
+        if (incumbentSpawn == null) {
+            val candidateSpawn = checkNotNull(spawns[event.candidate]) {
+                "promotion provenance names missing candidate ${event.candidate}"
+            }
+            check(!candidateSpawn.shadow) {
+                "promotion provenance candidate ${event.candidate} is still shadowed"
+            }
+            promotions[event.incumbent] = event
+            return
         }
         if (event.incumbent == event.candidate) {
             spawns[event.incumbent] = incumbentSpawn.copy(
@@ -199,6 +217,9 @@ internal class MutableTopologyFold {
         val redirected = links.values
             .filter { it.from == event.incumbent && it.outlet == event.outlet }
             .map { it.copy(from = event.candidate) }
+        val inheritedRoots = promotions
+            .filterValues { it.candidate == event.incumbent }
+            .keys
 
         remove(event.incumbent)
         spawns[event.candidate] = candidateSpawn.copy(
@@ -206,6 +227,9 @@ internal class MutableTopologyFold {
             replicated = event.replicated,
             shadow = false,
         )
+        (inheritedRoots + event.incumbent).forEach { root ->
+            promotions[root] = event.copy(incumbent = root)
+        }
         redirected.forEach { links[TopologyLinkKey.of(it)] = it }
     }
 }

@@ -7,6 +7,7 @@ import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.GraphStep
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.InstanceSetStep
+import civictech.cell.graph.PromoteStep
 import civictech.cell.graph.SpawnStep
 import civictech.cell.graph.UnlinkStep
 import civictech.cell.link.LinkOptions
@@ -248,6 +249,25 @@ class PlacementPlan private constructor(
                             localSteps += step
                         }
                         active.remove(step.handle)
+                    }
+
+                    is PromoteStep -> {
+                        val handles = buildList {
+                            add(step.incumbent)
+                            add(step.candidate)
+                            add(step.gate)
+                            addAll(step.downstream.map { it.first })
+                            addAll(step.gates)
+                            step.baseline?.let(::add)
+                            addAll(step.baselineGates)
+                        }
+                        handles.forEach { requireActive(active, it) }
+                        if (handles.any { !local(it) }) {
+                            throw IllegalStateException(
+                                "promote '${step.handle}': cross-node promotion is not supported",
+                            )
+                        }
+                        localSteps += step
                     }
 
                     is InstanceSetStep -> error("InstanceSetStep must be lowered before placement")
