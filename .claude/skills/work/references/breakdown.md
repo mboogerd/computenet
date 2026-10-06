@@ -104,9 +104,8 @@ what you verified, the fork, and what each answer produces.
 ## The files claim
 
 `metadata.files` is a scheduling lock: tasks with disjoint claims run in
-parallel, and an implementer stays inside its claim. An incomplete claim makes
-a task unsatisfiable; an over-broad one costs a sibling a batch slot, which is
-cheaper.
+parallel, and an implementer stays inside its claim. A missing file makes a task
+unsatisfiable; an extra one only costs a sibling a batch slot.
 
 **A claim covers every file that must change for the acceptance to hold, and no
 file the task only reads.** Derive it by closure, not from the prose. For each
@@ -119,12 +118,14 @@ change. Record each grep in the description as `observed:`.
   or a placeholder.
 - Added to a set (sealed type, enum, package, corpus directory): grep an
   existing sibling (`is <SiblingVariant>`, the package path), not the new
-  entry. That finds exhaustive `when`s, inventories
-  (`oracle/src/test/resources/*-inventory.txt` for a top-level type in
-  `civictech.cell.data` or `.op`; `CorpusCrossCheckTest` for a `24-data-cells`
-  scenario) and completeness gates. A new module claims `doc/ARCHITECTURE.md`;
-  a new cross-package kernel edge claims
-  `kernel/src/test/resources/architecture/package-edges.txt`.
+  entry. That finds exhaustive `when`s, inventories and completeness gates.
+- Checked outside its module: a baseline or generated file a repo-wide check
+  compares with what the task changes. Claim it and put its check in the task's
+  gate, whatever module the gate is scoped to; grep `.github/workflows/` and
+  `*/src/test/resources/` for what the task touches. Examples: the ratchets in
+  `kernel/src/test/resources/architecture/` (they scan every module),
+  `doc/ARCHITECTURE.md`, `oracle/src/test/resources/*-inventory.txt`, and
+  `doc/FEATURE-STATUS.md` when a demo's imports or cells change.
 - Mirrored: the mirror and the test that pins it (`ui/src/api/types.ts` with
   `ui/test/types.test.ts`), and the value types a new journal or checkpoint
   path serializes.
@@ -133,9 +134,8 @@ change. Record each grep in the description as `observed:`.
   runs it); and KDoc or comments narrating a changed rule (grep its distinctive
   phrases and requirement id) — no test fails on a stale explanation.
 
-Read the hits rather than claiming them all; an import is not an enumeration. A
-sibling's claim is a lower bound. When unsure, claim wider and say in the
-description that the breadth is deliberate and how you derived it.
+Read the hits rather than claiming them all; an import is not an enumeration.
+A sibling's claim is a lower bound. When unsure, claim wider and say why.
 
 Check pending work, not only the tree: a file that does not exist yet may be
 claimed by an unstarted task elsewhere in the epic. Resolve the epic with
