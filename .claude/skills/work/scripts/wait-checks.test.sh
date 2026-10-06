@@ -166,6 +166,8 @@ fixture; printf '%s\n' "${ONE_FAILED/kernel-test$'\t'pass$'\t'success/kernel-tes
 out=$(run)
 has "$out" "RED — required check(s) FAILED: concord-full" "a real failure beside a cancel is still RED, alone"
 has "$out" "not failed: kernel-test" "and the cancel is still named separately"
+hasnt "$out" "FAILED: concord-full kernel-test" "the cancel is not folded into the RED list"
+has "$out" "Do NOT gh pr ready yet" "the cancelled line says not to ship"
 
 # 4. THE computenet-1zhu TRAP: only the auto-merge row for the first rounds.
 #    No pending anywhere, but it must NOT read as settled OR as a failure.

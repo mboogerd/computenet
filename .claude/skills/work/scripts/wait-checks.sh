@@ -348,7 +348,7 @@ say_red() {
   cancelled=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '$3 == "cancelled" {print $1}' | tr '\n' ' ')
   if [ -n "$cancelled" ]; then
     echo "wait-checks: CANCELLED — required check(s) cancelled by the runner, not failed: ${cancelled% }"
-    echo "wait-checks: once that run completes, gh run rerun <run-id> --failed (the id is in gh pr checks' URLs), then wait again. Not a recovery.md red check."
+    echo "wait-checks: once that run completes, gh run rerun <run-id> --failed (the id is in gh pr checks' URLs), then wait again. Do NOT gh pr ready yet; this is not a recovery.md red check."
   fi
   [ -n "$red" ] || return 0
   echo "wait-checks: RED — required check(s) FAILED: ${red% }"
