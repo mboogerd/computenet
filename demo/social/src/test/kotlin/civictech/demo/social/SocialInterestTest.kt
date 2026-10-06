@@ -2,6 +2,7 @@ package civictech.demo.social
 
 import civictech.cell.CellRef
 import civictech.cell.StateReadResult
+import civictech.cell.host.InterestSpawnRefused
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -14,9 +15,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
 /**
@@ -43,55 +42,16 @@ class SocialInterestTest {
         const val FORUM = 100L
     }
 
-    /**
-     * SOC1-INT-04's `spawnExecutor` constructor argument: queues rather than
-     * runs, so the test can [drainAll] itself, top-level, between its own
-     * `runToIdle()` calls instead of letting a real background thread call
-     * back into the single-threaded [SimulationController] concurrently.
-     */
-    private class QueueExecutor : Executor {
-        private val pending = ConcurrentLinkedQueue<Runnable>()
-
-        override fun execute(command: Runnable) {
-            pending.add(command)
-        }
-
-        fun drainAll() {
-            while (true) {
-                val next = pending.poll() ?: return
-                next.run()
-            }
-        }
-    }
-
-    /**
-     * computenet-pvtcj: an executor whose FIRST `execute()` throws
-     * synchronously — simulating `spawnExecutor` itself refusing the admit
-     * task (e.g. a real pool's `RejectedExecutionException`) — and every
-     * later call defers to an internal [QueueExecutor] the test drains
-     * itself, so a subsequent pull on the same [FeedSession] can still be
-     * driven safely on the single-threaded [SimulationController] rig.
-     */
-    private class FlakyExecutor : Executor {
-        private val queue = QueueExecutor()
-        private var failNext = true
-
-        fun drainAll() = queue.drainAll()
-
-        override fun execute(command: Runnable) {
-            if (failNext) {
-                failNext = false
-                throw IllegalStateException("admit executor boom")
-            }
-            queue.execute(command)
-        }
-    }
-
-    private class Rig {
+    private class Rig(interestDriven: Boolean = false) {
         val controller = SimulationController()
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
-        val pipeline = SnbPipeline.build(host, journalDir = null, registry = registry)
+        val pipeline = SnbPipeline.build(
+            host,
+            journalDir = null,
+            registry = registry,
+            interestDriven = interestDriven,
+        )
         val families = pipeline.families
         val graph = SocialGraph(host, pipeline)
         val refused: MutableMap<CellRef, StateReadResult.Reason> = ConcurrentHashMap()
@@ -255,8 +215,8 @@ class SocialInterestTest {
     // --- [SOC1-INT-04] --------------------------------------------------------
 
     @Test
-    fun `SOC1-INT-04 a spawner durably spawns an admitted-but-absent friend, which answers Empty at since = null`() {
-        val rig = Rig()
+    fun `SOC1-INT-04 the interest-driven family durably spawns an admitted-but-absent friend, which answers Empty at since = null`() {
+        val rig = Rig(interestDriven = true)
         rig.knows(A, 7)
         rig.knows(D, 7)
         rig.post(10, A)
@@ -264,33 +224,10 @@ class SocialInterestTest {
         rig.families.authored.contains(D) shouldBe false
         val refA = rig.authoredRef(A)
 
-        val spawner = InterestDrivenFamily(rig.families.authored)
-        // FeedSession.fanOut dispatches admit() off the completing thread
-        // (its own KDoc explains why: KeyedCells.getOrSpawn blocks on the
-        // host, which a derived scope's own read completion runs on).
-        // Production's dedicated VirtualThreadScheduler thread keeps
-        // draining regardless of who waits, so a real background pool is
-        // safe there — but SimulationController is documented single-
-        // thread-only, and a genuine background thread calling back into it
-        // concurrently with this test's own runToIdle() is a real, observed
-        // race (`enqueueAwaiting` can see a transient false "quiescent" while
-        // the OTHER thread is mid-step). QueueExecutor below defers the
-        // admit task instead of running it on another thread; this test
-        // drains it itself, top-level, between its own runToIdle() calls —
-        // strictly single-threaded, so no race is possible. Injected through
-        // the constructor (computenet-pvtcj), never through global state.
-        val queue = QueueExecutor()
-        val session =
-            FeedSession(V, rig.interest, rig.families, rig.registry, rig.recorder, spawner = spawner, spawnExecutor = queue)
         rig.recorder.reset()
 
-        val future = session.pull()
-        awaitUntil("SOC1-INT-04 pull with a spawner to settle", timeoutMs = 20_000) {
-            rig.controller.runToIdle()
-            queue.drainAll()
-            rig.controller.runToIdle()
-            future.isDone
-        }
+        val future = rig.session.pull()
+        rig.controller.runToIdle()
         val report = future.get(20, TimeUnit.SECONDS)
 
         rig.families.authored.contains(D) shouldBe true
@@ -303,7 +240,7 @@ class SocialInterestTest {
     }
 
     @Test
-    fun `without a spawner the same fixture leaves keys() unchanged and issues no leg for the never-posted friend`() {
+    fun `the default family leaves keys() unchanged and issues no leg for the never-posted friend`() {
         val rig = Rig()
         rig.knows(A, 7)
         rig.knows(D, 7)
@@ -311,7 +248,7 @@ class SocialInterestTest {
         rig.families.authored.contains(D) shouldBe false
         val refA = rig.authoredRef(A)
 
-        val report = rig.pull() // rig.session has no spawner (the AMENDS default)
+        val report = rig.pull()
 
         rig.families.authored.contains(D) shouldBe false
         rig.families.authored.keys() shouldBe setOf(A)
@@ -350,86 +287,25 @@ class SocialInterestTest {
         }
     }
 
-    // --- computenet-pvtcj: FeedSession's spawn executor is owned, not a mutable global ---
-
     @Test
-    fun `SocialApp(interestDriven = true) owns its spawn executor and stop() shuts it down`() {
-        val app = SocialApp(port = 0, interestDriven = true)
-        try {
-            app.graph.addPerson(Person(V, "p$V", "person"))
-            app.graph.addPerson(Person(A, "p$A", "person"))
-            app.graph.addForum(Forum(FORUM, "forum", V))
-            app.graph.addKnows(V, A, 7)
-            app.graph.addPost(Message(10, A, 10, "m10", forumId = FORUM))
-            awaitUntil("post to settle", timeoutMs = 20_000) { app.graph.authored(A).size == 1 }
-
-            // Any pull with a spawner dispatches admit() onto the app's own
-            // executor regardless of whether it needs to spawn anything
-            // (fanOut runs it unconditionally), which is enough to mint a
-            // real `FeedSession-spawn` thread on this app's own pool.
-            app.feedSession(V).pull().get(20, TimeUnit.SECONDS)
-
-            awaitUntil("a FeedSession-spawn thread this app started to come up", timeoutMs = 20_000) {
-                Thread.getAllStackTraces().keys.any { it.name == "FeedSession-spawn" && it.isAlive }
-            }
-        } finally {
-            app.stop()
-        }
-
-        awaitUntil("every FeedSession-spawn thread to die after stop()", timeoutMs = 20_000) {
-            Thread.getAllStackTraces().keys.none { it.name == "FeedSession-spawn" && it.isAlive }
-        }
-    }
-
-    @Test
-    fun `an admit that fails completes the pull exceptionally with no leg read issued, and a later pull succeeds`() {
+    fun `a refused interest admission fails the pull with the kernel cause before any leg, and a later pull succeeds`() {
         val rig = Rig()
         rig.knows(A, 7)
         rig.post(10, A)
         val refA = rig.authoredRef(A)
+        val refusal = InterestSpawnRefused("snb-authored", "Ranges")
+        val subscription = rig.registry.onInterest { _, _ -> CompletableFuture.failedFuture(refusal) }
 
-        val spawner = InterestDrivenFamily(rig.families.authored)
-        val flaky = FlakyExecutor()
-        val session = FeedSession(
-            V,
-            rig.interest,
-            rig.families,
-            rig.registry,
-            rig.recorder,
-            spawner = spawner,
-            spawnExecutor = flaky,
-        )
-        rig.recorder.reset()
-
-        val failed = session.pull()
-        rig.controller.runToIdle()
-        val cause = shouldThrow<ExecutionException> { failed.get(20, TimeUnit.SECONDS) }.cause!!
-
-        cause.shouldBeInstanceOf<IllegalStateException>().message shouldBe "admit executor boom"
-        rig.legReads() shouldBe emptyList() // no leg read issued
-
-        // inFlight was released by the exceptional completion: a later pull
-        // does not throw FeedSession's own "not reentrant" check, and
-        // succeeds once the (now non-throwing) executor is drained.
-        val later = session.pull()
-        awaitUntil("the later pull to settle", timeoutMs = 20_000) {
-            rig.controller.runToIdle()
-            flaky.drainAll()
-            rig.controller.runToIdle()
-            later.isDone
+        try {
+            val cause = rig.failingPull()
+            (cause === refusal) shouldBe true
+            rig.legReads() shouldBe emptyList()
+            rig.session.scope shouldBe Interest.Empty
+        } finally {
+            subscription.close()
         }
-        val report = later.get(20, TimeUnit.SECONDS)
-        report.legs.keys shouldBe setOf(refA)
-    }
 
-    @Test
-    fun `InterestDrivenFamily admit rejects any interest arm other than Ranges or Empty`() {
-        val rig = Rig()
-        val spawner = InterestDrivenFamily(rig.families.authored)
-
-        spawner.admit(Interest.Empty) shouldBe emptySet()
-
-        shouldThrow<IllegalArgumentException> { spawner.admit(Interest.Total) }
+        rig.pull().legs.keys shouldBe setOf(refA)
     }
 
     // --- [SOC1-INT-05] (B13, second clause) ---------------------------------
