@@ -224,7 +224,13 @@ private class ObservationCoordinator(
         }
     }
 
-    override fun current(): ObservationFrame = latest
+    override fun current(): ObservationFrame = synchronized(lock) {
+        // A group's published composite advances on the host path, before its
+        // listener callback reaches this coordinator's dispatcher. Synchronous
+        // reads therefore assemble from those authoritative publications rather
+        // than from the callback cache used to preserve listener delivery order.
+        assemble(groupCells.mapValuesTo(LinkedHashMap()) { it.value.composite() })
+    }
 
     override fun onChange(listener: (ObservationFrame) -> Unit) {
         val one = singleGroup

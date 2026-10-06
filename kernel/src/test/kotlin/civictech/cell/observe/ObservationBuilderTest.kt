@@ -28,6 +28,8 @@ import org.junit.jupiter.api.assertThrows
 import java.util.Collections
 import java.util.Random
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Exit criterion for the canonical app-edge [observation] builder: equal root
@@ -157,9 +159,43 @@ class ObservationBuilderTest {
         frames.size shouldBe 4
         observation.get<Set<Int>>("votes") shouldBe setOf(1, 2, 3)
         frames.last().views.getValue("votes") shouldBe setOf(1, 2, 3)
-        callbackThreads.all { it == "aligned-observe-${expectedRef.id}" } shouldBe true
+        synchronized(callbackThreads) {
+            callbackThreads.all { it == "aligned-observe-${expectedRef.id}" }
+        } shouldBe true
 
         observation.close()
+    }
+
+    @Test
+    fun `current immediately reflects a group publication after the host drains`() {
+        val graph = ShoppingGraph(seed = 92)
+        val observation = graph.host.observation {
+            set("votes", graph.votes.ref)
+        }
+        val group = observation.group("votes")
+        val callbackStarted = CountDownLatch(1)
+        val releaseCallback = CountDownLatch(1)
+        group.onComposite {
+            callbackStarted.countDown()
+            releaseCallback.await(5, TimeUnit.SECONDS)
+        }
+        callbackStarted.await(1, TimeUnit.SECONDS) shouldBe true
+
+        try {
+            graph.ops(graph.writerV).add(7)
+            graph.controller.runToIdle()
+
+            val published = group.composite()
+            observation.current() shouldBe ObservationFrame(
+                views = published.views,
+                groups = mapOf("votes" to published),
+                groupOf = mapOf("votes" to "votes"),
+                crossRoot = emptyMap(),
+            )
+        } finally {
+            releaseCallback.countDown()
+            observation.close()
+        }
     }
 
     @Test
@@ -190,7 +226,9 @@ class ObservationBuilderTest {
                 frames += it
             }
             awaitUntil("multi-group catch-up dispatched (seed $seed)") { frames.isNotEmpty() }
-            callbackThreads.all { it.startsWith("observation-") } shouldBe true
+            synchronized(callbackThreads) {
+                callbackThreads.all { it.startsWith("observation-") }
+            } shouldBe true
 
             val itemA = graph.ops(graph.writerA)
             val itemB = graph.ops(graph.writerB)
@@ -223,7 +261,9 @@ class ObservationBuilderTest {
             awaitUntil("multi-group final frame dispatched (seed $seed)") {
                 frames.lastOrNull()?.views?.get("wanted") == (0..12).toSet()
             }
-            callbackThreads.all { it.startsWith("observation-") } shouldBe true
+            synchronized(callbackThreads) {
+                callbackThreads.all { it.startsWith("observation-") }
+            } shouldBe true
 
             val frame = observation.current()
             frame.groups.getValue("votes").frontier shouldBe votesFrontier
