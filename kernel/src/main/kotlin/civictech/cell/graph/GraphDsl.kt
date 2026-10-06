@@ -48,10 +48,10 @@ class KeyCodec(
     val parse: (String) -> Any,
 ) : Serializable {
     companion object {
-        // KeyedFamily's legacy fixture contains its codec. Adding the family
-        // field perturbs Kotlin's computed UID for this otherwise-unchanged
-        // class, so pin the pre-change value as part of the same journal seam.
-        private const val serialVersionUID: Long = 3426916641587508556L
+        // TopoEvent.Family records embed this codec inside KeyedFamily. Pin the
+        // JVM-computed UID of the unpinned class so journals written before the
+        // pin keep decoding (vb7aq-D12).
+        private const val serialVersionUID: Long = 3426917053904368972L
 
         /** The default codec for string keys. */
         val Strings = KeyCodec(@JvmSerializableLambda { it as String }, @JvmSerializableLambda { it })

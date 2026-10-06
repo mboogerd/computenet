@@ -322,12 +322,12 @@ class InterestSpawnTest {
     @Test
     fun `pre-change KeyedFamily fixture defaults interest spawning off`() {
         val fixture = Base64.getDecoder().decode(
-            "rO0ABXNyACBjaXZpY3RlY2guY2VsbC5ncmFwaC5LZXllZEZhbWlseSP6FdaHA2qrAgADTAAJam91cm5hbElkdAASTGphdmEvbGFuZy9TdHJpbmc7TAAEa2V5c3QAH0xjaXZpY3RlY2gvY2VsbC9ncmFwaC9LZXlDb2RlYztMAAluYW1lc3BhY2VxAH4AAXhwdAABanNyAB1jaXZpY3RlY2guY2VsbC5ncmFwaC5LZXlDb2RlYy+O2odosrVMAgACTAAFcGFyc2V0ACBMa290bGluL2p2bS9mdW5jdGlvbnMvRnVuY3Rpb24xO0wABnJlbmRlcnEAfgAGeHBzcgAvY2l2aWN0ZWNoLmNlbGwuZ3JhcGguS2V5Q29kZWMkQ29tcGFuaW9uJExvbmdzJDJBvyMsrfh38AIAAHhyABprb3RsaW4uanZtLmludGVybmFsLkxhbWJkYZFOGvDP6Ts3AgABSQAFYXJpdHl4cAAAAAFzcgAvY2l2aWN0ZWNoLmNlbGwuZ3JhcGguS2V5Q29kZWMkQ29tcGFuaW9uJExvbmdzJDGSlK519X/AZwIAAHhxAH4ACQAAAAF0AAJucw==",
+            "rO0ABXNyACBjaXZpY3RlY2guY2VsbC5ncmFwaC5LZXllZEZhbWlseSP6FdaHA2qrAgADTAAJam91cm5hbElkdAASTGphdmEvbGFuZy9TdHJpbmc7TAAEa2V5c3QAH0xjaXZpY3RlY2gvY2VsbC9ncmFwaC9LZXlDb2RlYztMAAluYW1lc3BhY2VxAH4AAXhwdAABanNyAB1jaXZpY3RlY2guY2VsbC5ncmFwaC5LZXlDb2RlYy+O2udosrVMAgACTAAFcGFyc2V0ACBMa290bGluL2p2bS9mdW5jdGlvbnMvRnVuY3Rpb24xO0wABnJlbmRlcnEAfgAGeHBzcgAvY2l2aWN0ZWNoLmNlbGwuZ3JhcGguS2V5Q29kZWMkQ29tcGFuaW9uJExvbmdzJDJBvyMsrfh38AIAAHhyABprb3RsaW4uanZtLmludGVybmFsLkxhbWJkYZFOGvDP6Ts3AgABSQAFYXJpdHl4cAAAAAFzcgAvY2l2aWN0ZWNoLmNlbGwuZ3JhcGguS2V5Q29kZWMkQ29tcGFuaW9uJExvbmdzJDGSlK519X/AZwIAAHhxAH4ACQAAAAF0AAJucw==",
         )
         val decoded = ObjectInputStream(ByteArrayInputStream(fixture)).use { it.readObject() as KeyedFamily }
 
         ObjectStreamClass.lookup(KeyedFamily::class.java).serialVersionUID shouldBe 2592408546637474475L
-        ObjectStreamClass.lookup(KeyCodec::class.java).serialVersionUID shouldBe 3426916641587508556L
+        ObjectStreamClass.lookup(KeyCodec::class.java).serialVersionUID shouldBe 3426917053904368972L
         decoded.namespace shouldBe "ns"
         decoded.journalId shouldBe "j"
         decoded.keys.parse("7") shouldBe 7L
