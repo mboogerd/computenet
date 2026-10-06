@@ -83,7 +83,8 @@ quantifies over".
 |---|---|---|
 | `nature-gate` | — | A sink whose inlet **declares a required nature** (idempotent merge). A plain default-nature producer's `connect` to it is refused at link time by the kernel's real `NatureNegotiation` (CP-F3) — resolves `12-NEGOTIATE-01`. |
 | `exclusive-source` | `push` | A source whose `outlet` carries an `Owned` (exclusive, SPSC) payload — resolves `23-SPSC-01`. `push` wraps `value:` in a fresh `Owned`. |
-| `exclusive-sink` | — | Consumes `exclusive-source`'s `Owned` payload; a **second** consume-link to the same `exclusive-source` outlet is rejected by the kernel's own FanOutlet exclusivity check (M5.6). Observed through a count (`final-view`/`readView` → the running delivery count). Only the reject half is covered — the observe/tap ADMIT half is the unbuilt G-47 gap (see `23-SPSC-01.yaml`). |
+| `exclusive-sink` | — | Consumes `exclusive-source`'s `Owned` payload; a **second** consume-link to the same `exclusive-source` outlet is rejected by the kernel's own FanOutlet exclusivity check (M5.6). Observed through a count (`final-view`/`readView` → the running delivery count). |
+| `exclusive-observer` | — | Borrows (`Owned.borrow`, never `take`) each `exclusive-source` delivery and counts it. Used as an Observe tap to prove that observation leaves the payload available to the sole consumer; observed through the running delivery count. |
 
 ## Cycles (34-CYCLE)
 
@@ -158,8 +159,9 @@ plain `combine-latest fn:sum`→`ScalarSumCombineCell` (the wave-aligned form,
 `feedback-undamped`→`FeedbackCell` (a `CycleHead`); `nature-gate`→
 `NatureGatedSinkCell` (a hand-registered `ContractRegistry` descriptor projects a
 required nature onto its inlet — CP-F2/F3, W4-A followup); `exclusive-source`/
-`exclusive-sink`→`ExclusiveSourceCell`/`ExclusiveSinkCell` (an `Owned`-carrying
-`FanOutlet` contract, likewise hand-registered — M5.6, W4-A followup); `window
+`exclusive-sink`/`exclusive-observer`→`ExclusiveSourceCell`/`ExclusiveSinkCell`/
+`ExclusiveObserverCell` (an `Owned`-carrying `FanOutlet` contract, likewise
+hand-registered — M5.6, W4-A followup); `window
 kind:tumbling`→a bare `GroupByCell` whose `keyFn` composes `Windows.tumbling`, and
 `window kind:tumbling lateness:L`→the same `GroupByCell` constructed with
 `lateness = Windows.Lateness(EventTimeOfPair, L)` and `keyTime(start) = start + size`
