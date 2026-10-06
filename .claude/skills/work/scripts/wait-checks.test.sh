@@ -155,6 +155,20 @@ has "$out" $'concord-full\tfail' "the failed row is in the printed rows"
 has "$out" "RED — required check(s) FAILED: concord-full" "the red row is named, not left to be read"
 has "$out" "Do NOT gh pr ready" "SETTLED-with-red says not to ship"
 
+# 3b. a runner-CANCELLED required check is not a red test (computenet-lbw1v):
+#     its own line routes to a rerun, and a real failure beside it stays RED.
+fixture; printf '%s\n' "${GREEN/kernel-test$'\t'pass$'\t'success/kernel-test$'\t'fail$'\t'cancelled}" > "$CTRL/default.rest"
+out=$(run)
+has "$out" "CANCELLED — required check(s) cancelled by the runner, not failed: kernel-test" "a cancelled check gets its own verdict line"
+has "$out" "gh run rerun <run-id> --failed" "the cancelled line names the rerun"
+hasnt "$out" "RED —" "a cancelled-only reading is not RED"
+fixture; printf '%s\n' "${ONE_FAILED/kernel-test$'\t'pass$'\t'success/kernel-test$'\t'fail$'\t'cancelled}" > "$CTRL/default.rest"
+out=$(run)
+has "$out" "RED — required check(s) FAILED: concord-full" "a real failure beside a cancel is still RED, alone"
+has "$out" "not failed: kernel-test" "and the cancel is still named separately"
+hasnt "$out" "FAILED: concord-full kernel-test" "the cancel is not folded into the RED list"
+has "$out" "Do NOT gh pr ready yet" "the cancelled line says not to ship"
+
 # 4. THE computenet-1zhu TRAP: only the auto-merge row for the first rounds.
 #    No pending anywhere, but it must NOT read as settled OR as a failure.
 echo
