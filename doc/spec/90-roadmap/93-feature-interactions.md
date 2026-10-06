@@ -1363,6 +1363,18 @@ suspend (`33`) ⇒ eviction (4.6). *When* to spawn a local replica vs. subscribe
 remotely, and replica *placement*, remain the economic-layer decision (G-6 residual) —
 consistent with `42`'s "eviction stays manual until memory pressure justifies a policy."
 
+**Interest-assignment retention (vb7aq-D5).** An interest-assignment entry is
+retained across unpublish and republish: unpublish does not reset the instance
+to `Interest.Total`, because that would let a republished ref widen a shed
+range and violate PN-6's no-widening admission rule in the
+`civictech.cell.replication.InstanceSet` KDoc. The entry MAY be dropped only
+when the ref's instance is evicted or despawned and no live assignment epoch
+remains; this task does not implement that drop path. The retention rule keeps
+the [42-INT-01] exact-subset guarantee and is pinned by
+`kernel/src/test/kotlin/civictech/cell/host/InterestRetainedOnUnpublishTest.kt`,
+which covers both an unpublish with no republish and an unpublish followed by
+republish.
+
 ##### 4.8 Keyed structures, counters, and the mergeable gate (N15)
 
 The **`Replicable` marker is the typed membership gate**: only cells whose delta merge

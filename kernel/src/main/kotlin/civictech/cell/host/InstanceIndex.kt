@@ -58,12 +58,14 @@ class InstanceIndex {
      * delta, so the linker's behavior is byte-identical to pre-interest
      * gossip (the replication default).
      *
-     * Retained on unpublish, deliberately (PN-6 no-widening: "an older epoch
-     * cannot widen a shed range back", `civictech.cell.replication.InstanceSet`
-     * KDoc) — clearing this entry when a ref is unpublished would let a
-     * republished ref fall back to [civictech.cell.link.Interest.Total] and
-     * silently widen a shed range. The resulting unbounded growth is filed
-     * as computenet-2971; not fixed here.
+     * Retained on unpublish, deliberately (vb7aq-D5; 93 I-3 §4.7). PN-6's
+     * no-widening rule ("an older epoch cannot widen a shed range back",
+     * `civictech.cell.replication.InstanceSet` KDoc) means clearing this entry
+     * would let a republished ref fall back to
+     * [civictech.cell.link.Interest.Total] and silently widen a shed range.
+     * The entry may be dropped only when the ref's instance is evicted or
+     * despawned and no live assignment epoch remains; no such drop path is
+     * implemented here.
      */
     private val interests = ConcurrentHashMap<CellRef, civictech.cell.link.Interest>()
 
