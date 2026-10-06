@@ -411,7 +411,7 @@ class DemoApp(
             val lag = disclosure.lagBySource.entries.joinToString(",", "{", "}") { (source, value) ->
                 "\"$source\":$value"
             }
-            "\"${pair.a}|${pair.b}\":{"independent":${disclosure.independent},"lagBySource":$lag}"
+            "\"${pair.a}|${pair.b}\":{\"independent\":${disclosure.independent},\"lagBySource\":$lag}"
         }
 
         val items = setOf("items")
