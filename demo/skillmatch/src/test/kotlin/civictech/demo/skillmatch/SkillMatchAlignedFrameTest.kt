@@ -9,10 +9,10 @@ import kotlin.test.assertTrue
 
 class SkillMatchAlignedFrameTest {
 
-    private val groupedFields = listOf("matches", "progress", "gap", "market")
+    private val alignedFields = listOf("matches", "progress", "gap", "market")
 
     @Test
-    fun `one candidate write changes all same-root views in one SSE frame`() {
+    fun `checked aligned views publish one consistent candidate-wave frame`() {
         val app = SkillMatchApp(port = 0).start()
         try {
             val base = "http://localhost:${app.boundPort}"
@@ -29,16 +29,29 @@ class SkillMatchAlignedFrameTest {
             }
 
             val transitions = (1 until frames.size).filter { i ->
-                groupedFields.any { name -> field(frames[i], name) != field(frames[i - 1], name) }
+                alignedFields.any { name -> field(frames[i], name) != field(frames[i - 1], name) }
             }
             assertEquals(1, transitions.size, "expected one derived-group transition: $frames")
             val changedAt = transitions.single()
-            groupedFields.forEach { name ->
+            alignedFields.forEach { name ->
                 assertTrue(
                     field(frames[changedAt], name) != field(frames[changedAt - 1], name),
                     "$name did not change in the group's sole SSE frame: $frames",
                 )
             }
+            assertEquals(
+                "[]",
+                field(frames[changedAt], "gap"),
+                "the frame that publishes the match must also retract its gap: $frames",
+            )
+            assertTrue(
+                "\"qualified\":true" in field(frames[changedAt], "progress"),
+                "the frame that publishes the match must also publish qualification: $frames",
+            )
+            assertTrue(
+                "\"supply\":1" in field(frames[changedAt], "market"),
+                "the frame that publishes the match must also publish market supply: $frames",
+            )
 
             awaitUntil("skillmatch aligned sink idle", timeoutMs = 5_000) { app.alignedBufferedWaves == 0 }
         } finally {

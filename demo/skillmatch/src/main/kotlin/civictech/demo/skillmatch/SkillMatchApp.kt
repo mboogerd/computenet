@@ -1,6 +1,8 @@
 package civictech.demo.skillmatch
 
 import civictech.cell.CellRef
+import civictech.cell.Timestamp
+import civictech.cell.control.Progress
 import civictech.cell.data.Aggregators
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -10,13 +12,16 @@ import civictech.cell.graph.graph
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
+import civictech.cell.host.ActorIngress
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.Linked
 import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.cell.observe.observeAligned
+import civictech.cell.protocol.Protocols
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
@@ -28,6 +33,7 @@ import civictech.inspect.edit.WritePlane
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
 import java.net.URLDecoder
+import java.util.UUID
 import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.JoinSetApi
 import civictech.cell.data.op.SemiJoinCell
@@ -70,7 +76,10 @@ data class MarketEntry(val supply: Long, val demand: Long, val scarce: Boolean) 
 data class QualEntry(val matched: Long, val required: Long, val qualified: Boolean) : Serializable
 
 /**
- * The dataflow pipeline, shared verbatim by the app and the seeded test:
+ * The dataflow pipeline shared by the app and the seeded terminal-state tests.
+ * The app enables frontier-gated emission because its aligned frame supplies
+ * explicit per-wave settlement; the independent-source tests keep the
+ * byte-compatible ungated default and compare the same cells and links at idle.
  *
  *   candSkills ─┬► matches (⋈ on skill) ─► matchCounts (count per candidate×job)
  *   jobSkills ──┼► required (count per job)
@@ -90,7 +99,8 @@ object SkillPipeline {
         val market: TypedRef<CombineLatestApi<String, Long, Long, MarketEntry>>,
     )
 
-    fun build(host: ManagedHost): Refs = buildWithSpec(host).first
+    fun build(host: ManagedHost, emitOnFrontier: Boolean = false): Refs =
+        buildWithSpec(host, emitOnFrontier).first
 
     /**
      * [build], also returning the [GraphSpec] its builder recorded while applying
@@ -99,7 +109,7 @@ object SkillPipeline {
      * [build] applies; the live topology cannot stand in for them, because its
      * links carry no port names.
      */
-    fun buildWithSpec(host: ManagedHost): Pair<Refs, GraphSpec> =
+    fun buildWithSpec(host: ManagedHost, emitOnFrontier: Boolean = false): Pair<Refs, GraphSpec> =
         graphOf(host.managementInlet) {
             // Factories stay pure (replay-safe): each spawn's lambda constructs
             // the cell from the resolved ref, and `spawn` returns a
@@ -115,6 +125,7 @@ object SkillPipeline {
                     leftKey = { cs: CandidateSkill -> cs.skill },
                     rightKey = { js: JobSkill -> js.skill },
                     combine = { cs: CandidateSkill, js: JobSkill -> Match(cs.candidate, js.job, cs.skill) },
+                    emitOnFrontier = emitOnFrontier,
                 )
             }
             val matchCounts = spawn("matchCounts") { ref ->
@@ -140,6 +151,7 @@ object SkillPipeline {
                         val nd = need ?: 0L
                         QualEntry(matched, nd, matched == nd && nd > 0L)
                     },
+                    emitOnFrontier = emitOnFrontier,
                 )
             }
             val gap = spawn("gap") { ref ->
@@ -148,6 +160,7 @@ object SkillPipeline {
                     leftKey = { js: JobSkill -> js.skill },
                     rightKey = { cs: CandidateSkill -> cs.skill },
                     negated = true,
+                    emitOnFrontier = emitOnFrontier,
                 )
             }
             // market view: per-skill supply (candidates who have it) and demand
@@ -173,6 +186,7 @@ object SkillPipeline {
                         val dv = d ?: 0L
                         MarketEntry(sv, dv, dv > sv)
                     },
+                    emitOnFrontier = emitOnFrontier,
                 )
             }
             // Typed, compile-checked wiring: each link's out/inn must share the
@@ -239,9 +253,11 @@ object SideGraph {
 class SkillMatchApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
-    private val refs = SkillPipeline.build(host)
+    private val refs = SkillPipeline.build(host, emitOnFrontier = true)
     private val candOps = host.lookup(refs.candSkills)!!.inlet.call
     private val jobOps = host.lookup(refs.jobSkills)!!.inlet.call
+    private val ingress = ActorIngress(UUID.randomUUID())
+    private val writeLock = Any()
 
     // The raw inputs have different root sets, so they stay point-consistent.
     private val candSkills: ObservationSink<Set<CandidateSkill>> =
@@ -249,21 +265,30 @@ class SkillMatchApp(port: Int = 8080) {
     private val jobSkills: ObservationSink<Set<JobSkill>> =
         host.observe(refs.jobSkills.ref, View.set<JobSkill>())
 
-    // These four views sit over ungated JoinSetCell/SemiJoinCell/LookupJoinCell/
-    // CombineLatestCell instances, which [KE2-09] (computenet-lw0mv) rejects at
-    // build. Opting out per view preserves this demo's observable behaviour;
-    // the known intra-wave tear remains visible through alignedBufferedWaves.
-    // Gating these cells with emitOnFrontier would change the frame shape and
-    // belongs to the separate operator follow-up.
     private val aligned: AlignedCompositeCell = host.observeAligned {
-        unchecked("matches")
-        unchecked("gap")
-        unchecked("qualification")
-        unchecked("market")
         set("matches", refs.matches.ref)
         set("gap", refs.gap.ref)
         map("qualification", refs.qualification.ref)
         map("market", refs.market.ref)
+    }
+
+    /**
+     * Every `/op` is one actor wave even though it changes only one of the two
+     * independent input sets. Once that write has quiesced, these are the
+     * immediate producers of the four frontier-gated views. Advancing all six
+     * with [Progress] positively settles the arms that had no effective delta;
+     * without that close, the static [emitOnFrontier][SkillPipeline.build]
+     * link set would correctly keep the independent-root wave buffered.
+     */
+    private val alignedFrontierProducers: List<Linked> = listOf(
+        refs.candSkills.ref,
+        refs.jobSkills.ref,
+        refs.matchCounts.ref,
+        refs.required.ref,
+        refs.supply.ref,
+        refs.demand.ref,
+    ).map { ref ->
+        requireNotNull(host.portAt(ref, "outlet") as? Linked) { "missing linked outlet for $ref" }
     }
 
     /** Diagnostic for the frame-level contract: no same-root wave remains held at idle. */
@@ -364,18 +389,38 @@ class SkillMatchApp(port: Int = 8080) {
             "cskill", "uncskill" -> {
                 val candidate = name("candidate") ?: return exchange.respond(400, "missing candidate")
                 val element = CandidateSkill(candidate, skill)
-                if (params["action"] == "cskill") candOps.add(element) else candOps.remove(element)
+                driveAlignedWave {
+                    if (params["action"] == "cskill") candOps.add(element) else candOps.remove(element)
+                }
             }
 
             "jskill", "unjskill" -> {
                 val job = name("job") ?: return exchange.respond(400, "missing job")
                 val element = JobSkill(job, skill)
-                if (params["action"] == "jskill") jobOps.add(element) else jobOps.remove(element)
+                driveAlignedWave {
+                    if (params["action"] == "jskill") jobOps.add(element) else jobOps.remove(element)
+                }
             }
 
             else -> return exchange.respond(400, "unknown action")
         }
         exchange.respond(200, "ok")
+    }
+
+    private fun driveAlignedWave(write: () -> Unit) = synchronized(writeLock) {
+        val (timestamp, _) = ingress.driveStamped(write)
+        host.quiescence().await(5_000, "skillmatch input wave $timestamp")
+        settleAlignedFrontier(timestamp)
+        host.quiescence().await(5_000, "skillmatch aligned wave $timestamp")
+    }
+
+    private fun settleAlignedFrontier(timestamp: Timestamp) {
+        val progress = Progress(timestamp.sourceId, timestamp.counter)
+        alignedFrontierProducers.forEach { producer ->
+            producer.linking.links.forEach { link ->
+                Protocols.sendDownstream(link, Protocols.Progress, progress)
+            }
+        }
     }
 
     private fun broadcast() = shell.broadcast { stateJson() }
