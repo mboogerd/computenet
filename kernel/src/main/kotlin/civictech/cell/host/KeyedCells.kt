@@ -216,18 +216,52 @@ class KeyedCells<K : Any>(
         return result
     }
 
-    /** Recovery deliberately remains synchronous so each key precedes its frames. */
-    private fun recoverSynchronously(key: K): Cell = synchronized(lock) {
-        live[key]?.let { return it }
-        val ref = refFor(key)
-        val cell = factory(key, ref)
-        val fresh = known.add(key)
-        if (fresh) {
-            host.topologyJournal(ref, cell)?.let { rememberForCheckpoint(it, key) }
+    /**
+     * Recovery deliberately remains synchronous so each key precedes its frames.
+     * It reserves [pending] before the factory, as [spawn] does, so a factory
+     * whose interest declaration names its own key joins this recovery rather
+     * than spawning the same ref a second time; and it waits on the host
+     * outside [lock], because a spawn completion takes that lock on the host
+     * thread.
+     */
+    private fun recoverSynchronously(key: K): Cell {
+        val result = CompletableFuture<Cell>()
+        var joined: CompletableFuture<Cell>? = null
+        var prepared: Cell? = null
+        synchronized(lock) {
+            live[key]?.let { return it }
+            joined = pending[key]
+            if (joined == null) {
+                pending[key] = result
+                try {
+                    val cell = factory(key, refFor(key))
+                    if (known.add(key)) {
+                        host.topologyJournal(cell.ref, cell)?.let { rememberForCheckpoint(it, key) }
+                    }
+                    prepared = cell
+                } catch (failure: Throwable) {
+                    pending.remove(key)
+                    result.completeExceptionally(failure)
+                    throw failure
+                }
+            }
         }
-        host.managementInlet.call.spawn(cell)
-        live[key] = cell
-        cell
+        // A spawn already in flight for this key owns it; recovery joins it.
+        joined?.let { return host.awaitManagement(it) }
+        val cell = checkNotNull(prepared)
+        try {
+            host.managementInlet.call.spawn(cell)
+        } catch (failure: Throwable) {
+            synchronized(lock) { pending.remove(key) }
+            result.completeExceptionally(failure)
+            throw failure
+        }
+        synchronized(lock) {
+            live[key] = cell
+            pending.remove(key)
+        }
+        result.complete(cell)
+        return cell
     }
 
     /** Decode the journal representation through this family's codec before spawning. */

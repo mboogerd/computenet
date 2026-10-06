@@ -265,6 +265,71 @@ class InterestSpawnTest {
         membership(recoveredFamily.getOrSpawn(5L)) shouldBe setOf("kept")
     }
 
+    /** SnbPipeline's authored factory shape: each member declares interest in its own key. */
+    private fun selfDeclaringFamily(host: ManagedHost, registry: LocationRegistry, dir: File): KeyedCells<Long> =
+        KeyedCells(
+            host = host,
+            journalDir = dir,
+            namespace = "authored",
+            factory = { key, ref ->
+                registry.setInterest(ref, Interest.Ranges(listOf(Interest.Ranges.Range(key, key + 1))))
+                SetCell<String>(ref)
+            },
+            render = Long::toString,
+            parse = String::toLong,
+            spawnOnInterest = true,
+        )
+
+    private fun seedSelfDeclaringJournal(dir: File) {
+        val controller = SimulationController(seed = 8)
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journal = KeyedCells.hostJournal(dir),
+        )
+        selfDeclaringFamily(host, registry, dir).getOrSpawn(5L)
+        controller.runToIdle()
+    }
+
+    @Test
+    fun `recovery joins a factory's own-key interest declaration instead of spawning the ref twice`(@TempDir dir: File) {
+        seedSelfDeclaringJournal(dir)
+
+        val controller = SimulationController(seed = 9)
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journal = KeyedCells.hostJournal(dir),
+        )
+        val family = selfDeclaringFamily(host, registry, dir)
+        family.recover()
+        controller.runToIdle()
+
+        family.keys() shouldBe setOf(5L)
+        host.supervisionAccounting().deadLetters shouldBe 0L
+    }
+
+    @Test
+    fun `recovery of a self-declaring family completes on a threaded scheduler`(@TempDir dir: File) {
+        seedSelfDeclaringJournal(dir)
+
+        val scheduler = VirtualThreadScheduler("interest-recover")
+        try {
+            val registry = LocationRegistry()
+            val host = ManagedHost(scheduler = scheduler, registry = registry, journal = KeyedCells.hostJournal(dir))
+            val family = selfDeclaringFamily(host, registry, dir)
+            val recovered = CompletableFuture.runAsync { family.recover() }
+
+            recovered.get(10, TimeUnit.SECONDS)
+            family.keys() shouldBe setOf(5L)
+            host.supervisionAccounting().deadLetters shouldBe 0L
+        } finally {
+            scheduler.shutdown()
+        }
+    }
+
     @Test
     fun `budget refusal leaves the recorded interest but no member or family key`() {
         val controller = SimulationController(seed = 5)
