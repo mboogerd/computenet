@@ -158,6 +158,14 @@ object Shadow {
 object Promotion {
 
     /**
+     * Whether [cell] is promotion-control state that must share a topology
+     * journal even when its GraphSpec spawn has no explicit data journal.
+     * ApplyContext calls through this seam so graph does not acquire a
+     * graph-to-membrane package edge merely to recognize the gate type.
+     */
+    internal fun isDurableGate(cell: Cell): Boolean = cell is TrafficLightApi<*>
+
+    /**
      * Declares that this cell's downstream merge is non-idempotent under a
      * source-identity change (spec 53 §Three handoff tiers: e.g. a running
      * counter). The T2 catch-up fallback mints a fresh source and replays
