@@ -447,6 +447,88 @@ class EvolveOrchestratorTest {
     }
 
     @Test
+    fun `a settlement fence dequeued under the recovery gate cannot complete after the lift`() {
+        val scheduler = RecordingScheduler(VirtualThreadScheduler("evolve-recovery-lift-race"))
+        val host = ManagedHost(scheduler = scheduler)
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = BlockingAfterEmitSummer(CellRef(logicalId, instanceId = 1))
+        val candidateGate = nonDecreasingGate()
+        val adapter = InvariantAdapterCell(candidateGate)
+        val view = CollectorCell()
+        val journal = BlockingReplayJournal()
+        val recovery = AtomicReference<civictech.cell.host.Recovery>()
+        val recoveryFailure = AtomicReference<Throwable>()
+        val recoveryReturned = CountDownLatch(1)
+        var hold: RecordingScheduler.Hold? = null
+
+        try {
+            listOf<Cell>(source, gate, incumbent, candidateGate, adapter, view).forEach {
+                host.managementInlet.call.spawn(it)
+            }
+            host.quiescence().await(5_000, "spawn recovery-lift graph")
+            val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java) as GateProxy).dataInlet.call
+            val routedInvariant =
+                (HostedCellProxy.create(adapter.ref, host, LongConsumerProxy::class.java) as LongConsumerProxy).inlet.call
+            source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+            gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+            incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+            candidate.outlet.subscribe(Use.fixed(routedInvariant, PortRef.generate()))
+            gate.controlInlet.call.setGreen()
+
+            val handle = Evolve.run(
+                host = host,
+                gate = gate,
+                incumbent = incumbent,
+                candidate = candidate,
+                outletName = "outlet",
+                downstream = listOf(view.inlet),
+                policy = policy().copy(window = ObservationWindow(1)),
+                gates = listOf(candidateGate),
+            )
+            source.emit(1)
+            candidate.emitted.await(5, TimeUnit.SECONDS) shouldBe true
+            hold = scheduler.holdNextLowestPriorityRun()
+
+            val recoveryFenceSubmitted = scheduler.expectManagementSubmission()
+            Thread.ofVirtual().start {
+                try {
+                    recovery.set(host.recoverFrom(journal))
+                } catch (failure: Throwable) {
+                    recoveryFailure.set(failure)
+                } finally {
+                    recoveryReturned.countDown()
+                }
+            }
+            recoveryFenceSubmitted.await(5, TimeUnit.SECONDS) shouldBe true
+            candidate.release()
+            journal.replayEntered.await(5, TimeUnit.SECONDS) shouldBe true
+            // The settlement fence has been dequeued while the gate is raised, and has not yet
+            // looked at it: the interleaving where the scheduler thread takes the task just
+            // before recovery lowers the gate and re-arms the staged violation delivery.
+            hold.entered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            journal.release()
+            recoveryReturned.await(5, TimeUnit.SECONDS) shouldBe true
+            recoveryFailure.get() shouldBe null
+            hold.release.countDown()
+
+            recovery.get().awaitApplied(5_000)
+            host.quiescence().await(5_000, "settle after recovery lift")
+            handle.verdict()
+                .shouldBeInstanceOf<PromotionVerdict.Reject>()
+                .reason.shouldContain("violated the promotion policy")
+        } finally {
+            hold?.release?.countDown()
+            candidate.release()
+            journal.release()
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
     fun `recovery can start during a candidate emission without leaking settlement refusal`() {
         val scheduler = RecordingScheduler(VirtualThreadScheduler("evolve-recovery-overlap"))
         val host = ManagedHost(scheduler = scheduler)
@@ -865,8 +947,28 @@ class EvolveOrchestratorTest {
             if (priority == Int.MAX_VALUE) lowestPrioritySubmissions.incrementAndGet()
             if (priority == 0) nextManagementSubmission.getAndSet(null)?.countDown()
             delegate.submit(priority) {
+                if (priority == Int.MAX_VALUE) {
+                    nextLowestPriorityHold.getAndSet(null)?.let { hold ->
+                        hold.entered.countDown()
+                        check(hold.release.await(10, TimeUnit.SECONDS)) { "test did not release held fence" }
+                    }
+                }
                 action()
                 if (priority == Int.MAX_VALUE) nextLowestPriorityRun.getAndSet(null)?.countDown()
+            }
+        }
+
+        /** Dequeued-but-not-yet-run point of the next lowest-priority task. */
+        class Hold {
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+        }
+
+        private val nextLowestPriorityHold = AtomicReference<Hold>()
+
+        fun holdNextLowestPriorityRun(): Hold = Hold().also { hold ->
+            check(nextLowestPriorityHold.compareAndSet(null, hold)) {
+                "a lowest-priority hold is already armed"
             }
         }
 

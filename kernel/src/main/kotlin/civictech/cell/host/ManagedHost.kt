@@ -780,6 +780,14 @@ open class ManagedHost(
      */
     private val recoveryAwareFences = ArrayDeque<CompletableFuture<Unit>>()
 
+    /**
+     * Times the recovery gate has been lowered to zero. A recovery-aware fence records it
+     * at submission and re-submits instead of completing when it changed: a fence task the
+     * scheduler dequeued under the gate may reach its check only after the lift, while the
+     * re-armed data tasks submitted under that same lock are still queued. Guarded by [dataLock].
+     */
+    private var recoveryGateLifts = 0L
+
     private fun requireRecoveryIdleLocked(operation: String) {
         check(recoveryRecordLoops == 0) {
             "$operation is unavailable while journal recovery is restoring records; " +
@@ -1654,6 +1662,7 @@ open class ManagedHost(
                 check(recoveryRecordLoops > 0) { "recovery record-loop gate underflow" }
                 recoveryRecordLoops--
                 if (recoveryRecordLoops == 0) {
+                    recoveryGateLifts++
                     val pending = attentionScheduler.dataQueues.values.sumOf { it.size }
                     deferredFences = recoveryAwareFences.toList()
                     recoveryAwareFences.clear()
@@ -1677,7 +1686,7 @@ open class ManagedHost(
                 deferredFences.forEach { it.completeExceptionally(failure) }
                 throw failure
             }
-            deferredFences.forEach { submitRecoveryAwareFence(it, throwOnFailure = false) }
+            deferredFences.forEach { submitRecoveryAwareFence(it, throwOnFailure = false, liftsAtSubmit = null) }
         }
     }
 
@@ -1769,34 +1778,44 @@ open class ManagedHost(
      */
     internal fun recoveryAwareQuiescence(): Quiescence {
         val future = CompletableFuture<Unit>()
-        val deferred = synchronized(dataLock) {
+        val liftsAtSubmit = synchronized(dataLock) {
             if (recoveryRecordLoops > 0) {
                 recoveryAwareFences.addLast(future)
-                true
+                null
             } else {
-                false
+                recoveryGateLifts
             }
         }
-        if (!deferred) submitRecoveryAwareFence(future, throwOnFailure = true)
+        if (liftsAtSubmit != null) submitRecoveryAwareFence(future, throwOnFailure = true, liftsAtSubmit)
         return Quiescence(future)
     }
 
-    /** Submit or re-submit one internal fence; its task must re-check the recovery gate. */
+    /**
+     * Submit or re-submit one internal fence; its task must re-check the recovery gate.
+     * [liftsAtSubmit] is [recoveryGateLifts] as read under [dataLock] when the gate was
+     * known lowered, or null to read it now (a re-submission after the lift).
+     */
     private fun submitRecoveryAwareFence(
         future: CompletableFuture<Unit>,
         throwOnFailure: Boolean,
+        liftsAtSubmit: Long?,
     ) {
+        val lifts = liftsAtSubmit ?: synchronized(dataLock) { recoveryGateLifts }
         try {
             scheduler.submit(Int.MAX_VALUE) {
-                val deferred = synchronized(dataLock) {
-                    if (recoveryRecordLoops > 0) {
-                        recoveryAwareFences.addLast(future)
-                        true
-                    } else {
-                        false
+                // Defer while the gate is raised; re-submit behind the re-armed data tasks
+                // when a lift happened since submission; complete only when neither did.
+                val outcome = synchronized(dataLock) {
+                    when {
+                        recoveryRecordLoops > 0 -> recoveryAwareFences.addLast(future).let { 0 }
+                        recoveryGateLifts != lifts -> 1
+                        else -> 2
                     }
                 }
-                if (!deferred) future.complete(Unit)
+                when (outcome) {
+                    1 -> submitRecoveryAwareFence(future, throwOnFailure = false, liftsAtSubmit = null)
+                    2 -> future.complete(Unit)
+                }
             }
         } catch (failure: Throwable) {
             future.completeExceptionally(failure)
