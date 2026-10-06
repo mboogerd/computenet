@@ -130,6 +130,10 @@ interface View<in D, out S> {
  * a state-as-delta, so a freshly-observed outlet's snapshot equals `current()`
  * without replaying history.
  *
+ * This is the lower-level single-view specialization; apps normally enter
+ * through [observation], which also handles same-root alignment and cross-root
+ * disclosure.
+ *
  * Threading: the fold runs on the host scheduler thread (per-cell FIFO); a
  * [lock] serializes the fold against [onChange] registration, and the published
  * snapshot is a `@Volatile` immutable value so [current] is torn-read-free from
@@ -355,6 +359,9 @@ class ObserveCell<D : Any, S>(
  * val common = host.observe(refs.common, View.set<Slot>()) { set -> broadcast(set) }
  * common.current()   // consistent snapshot, any thread
  * ```
+ *
+ * This single-view specialization remains behaviorally unchanged. Apps should
+ * normally use [observation] as the canonical app-edge entry point.
  */
 fun <D : Any, S> Use<HostManagementApi>.observe(
     source: CellRef,
@@ -466,6 +473,9 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
  * A composite over several named outlets, assembling one `{ name -> value }`
  * snapshot for the app (slotfinder's participants + pair + common + filtered +
  * byDay as one JSON object).
+ *
+ * This is the lower-level point-consistent specialization; apps normally enter
+ * through [observation], which partitions views into aligned root groups.
  *
  * **Consistency (honest):** this composite is **point-consistent per outlet**,
  * NOT wave-aligned. Each named outlet is folded by its own [ObserveCell] and
@@ -641,6 +651,9 @@ class CompositeSink internal constructor(
  * }
  * view.current()   // { common, filtered, byDay }
  * ```
+ *
+ * This point-consistent specialization remains behaviorally unchanged. Apps
+ * should normally use [observation] as the canonical app-edge entry point.
  *
  * **This composite is point-consistent per outlet** (see [CompositeSink]): a
  * read may pair `common` at wave `t` with `filtered` at wave `t-1` mid-wave.

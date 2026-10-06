@@ -8,6 +8,7 @@ import civictech.cell.data.delta.MapDelta
  * last-writer-per-key puts and removals into a queryable map — the canonical
  * fold for anything holding a [MapCell] / `GroupByCell` outlet (an app
  * subscriber, a test, the observation sink). No ports, no host, no wave logic.
+ * Not an app-edge API; apps read through [civictech.cell.observe.observation].
  *
  * Convergence caveat is inherited from [MapDelta] (G-23): map deltas carry no
  * causal tags, so this is sound over one FIFO stream but not across concurrent

@@ -21,6 +21,7 @@ interface MapHubApi<K, V> {
 /**
  * Sink cell folding a [SetDelta] stream into live membership via [SetView];
  * [onUpdate] fires on effective membership change only (tag churn is silent).
+ * Not an app-edge API; apps read through [civictech.cell.observe.observation].
  */
 class SetHubCell<E>(
     private val onUpdate: (Set<E>) -> Unit,
@@ -36,6 +37,7 @@ class SetHubCell<E>(
 /**
  * Sink cell folding a [MapDelta] stream into current entries via [MapView];
  * [onUpdate] fires on effective change only (restated puts are silent).
+ * Not an app-edge API; apps read through [civictech.cell.observe.observation].
  */
 class MapHubCell<K, V>(
     private val onUpdate: (Map<K, V>) -> Unit,
