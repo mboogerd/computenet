@@ -147,10 +147,11 @@ sealed interface StepCheck {
 
 /**
  * What a planned step would do ([WKB2-14]). Precheck produces [SPAWN], [LINK]
- * and [UNLINK]; [DESPAWN] and [PROMOTE] are arms for the write plane's draft
+ * and [UNLINK]; [WRITE] is a check-only declaration, while [DESPAWN] and
+ * [PROMOTE] are arms for the write plane's draft
  * (WKB2 F3/F9).
  */
-enum class PlannedAction { SPAWN, LINK, UNLINK, DESPAWN, PROMOTE }
+enum class PlannedAction { SPAWN, LINK, UNLINK, DESPAWN, WRITE, PROMOTE }
 
 /**
  * One step of a [Plan]. [key] mirrors [ApplyReport] (91xzn-D8): the spawn
@@ -206,6 +207,7 @@ fun GraphSpec.precheck(boundary: List<BoundaryLink> = emptyList(), live: LiveVie
             is ConnectStep -> planned += scratch.connect(step)
             is UnlinkStep -> planned += scratch.unlink(step)
             is DespawnStep -> planned += scratch.despawn(step)
+            is WriteStep -> planned += scratch.write(step)
             is PromoteStep -> planned += PlannedStep(
                 step.handle,
                 step.handle,
@@ -390,6 +392,21 @@ private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
             }
         }
         return PlannedStep(key, step.handle, PlannedAction.DESPAWN, emptySet(), StepCheck.Ok)
+    }
+
+    fun write(step: WriteStep): PlannedStep {
+        val unresolved = step.cells.firstOrNull { it !in staged }
+        val result = if (unresolved == null) {
+            StepCheck.Ok
+        } else {
+            val reason = if (unresolved in familyHandles) {
+                familyUnresolved(unresolved, "declared write '${step.name}'")
+            } else {
+                unresolvedHandle(unresolved, "declared write '${step.name}'")
+            }
+            StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, reason)
+        }
+        return PlannedStep(step.name, step.name, PlannedAction.WRITE, emptySet(), result)
     }
 
     fun boundary(link: BoundaryLink, live: LiveView): PlannedStep {

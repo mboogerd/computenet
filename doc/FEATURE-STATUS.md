@@ -20,7 +20,7 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Typed ports / explicit links | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | 13 |
 | Deltas & data-cell operators | - | USED | USED | USED | USED | - | USED | USED | USED | USED | USED | USED | USED | 11 |
-| Glitch-free observation | USED | - | - | - | - | USED | USED | USED | USED | USED | USED | USED | USED | 9 |
+| Glitch-free observation | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | USED | USED | 11 |
 | Interest-driven execution | - | - | - | - | - | - | - | USED | - | - | - | USED | - | 2 |
 | Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Partitioning | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -33,7 +33,7 @@
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
 | Demograph | - | - | - | USED | - | - | - | - | - | - | - | - | - | 1 |
-| **headline count** | 4 | 4 | 3 | 5 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
+| **headline count** | 4 | 5 | 3 | 6 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
@@ -62,7 +62,7 @@
 - typed-links / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - typed-links / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorGraph.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/baseline/Rebaseline.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/projector/MirrorCellFactory.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt
 - typed-links / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/Cells.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/DeliberateApp.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Sensitivity.kt
-- typed-links / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/BindingTable.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
+- typed-links / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/BindingTable.kt
 - typed-links / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - typed-links / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - typed-links / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
@@ -73,7 +73,7 @@
 - delta-operators / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/declaration/DeclarationIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/ingest/SpendLogIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/SessionLedger.kt
 - delta-operators / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - delta-operators / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorGraph.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/projector/MirrorCellFactory.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/projector/MirrorProjector.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/ready/ReadySetCell.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/writeback/Provenance.kt
-- delta-operators / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/TranscriptSource.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/ClaimMint.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/RelationMint.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/StanceProject.kt
+- delta-operators / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialoguePipeline.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/TranscriptSource.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/ClaimMint.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/RelationMint.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/mint/StanceProject.kt
 - delta-operators / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - delta-operators / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - delta-operators / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
@@ -81,6 +81,8 @@
 - delta-operators / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/Queries.kt, demo/social/src/main/kotlin/civictech/demo/social/ShortReads.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
 - delta-operators / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - glitch-free-observe / agora: demo/agora/src/main/kotlin/civictech/agora/cell/CredenceView.kt
+- glitch-free-observe / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
+- glitch-free-observe / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - glitch-free-observe / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/Cells.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Sensitivity.kt
 - glitch-free-observe / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
 - glitch-free-observe / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt

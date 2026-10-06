@@ -55,6 +55,15 @@ interface HostManagementApi {
     fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry
 
     /**
+     * Declares one host-local multi-cell write boundary. Repeating [name] with
+     * the same [cells] is idempotent; changing its scope is a conflict.
+     */
+    fun declareWrite(name: String, cells: Set<CellRef>): DeclaredWrite
+
+    /** Returns the write declared under [name], or null when none exists. */
+    fun declaredWrite(name: String): DeclaredWrite?
+
+    /**
      * Unregisters a hosted cell and calls its [Cell.onDeactivate] on the
      * host's execution context. Subsequent invocations for the ref dead-letter.
      */

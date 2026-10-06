@@ -15,16 +15,16 @@ import kotlin.test.assertTrue
  * SSE frame in which both fields change, `produce` is always a subset of
  * `items`, and the aligned sink drains to zero buffered waves at idle.
  *
- * **Frame-attribution method**: because `broadcast` frames from different
- * hubs arrive from different dispatcher threads, a frame from another hub is
- * not ordered against an aligned frame — but two waves through the *aligned*
- * sink are FIFO on its own single-consumer dispatcher. So each test
- * subscribes (the first frame is the initial state), performs the op(s)
- * under test, then a sentinel `add` of an item outside the `a..m` range
- * (`zebra`, which changes `items` only) and collects frames up to and
- * including the one where `zebra` first appears in `items`. The frames
- * strictly between the initial frame and the sentinel frame are the op's own
- * frames.
+ * **Frame-attribution method**: the multi-group observation listener is a
+ * latest-state callback: the coordinator queues each group publication, but
+ * `broadcast()` reads `observation.current()` when its callback runs.
+ * Back-to-back waves can therefore coalesce into one serialized SSE state even
+ * though the aligned sink published each wave. Each test subscribes (the first
+ * frame is the initial state), performs the op(s) under test, waits until the
+ * tap shows the op's own aligned state, then posts a sentinel `add` of an item
+ * outside the `a..m` range (`zebra`, which changes `items` only). The frames
+ * strictly between the initial frame and the sentinel frame are consequently
+ * the op's own frames.
  */
 class AlignedFrameTest {
 
@@ -59,6 +59,60 @@ class AlignedFrameTest {
         }
 
     @Test
+    fun `canonical observation partitions shopping views by equal roots`() {
+        val app = DemoApp(port = 0).start()
+        try {
+            assertEquals(
+                setOf("items+produce", "votes", "wanted"),
+                app.observationGroups,
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `replication keeps shared observation in its own root group`() {
+        val app = DemoApp(port = 0, replicate = true).start()
+        try {
+            assertEquals(
+                setOf("items+produce", "votes", "wanted", "shared"),
+                app.observationGroups,
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `item-only ops leave the votes group frontier unchanged`() {
+        val app = DemoApp(port = 0).start()
+        try {
+            val base = "http://localhost:${app.boundPort}"
+            val probe = HttpProbe(base)
+
+            // Establish a non-empty votes frontier, then advance only the item
+            // writer. The independent votes group must not move with those ops.
+            probe.post("user=tester&action=vote&item=banana")
+            awaitSseData(base + "/events", timeoutMs = 5_000) { "\"banana\"" in it }
+            val afterVote = app.observationFrontier("votes")
+
+            probe.post("user=tester&action=add&item=apples")
+            awaitSseData(base + "/events", timeoutMs = 5_000) { "\"apples\"" in it }
+            val afterFirstItem = app.observationFrontier("votes")
+
+            probe.post("user=tester&action=add&item=pears")
+            awaitSseData(base + "/events", timeoutMs = 5_000) { "\"pears\"" in it }
+            val afterSecondItem = app.observationFrontier("votes")
+
+            assertEquals(afterVote, afterFirstItem, "an item-only op advanced the votes group frontier")
+            assertEquals(afterFirstItem, afterSecondItem, "a second item-only op advanced the votes group frontier")
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
     fun `an in-range add settles as one aligned frame with both fields changed`() {
         val app = DemoApp(port = 0).start()
         try {
@@ -67,8 +121,13 @@ class AlignedFrameTest {
 
             val frames = collectSseFrames(
                 "$base/events",
-                onSubscribed = {
+                onSubscribed = { tap ->
                     probe.post("user=tester&action=add&item=apples")
+                    awaitUntil("aligned SSE frame for `add apples`", timeoutMs = 5_000) {
+                        tap.frames().any { frame ->
+                            "apples" in itemsOf(frame) && "apples" in produceOf(frame)
+                        }
+                    }
                     probe.post("user=tester&action=add&item=zebra")
                 },
             ) { "zebra" in itemsOf(it) }
@@ -86,6 +145,7 @@ class AlignedFrameTest {
             )
             assertTrue("apples" in itemsOf(opFrames[changed.single()]), "the changed frame never shows apples")
             assertTrue("apples" in produceOf(opFrames[changed.single()]), "the changed frame never shows apples in produce")
+            awaitUntil("aligned sink idle", timeoutMs = 5_000) { app.alignedBufferedWaves == 0 }
         } finally {
             app.stop()
         }
@@ -105,8 +165,15 @@ class AlignedFrameTest {
 
             val frames = collectSseFrames(
                 "$base/events",
-                onSubscribed = {
+                onSubscribed = { tap ->
                     probe.post("user=tester&action=remove&item=apples")
+                    awaitUntil("aligned SSE frame for `remove apples`", timeoutMs = 5_000) {
+                        tap.frames().any { frame ->
+                            "apples" !in itemsOf(frame) &&
+                                "apples" !in produceOf(frame) &&
+                                "zebra" !in itemsOf(frame)
+                        }
+                    }
                     probe.post("user=tester&action=add&item=zebra")
                 },
             ) { "zebra" in itemsOf(it) }
@@ -125,6 +192,7 @@ class AlignedFrameTest {
                 "apples" !in produceOf(opFrames[changed.single()]),
                 "the changed frame still shows apples in produce",
             )
+            awaitUntil("aligned sink idle", timeoutMs = 5_000) { app.alignedBufferedWaves == 0 }
         } finally {
             app.stop()
         }
@@ -139,12 +207,17 @@ class AlignedFrameTest {
 
             val frames = collectSseFrames(
                 "$base/events",
-                onSubscribed = {
+                onSubscribed = { tap ->
                     probe.post("user=tester&action=add&item=banana")
                     probe.post("user=tester&action=vote&item=banana")
                     probe.post("user=tester&action=add&item=zucchini")
                     probe.post("user=tester&action=vote&item=apricot") // unlisted item's vote
                     probe.post("user=tester&action=remove&item=banana")
+                    awaitUntil("aligned frame before mixed-op sentinel", timeoutMs = 5_000) {
+                        tap.frames().any { frame ->
+                            "zucchini" in itemsOf(frame)
+                        }
+                    }
                     probe.post("user=tester&action=add&item=zebra")
                 },
             ) { "zebra" in itemsOf(it) }
@@ -163,21 +236,22 @@ class AlignedFrameTest {
  * first one satisfying [until]. Bounded by [timeoutMs] — [awaitSseData]'s
  * discipline: fails naming [url] rather than parking until JUnit's suite
  * timeout. Built on [SseTap] (already in `:testkit`, unmodified here), whose
- * async subscription starts on construction, so [onSubscribed] — invoked once
- * the tap's own initial-state frame has arrived — is where a caller safely
- * issues the ops it wants captured, on the same thread, with no extra
- * concurrency of its own. `internal` and top-level so the two-JVM sibling
- * task (computenet-sozzn.2) can reuse it against `TwoJvmConvergenceTest.kt`.
+ * async subscription starts on construction, so [onSubscribed] — invoked with
+ * the tap once its own initial-state frame has arrived — is where a caller
+ * safely issues the ops it wants captured and can await an operation frame on
+ * that same tap, on the same thread, with no extra concurrency of its own.
+ * `internal` and top-level so the two-JVM sibling task (computenet-sozzn.2) can
+ * reuse it against `TwoJvmConvergenceTest.kt`.
  */
 internal fun collectSseFrames(
     url: String,
     timeoutMs: Long = 5_000,
-    onSubscribed: (() -> Unit)? = null,
+    onSubscribed: ((SseTap<String>) -> Unit)? = null,
     until: (String) -> Boolean,
 ): List<String> {
     SseTap(url) { it }.use { tap ->
         awaitUntil("initial SSE frame from $url", timeoutMs = timeoutMs) { tap.frames().isNotEmpty() }
-        onSubscribed?.invoke()
+        onSubscribed?.invoke(tap)
         awaitUntil("SSE frame from $url satisfying `until`", timeoutMs = timeoutMs) { tap.frames().any(until) }
         val frames = tap.frames()
         val cutoff = frames.indexOfFirst(until)

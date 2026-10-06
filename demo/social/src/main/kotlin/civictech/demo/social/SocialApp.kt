@@ -18,10 +18,9 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.Interest
-import civictech.cell.observe.ObservationSink
-import civictech.cell.observe.ObserveCell
-import civictech.cell.observe.View
-import civictech.cell.observe.observe
+import civictech.cell.observe.Observation
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
@@ -162,14 +161,15 @@ class SocialApp(
      */
     private val feedSessions = ConcurrentHashMap<Long, FeedSession>()
 
-    // One observe sink per static dimension set (jo2jk-D2), read the same way
-    // SocialGraph reads its keyed families: sink.current() only.
-    private val tags: ObservationSink<Set<Tag>> = host.observe(pipeline.statics.tags.ref, View.set<Tag>())
-    private val tagClasses: ObservationSink<Set<TagClass>> =
-        host.observe(pipeline.statics.tagClasses.ref, View.set<TagClass>())
-    private val places: ObservationSink<Set<Place>> = host.observe(pipeline.statics.places.ref, View.set<Place>())
-    private val organisations: ObservationSink<Set<Organisation>> =
-        host.observe(pipeline.statics.organisations.ref, View.set<Organisation>())
+    // One canonical observation for all four static dimensions (axcyk-D13).
+    // Their independent roots become four one-view aligned groups; the test
+    // pins that partition so a future topology change cannot silently alter it.
+    internal val staticObservation: Observation = host.observation {
+        set("tags", pipeline.statics.tags.ref)
+        set("tagClasses", pipeline.statics.tagClasses.ref)
+        set("places", pipeline.statics.places.ref)
+        set("organisations", pipeline.statics.organisations.ref)
+    }
 
     /** The four static dimension sets as this app's sinks currently hold them. */
     internal data class StaticSets(
@@ -181,7 +181,12 @@ class SocialApp(
 
     /** Test read (computenet-v10ou.1): the static sets, which `BatchModel.Relations` does not carry. */
     internal fun staticSets(): StaticSets =
-        StaticSets(tags.current(), tagClasses.current(), places.current(), organisations.current())
+        StaticSets(
+            staticObservation.get("tags"),
+            staticObservation.get("tagClasses"),
+            staticObservation.get("places"),
+            staticObservation.get("organisations"),
+        )
 
     /** Test read (computenet-v10ou.1): this app's host dead-letter count, so far. */
     internal fun deadLetterCount(): Long = host.supervisionAccounting().deadLetters
@@ -263,23 +268,17 @@ class SocialApp(
     }
 
     /**
-     * Safe on a never-started app. Also releases every observe-sink dispatcher
-     * thread this app minted (computenet-a77tu): [SocialGraph.close] for the
-     * per-keyed-cell sinks, plus this app's own four static-set sinks
-     * ([tags]/[tagClasses]/[places]/[organisations]), cast to [ObserveCell]
-     * the same way and for the same reason [SocialGraph.close] does — the
-     * sole implementation `host.observe` ever returns, and the one that
-     * exposes `close`. Idempotent, since both [SocialGraph.close] and
-     * [ObserveCell.close] are.
+     * Safe on a never-started app. Also releases every observation dispatcher
+     * thread this app minted (computenet-a77tu): [SocialGraph.close] handles
+     * the per-keyed-cell observations, while [staticObservation] owns the four
+     * static dimensions. Idempotent, since both observation lifecycles are.
      *
-     * computenet-cpybp: returns only after every observe-cell dispatcher
-     * thread this app caused has terminated, waiting at most
-     * [STOP_DISPATCHER_BOUND_MS] ([SocialGraph.awaitDispatchers] says how the
-     * threads are found, and the one case it does not cover). Only
-     * [SocialGraph]'s sinks can have minted one: the four static-set sinks
-     * never get a listener, and `ObserveCell` mints its dispatcher only to run
-     * a listener. Every other step runs first, so a bound overrun still leaves
-     * the app fully stopped.
+     * computenet-cpybp / computenet-iltfm: returns only after every observation
+     * dispatcher this app caused has terminated, waiting at most
+     * [STOP_DISPATCHER_BOUND_MS] through the observations' termination handles
+     * (see [SocialGraph.awaitDispatchers]). Both sets share that one deadline.
+     * Every other step runs first, so a bound overrun still leaves the app
+     * fully stopped.
      *
      * @throws IllegalStateException naming the survivors, if any dispatcher is
      *   still alive after [STOP_DISPATCHER_BOUND_MS].
@@ -287,11 +286,15 @@ class SocialApp(
     fun stop() {
         shell?.stop()
         graph.close()
-        listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
-        val survivors = graph.awaitDispatchers(STOP_DISPATCHER_BOUND_MS)
+        staticObservation.close()
+        val started = System.nanoTime()
+        val survivors = graph.awaitDispatchers(STOP_DISPATCHER_BOUND_MS).toMutableList()
+        val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        val remainingMs = (STOP_DISPATCHER_BOUND_MS - elapsedMs).coerceAtLeast(0)
+        if (!staticObservation.awaitTermination(remainingMs)) survivors += staticObservation.toString()
         check(survivors.isEmpty()) {
-            "SocialApp.stop: ${survivors.size} observe-cell dispatcher(s) still alive " +
-                "${STOP_DISPATCHER_BOUND_MS}ms after stop: $survivors"
+            "SocialApp.stop: ${survivors.size} observation dispatcher(s) still draining " +
+                "${STOP_DISPATCHER_BOUND_MS}ms after stop; observations: $survivors"
         }
     }
 
@@ -772,7 +775,7 @@ class SocialApp(
 
         val knowsTotal = personIds.sumOf { id -> graph.personFacts(id).count { it is Knows } }
         val likesTotal = messageIds.sumOf { id -> graph.messageFacts(id).count { it is MessageFact.LikedBy } }
-        val tagsTotal = tags.current().size
+        val tagsTotal = staticObservation.get<Set<Tag>>("tags").size
 
         val personsJson = personIds.take(STATE_LIMIT).joinToString(",", "[", "]") { id ->
             val facts = graph.personFacts(id)

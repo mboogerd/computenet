@@ -99,24 +99,32 @@ internal fun interface GatedFold<T> {
  *  - the absorber links **directly** into the gated inlet — its
  *    [civictech.cell.control.absorbAck] lands on the expected edge, the wave
  *    completes, the gate is correct;
- *  - the absorber has **one or more pure hops below it** — the ack is
- *    *edge-local* and **no plain operator relays it**: a `FilterCell` /
- *    `FlatMapSetCell` hop installs no [Protocols.Progress] handler, so an ack
- *    arriving on its inlet neither advances anything nor is re-emitted. Only a
- *    cell that installs a frontier (this gate, `WaveFrontier`,
- *    `CoalescingCombineCell`, `AlignedCompositeCell`) consumes one. The expected
- *    edge then never settles for that wave: output **lags** until the arm
- *    happens to deliver a *later* wave (the monotone-`max` advance standing in
- *    for the lost ack), and at rest — when the final wave is one that arm never
- *    carries — output is **withheld permanently**, which disqualifies the gate.
+ *  - the absorber has **one or more single-input, transparent relay-enabled
+ *    hops below it** — [civictech.cell.control.relayAbsorbAcks] forwards the
+ *    same `Progress` `(sourceId, thru)` through each hop, without minting a wave
+ *    or rewriting source/tag identity, until it lands on this gate's expected
+ *    edge. A frontier installed on an intermediate inlet consumes the ack and
+ *    is a relay terminal. A hop with more than one open `Consume` input edge
+ *    never relays: one edge's watermark cannot stand for the per-inlink
+ *    completeness condition `[22-LIVE-01]`; a future per-edge watermark fold
+ *    may relax that conservative limit. `FilterCell`, `FlatMapSetCell`,
+ *    `GroupByCell`, and a single-input downstream `QuorumSetCell` install that
+ *    bounded relay; the slotfinder `common -> filtered -> byDay` pipeline is
+ *    one exercised shape (`common` absorbs, while the latter two are unary).
+ *
+ * A transparent operator that has not installed the relay retains F-15's old
+ * failure mode: the expected edge advances only on a later real wave and can
+ * still withhold output permanently at rest. Extending the relay to every such
+ * operator, and teaching the frontier to distinguish structurally silent arms,
+ * remain the wider G-40/G-13 surface.
  *
  * Measured on the AGO1 relation leg (computenet-23bf; both arms two hops deep,
  * `RelationMintTest` reduced to an empty canonical relation set at quiescence)
  * and reproduced minimally in `FrontierGatedEmissionTest`'s disjoint-wave-arm
- * pair, whose one-hop control is the discriminator. Closing this properly means
- * either relaying `Progress` through pure operator hops or teaching the frontier
- * to tell a structurally silent arm from a stalled one — the G-40/G-13 residual
- * again; see `doc/demo-findings.md` F-15.
+ * pair, whose one-hop control is the discriminator. The local relay resolution
+ * is exercised at the aligned observation edge by `ProgressRelayObservationTest`;
+ * the structural silent-vs-stalled distinction remains the broader G-40/G-13
+ * residual; see `doc/demo-findings.md` F-15.
  *
  * Not thread-safe by itself: it runs under the owning cell's ordinary
  * single-threaded handler discipline, exactly as [CoalescingCombineCell]'s fold

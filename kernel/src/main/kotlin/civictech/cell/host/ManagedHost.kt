@@ -33,6 +33,7 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
+import java.nio.charset.StandardCharsets.UTF_8
 import civictech.cell.control.AttentionBand
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionScheduler
@@ -400,6 +401,9 @@ open class ManagedHost(
     val color: HostColor get() = scheduler.color
 
     private val cells = ConcurrentHashMap<CellRef, Cell>()
+
+    /** Host-local declared ingress lanes; their counters are intentionally volatile. */
+    private val declaredWrites = ConcurrentHashMap<String, DeclaredWrite>()
 
     /** `spawnBound`'s recorded `parent` association (93 I-21 §4.3): bookkeeping only —
      * membrane/exposure enforcement over this is G-9, unbuilt. */
@@ -2456,6 +2460,32 @@ open class ManagedHost(
             override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
                 civictech.cell.host.upstreamConsumeAncestors(cells, ref)
 
+            override fun declareWrite(name: String, cells: Set<CellRef>): DeclaredWrite {
+                val declaredCells = cells.toSet()
+                val missing = declaredCells.filterNot(this@ManagedHost.cells::containsKey)
+                require(missing.isEmpty()) {
+                    "declared write '$name' contains refs not hosted by ${this@ManagedHost.ref}: $missing"
+                }
+                return declaredWrites.compute(name) { _, existing ->
+                    when {
+                        existing == null -> DeclaredWrite(
+                            name = name,
+                            actorId = UUID.nameUUIDFromBytes(
+                                "computenet:declared-write:${this@ManagedHost.ref.id}:$name".toByteArray(UTF_8),
+                            ),
+                            cells = declaredCells,
+                        )
+                        existing.cells == declaredCells -> existing
+                        else -> throw IllegalStateException(
+                            "declared write '$name' already exists with cells ${existing.cells}, " +
+                                "cannot redeclare it with $declaredCells",
+                        )
+                    }
+                }!!
+            }
+
+            override fun declaredWrite(name: String): DeclaredWrite? = declaredWrites[name]
+
             override fun despawn(ref: CellRef) {
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
                 registry?.unpublish(ref)
@@ -2635,6 +2665,8 @@ open class ManagedHost(
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
             } else if (method.name == "upstreamConsumeAncestors") {
                 internalApi.upstreamConsumeAncestors(args!![0] as CellRef)
+            } else if (method.name == "declareWrite" || method.name == "declaredWrite") {
+                enqueueAwaiting(0) { invocation.invoke() }
             } else if (method.name.startsWith("connect")) {
                 // surfaces the LinkResult (management calls may await, spec 31 rule 4)
                 enqueueAwaiting(0) { invocation.invoke() }

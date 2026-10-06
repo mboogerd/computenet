@@ -48,17 +48,17 @@
  * write-ahead journaled the same way every other `--journal` demo's writes
  * are.
  *
- * **Reads** are one [civictech.cell.observe.ObservationSink] per spawned
- * keyed cell (jo2jk-D2): the sink is created the moment a cell is first
+ * **Reads** are one [civictech.cell.observe.Observation] per spawned keyed
+ * cell (jo2jk-D2): the observation is created the moment a cell is first
  * reached (in [personCell]/[forumCell]/[messageCell]/[authoredCell]), folding
- * that cell's outlet with [civictech.cell.observe.View.set] so
+ * that cell's outlet as one aligned view so
  * [personFacts]/[authored]/[forumFacts]/[messageFacts] read a consistent
- * snapshot (`sink.current()`) from any thread, never `SetCell.membership()`
- * directly. This is a demo-scale cost worth stating plainly: one
- * [civictech.cell.observe.ObserveCell] per keyed cell that has ever been
- * touched, not per family — an SNB dataset with many persons/forums/messages
- * spawns one extra observing cell for each. [onChange] registers a listener
- * that every sink, present and future, fires on a settled effective change,
+ * snapshot from any thread, never `SetCell.membership()` directly. This is a
+ * demo-scale cost worth stating plainly: one one-view aligned group per keyed
+ * cell that has ever been touched, not per family — an SNB dataset with many
+ * persons/forums/messages spawns one extra observing cell for each. [onChange]
+ * registers a listener that every observation, present and future, fires on a
+ * settled effective change,
  * mirroring the per-outlet `graph.onChange { broadcast() }` idiom the other
  * `--journal` demos use for their single outlet.
  */
@@ -71,10 +71,10 @@ import civictech.cell.graph.TypedRef
 import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.ManagedHost
-import civictech.cell.observe.ObservationSink
-import civictech.cell.observe.ObserveCell
-import civictech.cell.observe.View
-import civictech.cell.observe.observe
+import civictech.cell.observe.Observation
+import civictech.cell.observe.ObservationFrame
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import java.util.SortedSet
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -92,7 +92,7 @@ class SocialGraph(
      * `/state` and `/events` are serialized against each other). Read by
      * [personFacts]/[authored]/[forumFacts]/[messageFacts], which `/state`
      * calls from that same HTTP thread, but ALSO from `graph.onChange {
-     * broadcast() }` (`SocialApp.kt`), which an [ObservationSink] fires from
+     * broadcast() }` (`SocialApp.kt`), which an [Observation] fires from
      * its own dedicated single-thread listener executor — "never the host
      * thread" (`kernel/.../observe/Observe.kt:138-152`). So a `getOrPut`
      * insert on the HTTP thread can race a `get` from a sink's listener
@@ -109,30 +109,30 @@ class SocialGraph(
      * the two candidate reproductions are both impractical here — a stress
      * loop is inherently non-deterministic (the failure is a torn/missing read
      * under resize, not something a fixed schedule can force), and forcing the
-     * interleaving would mean whitebox-instrumenting `ObservationSink`'s
+     * interleaving would mean whitebox-instrumenting [Observation]'s
      * private dispatcher, which is kernel-internal and not a seam this class
      * owns. `SocialServerTest`/`SocialSchemaTest` cannot observe it either:
      * they poll `/state` on the HTTP thread via `HttpProbe.await`, which never
      * touches the sink-dispatcher thread.
      */
-    private val personSinks = ConcurrentHashMap<Long, ObservationSink<Set<PersonFact>>>()
-    private val forumSinks = ConcurrentHashMap<Long, ObservationSink<Set<ForumFact>>>()
-    private val messageSinks = ConcurrentHashMap<Long, ObservationSink<Set<MessageFact>>>()
-    private val authoredSinks = ConcurrentHashMap<Long, ObservationSink<Set<Message>>>()
+    private val personSinks = ConcurrentHashMap<Long, Observation>()
+    private val forumSinks = ConcurrentHashMap<Long, Observation>()
+    private val messageSinks = ConcurrentHashMap<Long, Observation>()
+    private val authoredSinks = ConcurrentHashMap<Long, Observation>()
 
     private val changeListeners = CopyOnWriteArrayList<() -> Unit>()
 
     /**
-     * Set by the first [onChange]; until then no sink carries a listener
-     * (computenet-v10ou.1). A listener is not free: each [ObservationSink]
-     * with one owns a dedicated dispatcher thread, minted on its first fire
-     * and never released (`kernel/.../observe/Observe.kt`, "The dispatcher is
-     * minted lazily"). Registering `{ fireChange() }` on every sink
-     * unconditionally cost one idle thread per keyed cell of every graph ever
-     * built — also for graphs nobody listens to (every sim-scheduler test
-     * graph) — and a test JVM building a handful of seed-42 graphs hit the
-     * per-process native-thread ceiling. [SocialApp] registers its broadcast
-     * only in `start()`, so an unstarted app now owns no sink threads.
+     * Set by the first [onChange]; until then no observation carries a listener
+     * (computenet-v10ou.1). A listener is not free: each one-view [Observation]
+     * forwards to its aligned group's dedicated dispatcher thread, minted on
+     * its first fire and released by [close]. Registering `{ fireChange() }`
+     * on every observation unconditionally cost one idle thread per keyed cell
+     * of every graph ever built — also for graphs nobody listens to (every
+     * sim-scheduler test graph) — and a test JVM building a handful of seed-42
+     * graphs hit the per-process native-thread ceiling. [SocialApp] registers
+     * its broadcast only in `start()`, so an unstarted app now owns no sink
+     * threads.
      */
     private val listening = AtomicBoolean(false)
 
@@ -161,28 +161,28 @@ class SocialGraph(
     private val unadmittedMessages = ConcurrentHashMap.newKeySet<Long>()
 
     /**
-     * Registers [listener] to fire on every settled change of every sink,
-     * present and future, made AFTER this call. A sink's state as it already
-     * stands at registration is not announced: a caller that needs it reads it
-     * (`/state`, and `/events`' own connect frame, do exactly that).
+     * Registers [listener] to fire on every settled change of every
+     * observation, present and future, made AFTER this call. An observation's
+     * state as it already stands at registration is not announced: a caller
+     * that needs it reads it (`/state`, and `/events`' own connect frame, do
+     * exactly that).
      *
-     * **The bulk attach skips each pre-existing sink's catch-up**
-     * (computenet-l3msn). [ObservationSink.onChange] always delivers one
+     * **The bulk attach skips each pre-existing observation's catch-up**
+     * (computenet-l3msn). [Observation.onChange] always delivers one
      * late-join catch-up per registration; for the first [onChange] that is
      * one invocation per pre-existing sink — N `/state` computations for a
      * preloaded source of N sinks (297 at `SnbGenerator(42, 0.05)`), which
      * [SocialApp]'s coalescing only divided by a load-dependent factor (CI
      * measured 101-233). So the bulk path registers [skipFirst]: its first
      * invocation is dropped, and that first invocation is always the catch-up
-     * — `ObserveCell.onChange` adds the listener and submits the catch-up
-     * inside one `synchronized(lock)` block, and `propagate` submits a
-     * change only under the same lock, to the same single-consumer executor
-     * (`kernel/.../observe/Observe.kt`, `onChange` and `propagate`). No
+     * — the aligned group adds the listener and submits the catch-up inside
+     * one synchronized block, and propagation submits a change only under the
+     * same lock, to the same single-consumer executor. No
      * change fold can therefore be submitted for this listener before its
      * catch-up, and every fold after registration still gets its own later
      * invocation, so no change is dropped. The skip leans on that ordering,
-     * which the kernel states as a guarantee in `ObserveCell`'s class KDoc
-     * (T08 finding 4), not on an implementation accident.
+     * which the kernel states as a guarantee for aligned observations, not on
+     * an implementation accident.
      *
      * [attach], for a sink created AFTER listening started, keeps its
      * catch-up: that sink's creating write may already have folded by the time
@@ -206,14 +206,22 @@ class SocialGraph(
      * late-join catch-up, see [onChange] — and calls [fireChange] on every
      * later one. One instance per sink: the skip is per registration.
      */
-    private fun <S> skipFirst(): (S) -> Unit {
+    private fun skipFirst(): (ObservationFrame) -> Unit {
         val caughtUp = AtomicBoolean(false)
         return { if (!caughtUp.compareAndSet(false, true)) fireChange() }
     }
 
-    /** Gives a newly created [sink] the change listener once any [onChange] exists. */
-    private fun <S> attach(sink: ObservationSink<S>): ObservationSink<S> =
-        sink.also { if (listening.get()) it.onChange { fireChange() } }
+    /**
+     * Gives a newly created [sink] the change listener once any [onChange]
+     * exists. A sink admitted after [close] is terminally closed here: it may
+     * have missed [close]'s map snapshot, but it must never mint a dispatcher
+     * that can outlive application shutdown.
+     */
+    private fun attach(sink: Observation): Observation =
+        sink.also {
+            if (closed.get()) it.close()
+            else if (listening.get()) it.onChange { fireChange() }
+        }
 
     private fun fireChange() {
         if (closed.get()) return
@@ -224,25 +232,33 @@ class SocialGraph(
 
     private fun personCell(id: Long): CellRef {
         val ref = graph.families.person.getOrSpawn(id).ref
-        if (!personSinks.containsKey(id)) personSinks.getOrPut(id) { host.observe(ref, View.set<PersonFact>()) }.let(::attach)
+        if (!personSinks.containsKey(id)) {
+            personSinks.getOrPut(id) { host.observation { set(PERSON_VIEW, ref) } }.let(::attach)
+        }
         return ref
     }
 
     private fun forumCell(id: Long): CellRef {
         val ref = graph.families.forum.getOrSpawn(id).ref
-        if (!forumSinks.containsKey(id)) forumSinks.getOrPut(id) { host.observe(ref, View.set<ForumFact>()) }.let(::attach)
+        if (!forumSinks.containsKey(id)) {
+            forumSinks.getOrPut(id) { host.observation { set(FORUM_VIEW, ref) } }.let(::attach)
+        }
         return ref
     }
 
     private fun messageCell(id: Long): CellRef {
         val ref = graph.families.message.getOrSpawn(id).ref
-        if (!messageSinks.containsKey(id)) messageSinks.getOrPut(id) { host.observe(ref, View.set<MessageFact>()) }.let(::attach)
+        if (!messageSinks.containsKey(id)) {
+            messageSinks.getOrPut(id) { host.observation { set(MESSAGE_VIEW, ref) } }.let(::attach)
+        }
         return ref
     }
 
     private fun authoredCell(id: Long): CellRef {
         val ref = graph.families.authored.getOrSpawn(id).ref
-        if (!authoredSinks.containsKey(id)) authoredSinks.getOrPut(id) { host.observe(ref, View.set<Message>()) }.let(::attach)
+        if (!authoredSinks.containsKey(id)) {
+            authoredSinks.getOrPut(id) { host.observation { set(AUTHORED_VIEW, ref) } }.let(::attach)
+        }
         return ref
     }
 
@@ -480,29 +496,22 @@ class SocialGraph(
     /** [isPerson]'s counterpart for messages — see its KDoc. */
     fun isMessage(id: Long): Boolean = graph.families.message.contains(id) && id !in unadmittedMessages
 
-    fun personFacts(id: Long): Set<PersonFact> = personSinks[id]?.current() ?: emptySet()
-    fun authored(id: Long): Set<Message> = authoredSinks[id]?.current() ?: emptySet()
-    fun forumFacts(id: Long): Set<ForumFact> = forumSinks[id]?.current() ?: emptySet()
-    fun messageFacts(id: Long): Set<MessageFact> = messageSinks[id]?.current() ?: emptySet()
+    fun personFacts(id: Long): Set<PersonFact> = personSinks[id]?.get(PERSON_VIEW) ?: emptySet()
+    fun authored(id: Long): Set<Message> = authoredSinks[id]?.get(AUTHORED_VIEW) ?: emptySet()
+    fun forumFacts(id: Long): Set<ForumFact> = forumSinks[id]?.get(FORUM_VIEW) ?: emptySet()
+    fun messageFacts(id: Long): Set<MessageFact> = messageSinks[id]?.get(MESSAGE_VIEW) ?: emptySet()
 
     /**
-     * Stops every sink's dispatcher thread, if it ever minted one
-     * (`kernel/.../observe/Observe.kt`, [ObserveCell.close]: "a caller that
-     * never despawns the sink ... may call this directly at shutdown"), and
-     * turns [fireChange] into a no-op ([closed]). [ObservationSink] itself does
-     * not expose `close` — only [ObserveCell], the sole implementation
-     * [personCell]/[forumCell]/[messageCell]/[authoredCell] ever construct via
-     * `host.observe`, does — so this casts rather than despawning through the
-     * host: despawn tears the cell down through the full management lifecycle,
-     * which is more than a stopping app that will never read these sinks again
-     * needs. Idempotent, like [ObserveCell.close] itself. The only caller is
-     * `SocialApp.stop` (computenet-a77tu): a running app never despawns these
-     * cells itself, so nothing else releases the thread each one may have
-     * minted.
+     * Terminally closes every per-key observation and turns [fireChange] into
+     * a no-op ([closed]). This uses the app-edge lifecycle directly rather
+     * than despawning through the host: despawn tears each aligned group down
+     * through the full management lifecycle, which is more than a stopping
+     * app that will never read these observations again needs. Idempotent. The
+     * only caller is `SocialApp.stop` (computenet-a77tu).
      *
-     * [ObserveCell.close] is `ExecutorService.shutdown()`: it returns at once
-     * and the thread exits only after its queue drains. Call
-     * [awaitDispatchers] to wait for that (computenet-cpybp).
+     * [Observation.close] returns after graceful shutdown starts; call
+     * [awaitDispatchers] to wait for every accepted listener invocation to
+     * finish (computenet-cpybp / computenet-iltfm).
      */
     fun close() {
         closed.set(true)
@@ -510,12 +519,12 @@ class SocialGraph(
     }
 
     /**
-     * Waits, up to [timeoutMs] in total, for every dispatcher thread minted by
-     * a sink of this graph to terminate, and returns the names of any still
-     * alive at the deadline — empty on success (computenet-cpybp). Valid only
-     * after [close]: that is what guarantees no sink mints another dispatcher
-     * (`ObserveCell.dispatchIfOpen` refuses under the same lock `close` sets
-     * `closed` under), so the set enumerated here is final.
+     * Waits, up to [timeoutMs] in total, for every sink of this graph to report
+     * terminal dispatcher shutdown through [Observation.awaitTermination], and
+     * returns descriptions of observations still draining at the deadline
+     * — empty on success. Valid only after [close], which terminally closes the
+     * existing sinks; [attach] terminally closes any in-flight admission that
+     * lands afterward, before it can register a listener.
      *
      * **Why a wait is needed at all** (measured 2026-09-25, darwin/arm64, a
      * throwaway probe against `SocialApp(source = SnbGenerator(42, 0.05))`):
@@ -531,47 +540,32 @@ class SocialGraph(
      * without broadcasting, so that queue is short. The wait stays: any
      * listener invocation can still be queued or running at `stop()`.)
      *
-     * **How the threads are found — a stated dependency on a kernel naming
-     * convention, not an API.** [ObserveCell] exposes no handle to its
-     * dispatcher and no way to await it, so this enumerates live threads named
-     * `observe-cell-<ref.id>` (`ObserveCell.newDispatcher`, Observe.kt) for
-     * this graph's sinks and joins them. Should that naming change, this finds
-     * nothing and returns empty without waiting; `SocialServerTest`'s
-     * dispatcher test, which selects the same threads by the same prefix,
-     * then fails to see any minted and goes red rather than passing silently.
-     * The proper seam is an `ObserveCell.awaitTermination`, a kernel change
-     * this demo does not make.
-     *
-     * **Not covered:** a sink the host re-activates after [close] (a
-     * `SupervisionPolicy.RESTART` landing mid-stop reopens it,
-     * `ObserveCell.reopen`) may mint a fresh dispatcher after this returns.
+     * Production shutdown does not enumerate JVM threads or depend on the
+     * dispatcher's diagnostic name. `SocialServerTest` deliberately keeps its
+     * independent thread-name witness so removing this wait still leaves a
+     * live dispatcher at the instant [civictech.demo.social.SocialApp.stop]
+     * returns and turns the test red.
      */
     fun awaitDispatchers(timeoutMs: Long): List<String> {
-        val names = allSinks().mapTo(HashSet()) { "observe-cell-${it.ref.id}" }
-        val dispatchers = liveThreads().filter { it.name in names }
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
-        for (thread in dispatchers) {
-            val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
-            if (remainingMs <= 0) break
-            thread.join(remainingMs)
+        require(timeoutMs >= 0) { "timeoutMs must not be negative (was $timeoutMs)" }
+        val started = System.nanoTime()
+        val survivors = mutableListOf<String>()
+        for (sink in allSinks()) {
+            val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+            val remainingMs = (timeoutMs - elapsedMs).coerceAtLeast(0)
+            if (!sink.awaitTermination(remainingMs)) survivors += sink.toString()
         }
-        return dispatchers.filter { it.isAlive }.map { it.name }
+        return survivors
     }
 
-    private fun allSinks(): List<ObserveCell<*, *>> =
+    private fun allSinks(): List<Observation> =
         listOf(personSinks.values, forumSinks.values, messageSinks.values, authoredSinks.values)
-            .flatMap { sinks -> sinks.map { it as ObserveCell<*, *> } }
+            .flatMap { it }
 
-    /** Every live thread in the JVM, enumerated from the root thread group. */
-    private fun liveThreads(): List<Thread> {
-        var root = Thread.currentThread().threadGroup
-        while (root.parent != null) root = root.parent
-        var buffer = arrayOfNulls<Thread>(root.activeCount() * 2 + 64)
-        var n = root.enumerate(buffer, true)
-        while (n == buffer.size) {
-            buffer = arrayOfNulls(buffer.size * 2)
-            n = root.enumerate(buffer, true)
-        }
-        return buffer.take(n).filterNotNull()
+    private companion object {
+        const val PERSON_VIEW = "person"
+        const val FORUM_VIEW = "forum"
+        const val MESSAGE_VIEW = "message"
+        const val AUTHORED_VIEW = "authored"
     }
 }
