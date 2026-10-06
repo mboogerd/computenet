@@ -108,7 +108,7 @@ class UpstreamAncestryTest {
 
         val ancestry = fixture.management.upstreamConsumeAncestors(filter.ref)
 
-        ancestry.local.shouldBeEmpty()
+        ancestry.local shouldBe emptyMap()
         ancestry.opaque.shouldBeEmpty()
     }
 
@@ -120,7 +120,7 @@ class UpstreamAncestryTest {
 
         val ancestry = fixture.management.upstreamConsumeAncestors(filter.ref)
 
-        ancestry.local.shouldBeEmpty()
+        ancestry.local shouldBe emptyMap()
         ancestry.opaque shouldBe setOf(opaque)
     }
 
@@ -135,7 +135,7 @@ class UpstreamAncestryTest {
 
         val ancestry = fixture.management.upstreamConsumeAncestors(filter.ref)
 
-        ancestry.local.shouldBeEmpty()
+        ancestry.local shouldBe emptyMap()
         ancestry.opaque shouldBe setOf(opaque)
     }
 
@@ -146,7 +146,7 @@ class UpstreamAncestryTest {
         val ancestry = fixture.management.upstreamConsumeAncestors(CellRef(UUID.randomUUID()))
 
         ancestry.self shouldBe null
-        ancestry.local.shouldBeEmpty()
+        ancestry.local shouldBe emptyMap()
         ancestry.opaque.shouldBeEmpty()
     }
 
@@ -160,7 +160,7 @@ class UpstreamAncestryTest {
         fixture.connect(root, "outlet", filter, "inlet")
         val after = fixture.management.upstreamConsumeAncestors(filter.ref)
 
-        before.local.shouldBeEmpty()
+        before.local shouldBe emptyMap()
         before.opaque.shouldBeEmpty()
         after.local.keys shouldBe setOf(root.ref)
         after.opaque.shouldBeEmpty()
