@@ -294,9 +294,9 @@ class InterestSpawnTest {
         val refusal = failed(admission.spawned).shouldBeInstanceOf<BudgetRefusedException>()
         refusal.denial.reason.name.startsWith("BUDGET_").shouldBeTrue()
         registry.interestOf(declaringRef) shouldBe interest
+        familyKeys(journal) shouldBe emptyList()
         family.keys() shouldBe emptySet()
         family.contains(9L).shouldBeFalse()
-        familyKeys(journal) shouldBe emptyList()
         ledger.charges.map { it.claimClass } shouldBe listOf(ClaimClass.Spawn)
         ledger.charges.single().stamp shouldBe stamp
 
