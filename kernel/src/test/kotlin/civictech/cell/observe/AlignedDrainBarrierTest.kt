@@ -58,6 +58,20 @@ class AlignedDrainBarrierTest {
     }
 
     @Test
+    fun `direct close after deactivation is terminal and activation does not reopen`() {
+        val ctx = object : CellContext {}
+        val sink = emptySink()
+
+        sink.onDeactivate(ctx)
+        sink.close()
+        sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Closed
+        sink.awaitTermination(1_000) shouldBe true
+
+        sink.onActivate(ctx)
+        sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Closed
+    }
+
+    @Test
     fun `deactivation and activation after direct close preserve terminal lifecycle`() {
         val sink = emptySink()
         val ctx = object : CellContext {}

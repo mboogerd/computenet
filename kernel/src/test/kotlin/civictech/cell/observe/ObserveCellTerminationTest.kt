@@ -136,6 +136,30 @@ class ObserveCellTerminationTest {
     }
 
     @Test
+    fun `observe close after deactivation is terminal and activation does not mint`() {
+        val sink = ObserveCell(View.set<Int>())
+        val ownThread = "observe-cell-${sink.ref.id}"
+        val firstFire = CountDownLatch(1)
+        val postCloseFire = CountDownLatch(1)
+        val fires = AtomicInteger()
+        sink.onChange { if (fires.incrementAndGet() == 1) firstFire.countDown() else postCloseFire.countDown() }
+        check(firstFire.await(30, TimeUnit.SECONDS)) { "initial observe catch-up did not run" }
+
+        val ctx = object : CellContext {}
+        sink.onDeactivate(ctx)
+        sink.close()
+        sink.awaitTermination(30_000).shouldBeTrue()
+
+        sink.onActivate(ctx)
+        sink.inlet.call.propagate(SetDelta(adds = mapOf(1 to setOf(freshTag()))))
+
+        sink.current() shouldBe setOf(1)
+        postCloseFire.await(1, TimeUnit.SECONDS).shouldBeFalse()
+        fires.get() shouldBe 1
+        liveThreadsNamed(ownThread).shouldBeEmpty()
+    }
+
+    @Test
     fun `terminal close awaits a predecessor parked by deactivation`() {
         val ctx = object : CellContext {}
 
