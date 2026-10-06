@@ -420,10 +420,10 @@ class DemoApp(
         val wanted = setOf("wanted")
         val voteCount = wanted.size
         // V4-PILOT: the `"shared"` field exists ONLY in replicate mode, so the
-        // default payload is byte-identical to what every existing test and the
-        // browser page already parse.
+        // default payload keeps the shared field absent, as every existing test
+        // and the browser page expect when replication is disabled.
         val sharedField = if (sharedCell == null) "" else ",\"shared\":${arr(setOf("shared"))}"
-        """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount,"crossRoot":${crossRootJson()}$sharedField}"""
+        return """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount,"crossRoot":${crossRootJson()}$sharedField}"""
     }
 
     /**
