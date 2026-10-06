@@ -18,6 +18,18 @@ import kotlin.test.assertTrue
  */
 class SocialAppLoadTest {
 
+    @Test
+    fun `temporary axcyk startup measurement`() {
+        val started = System.nanoTime()
+        val app = SocialApp(port = 0, source = SnbGenerator(42, 0.05)).start()
+        try {
+            HttpProbe("http://localhost:${app.boundPort}").state()
+            println("AXCYK_START_TO_FIRST_STATE_MS=" + (System.nanoTime() - started) / 1_000_000)
+        } finally {
+            app.stop()
+        }
+    }
+
     // --- [SOC1-GEN-05] ------------------------------------------------------
 
     @Test

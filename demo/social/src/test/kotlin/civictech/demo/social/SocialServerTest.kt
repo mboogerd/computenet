@@ -5,6 +5,7 @@ import civictech.testkit.awaitSseData
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -232,6 +233,28 @@ class SocialServerTest {
         const val STARTUP_BROADCAST_BOUND = 2L
     }
 
+    @Test
+    fun `static dimensions are one observation partitioned into four independent groups`() {
+        val app = SocialApp(port = 0)
+        try {
+            assertEquals(
+                linkedMapOf(
+                    "tags" to "tags",
+                    "tagClasses" to "tagClasses",
+                    "places" to "places",
+                    "organisations" to "organisations",
+                ),
+                app.staticObservation.current().groupOf,
+            )
+            assertFailsWith<IllegalStateException> {
+                app.staticObservation.awaitTermination(0)
+            }
+        } finally {
+            app.stop()
+        }
+        assertTrue(app.staticObservation.awaitTermination(0))
+    }
+
     // --- SOC1-SCHEMA-02 (state half, pinned in jo2jk-D6) -------------------
 
     @Test
@@ -279,34 +302,35 @@ class SocialServerTest {
 
     // --- computenet-a77tu: stop() releases every observe-sink thread --------
     // computenet-f0v6m: rewritten to track this app's OWN minted dispatcher
-    // threads BY NAME rather than a process-wide COUNT. `observe-cell-` names
-    // embed a per-instance UUID (kernel/.../observe/Observe.kt:182,
-    // ObserveCell.newDispatcher), so the exact set this app minted can be
+    // threads BY NAME rather than a process-wide COUNT. `aligned-observe-`
+    // names embed a per-instance UUID, so the exact set this app minted can be
     // captured at mint time and diffed against later, independent of any
     // unrelated `observe-cell-` thread that happens to be alive in the same
     // JVM (another test class's dispatcher still winding down) — a false
     // positive/negative the old raw-count comparison could not tell apart
     // from a real leak.
 
-    /** Live threads whose name starts with `observe-cell-` (`ObserveCell`'s dispatcher naming). */
-    private fun observeCellThreadNames(): Set<String> {
+    /** Live threads belonging to the observation API's group/coordinator dispatchers. */
+    private fun observationThreadNames(): Set<String> {
         val threads = arrayOfNulls<Thread>(Thread.activeCount() * 2 + 64)
         val n = Thread.enumerate(threads)
-        return threads.take(n).mapNotNull { it?.name }.filter { it.startsWith("observe-cell-") }.toSet()
+        return threads.take(n).mapNotNull { it?.name }
+            .filter { it.startsWith("aligned-observe-") || it.startsWith("observation-") }
+            .toSet()
     }
 
     @Test
     fun `stop releases every observe-cell dispatcher thread a started app minted`() {
-        val before = observeCellThreadNames()
+        val before = observationThreadNames()
 
         val app = SocialApp(port = 0, source = SnbGenerator(42, 0.05)).start()
-        awaitUntil("app to mint at least one observe-cell dispatcher thread") {
-            (observeCellThreadNames() - before).isNotEmpty()
+        awaitUntil("app to mint at least one observation dispatcher thread") {
+            (observationThreadNames() - before).isNotEmpty()
         }
         // The exact set of threads THIS app minted, named at the moment of
         // minting — not touched again, so a sibling test minting its own
         // (differently-UUID-named) dispatcher afterward cannot inflate it.
-        val minted = observeCellThreadNames() - before
+        val minted = observationThreadNames() - before
 
         app.stop()
 
@@ -317,11 +341,11 @@ class SocialServerTest {
         // let this test stay green with the await removed: unawaited, the
         // dispatchers usually do die within a second, just not before stop()
         // returns.
-        val survivors = observeCellThreadNames().intersect(minted)
+        val survivors = observationThreadNames().intersect(minted)
 
         assertTrue(
             survivors.isEmpty(),
-            "observe-cell dispatcher thread(s) minted by this app (${survivors.size} of ${minted.size}) " +
+            "observation dispatcher thread(s) minted by this app (${survivors.size} of ${minted.size}) " +
                 "were still alive when stop() returned: $survivors",
         )
     }
@@ -330,6 +354,7 @@ class SocialServerTest {
     fun `a per-key sink admitted after graph close is terminally closed at creation`() {
         val app = SocialApp(port = 0)
         try {
+            val before = observationThreadNames()
             // Make a late sink eligible for listener attachment, then close
             // before any per-key sink exists: the creation path, not close's
             // existing-sink iteration, must enforce terminal shutdown.
@@ -339,8 +364,12 @@ class SocialServerTest {
             app.graph.addPerson(Person(1, "Late", "Admission"))
 
             assertTrue(
-                app.graph.awaitDispatchers(1_000).isEmpty(),
+                app.graph.awaitDispatchers(0).isEmpty(),
                 "a sink created after graph close must already be terminally closed",
+            )
+            assertTrue(
+                (observationThreadNames() - before).isEmpty(),
+                "a sink admitted after close must not mint an observation dispatcher",
             )
         } finally {
             app.stop()
