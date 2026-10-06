@@ -211,12 +211,7 @@ object TierPipeline {
             val prefAvg = spawn("prefAvg") {
                 GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = Aggregators.avgOf { c: Contribution -> c.sign })
             }
-            val fused = spawn("fused") {
-                CombineLatestCell<String, Double, Double, Tiered>(
-                    emitOnFrontier = true,
-                    combine = { _, t, p -> Tiering.fuse(t, p) },
-                )
-            }
+            val fused = spawn("fused") { CombineLatestCell<String, Double, Double, Tiered>(combine = { _, t, p -> Tiering.fuse(t, p) }) }
             // The adoption seam (j2x.5-D2): the tagged map's converged state,
             // projected down to the untagged MapDelta vocabulary the join
             // family already speaks. No demo code ever merges dots.
@@ -226,7 +221,6 @@ object TierPipeline {
             // regardless, so there are no ghost rows).
             val board = spawn("board") {
                 CombineLatestCell<String, Tiered, String, Tiered>(
-                    emitOnFrontier = true,
                     combine = { _, computed, manualTier -> manualTier?.let(Tiering::manualTiered) ?: computed },
                 )
             }
@@ -394,8 +388,14 @@ class TieringApp(
         map("tierAvg", refs.tierAvg.ref)
         set("prefs", refs.prefs.ref)
         map("prefAvg", refs.prefAvg.ref)
+        // These are existing point-consistent one-view reads over ungated
+        // CombineLatestCell operators. A single view has no mixed-view
+        // alignment risk; the canonical builder currently needs this explicit
+        // admission exception to preserve their immediate publication.
+        unchecked("fused")
         map("fused", refs.fused.ref)
         map("manual", refs.manualEffective.ref)
+        unchecked("board")
         map("board", refs.board.ref)
     }
 
