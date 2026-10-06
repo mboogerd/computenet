@@ -15,6 +15,19 @@ import kotlin.test.fail
 class SlotFinderServerTest {
 
     @Test
+    fun `canonical observation pins the equal-root-set partition`() {
+        val app = SlotFinderApp(port = 0).start()
+        try {
+            assertEquals(
+                setOf("alice", "bob", "carol", "nearMiss+common+filtered+byDay+late"),
+                app.observationGroups,
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
     fun `a slot shared by all three flows through intersect, filter and count`() {
         val app = SlotFinderApp(port = 0).start()
         try {

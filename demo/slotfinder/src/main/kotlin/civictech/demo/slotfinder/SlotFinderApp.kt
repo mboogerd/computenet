@@ -13,7 +13,8 @@ import civictech.cell.graph.lookupOrThrow
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.observe.observeAll
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
@@ -201,12 +202,11 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         host.lookupOrThrow(tref).inlet.call
     }
 
-    // The observation edge: one composite sink folds every observed outlet into a
-    // materialized, thread-safe snapshot with built-in late-join catch-up — no hand-rolled
-    // hub cells, no synchronized mutable snapshot. Typed overloads (T08 finding 2): the
-    // element/key type flows from each TypedRef's API shape, so a wrong-shaped source
-    // here is a compile error, not an Any?-erased fold read back with an unchecked cast.
-    private val view = host.observeAll {
+    // The canonical app-edge observation folds all outlets into materialized,
+    // internally aligned root groups with built-in late-join catch-up. Typed
+    // overloads (T08 finding 2) keep the element/key type flowing from each
+    // TypedRef's API shape, so a wrong-shaped source is a compile error.
+    private val view = host.observation {
         PARTICIPANTS.forEach { set(it, refs.participants.getValue(it)) }
         set("nearMiss", refs.nearMiss)
         set("common", refs.common)
@@ -216,6 +216,9 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         // outlet (a SetDelta port not on GroupByApi, so observed by CellRef + name).
         set("late", refs.byDay.ref, outletName = "late")
     }
+
+    /** The computed equal-root-set partition, pinned by the demo test. */
+    internal val observationGroups: Set<String> get() = view.groups
 
     private val shell = DemoShell(port)
 

@@ -59,6 +59,19 @@ class AlignedFrameTest {
         }
 
     @Test
+    fun `canonical observation partitions shopping views by equal roots`() {
+        val app = DemoApp(port = 0).start()
+        try {
+            assertEquals(
+                setOf("items+produce", "votes", "wanted"),
+                app.observationGroups,
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
     fun `an in-range add settles as one aligned frame with both fields changed`() {
         val app = DemoApp(port = 0).start()
         try {
