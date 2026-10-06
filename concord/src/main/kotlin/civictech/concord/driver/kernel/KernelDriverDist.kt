@@ -586,7 +586,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * own default, [civictech.cell.link.Interest.Total], applies). Precedence when
      * more than one field is present: `total` > `empty` > `slots` > `ranges`.
      */
-    private fun parseInterest(value: Value?): civictech.cell.link.Interest? {
+    internal fun parseInterest(value: Value?): civictech.cell.link.Interest? {
         val fields = (value as? Value.MapVal)?.entries ?: return null
         fun bool(key: String) = (fields[key] as? Value.BoolVal)?.value == true
         return when {

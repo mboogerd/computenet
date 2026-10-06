@@ -24,7 +24,9 @@ import civictech.concord.schema.DriveStampedStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
+import civictech.concord.schema.FamilyHolds
 import civictech.concord.schema.IncrementalEqualsBatch
+import civictech.concord.schema.InterestRefusals
 import civictech.concord.schema.LateJoinEqualsEarly
 import civictech.concord.schema.NoDeadLetters
 import civictech.concord.schema.ObservationsAllSatisfy
@@ -1885,5 +1887,39 @@ class ChecksTest {
     fun `refusal-count fails on a negative reading, which no ascending tally can produce`() {
         fail(Checks.refusalCount(RefusalCount("r1", exactly = 0), refusalCtx(observed = -1L)))
             .message shouldContain "only ascends"
+    }
+
+    // --- family checks (computenet-vb7aq, 42-INTEREST-SPAWN-01) ------------
+
+    private fun familyCtx(keys: List<Long>? = listOf(2L, 3L), refused: Long? = 1L) = FakeContext(
+        FakeDriver(
+            families = if (keys == null) emptyMap() else mapOf("f" to keys),
+            interestRefusals = if (refused == null) emptyMap() else mapOf("f" to refused),
+        ),
+        refusalScenario,
+    )
+
+    @Test
+    fun `family-holds compares exact membership without imposing key order`() {
+        pass(Checks.familyHolds(FamilyHolds("f", listOf(2L, 3L)), familyCtx(keys = listOf(3L, 2L))))
+    }
+
+    @Test
+    fun `family-holds fails when a member is missing`() {
+        fail(Checks.familyHolds(FamilyHolds("f", listOf(2L, 3L)), familyCtx(keys = listOf(2L))))
+            .message shouldContain "expected [2, 3] but held [2]"
+    }
+
+    @Test
+    fun `interest-refusals reports the family declaration tally`() {
+        pass(Checks.interestRefusals(InterestRefusals("f", count = 1L), familyCtx(refused = 1L)))
+        fail(Checks.interestRefusals(InterestRefusals("f", count = 1L), familyCtx(refused = 0L)))
+            .message shouldContain "expected 1 refusal(s) but observed 0"
+    }
+
+    @Test
+    fun `interest-refusals fails loudly when the family is not observed`() {
+        fail(Checks.interestRefusals(InterestRefusals("f", count = 0L), familyCtx(refused = null)))
+            .message shouldContain "refused to observe interest refusals"
     }
 }

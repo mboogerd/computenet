@@ -122,6 +122,7 @@ optional descriptor param the driver binds. The v1 named params:
 | `host` | host placement (dist profile) |
 | `replica-of` | logical replica-group id (dist profile) |
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
+| `family` | keyed-family declaration (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
 | `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
 | `lateness` | event-time lateness `L`, a non-negative integer, on `window` (tumbling), `join`, `semi-join`, `intersect` or `waterline` — see below (`computenet-t4od7`, additive) |
@@ -268,6 +269,27 @@ The parser runs **lenient** (unknown keys ignored) so a future param does not
 break older files; promoting a new param to a typed field is a schema-change
 ticket.
 
+#### `family` (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
+
+A `set-source` may be declared as a long-keyed family. The cell `id` names the
+family handle: it has membership, but no view or ports of its own, and therefore
+cannot be a link endpoint. The driver refuses a `family:` on any other catalog
+type. The descriptor is additive; absent means the ordinary single cell every
+existing scenario already declares.
+
+```yaml
+- {id: f, type: set-source, of: string, host: h1, family: {keys: long, spawn-on-interest: true}}
+```
+
+| field | meaning |
+|---|---|
+| `keys` | key codec; optional, defaults to `long` (the only admitted codec today) |
+| `spawn-on-interest` | optional boolean, default `false`; when true, bounded interests admitted on the family's host registry materialize their named members |
+
+Every member is the declared catalog type (`set-source` here). Member refs and
+construction details are driver-owned and have no scenario meaning. A family
+declaration is not a replica declaration and carries no `replica-of` identity.
+
 ### Link params
 
 `{from, to, inlet?, outlet?, role?}`. `role` selects consume vs observe
@@ -287,6 +309,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 |---|---|---|
 | apply | `{type: apply, on: a, op: add, value: apple}` (also `times: N`) | `apply(cell, op)` |
 | quiesce | `{type: quiesce}` (also `budget: N`) | `quiesce(budget)` barrier |
+| declare-interest | `{type: declare-interest, on: f, interest: {ranges: [[2, 4]]}}` | `declareInterest(family, interest)` and await induced spawns |
 | connect | `{type: connect, from: s, to: late, inlet?, outlet?, role?, expect?}` | `connect(...)` |
 | disconnect | `{type: disconnect, from: s, to: late, inlet?, outlet?, expect?}` | `disconnect(linkRef)` |
 | snapshot | `{type: snapshot, on: c, as: blob1}` | `snapshot(cell)` |
@@ -321,6 +344,21 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   actor again"; there is no `counter:`, because a scenario that could state the
   position would be describing the graph's frame rather than an outsider's. See
   below.
+
+#### `declare-interest` (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
+
+`on` names a `family:` handle and `interest` uses the same closed
+total/empty/slots/ranges grammar as the cell descriptor above. The declaration
+is recorded on that family's host registry, then the driver awaits the
+admission's induced spawns before returning; a following `quiesce` therefore
+observes every admitted member. Which registry ref makes the declaration is a
+driver-owned detail and has no scenario meaning.
+
+A bounded `ranges` arm enumerates its half-open long-key ranges. An unbounded
+arm such as `{total: true}` is recorded but completes with a typed refusal; the
+step does not throw and does not create a dead letter. `interest-refusals`
+accounts that result. Declaring interest on a family whose
+`spawn-on-interest` is false records normally and materializes nothing.
 
 #### `restart` (D-C12, spec 21 §RESTART re-baselines / spec 30/31 rule 5)
 
@@ -733,6 +771,8 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | observations-all-satisfy | `{type: observations-all-satisfy, view: v, fn: even}` | every observation-stream event satisfies a catalog predicate |
 | observations-monotone | `{type: observations-monotone, view: v, order?: ...}` | stream never regresses under the order |
 | replicas-converge | `{type: replicas-converge, logical: shared}` | all live replicas of the logical id hold equal folds (dist) |
+| family-holds | `{type: family-holds, family: f, keys: [2, 3]}` | the family holds exactly this order-free long-key set |
+| interest-refusals | `{type: interest-refusals, family: f, count: 1}` | exactly N declarations made for this family completed with a typed spawn/budget refusal |
 | no-dead-letters | `{type: no-dead-letters}` | zero dead letters across all hosts |
 | effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) — unkeyed, per key the script *fed* it (see below) |
 | observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
@@ -968,6 +1008,22 @@ loudly rather than answer `0` — see the next section — and the evaluator rep
 that as this check's failure. A negative reading fails for the same reason: a
 tally that only ascends cannot produce one, so it is not a count of refusals.
 
+### Family membership and interest refusals (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
+
+`family-holds` compares the driver's exact membership of `family` with `keys`
+as sets: key order is not semantic, and both an extra and a missing member fail.
+The handle must name a declared family; a driver cannot answer with an empty
+list for a handle it does not observe.
+
+`interest-refusals` is deliberately separate from `refusal-count`.
+`refusal-count` is the spec-24 observation of a delivery rejected at an
+`Effectful` inlet for want of a message position. An interest-spawn refusal is
+a registry admission result instead: an unbounded arm (`InterestSpawnRefused`)
+or a budget refusal. Reusing the delivery count would conflate two different
+quantities and reporting channels. This check reads one ascending per-family
+run total; an unobserved family fails loudly rather than answering the
+plausibly-passing value `0`.
+
 ### `composite-whole-waves`: one common prefix across members
 
 (`computenet-5ubdv`, spec 22 `[22-OBS-01]`/`[22-OBS-02]`.) An `aligned-view`
@@ -994,14 +1050,15 @@ an inlet with zero or several inbound links, an arm not ending at `source`, a
 `members:` name not in `views:`, or a source op other than `add`/`remove`. An
 empty observation stream fails as for the other `observations-*` checks.
 
-### What a conforming driver must observe (the four checks that need one)
+### What a conforming driver must observe (the six checks that need one)
 
 A check is only a conformance check if a **second, non-kernel** implementation
-could evaluate it from the specification alone. Four checks require an
+could evaluate it from the specification alone. Six checks require an
 observation beyond the existing verbs — the two added with `read-state`
-(V1C-CONCORD), `emission-count` (`computenet-dvim`) and `refusal-count`
-(`computenet-em9i`) — and each is stated here in the spec's vocabulary, not any
-implementation's.
+(V1C-CONCORD), `emission-count` (`computenet-dvim`), `refusal-count`
+(`computenet-em9i`), `family-holds` and `interest-refusals`
+(`computenet-vb7aq`) — and each is stated here in the spec's vocabulary, not
+any implementation's.
 
 **`wave-plane-unchanged`** requires the driver to report, for a named cell, the
 **wave plane that cell has reached**: for every wave source visible at that
@@ -1105,6 +1162,18 @@ same rule as `emission-count` and `retransmit`: `0` is exactly what an
 `exactly: 0` check accepts, so a silent 0 converts an unwatched cell into a
 green check — the one failure this observation exists to prevent, and the one
 that leaves no trace in a passing run.
+
+**`family-holds`** requires the driver to report the exact set of long keys the
+named family has materialized. The result is membership only: no member cell
+state, ref, port, scheduling event or spawn order is exposed. This is the
+boundary-observable content of a family handle, and a driver that does not hold
+the named family fails loudly.
+
+**`interest-refusals`** requires the driver to report an ascending per-family
+count of declarations whose induced spawn admission completed with a typed
+interest or budget refusal. It observes neither exception class nor reason;
+those are implementation details. The count is per run, and an unobserved
+family fails loudly rather than reporting zero.
 
 ## `generator` (kind: generative)
 

@@ -1,5 +1,6 @@
 package civictech.concord.driver.kernel
 
+import civictech.cell.BudgetRefusedException
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Cursor
@@ -9,16 +10,18 @@ import civictech.cell.StateReadResult
 import civictech.cell.Stateful
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.SetCell
-import civictech.cell.host.ManagedHost
-import civictech.cell.observe.ObservationSink
 import civictech.cell.host.HostScheduler
+import civictech.cell.host.InterestSpawnRefused
+import civictech.cell.host.KeyedCells
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
-import civictech.cell.host.LocationRegistry
 import civictech.cell.link.Interest
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkRole
 import civictech.cell.Propagate
+import civictech.cell.observe.ObservationSink
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
@@ -50,6 +53,8 @@ import java.io.ObjectOutputStream
 import java.util.IdentityHashMap
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -95,6 +100,7 @@ class KernelDriver private constructor(
     /** Separate registries exist only in transport mode; the default always returns [registry]. */
     private val registriesByHost = LinkedHashMap<HostId, LocationRegistry>()
     private val registriesByManagedHost = IdentityHashMap<ManagedHost, LocationRegistry>()
+    private val schedulersByManagedHost = IdentityHashMap<ManagedHost, HostScheduler>()
     /** Scenario-declared routing policy is control-plane configuration shared by every peer. */
     private val interestsByRef = LinkedHashMap<CellRef, Interest>()
 
@@ -123,6 +129,16 @@ class KernelDriver private constructor(
 
     private val hosts = LinkedHashMap<HostId, ManagedHost>()
     internal val cells = LinkedHashMap<CellId, Bound>()
+
+    private data class FamilyBinding(
+        val host: ManagedHost,
+        val family: KeyedCells<Long>,
+        val declaringRef: CellRef,
+        var refusals: Long = 0L,
+    )
+
+    /** Family handles have membership but no cell ref, ports, or view of their own. */
+    private val families = LinkedHashMap<CellId, FamilyBinding>()
 
     /**
      * The `dist`-profile capability (W4-A), composed in rather than inherited so
@@ -210,8 +226,10 @@ class KernelDriver private constructor(
         val key = hostId ?: defaultHostId
         return hosts.getOrPut(key) {
             val hostRegistry = registryFor(key)
-            ManagedHost(scheduler = newScheduler(), registry = hostRegistry).also { host ->
+            val scheduler = newScheduler()
+            ManagedHost(scheduler = scheduler, registry = hostRegistry).also { host ->
                 registriesByManagedHost[host] = hostRegistry
+                schedulersByManagedHost[host] = scheduler
                 host.deadLetterOutlet.subscribe(
                     Use.fixed(
                         Propagate<civictech.cell.host.DeadLetter> { dl ->
@@ -320,6 +338,13 @@ class KernelDriver private constructor(
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
+        params["family"]?.let { descriptor ->
+            if (hostId == KernelDriverDur.DUR_HOST) {
+                throw UnsupportedCatalogBinding("family '$cellId' cannot be placed on the reserved durable host")
+            }
+            spawnFamily(hostId, cellId, type, descriptor)
+            return
+        }
         // dur hook (W4-B): a cell on the reserved durable host (or a `journal`
         // controller) is the dur capability's; short-circuit before any core or
         // dist placement. A durable cell is never also a dist replica.
@@ -367,6 +392,39 @@ class KernelDriver private constructor(
             waveAligned = built.waveAligned,
         )
         cells[cellId] = bound
+    }
+
+    /** Bind the one catalog family admitted by `42-INTEREST-SPAWN-01`. */
+    private fun spawnFamily(hostId: HostId, cellId: CellId, type: String, descriptor: Value) {
+        if (type != "set-source") {
+            throw UnsupportedCatalogBinding(
+                "family '$cellId': catalog type '$type' is not admitted as a family member; " +
+                    "only 'set-source' is bound",
+            )
+        }
+        check(cellId !in cells && cellId !in families) { "duplicate Concord cell id '$cellId'" }
+        val fields = (descriptor as? Value.MapVal)?.entries
+            ?: throw UnsupportedCatalogBinding("family '$cellId': descriptor must be a map")
+        val keys = (fields["keys"] as? Value.StrVal)?.value ?: "long"
+        if (keys != "long") {
+            throw UnsupportedCatalogBinding("family '$cellId': key codec '$keys' is unbound; expected 'long'")
+        }
+        val spawnOnInterest = (fields["spawn-on-interest"] as? Value.BoolVal)?.value ?: false
+        val host = hostFor(if (hostId.isEmpty()) defaultHostId else hostId)
+        val family = KeyedCells(
+            host = host,
+            journalDir = null,
+            namespace = cellId,
+            factory = { _, ref -> SetCell<Any?>(ref) },
+            render = Long::toString,
+            parse = String::toLong,
+            spawnOnInterest = spawnOnInterest,
+        )
+        families[cellId] = FamilyBinding(
+            host = host,
+            family = family,
+            declaringRef = CellRef(UUID.nameUUIDFromBytes("concord-interest:$cellId".toByteArray())),
+        )
     }
 
     override fun connect(
@@ -494,6 +552,40 @@ class KernelDriver private constructor(
             }
             Thread.sleep(TRANSPORT_POLL_MILLIS)
         }
+    }
+
+    override fun declareInterest(cellId: CellId, interest: Value) {
+        val binding = families[cellId]
+            ?: throw UnsupportedCatalogBinding("declare-interest target '$cellId' is not a keyed family")
+        val parsed = dist.parseInterest(interest)
+            ?: throw UnsupportedCatalogBinding("declare-interest on '$cellId' has no recognized interest arm")
+        val admission = registryOf(binding.host).setInterest(binding.declaringRef, parsed)
+        try {
+            checkNotNull(schedulersByManagedHost[binding.host]) {
+                "family '$cellId' belongs to a host with no Concord scheduler"
+            }.await(admission.spawned)
+        } catch (failure: RuntimeException) {
+            when (val cause = unwrapCompletion(failure)) {
+                is InterestSpawnRefused, is BudgetRefusedException -> binding.refusals++
+                else -> throw cause
+            }
+        }
+    }
+
+    override fun familyKeys(cellId: CellId): List<Long> =
+        families[cellId]?.family?.keys()?.sorted()
+            ?: throw UnsupportedCatalogBinding("family-holds target '$cellId' is not a keyed family")
+
+    override fun interestRefusalCount(cellId: CellId): Long =
+        families[cellId]?.refusals
+            ?: throw UnsupportedCatalogBinding("interest-refusals target '$cellId' is not a keyed family")
+
+    private fun unwrapCompletion(failure: RuntimeException): RuntimeException {
+        var current: Throwable = failure
+        while ((current is CompletionException || current is ExecutionException) && current.cause != null) {
+            current = current.cause!!
+        }
+        return current as? RuntimeException ?: failure
     }
 
     private data class Drain(val settled: Boolean, val steps: Int)

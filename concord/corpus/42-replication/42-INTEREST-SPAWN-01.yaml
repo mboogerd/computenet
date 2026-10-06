@@ -1,0 +1,25 @@
+# Concord corpus scenario (computenet-vb7aq, profile: dist). Canonical schema —
+# see concord/schema/scenario.md. The family handle has membership but no view
+# or ports; `family-holds` observes that membership directly.
+id: 42-INTEREST-SPAWN-01
+title: A bounded admitted interest materializes exactly its keyed family members
+covers: [42-INT-01]
+profile: dist
+kind: example
+narrative:
+  given: one long-keyed set-source family whose members spawn from admitted interest
+  when: a bounded range is declared, followed by an unbounded total declaration
+  then: the bounded keys exist, the total declaration is refused without widening the family, and no dead letter is produced
+graph:
+  hosts: [h1]
+  cells:
+    - {id: f, type: set-source, of: string, host: h1, family: {keys: long, spawn-on-interest: true}}
+script:
+  - {type: declare-interest, on: f, interest: {ranges: [[2, 4]]}}
+  - {type: quiesce}
+  - {type: declare-interest, on: f, interest: {total: true}}
+  - {type: quiesce}
+checks:
+  - {type: family-holds, family: f, keys: [2, 3]}
+  - {type: interest-refusals, family: f, count: 1}
+  - {type: no-dead-letters}
