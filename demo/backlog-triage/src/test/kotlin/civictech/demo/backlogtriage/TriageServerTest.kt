@@ -29,6 +29,25 @@ class TriageServerTest {
     fun `preferences fold into a collective ranking that reorders live`() {
         val app = TriageApp(port = 0).start()
         try {
+            assertEquals(
+                mapOf(
+                    "features" to "features",
+                    "prefs" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "score" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "votes" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "rating:elo" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "rating:bt" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "rating:trueskill" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "rating:glicko" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "rating:wenglin" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                    "rating:wilson" to "prefs+score+votes+rating:elo+rating:bt+rating:trueskill+rating:glicko+rating:wenglin+rating:wilson",
+                ),
+                app.observationGroups,
+            )
+            assertEquals(
+                mapOf("rating:meta" to "rating:meta"),
+                app.metaObservationGroups,
+            )
             val probe = HttpProbe("http://localhost:${app.boundPort}")
 
             // submit: explicit id, and a slug derived from the title
