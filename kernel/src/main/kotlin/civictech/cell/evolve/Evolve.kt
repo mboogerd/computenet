@@ -45,6 +45,17 @@ interface EvolutionHooks {
         host.managementInlet.call.despawn(ref)
     }
 
+    /** Attach a production input to a shadow; graph owners may journal the link. */
+    fun <T : Any> tapShadow(outlet: FanOutlet<T>, inlet: FanInlet<T>): PortRef {
+        outlet.subscribe(inlet)
+        return inlet.ref
+    }
+
+    /** Remove a tap previously installed by [tapShadow]. */
+    fun <T : Any> untapShadow(outlet: FanOutlet<T>, inlet: PortRef) {
+        outlet.unsubscribe(inlet)
+    }
+
     fun promoted(incumbent: CellRef) {}
 }
 
@@ -149,15 +160,16 @@ object Evolve {
         validateGates(policy, gates, baseline)
 
         val judge = PromotionJudge(policy, cycleHead = incumbent as? CycleHead<*>)
+        val activeHooks = hooks ?: object : EvolutionHooks {}
         @Suppress("UNCHECKED_CAST")
         val gateOutlet = gate.dataOutlet as? FanOutlet<T>
             ?: throw Refused("gates: the traffic-light data outlet must be a FanOutlet")
 
         spawnIfNeeded(host, candidate, outletName)
-        val candidateInputs = tapShadow(gateOutlet, candidate)
+        val candidateInputs = tapShadow(gateOutlet, candidate, activeHooks)
 
         baseline?.let { spawnIfNeeded(host, it.twin, outletName) }
-        val baselineInputs = baseline?.let { tapShadow(gateOutlet, it.twin) }.orEmpty()
+        val baselineInputs = baseline?.let { tapShadow(gateOutlet, it.twin, activeHooks) }.orEmpty()
 
         val violationSubscriptions = mutableListOf<ViolationSubscription>()
         gates.forEach { invariant ->
@@ -187,7 +199,7 @@ object Evolve {
             baseline = baseline,
             baselineInputs = baselineInputs,
             authority = authority,
-            hooks = hooks ?: object : EvolutionHooks {},
+            hooks = activeHooks,
         )
     }
 
@@ -232,15 +244,18 @@ object Evolve {
         if (host.portAt(cell.ref, outletName) == null) Shadow.spawn(host, cell)
     }
 
-    private fun <T : Any> tapShadow(gateOutlet: FanOutlet<T>, shadow: Cell): List<PortRef> {
+    private fun <T : Any> tapShadow(
+        gateOutlet: FanOutlet<T>,
+        shadow: Cell,
+        hooks: EvolutionHooks,
+    ): List<PortRef> {
         val tapped = mutableListOf<PortRef>()
         val ports = PortRegistry.of(shadow)
         ports.names().forEach { name ->
             val inlet = ports[name]
             if (inlet is FanInlet<*> && inlet.clazz == gateOutlet.clazz) {
                 @Suppress("UNCHECKED_CAST")
-                gateOutlet.subscribe(inlet as Use<T>)
-                tapped += inlet.ref
+                tapped += hooks.tapShadow(gateOutlet, inlet as FanInlet<T>)
             }
         }
         return tapped
@@ -389,7 +404,7 @@ object Evolve {
         }
 
         private fun detachInputs(refs: List<PortRef>) {
-            refs.forEach(gateOutlet::unsubscribe)
+            refs.forEach { hooks.untapShadow(gateOutlet, it) }
         }
 
         private fun EvolutionHandle.State.isTerminal(): Boolean =

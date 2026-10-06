@@ -19,11 +19,14 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
+import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.identity
 import civictech.cell.replication.Replication
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -304,7 +307,39 @@ class ApplyContext(
             }
         }.orEmpty()
         val hooks = object : EvolutionHooks {
+            private val taps = mutableMapOf<PortRef, TopoEvent.Connect>()
+
             override val journal: PromotionJournal = prepared.journal
+
+            override fun <T : Any> tapShadow(outlet: FanOutlet<T>, inlet: FanInlet<T>): PortRef {
+                val from = requireNotNull(outlet.identity()) { "evolution gate outlet has no registered identity" }
+                val to = requireNotNull(inlet.identity()) { "evolution candidate inlet has no registered identity" }
+                val event = TopoEvent.Connect(
+                    from = from.owner,
+                    outlet = from.name,
+                    to = to.owner,
+                    inlet = to.name,
+                    options = LinkOptions(staged = true),
+                )
+                journalTopology(listOf(event))
+                checkNotNull(applyConnect(event)) { "evolution shadow tap was deferred" }
+                taps[inlet.ref] = event
+                return inlet.ref
+            }
+
+            override fun <T : Any> untapShadow(outlet: FanOutlet<T>, inlet: PortRef) {
+                val connected = checkNotNull(taps.remove(inlet)) {
+                    "evolution shadow tap $inlet was not installed by this handle"
+                }
+                val event = TopoEvent.Unlink(
+                    connected.from,
+                    connected.outlet,
+                    connected.to,
+                    connected.inlet,
+                )
+                journalTopology(listOf(event))
+                applyUnlink(event)
+            }
 
             override fun despawnShadow(host: ManagedHost, ref: CellRef) {
                 val event = TopoEvent.Despawn(ref)
@@ -534,7 +569,10 @@ class ApplyContext(
         cells[ref] = candidateCell
     }
 
-    /** Replay applies the completed swap directly; it never buffers or invokes Promotion.promote. */
+    /**
+     * Replay applies an uncompacted completed swap directly; a compacted fold already contains
+     * the active candidate and redirected links, so its retained Promote is provenance only.
+     */
     private fun applyPromote(event: TopoEvent.Promote) {
         if (event.replicated) {
             applyReplicatedPromote(event)
@@ -542,6 +580,14 @@ class ApplyContext(
         }
         check(event.incumbent != event.candidate) {
             "single-instance promotion replay requires distinct incumbent and candidate refs"
+        }
+        if (cells[event.incumbent] == null && cells[event.candidate] != null) {
+            fold.record(event)
+            val gate = event.gate?.let { ref ->
+                cells[ref] ?: error("compacted promotion replay gate $ref is not live")
+            } ?: error("compacted single-instance promotion replay has no gate")
+            Promotion.completeRecoveredGate(gate)
+            return
         }
         val before = live()
         val incumbent = cells[event.incumbent]
