@@ -607,6 +607,8 @@ class JournaledPromotionRecoveryTest {
         recovery.awaitApplied(30_000)
         recovered.controller.runToIdle()
         (recovered.host.retainedCheckpointReplayPositionCount() > 0).shouldBeTrue()
+        // Same journal object, different host: the positions belong to the host that recovered them.
+        firstRecovered.host.retainedCheckpointReplayPositionCount() shouldBe 0
 
         recovered.context.promote(
             gate = refs.gate,
