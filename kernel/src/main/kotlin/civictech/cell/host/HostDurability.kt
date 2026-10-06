@@ -2,6 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.ReplayProvenance
 import civictech.cell.ReplayScope
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
@@ -39,6 +40,107 @@ internal data class CheckpointFrame(
     val invocation: HostedPortInvocation,
 )
 
+/**
+ * A cell-owned holding tier whose accepted invocations have already left the host scheduler.
+ * Checkpoint compaction carries these frames after the snapshot just like scheduler-, policy-
+ * and cold-inlet-held work. Implementations return a stable, ordered copy and retain ownership
+ * of their live queue; checkpointing is an observation, never a drain.
+ */
+internal interface CheckpointFrameSource {
+    fun checkpointFrames(): List<HostedPortInvocation>
+}
+
+/** One exact replay position retained beside a checkpointed cell-owned frame. */
+internal data class CheckpointReplayPosition(
+    val cellRef: CellRef,
+    val portName: String,
+    val timestamp: Timestamp,
+) : Serializable
+
+private typealias CheckpointReplayCounts =
+    MutableMap<Pair<CellRef, String>, MutableMap<Timestamp, Int>>
+
+/**
+ * Bridges exact replay suppression across a checkpoint that carries a cell-owned frame.
+ *
+ * A replay-derived frame parked in a red traffic gate can be either pending work or a copy of
+ * work also present later in the same journal. Before compaction, [ReplayedPositions] decides
+ * that per downstream target. The checkpoint keeps one matching target position with each
+ * parked invocation; after recovery the gate registers those positions against the new replay's
+ * journal token. Every asynchronous descendant keeps that token through [ReplayProvenance], so
+ * [HostDurability.suppressesReplayedDuplicate] can make the same per-target decision after the
+ * original downstream frame has been folded into state.
+ */
+internal object CheckpointReplayPositions {
+    private data class Capture(val journal: Any, val counts: CheckpointReplayCounts)
+
+    private val capture = ThreadLocal<Capture?>()
+    private val restored = IdentityHashMap<Any, CheckpointReplayCounts>()
+
+    fun <T> capturing(
+        journal: Any,
+        replayed: Map<Pair<CellRef, String>, Map<Timestamp, Int>>,
+        block: () -> T,
+    ): T {
+        val counts = replayed.mapValuesTo(mutableMapOf()) { (_, positions) -> positions.toMutableMap() }
+        synchronized(restored) {
+            restored[journal]?.forEach { (key, positions) ->
+                val target = counts.getOrPut(key, ::mutableMapOf)
+                positions.forEach { (timestamp, occurrences) ->
+                    target[timestamp] = maxOf(target[timestamp] ?: 0, occurrences)
+                }
+            }
+        }
+        val previous = capture.get()
+        capture.set(Capture(journal, counts))
+        return try {
+            block()
+        } finally {
+            capture.set(previous)
+        }
+    }
+
+    /** Assign at most one occurrence per target to this parked invocation. */
+    fun capture(replayOf: Any?, timestamp: Timestamp?): List<CheckpointReplayPosition> {
+        val current = capture.get() ?: return emptyList()
+        if (replayOf !== current.journal || timestamp == null) return emptyList()
+        return current.counts.entries
+            .sortedWith(compareBy({ it.key.first.toString() }, { it.key.second }))
+            .mapNotNull { (key, positions) ->
+                val occurrences = positions[timestamp] ?: return@mapNotNull null
+                if (occurrences == 1) positions.remove(timestamp) else positions[timestamp] = occurrences - 1
+                CheckpointReplayPosition(key.first, key.second, timestamp)
+            }
+    }
+
+    fun register(replayOf: Any, positions: List<CheckpointReplayPosition>) {
+        if (positions.isEmpty()) return
+        synchronized(restored) {
+            val counts = restored.getOrPut(replayOf, ::mutableMapOf)
+            positions.forEach { position ->
+                val byTimestamp = counts.getOrPut(position.cellRef to position.portName, ::mutableMapOf)
+                byTimestamp[position.timestamp] = byTimestamp.getOrDefault(position.timestamp, 0) + 1
+            }
+        }
+    }
+
+    fun consume(replayOf: Any, cellRef: CellRef, portName: String, timestamp: Timestamp): Boolean =
+        synchronized(restored) {
+            val counts = restored[replayOf] ?: return@synchronized false
+            val key = cellRef to portName
+            val positions = counts[key] ?: return@synchronized false
+            val occurrences = positions[timestamp] ?: return@synchronized false
+            if (occurrences == 1) positions.remove(timestamp) else positions[timestamp] = occurrences - 1
+            if (positions.isEmpty()) counts.remove(key)
+            if (counts.isEmpty()) restored.remove(replayOf)
+            true
+        }
+
+    fun clear(replayOf: Any) {
+        synchronized(restored) { restored.remove(replayOf) }
+    }
+}
+
 /** The synchronous staging result that [ManagedHost] exposes as a [Recovery]. */
 internal data class StagedRecovery(
     val replayedFrames: Int,
@@ -63,6 +165,10 @@ private class ReplayedPositions {
         if (occurrences == 1) positions.remove(timestamp) else positions[timestamp] = occurrences - 1
         return true
     }
+
+    @Synchronized
+    fun snapshot(): Map<Pair<CellRef, String>, Map<Timestamp, Int>> =
+        byPort.mapValues { (_, positions) -> HashMap(positions) }
 }
 
 /**
@@ -522,6 +628,7 @@ internal class HostDurability(
         synchronized(replayedPositions) {
             replayedPositions.remove(journal)
         }
+        CheckpointReplayPositions.clear(journal)
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
         // itself is stamped up front (below) so a reactive re-emission inherits
@@ -635,7 +742,14 @@ internal class HostDurability(
         if (journalSelector(frame.cellRef, frame.portName) !== journal) return false
         val timestamp = frame.invocation.context?.timestamp ?: return false
         val positions = synchronized(replayedPositions) { replayedPositions[journal] } ?: return false
-        if (!positions.consume(frame.cellRef, frame.portName, timestamp)) return false
+        val replayedMatch = positions.consume(frame.cellRef, frame.portName, timestamp)
+        val checkpointMatch = CheckpointReplayPositions.consume(
+            journal,
+            frame.cellRef,
+            frame.portName,
+            timestamp,
+        )
+        if (!replayedMatch && !checkpointMatch) return false
         positions.suppressedDuplicates.incrementAndGet()
         return true
     }
@@ -751,13 +865,14 @@ internal class HostDurability(
      * **Inter-invocation checkpoint boundary, with topology limits** (93 I-7 R7,
      * computenet-xy7w4 D3). The management band runs between two deliveries of the
      * single-consumer host, so at that point every frame accepted for [journal] is either
-     * DELIVERED — its effect is in the snapshot — or pending and not yet delivered:
-     * live/recovery staging, a coalesced entry, attention parking, supervision-SUSPEND
-     * parking, an inlet policy's transient holding tier, or a cold inlet's
-     * pre-activation tail. The compacted journal is the checkpoint records followed by
-     * every pending frame whose target port tees to [journal] — or whose target cell's
-     * snapshot it holds, a per-port selector's volatile inlet included — re-encoded by
-     * [journalFrame] in host sequence order.
+     * DELIVERED — its effect is in the snapshot — held by a [CheckpointFrameSource] after
+     * delivery to that cell, or pending and not yet delivered: live/recovery staging, a
+     * coalesced entry, attention parking, supervision-SUSPEND parking, an inlet policy's
+     * transient holding tier, or a cold inlet's pre-activation tail. The compacted journal
+     * is the checkpoint records followed by every selected cell-held frame in stable source
+     * order, then every pending host frame in host sequence order. Selection includes a
+     * frame whose target port tees to [journal], or whose target cell's snapshot it holds
+     * (a per-port selector's volatile inlet included); each is re-encoded by [journalFrame].
      *
      * That cell-level carry is deliberately conservative. A cross-journal volatile-port
      * frame can be delivered twice after both journals recover: once from this carry and
@@ -811,9 +926,17 @@ internal class HostDurability(
             } else {
                 emptyList()
             }
-            val state = HashMap<CellRef, Serializable>()
-            cells.forEach { (cellRef, cell) ->
-                if (cell is Stateful && cellJournalSelector(cellRef) === journal) state[cellRef] = cell.snapshot()
+            val replayed = synchronized(replayedPositions) {
+                replayedPositions[journal]?.snapshot().orEmpty()
+            }
+            val state = CheckpointReplayPositions.capturing(journal, replayed) {
+                HashMap<CellRef, Serializable>().also { snapshots ->
+                    cells.forEach { (cellRef, cell) ->
+                        if (cell is Stateful && cellJournalSelector(cellRef) === journal) {
+                            snapshots[cellRef] = cell.snapshot()
+                        }
+                    }
+                }
             }
             // computenet-xy7w4 D4: the frontier/baseline filters below key on the PORT
             // selector, not the cell one — an Effectful inlet's frontier rides its OWN
@@ -949,14 +1072,28 @@ internal class HostDurability(
                 }
                 val compacted =
                     topology + listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + inputs + baselines
-                val carried = pending
+                // Cell-owned holds have already run as host deliveries, so they precede every
+                // still-pending host frame. Each source supplies its own stable local order;
+                // sorting sources by ref keeps the otherwise-unordered cross-cell case
+                // deterministic without claiming a cross-cell FIFO the runtime does not have.
+                val cellHeld = cells.entries
+                    .sortedBy { (cellRef, _) -> cellRef.toString() }
+                    .flatMap { (_, cell) ->
+                        (cell as? CheckpointFrameSource)?.checkpointFrames().orEmpty()
+                    }
+                    .filter {
+                        journalSelector(it.cellRef, it.portName) === journal ||
+                            cellJournalSelector(it.cellRef) === journal
+                    }
+                    .map(::journalFrame)
+                val hostHeld = pending
                     .filter {
                         journalSelector(it.invocation.cellRef, it.invocation.portName) === journal ||
                             cellJournalSelector(it.invocation.cellRef) === journal
                     }
                     .sortedBy(CheckpointFrame::sequence)
                     .map { journalFrame(it.invocation) }
-                journal.reset(compacted + carried)
+                journal.reset(compacted + cellHeld + hostHeld)
             }
         }
     }
