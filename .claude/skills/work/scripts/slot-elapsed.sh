@@ -152,4 +152,9 @@ for f in "$SCRATCH"/dispatched-*; do
     if [ -z "$wake" ] || [ "$due" -lt "$wake" ]; then wake=$due; fi
   fi
 done
-[ -z "$wake" ] || echo "wake: ${wake}m — with agents live, arm a one-shot Monitor running \`sleep $(( wake * 60 )); echo wake\`"
+# The Monitor tool caps a deadline at 30m, so a longer wake is armed as 30m and
+# re-armed from this clock when it fires (computenet-fug9p).
+if [ -n "$wake" ]; then
+  arm=$wake; [ "$arm" -le 30 ] || arm=30
+  echo "wake: ${wake}m — with agents live, arm a one-shot Monitor (timeout_ms 1800000, its cap) running \`sleep $(( arm * 60 )); echo wake\`$([ "$arm" = "$wake" ] || echo "; when it fires, re-run this clock and re-arm")"
+fi
