@@ -2,13 +2,13 @@ package civictech.cell.membrane
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.CheckpointFrameSource
+import civictech.cell.CheckpointReplayPosition
+import civictech.cell.CheckpointReplayPositions
 import civictech.cell.ReplayProvenance
 import civictech.cell.ReplayScope
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
-import civictech.cell.host.CheckpointFrameSource
-import civictech.cell.host.CheckpointReplayPosition
-import civictech.cell.host.CheckpointReplayPositions
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Subscribe
