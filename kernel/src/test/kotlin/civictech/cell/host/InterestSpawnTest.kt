@@ -68,6 +68,20 @@ class InterestSpawnTest {
         }
     }
 
+    private class FamilyKeyFailingJournal(
+        private val delegate: InMemoryJournal = InMemoryJournal(),
+    ) : Journal by delegate {
+        override fun append(record: ByteArray) {
+            val decoded = JournalRecords.decode(record)
+            if (decoded is DecodedJournalRecord.Topology &&
+                decoded.events.any { it is TopoEvent.FamilyKey }
+            ) {
+                throw IllegalStateException("FamilyKey append failed")
+            }
+            delegate.append(record)
+        }
+    }
+
     private val provide = Consumer::class.java.methods.first { it.name == "provide" }
 
     private fun longFamily(
@@ -159,6 +173,33 @@ class InterestSpawnTest {
         alreadyTouched.spawned.get(5, TimeUnit.SECONDS) shouldBe setOf(family.getOrSpawn(5L).ref)
         family.keys() shouldBe setOf(2L, 3L, 5L)
         familyKeys(journal).groupingBy { it.key }.eachCount() shouldBe mapOf("2" to 1, "3" to 1, "5" to 1)
+    }
+
+    @Test
+    fun `a failed post-spawn family key append keeps the admitted cell reachable`() {
+        val controller = SimulationController(seed = 10)
+        val registry = LocationRegistry()
+        val journal = FamilyKeyFailingJournal()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, journal = journal)
+        val family = longFamily(host)
+        val declaringRef = CellRef(UUID.randomUUID())
+        val interest = Interest.Ranges(listOf(Interest.Ranges.Range(11, 12)))
+
+        val failedAdmission = registry.setInterest(declaringRef, interest)
+        controller.runToIdle()
+
+        failed(failedAdmission.spawned).message shouldBe "FamilyKey append failed"
+        val admittedRef = CellRef(UUID.nameUUIDFromBytes("authored:11".toByteArray()))
+        registry.location(admittedRef).shouldNotBeNull()
+        val retry = registry.setInterest(declaringRef, interest)
+        controller.runToIdle()
+        retry.spawned.get(5, TimeUnit.SECONDS) shouldBe setOf(admittedRef)
+
+        val admitted = family.getOrSpawn(11L)
+        admitted.ref shouldBe admittedRef
+        registry.location(admitted.ref).shouldNotBeNull()
+        family.keys() shouldBe setOf(11L)
+        familyKeys(journal) shouldBe emptyList()
     }
 
     @Test
