@@ -5,16 +5,19 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Propagate
 import civictech.cell.Stateful
+import civictech.cell.control.Magnitude
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.TrafficLightCell
+import civictech.cell.port.CycleHead
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.feedbackInlet
 import civictech.cell.port.registerPort
 import civictech.cell.verify.InvariantCell
 import io.kotest.assertions.throwables.shouldThrow
@@ -24,6 +27,7 @@ import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
+import kotlin.math.abs
 
 class EvolveOrchestratorTest {
 
@@ -250,6 +254,50 @@ class EvolveOrchestratorTest {
         run.view.received shouldBe listOf(1L, 3L, 6L, 10L)
     }
 
+    @Test
+    fun `cycle quiescence defers the handle but remains a promotion precheck refusal`() {
+        val cyclePolicy = PromotionPolicy(
+            gates = listOf(GATE_NAME),
+            window = ObservationWindow(4),
+            judge = "judge",
+        )
+        val run = Run(seed = 13, incumbentFactory = ::CyclicSummerV1, policy = cyclePolicy)
+        val hooks = RecordingHooks()
+        val handle = run.start(hooks = hooks)
+        val incumbent = run.incumbent as CyclicSummerV1
+        (1..3).forEach(run::emit)
+
+        handle.advance() shouldBe EvolutionHandle.State.SHADOWING
+        handle.reason shouldBe null
+        hooks.despawned shouldBe emptyList()
+        hooks.promoted shouldBe emptyList()
+        (run.host.portAt(run.incumbent.ref, "outlet") != null) shouldBe true
+        (run.host.portAt(run.candidate.ref, "outlet") != null) shouldBe true
+
+        val directJudge = PromotionJudge(cyclePolicy, cycleHead = incumbent)
+        repeat(4) { directJudge.observeCandidateWave() }
+        val aborted = shouldThrow<Promotion.PromotionAborted> {
+            Promotion.promote(
+                host = run.host,
+                gate = run.gate,
+                incumbent = run.incumbent,
+                candidate = run.candidate,
+                outletName = "outlet",
+                downstream = listOf(run.view.inlet),
+                judge = directJudge,
+            )
+        }
+        aborted.message!!.shouldContain("PRECHECK")
+        aborted.message!!.shouldContain("cycle promotion deferred")
+
+        run.emit(4)
+        run.view.received shouldBe listOf(1L, 3L, 6L, 10L)
+        incumbent.feedbackInput.call.provide(CycleDelta(0.001))
+
+        handle.advance() shouldBe EvolutionHandle.State.PROMOTED
+        hooks.promoted shouldBe listOf(run.incumbent.ref)
+    }
+
     private interface SummingCell : Cell {
         val inlet: FanInlet<Consumer<Int>>
         val outlet: FanOutlet<Consumer<Long>>
@@ -260,7 +308,7 @@ class EvolveOrchestratorTest {
         fun emit(value: Int) = outlet.call.provide(value)
     }
 
-    private class SummerV1(override val ref: CellRef) : SummingCell, Stateful {
+    private open class SummerV1(override val ref: CellRef) : SummingCell, Stateful {
         override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
         override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
         private var sum = 0L
@@ -279,6 +327,14 @@ class EvolveOrchestratorTest {
         override fun restore(state: Serializable) {
             sum = state as Long
         }
+    }
+
+    private data class CycleDelta(val value: Double) : Magnitude {
+        override fun size(): Double = abs(value)
+    }
+
+    private class CyclicSummerV1(ref: CellRef) : SummerV1(ref), CycleHead<CycleDelta> {
+        override val feedbackInput by feedbackInlet<CycleDelta>(quiescence = 0.01) {}
     }
 
     private open class SummerV2(override val ref: CellRef) : SummingCell, StateMigrating {
@@ -373,6 +429,7 @@ class EvolveOrchestratorTest {
 
     private inner class Run(
         seed: Long,
+        incumbentFactory: (CellRef) -> SummingCell = ::SummerV1,
         candidateFactory: (CellRef) -> SummingCell = ::SummerV2,
         baselineFactory: ((CellRef) -> SummingCell)? = null,
         val policy: PromotionPolicy = policy(baseline = baselineFactory != null),
@@ -382,7 +439,7 @@ class EvolveOrchestratorTest {
         val logicalId = UUID.randomUUID()
         val source = SourceCell(consumerInt)
         val gate = TrafficLightCell.create<Consumer<Int>>()
-        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val incumbent = incumbentFactory(CellRef(logicalId, instanceId = 0))
         val candidate = candidateFactory(CellRef(logicalId, instanceId = 1))
         val baselineTwin = baselineFactory?.invoke(CellRef(logicalId, instanceId = 2))
         val candidateGate = nonDecreasingGate()
