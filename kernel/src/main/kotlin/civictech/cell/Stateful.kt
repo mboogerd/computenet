@@ -1,6 +1,8 @@
 package civictech.cell
 
 import civictech.cell.proxy.HostedPortInvocation
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.withContext
 import java.io.Serializable
 import java.util.IdentityHashMap
 
@@ -60,9 +62,12 @@ private typealias CheckpointReplayCounts =
  * parked invocation; after recovery the cell registers those positions against the new replay's
  * journal token. Every asynchronous descendant keeps that token through [ReplayProvenance], so
  * the host can make the same per-target decision after the original downstream frame has been
- * folded into state.
+ * folded into state. Each host owns one instance; the companion's thread-local is only a
+ * delivery/checkpoint context pointer and never owns a journal or retained position itself.
  */
-internal object CheckpointReplayPositions {
+internal class CheckpointReplayPositions(
+    private val targetExists: (CellRef, String) -> Boolean,
+) {
     private data class Capture(val journal: Any, val counts: CheckpointReplayCounts)
 
     private val capture = ThreadLocal<Capture?>()
@@ -76,6 +81,7 @@ internal object CheckpointReplayPositions {
         val counts = replayed.mapValuesTo(mutableMapOf()) { (_, positions) -> positions.toMutableMap() }
         synchronized(restored) {
             restored[journal]?.forEach { (key, positions) ->
+                if (!targetExists(key.first, key.second)) return@forEach
                 val target = counts.getOrPut(key, ::mutableMapOf)
                 positions.forEach { (timestamp, occurrences) ->
                     target[timestamp] = maxOf(target[timestamp] ?: 0, occurrences)
@@ -84,10 +90,12 @@ internal object CheckpointReplayPositions {
         }
         val previous = capture.get()
         capture.set(Capture(journal, counts))
-        return try {
-            block()
-        } finally {
-            capture.set(previous)
+        return withCurrent(this) {
+            try {
+                block()
+            } finally {
+                capture.set(previous)
+            }
         }
     }
 
@@ -107,8 +115,9 @@ internal object CheckpointReplayPositions {
     fun register(replayOf: Any, positions: List<CheckpointReplayPosition>) {
         if (positions.isEmpty()) return
         synchronized(restored) {
-            val counts = restored.getOrPut(replayOf, ::mutableMapOf)
             positions.forEach { position ->
+                if (!targetExists(position.cellRef, position.portName)) return@forEach
+                val counts = restored.getOrPut(replayOf, ::mutableMapOf)
                 val byTimestamp = counts.getOrPut(position.cellRef to position.portName, ::mutableMapOf)
                 byTimestamp[position.timestamp] = byTimestamp.getOrDefault(position.timestamp, 0) + 1
             }
@@ -129,5 +138,41 @@ internal object CheckpointReplayPositions {
 
     fun clear(replayOf: Any) {
         synchronized(restored) { restored.remove(replayOf) }
+    }
+
+    fun discard(cellRef: CellRef) {
+        synchronized(restored) {
+            val journals = restored.values.iterator()
+            while (journals.hasNext()) {
+                val counts = journals.next()
+                counts.keys.removeIf { (target, _) -> target == cellRef }
+                if (counts.isEmpty()) journals.remove()
+            }
+        }
+    }
+
+    fun retainedPositionCount(): Int = synchronized(restored) {
+        restored.values.sumOf { counts -> counts.values.sumOf { it.values.sum() } }
+    }
+
+    companion object {
+        private val current = ThreadLocal<CheckpointReplayPositions?>()
+
+        fun get(): CheckpointReplayPositions? = current.get()
+
+        private fun <T> withCurrent(registry: CheckpointReplayPositions, block: () -> T): T {
+            val previous = current.get()
+            current.set(registry)
+            return try {
+                block()
+            } finally {
+                current.set(previous)
+            }
+        }
+
+        suspend fun <T> withCurrentSuspending(
+            registry: CheckpointReplayPositions,
+            block: suspend () -> T,
+        ): T = withContext(current.asContextElement(registry)) { block() }
     }
 }

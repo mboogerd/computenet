@@ -81,7 +81,11 @@ class TrafficLightCell<T : Any>(
     private fun park(invocation: Invocation) {
         val replayOf = ReplayProvenance.get()
         val checkpointPositions = restoredReplayPositions.pollFirst().orEmpty()
-        if (replayOf != null) CheckpointReplayPositions.register(replayOf, checkpointPositions)
+        if (replayOf != null) {
+            checkNotNull(CheckpointReplayPositions.get()) {
+                "replayed traffic light invocation has no host checkpoint-position registry"
+            }.register(replayOf, checkpointPositions)
+        }
         buffer.park(
             ParkedInvocation(
                 invocation = invocation,
@@ -126,10 +130,13 @@ class TrafficLightCell<T : Any>(
         return CheckpointState(
             green = !isStopped,
             replayPositions = buffer.snapshot().map { parked ->
-                CheckpointReplayPositions.capture(
-                    parked.replayOf,
-                    parked.invocation.context?.timestamp,
-                )
+                if (parked.replayOf == null) {
+                    emptyList()
+                } else {
+                    checkNotNull(CheckpointReplayPositions.get()) {
+                        "replayed traffic light checkpoint has no host checkpoint-position registry"
+                    }.capture(parked.replayOf, parked.invocation.context?.timestamp)
+                }
             },
         )
     }

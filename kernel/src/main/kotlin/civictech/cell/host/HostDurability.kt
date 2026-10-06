@@ -457,6 +457,15 @@ internal class HostDurability(
     private val replayedPositions = IdentityHashMap<Journal, ReplayedPositions>()
 
     /**
+     * Checkpoint-carried replay positions belong to this host, like [replayedPositions].
+     * The target predicate rejects positions for a cell or port that promotion has already
+     * retired before the carried gate frame reaches its handler.
+     */
+    internal val checkpointReplayPositions = CheckpointReplayPositions { cellRef, portName ->
+        cellsView()[cellRef]?.let { PortRegistry.of(it)[portName] != null } == true
+    }
+
+    /**
      * Processed-frontier (G-59, fixes C-9; spec 20/24, 30/31, 50/52): per
      * [civictech.cell.evolve.Effectful] inlet `(cellRef, portName)`, the last applied
      * `Timestamp` per source — durable via [FrontierRecord]/[CheckpointRecord] so both
@@ -529,7 +538,7 @@ internal class HostDurability(
         synchronized(replayedPositions) {
             replayedPositions.remove(journal)
         }
-        CheckpointReplayPositions.clear(journal)
+        checkpointReplayPositions.clear(journal)
         // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
         // *originates* mid-replay marks that emission a baseline too; the frame
         // itself is stamped up front (below) so a reactive re-emission inherits
@@ -644,7 +653,7 @@ internal class HostDurability(
         val timestamp = frame.invocation.context?.timestamp ?: return false
         val positions = synchronized(replayedPositions) { replayedPositions[journal] } ?: return false
         val replayedMatch = positions.consume(frame.cellRef, frame.portName, timestamp)
-        val checkpointMatch = CheckpointReplayPositions.consume(
+        val checkpointMatch = checkpointReplayPositions.consume(
             journal,
             frame.cellRef,
             frame.portName,
@@ -831,7 +840,7 @@ internal class HostDurability(
             val replayed = synchronized(replayedPositions) {
                 replayedPositions[journal]?.snapshot().orEmpty()
             }
-            val state = CheckpointReplayPositions.capturing(journal, replayed) {
+            val state = checkpointReplayPositions.capturing(journal, replayed) {
                 HashMap<CellRef, Serializable>().also { snapshots ->
                     cells.forEach { (cellRef, cell) ->
                         if (cellJournalSelector(cellRef) === journal) {
@@ -1112,4 +1121,8 @@ internal class HostDurability(
             journalRecord(RECORD_BASELINE, BaselineDischargeRecord(cellRef, portName, timestamp)),
         )
     }
+
+    fun discardCheckpointReplayPositions(cellRef: CellRef) = checkpointReplayPositions.discard(cellRef)
+
+    fun retainedCheckpointReplayPositionCount(): Int = checkpointReplayPositions.retainedPositionCount()
 }
