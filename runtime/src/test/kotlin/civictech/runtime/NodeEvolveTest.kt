@@ -130,6 +130,50 @@ class NodeEvolveTest {
         }
     }
 
+    /**
+     * Journal compatibility: a topology checkpoint compacted by a build that did not retain
+     * Promote provenance folds to the active same-logical candidate with no incumbent and no
+     * Promote record. That fold is written here directly (the candidate journaled as active), and
+     * a re-boot with the pre-promotion spec that declares the shadow candidate must still recover.
+     */
+    @Test
+    @Timeout(60)
+    fun `a compacted promotion without retained provenance still recovers the declared shadow`() {
+        singleCaptured.clear()
+        val logicalId = UUID.randomUUID()
+        val manifest = manifest("legacy-compacted")
+        val candidate = SpawnStep(
+            "candidate",
+            SingleFactory("candidate"),
+            identity = IdentityBinding.NewInstanceOf(logicalId),
+            journalId = "main",
+        )
+        val legacyFold = GraphSpec(
+            listOf(
+                SpawnStep("relay", SingleFactory("relay")),
+                SpawnStep("gate", SingleFactory("gate")),
+                candidate,
+                SpawnStep("collector", SingleFactory("collector"), journalId = "main"),
+                ConnectStep("relay", "outlet", "gate", "dataInlet", staged),
+                ConnectStep("gate", "dataOutlet", "candidate", "inlet", staged),
+                ConnectStep("candidate", "outlet", "collector", "inlet", staged),
+            ),
+        )
+        Runtime.boot(manifest, "solo", legacyFold).close()
+
+        val declared = GraphSpec(
+            baseSpec(logicalId).steps.toMutableList().apply {
+                add(3, candidate.copy(shadow = true))
+                add(ConnectStep("gate", "dataOutlet", "candidate", "inlet", staged))
+            },
+        )
+        Runtime.boot(manifest, "solo", declared).use { node ->
+            assertTrue(node.recovered)
+            assertTrue("candidate" in node.refs, "recovered refs ${node.refs.keys} lack candidate")
+            assertFalse("incumbent" in node.refs, "recovered refs ${node.refs.keys} keep incumbent")
+        }
+    }
+
     @Test
     @Timeout(60)
     fun `remote authority refuses node apply after applying the shadow prefix`() {

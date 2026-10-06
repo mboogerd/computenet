@@ -188,18 +188,27 @@ object Runtime {
      * transition keeps unrelated stale specs loud and also covers candidates introduced by a
      * journaled [Node.apply] delta. The recovered active spawn's promotion provenance is the
      * durable evidence after topology checkpoint compaction, where the historical swap itself can
-     * no longer be re-applied.
+     * no longer be re-applied. A checkpoint compacted before that provenance was retained carries
+     * no Promote at all; it is still accepted when [declared] names the same-logical shadow
+     * candidate and the fold shows it active, so journals written by earlier builds keep recovering.
      */
     private fun retiredByRecoveredPromotion(
         missing: SpawnStep,
+        declared: List<SpawnStep>,
         context: ApplyContext,
     ): Boolean {
         val logicalId = missing.identity.declaredLogicalId() ?: return false
         val live = context.live()
-        return live.promotions.any { (retired, event) ->
+        val provenance = live.promotions.any { (retired, event) ->
             retired.id == logicalId &&
                 event.candidate.id == logicalId &&
                 live.spawns[event.candidate]?.shadow == false
+        }
+        return provenance || declared.any { candidate ->
+            candidate.handle != missing.handle &&
+                candidate.shadow &&
+                candidate.identity.declaredLogicalId() == logicalId &&
+                context.handles[candidate.handle]?.let { ref -> live.spawns[ref]?.shadow == false } == true
         }
     }
 
@@ -326,7 +335,7 @@ object Runtime {
                         .also { declared ->
                             declared.firstOrNull { missing ->
                                 missing.handle !in applyContext.handles &&
-                                    !retiredByRecoveredPromotion(missing, applyContext)
+                                    !retiredByRecoveredPromotion(missing, declared, applyContext)
                             }?.let { missing ->
                                 throw IllegalStateException(
                                     "recovered topology is missing handle '${missing.handle}' declared by " +
