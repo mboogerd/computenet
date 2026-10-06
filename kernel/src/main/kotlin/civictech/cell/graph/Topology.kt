@@ -90,7 +90,11 @@ data class TopologyFold(
     val families: Map<String, TopologyFamily>,
     val links: Map<TopologyLinkKey, TopoEvent.Connect>,
     val handles: Map<String, CellRef>,
-    /** Completed distinct-ref promotions retained as recovery provenance after folding. */
+    /**
+     * Completed distinct-ref promotions retained as recovery provenance after folding. A build
+     * predating this field cannot read a checkpoint that carries one: its fold requires the
+     * incumbent's spawn for every Promote, so a downgrade fails recovery of such a journal.
+     */
     val promotions: Map<CellRef, TopoEvent.Promote>,
 ) {
     fun events(): List<TopoEvent> = buildList {

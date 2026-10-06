@@ -77,10 +77,20 @@ interface EvolutionHandle {
 
     fun verdict(): PromotionVerdict
 
-    /** Evaluate the current verdict and, when settled, perform its terminal action. */
+    /**
+     * Evaluate the current verdict and, when settled, perform its terminal action.
+     *
+     * Call it between waves, after the host has drained: the wave counter fires inside the
+     * candidate's emission while a gate's violation for that same wave arrives in a later
+     * host task, so a verdict read mid-wave can count a window-filling wave whose violation
+     * is still queued (a candidate can then be accepted that its gates would reject).
+     */
     fun advance(): State
 
-    /** Poll [advance] until the handle is terminal or [timeoutMillis] elapses. */
+    /**
+     * Poll [advance] until the handle is terminal or [timeoutMillis] elapses. It takes no host
+     * fence, so it carries [advance]'s mid-wave caveat while production traffic flows.
+     */
     fun await(timeoutMillis: Long): State
 }
 
