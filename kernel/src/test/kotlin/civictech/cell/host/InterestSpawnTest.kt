@@ -70,12 +70,16 @@ class InterestSpawnTest {
 
     private class FamilyKeyFailingJournal(
         private val delegate: InMemoryJournal = InMemoryJournal(),
+        private var failuresRemaining: Int = Int.MAX_VALUE,
     ) : Journal by delegate {
+        @Synchronized
         override fun append(record: ByteArray) {
             val decoded = JournalRecords.decode(record)
             if (decoded is DecodedJournalRecord.Topology &&
-                decoded.events.any { it is TopoEvent.FamilyKey }
+                decoded.events.any { it is TopoEvent.FamilyKey } &&
+                failuresRemaining > 0
             ) {
+                failuresRemaining--
                 throw IllegalStateException("FamilyKey append failed")
             }
             delegate.append(record)
@@ -200,6 +204,48 @@ class InterestSpawnTest {
         registry.location(admitted.ref).shouldNotBeNull()
         family.keys() shouldBe setOf(11L)
         familyKeys(journal) shouldBe emptyList()
+    }
+
+    @Test
+    fun `an adopted member whose family key append failed loses its journaled state on recovery`() {
+        val firstController = SimulationController(seed = 11)
+        val firstRegistry = LocationRegistry()
+        val journal = FamilyKeyFailingJournal(failuresRemaining = 1)
+        val firstHost = ManagedHost(
+            scheduler = firstController.scheduler(),
+            registry = firstRegistry,
+            journal = journal,
+        )
+        val firstFamily = longFamily(firstHost)
+        val declaringRef = CellRef(UUID.randomUUID())
+        val interest = Interest.Ranges(listOf(Interest.Ranges.Range(11, 12)))
+
+        val failedAdmission = firstRegistry.setInterest(declaringRef, interest)
+        firstController.runToIdle()
+        failed(failedAdmission.spawned).message shouldBe "FamilyKey append failed"
+
+        val adopted = firstFamily.getOrSpawn(11L)
+        opsFor(firstRegistry, adopted).add("kept")
+        firstController.runToIdle()
+        val retry = firstRegistry.setInterest(declaringRef, interest)
+        firstController.runToIdle()
+        retry.spawned.get(5, TimeUnit.SECONDS) shouldBe setOf(adopted.ref)
+        familyKeys(journal) shouldBe emptyList()
+
+        val recoveredController = SimulationController(seed = 12)
+        val recoveredRegistry = LocationRegistry()
+        val recoveredHost = ManagedHost(
+            scheduler = recoveredController.scheduler(),
+            registry = recoveredRegistry,
+            journal = journal,
+        )
+        val recoveredFamily = longFamily(recoveredHost)
+        recoveredHost.recoverFrom(journal)
+        recoveredController.runToIdle()
+
+        recoveredFamily.keys() shouldBe emptySet()
+        recoveredHost.supervisionAccounting().deadLetters shouldBe 1L
+        membership(recoveredFamily.getOrSpawn(11L)) shouldBe emptySet()
     }
 
     @Test

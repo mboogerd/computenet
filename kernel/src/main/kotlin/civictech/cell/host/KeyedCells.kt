@@ -39,8 +39,12 @@ import java.util.concurrent.CompletableFuture
  *   whose membership append then fails is retained as a volatile live member
  *   while the admission future reports the append failure: it is not
  *   recoverable after restart, but retries join it instead of spawning its
- *   deterministic ref twice. A spawn refusal still owns neither an in-memory
- *   key nor a durable key record;
+ *   deterministic ref twice. Membership is never re-recorded in-process, even
+ *   if the journal later heals. Frames and checkpoint state subsequently
+ *   journaled for that member therefore have no preceding `FamilyKey` on
+ *   recovery: frames are dead-lettered as targeting an unknown cell, and
+ *   checkpoint state is dead-lettered as having no checkpoint-state cell. A
+ *   spawn refusal still owns neither an in-memory key nor a durable key record;
  * - **checkpoint-safe membership** — the family contributes its recorded keys
  *   to each journal's topology fold, so compaction preserves membership.
  *
