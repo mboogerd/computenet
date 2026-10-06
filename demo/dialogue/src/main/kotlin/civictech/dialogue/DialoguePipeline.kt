@@ -405,10 +405,11 @@ object DialoguePipeline {
             // therefore no longer a current example of an ack dying before
             // the semijoin. A hop with multiple open Consume inputs remains a
             // relay terminal; per-edge settlement is the open fan-in question
-            // in computenet-t6vex. The pre-6ovpx one-hop/two-hop reproduction
-            // remains documented in :kernel's FrontierGatedEmissionTest and
-            // doc/demo-findings.md F-15, while GatingEvidenceTest records the
-            // present two-Filter over-refusal of the conservative depth rule.
+            // in computenet-t6vex. :kernel's FrontierGatedEmissionTest two-hop
+            // disjoint-wave case now asserts that relay; the pre-6ovpx failure
+            // is recorded in doc/demo-findings.md F-15, while GatingEvidenceTest
+            // records the present two-Filter over-refusal of the conservative
+            // depth rule.
             //
             // Observed (task computenet-2aw.3.2, RelationMintTest): with
             // `emitOnFrontier = true` on BOTH semijoins, or on the first alone,
@@ -418,6 +419,10 @@ object DialoguePipeline {
             // pipeline satisfies it vacuously.) Re-measured at 915d574a9 by
             // computenet-23bf. All five pass ungated. A gate that
             // withholds output at rest is disqualifying, so the default stands.
+            // That measurement predates computenet-6ovpx: with both semijoins
+            // gated, RelationMintTest now passes 5/5 (computenet-25gh4 feature
+            // review). Whether to gate 5d/5e now is computenet-13dby; the
+            // default is unchanged here.
             //
             // What the ungated default leaves open is the transient the gate
             // exists for: admitting the utterance that mints a relation's last

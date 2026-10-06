@@ -540,17 +540,21 @@ open decision about relaxing the rule.
 
 **Historical reproduction (before computenet-6ovpx)**: `FrontierGatedEmissionTest` (`:kernel`), the pair
 `control - disjoint-wave arms one hop deep settle, because the absorb-ack
-lands on the gated edge` (green) and `disjoint-wave arms TWO hops deep
-withhold output at rest - the absorb-ack dies at the intervening hop`. Same
+lands on the gated edge` (green) and the two-hop case, then named
+`disjoint-wave arms TWO hops deep withhold output at rest - the absorb-ack
+dies at the intervening hop` and since computenet-6ovpx inverted to
+`disjoint-wave arms TWO hops deep settle at rest through the intervening
+FlatMapSetCell relay`. Same
 rig, same disjoint waves, only the hop count differs — which pinned the
 pre-relay mechanism to ack non-relay rather than to the wave partition itself.
 The same file's `CombineDisjointArmRig` and its own control/case pair (`control
 - CombineLatestCell disjoint-wave arms one hop deep settle...` /
 `CombineLatestCell disjoint-wave arms TWO hops deep emit a null-extension that
 is never corrected at rest...`) repeat the historical measurement for
-`CombineLatestCell` — see "Measured" below. The unary two-hop case now settles;
-the `CombineLatestCell` case remains relevant as a multi-input frontier
-terminal under computenet-t6vex, whose per-edge settlement is still open.
+`CombineLatestCell` — see "Measured" below. The `SemiJoinCell` two-hop case
+now settles. The `CombineLatestCell` two-hop case still withholds, but not
+because of fan-in: its intervening hop is the test-local `MapArm` identity
+cell, which installs no relay — the uninstrumented-hop case above.
 
 **Why it was a gap**: "derive two arms from one stream, split by element kind,
 and join them" is generic incremental dataflow, not an AGO1 shape, and it is
@@ -596,25 +600,26 @@ canonical relation fold re-opens this finding.
 
 **Honest limit of this entry**: the historical reproduction covers
 `SemiJoinCell`'s gate, and `GatingEvidenceTest` now measures the unary relay
-resolution on both filter hop orders. `CombineLatestCell` remains a separate
-multi-input frontier-terminal case, measured below; its per-edge settlement is
-the open computenet-t6vex question. `WaveFrontier` and `AlignedCompositeCell`
+resolution on both filter hop orders. `CombineLatestCell`'s two-hop pair,
+measured below, still withholds because its rig's identity hop (`MapArm`)
+installs no relay; no `CombineLatestCell` arm through a relay-enabled hop was
+measured. `WaveFrontier` and `AlignedCompositeCell`
 were not measured for the broader frontier behavior. The "withheld permanently
 at rest" claim is about the historical graph's quiescence (or a remaining
 unrelayed terminal): a graph that keeps receiving waves on every arm sees only
 the lag.
 
 **Measured (computenet-u0oa, 2026-09-03, before computenet-6ovpx)**:
-`CombineLatestCell` shares the multi-input frontier-terminal behavior, extending
+`CombineLatestCell` shares the defect, extending
 `FrontierGatedEmissionTest`'s disjoint-wave-arm rig
 (`CombineDisjointArmRig`) to `CombineLatestCell` — same one-hop-settles /
 two-hop-withholds control/case pair, same arm shape (a kind-filtering head that
 CP-A3 absorb-acks every other wave, followed by `hops - 1` pure identity hops),
-gated cell and wire type (`MapDelta`) swapped and nothing else. The green
-one-hop control pins the historical mechanism, while the current bounded
-behavior is that `CombineLatestCell` has multiple inputs and does not relay one
-edge's `Progress` as whole-hop settlement; computenet-t6vex leaves the proper
-per-edge fold open.
+gated cell and wire type (`MapDelta`) swapped and nothing else, so the green
+one-hop control pins the mechanism to the same ack non-relay as `SemiJoinCell`'s.
+The rig's identity hop is a test-local `MapArm` that installs no relay, so this
+pair still fails after computenet-6ovpx: it is the uninstrumented-hop case, not
+the computenet-t6vex fan-in case.
 The manifestation differs from `SemiJoinCell`'s complete silence, though, in a
 way that matters: `CombineLatestCell`'s premature reconciliation (against a
 still-incomplete other side) does not withhold — it **emits a wrong value**, a
