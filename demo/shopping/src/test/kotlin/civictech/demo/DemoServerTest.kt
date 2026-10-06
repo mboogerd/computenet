@@ -81,7 +81,7 @@ class DemoServerTest {
             }
 
             assertTrue(
-                "\"items+produce|votes\":{"independent":true,\"lagBySource\":{}" in json,
+                "\"items+produce|votes\":{\"independent\":true,\"lagBySource\":{}" in json,
                 "independent item/vote groups were not disclosed: $json",
             )
             assertTrue(
