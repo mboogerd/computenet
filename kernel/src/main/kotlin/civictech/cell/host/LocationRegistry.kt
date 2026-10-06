@@ -3,10 +3,12 @@ package civictech.cell.host
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.link.PeerId
+import civictech.cell.link.Interest
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.control.ParkQueue
 import java.lang.ref.WeakReference
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -32,10 +34,12 @@ import java.util.concurrent.ConcurrentHashMap
  *    [24-PART-04], CP-D4, 93 I-19) belongs to [DeliveryHold], held at
  *    [holds].
  *
- * [setInterest]/[interestOf]/[isHeld] and friends remain as compatibility
- * delegates onto those two for out-of-kernel callers (kernel main-source
- * reads [instances]/[holds] directly, OQ-1 computenet-iyi.4) — see each
- * delegate's own KDoc. `ExtractionFenceTest` (BS-18) pins the shape: exactly
+ * [interestOf]/[isHeld] and friends remain as compatibility delegates onto
+ * those two for out-of-kernel callers (kernel main-source reads
+ * [instances]/[holds] directly, OQ-1 computenet-iyi.4). [setInterest] records
+ * through [instances] too, then owns the post-admission notification seam for
+ * interest-driven families — see its KDoc. `ExtractionFenceTest` (BS-18) pins
+ * the shape: exactly
  * one [InstanceIndex]- and one [DeliveryHold]-typed field, and no other field
  * whose name contains `byLogicalId`, `interest`, `held` or `holds`. That
  * second clause is a four-substring heuristic, not a judgement about names:
@@ -166,11 +170,30 @@ class LocationRegistry {
 
     /**
      * Declare [ref]'s interest (the interest-assignment table entry,
-     * CP-D2/CP-D3) — compatibility delegate onto [instances] for out-of-kernel
-     * callers; see [InstanceIndex.setInterest]. Kernel main-source reads
-     * [instances] directly (OQ-1, computenet-iyi.4).
+     * CP-D2/CP-D3), then notify every [onInterest] participant. Recording is
+     * always first and survives a participant's exceptional completion.
+     * [InterestAdmission.spawned] joins the refs materialized by every
+     * participant; a declaration made before any participant exists records
+     * normally and completes with an empty set.
      */
-    fun setInterest(ref: CellRef, interest: civictech.cell.link.Interest) = instances.setInterest(ref, interest)
+    fun setInterest(ref: CellRef, interest: Interest): InterestAdmission {
+        instances.setInterest(ref, interest)
+        val futures = admissionListeners.mapNotNull { listener ->
+            try {
+                listener(ref, interest)
+            } catch (failure: Exception) {
+                CompletableFuture.failedFuture<Set<CellRef>>(failure)
+            }
+        }
+        val spawned: CompletableFuture<Set<CellRef>> = if (futures.isEmpty()) {
+            CompletableFuture.completedFuture(emptySet<CellRef>())
+        } else {
+            CompletableFuture.allOf(*futures.toTypedArray()).thenApply<Set<CellRef>> {
+                futures.flatMapTo(linkedSetOf()) { it.join() }
+            }
+        }
+        return InterestAdmission(ref, interest, spawned)
+    }
 
     /**
      * [ref]'s declared interest, or [civictech.cell.link.Interest.Total] when
@@ -189,6 +212,14 @@ class LocationRegistry {
 
     /** Fire after *any* publish (local or remote) — the replica-discovery seam (M7.2, spec 42). */
     private val onPublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
+
+    /**
+     * Post-record interest participants. The field deliberately says
+     * "admission" rather than duplicating [InstanceIndex]'s interest table:
+     * this is a listener list, never a second store for assignments.
+     */
+    private val admissionListeners =
+        java.util.concurrent.CopyOnWriteArrayList<(CellRef, Interest) -> CompletableFuture<Set<CellRef>>?>()
 
     /** Fire after a *local* unpublish — the eviction-announcement seam (spec 42, G-45). */
     private val onLocalUnpublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
@@ -245,6 +276,18 @@ class LocationRegistry {
     fun onPublish(listener: (CellRef) -> Unit): AutoCloseable {
         onPublish += listener
         return AutoCloseable { onPublish -= listener }
+    }
+
+    /**
+     * Participate in interests admitted through [setInterest]. Returning
+     * `null` means the listener does not own the declaration. A declaration
+     * made before any interested family subscribes is still recorded, but its
+     * [InterestAdmission.spawned] result is immediately empty; declarations
+     * are not replayed to later listeners.
+     */
+    fun onInterest(listener: (CellRef, Interest) -> CompletableFuture<Set<CellRef>>?): AutoCloseable {
+        admissionListeners += listener
+        return AutoCloseable { admissionListeners -= listener }
     }
 
     /** Returns a deregistration handle — mirrors [onLocalPublish]'s reconnect contract. */

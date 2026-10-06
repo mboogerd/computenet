@@ -48,6 +48,11 @@ class KeyCodec(
     val parse: (String) -> Any,
 ) : Serializable {
     companion object {
+        // TopoEvent.Family records embed this codec inside KeyedFamily. Pin the
+        // JVM-computed UID of the unpinned class so journals written before the
+        // pin keep decoding (vb7aq-D12).
+        private const val serialVersionUID: Long = 3426917053904368972L
+
         /** The default codec for string keys. */
         val Strings = KeyCodec(@JvmSerializableLambda { it as String }, @JvmSerializableLambda { it })
 
@@ -56,12 +61,24 @@ class KeyCodec(
     }
 }
 
-/** The declarative parameters for a lazily-spawned keyed cell family. */
+/**
+ * The declarative parameters for a lazily-spawned keyed cell family.
+ *
+ * [spawnOnInterest] makes bounded interests admitted by the host registry
+ * materialize their named keys. It defaults off so existing graphs remain
+ * touch-driven. The explicit serial version preserves topology records written
+ * before that additive field existed; a missing field decodes as `false`.
+ */
 data class KeyedFamily(
     val namespace: String,
     val keys: KeyCodec = KeyCodec.Strings,
     val journalId: String? = null,
-) : Serializable
+    val spawnOnInterest: Boolean = false,
+) : Serializable {
+    companion object {
+        private const val serialVersionUID: Long = 2592408546637474475L
+    }
+}
 
 /** A cell factory whose construction also receives the family key. */
 fun interface KeyedCellFactory : CellFactory {
@@ -925,6 +942,7 @@ class GraphBuilder private constructor(
         namespace: String,
         keys: KeyCodec = KeyCodec.Strings,
         journalId: String? = null,
+        spawnOnInterest: Boolean = false,
         factory: KeyedCellFactory,
     ): KeyedCells<Any> {
         val applyContext = context
@@ -937,7 +955,7 @@ class GraphBuilder private constructor(
         val step = SpawnStep(
             handle = name,
             factory = factory,
-            family = KeyedFamily(namespace, keys, journalId),
+            family = KeyedFamily(namespace, keys, journalId, spawnOnInterest),
         )
         val event = TopoEvent.Family(name, step.family!!, factory)
         applyContext.journalTopology(listOf(event))

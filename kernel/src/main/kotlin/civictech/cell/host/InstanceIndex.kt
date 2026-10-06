@@ -69,7 +69,12 @@ class InstanceIndex {
      */
     private val interests = ConcurrentHashMap<CellRef, civictech.cell.link.Interest>()
 
-    /** Declare [ref]'s interest (the interest-assignment table entry, CP-D2/CP-D3). */
+    /**
+     * Declare [ref]'s interest (the interest-assignment table entry,
+     * CP-D2/CP-D3). This type only records the assignment; post-admission
+     * reactions such as keyed-family spawning belong to
+     * [LocationRegistry.setInterest].
+     */
     fun setInterest(ref: CellRef, interest: civictech.cell.link.Interest) {
         interests[ref] = interest
     }
