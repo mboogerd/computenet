@@ -166,8 +166,10 @@ class ExchangeApp(
     private val boardApi = Propagate::class.java as Class<Propagate<MapDelta<String, Long>>>
     private val boardCell = GlitchFreeCell(boardApi)
 
-    private val observation: Observation = host.observation {
-        map("board", boardCell.ref)
+    private val observation: Observation by lazy {
+        host.observation {
+            map("board", boardCell.ref)
+        }
     }
 
     internal val observationGroups: Map<String, String>
