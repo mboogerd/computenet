@@ -35,8 +35,8 @@ import kotlin.test.assertTrue
  *   is how the surface learns a credence settled after a stance write.
  * - `claimProvenance` / `relationProvenance`, read from the two
  *   ProvenanceIndex views in this runtime's canonical observation (2aw.5-D9),
- *   and the durability half that goes with them: their deterministic group
- *   ref is volatile and their non-`@Serializable` payloads never reach the WAL.
+ *   and the durability half that goes with them: both deterministic group
+ *   refs are volatile and their non-`@Serializable` payloads never reach the WAL.
  *
  * Deliberately **not** here: recovery order, BS-18 and BS-19 — those are
  * [DialogueRuntimeTest]'s, which this file does not touch. The worlds here
@@ -270,7 +270,7 @@ class DialogueRuntimeSurfaceTest {
         assertEquals(setOf("u1", "u2"), world.runtime.claimProvenance(keyOne))
         assertEquals(setOf("u3"), world.runtime.relationProvenance(relationKey))
 
-        // …and the observation group's ref does not appear in the WAL. WireCodec encodes a
+        // …and neither observation group's ref appears in the WAL. WireCodec encodes a
         // frame as JSON (`json.encodeToString(WireFrame.serializer(), …)`)
         // and a frame names its target cell by ref, so a journaled sink would
         // be visible as its UUID in the journal bytes.
@@ -285,17 +285,19 @@ class DialogueRuntimeSurfaceTest {
         // (ManagedHost's `journalSelector(...)?.append(...)`). So SINK_NAMES
         // membership for the sinks is belt-and-braces here, not a load-bearing
         // guard this suite can demonstrate; the guard it demonstrably IS
-        // load-bearing for is the ingress cell, below. Keep the group id in
+        // load-bearing for is the ingress cell, below. Keep both names in
         // SINK_NAMES anyway: the design intent (isDurable's KDoc, and
         // computenet-oy26's note on GraphApplier.sink) is that a sink is never
         // durable, and nothing here licenses relying on the delivery path
         // staying non-journaling.
         val journalText = File(dir, "host.journal").readBytes().toString(Charsets.ISO_8859_1)
-        val provenanceGroupRef = world.runtime.observationGroupRefs.getValue("claimProvenance")
-        assertFalse(
-            journalText.contains(provenanceGroupRef.id.toString()),
-            "no journal frame names the provenance observation group ($provenanceGroupRef)",
-        )
+        listOf("claimProvenance", "relationProvenance").forEach { name ->
+            val ref = world.runtime.observationGroupRefs.getValue(name)
+            assertFalse(
+                journalText.contains(ref.id.toString()),
+                "no journal frame names the $name observation group ($ref)",
+            )
+        }
         // Positive control for the instrument: the ingress cell IS durable, so
         // an assertion of this shape can see a ref when there is one to see.
         assertTrue(
