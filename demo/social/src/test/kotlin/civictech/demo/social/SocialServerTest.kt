@@ -4,6 +4,9 @@ import civictech.testkit.HttpProbe
 import civictech.testkit.awaitSseData
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -231,6 +234,12 @@ class SocialServerTest {
     private companion object {
         /** See [assertStartupBroadcastsBounded]: structurally 0; a constant, never a fraction of N. */
         const val STARTUP_BROADCAST_BOUND = 2L
+
+        /** Outlives an unawaited stop(); well inside SocialApp's STOP_DISPATCHER_BOUND_MS. */
+        const val BLOCKED_LISTENER_MS = 1_500L
+
+        /** Far above any SnbGenerator id, so the write mints a fresh per-key observation. */
+        const val BLOCKED_LISTENER_PERSON_ID = 9_000_000_000_000_000L
     }
 
     @Test
@@ -330,6 +339,25 @@ class SocialServerTest {
         awaitUntil("app to mint at least one observation dispatcher thread") {
             (observationThreadNames() - before).isNotEmpty()
         }
+        // computenet-axcyk.6 review: hold one dispatcher inside a listener
+        // across stop(). Idle dispatchers exit within microseconds of
+        // shutdown(), so without a listener still running at stop() this test
+        // stayed green with awaitDispatchers reduced to `emptyList()` (observed
+        // at both this task's base and head). A listener sleeping
+        // BLOCKED_LISTENER_MS outlives an unawaited stop() but finishes well
+        // inside STOP_DISPATCHER_BOUND_MS, so an awaited stop() still returns.
+        val entered = CountDownLatch(1)
+        val armed = AtomicBoolean(true)
+        app.graph.onChange {
+            if (armed.compareAndSet(true, false)) {
+                entered.countDown()
+                Thread.sleep(BLOCKED_LISTENER_MS)
+            }
+        }
+        // A new person mints a new per-key observation whose late-attach
+        // catch-up fires the listener on that observation's dispatcher.
+        app.graph.addPerson(Person(BLOCKED_LISTENER_PERSON_ID, "Blocked", "Listener"))
+        assertTrue(entered.await(10, TimeUnit.SECONDS), "the blocking listener never ran")
         // The exact set of threads THIS app minted, named at the moment of
         // minting — not touched again, so a sibling test minting its own
         // (differently-UUID-named) dispatcher afterward cannot inflate it.
@@ -351,6 +379,29 @@ class SocialServerTest {
             "observation dispatcher thread(s) minted by this app (${survivors.size} of ${minted.size}) " +
                 "were still alive when stop() returned: $survivors",
         )
+    }
+
+    // computenet-axcyk.6 review: a one-view Observation must not register the
+    // coordinator as a listener on its only group (Observation.kt init), or
+    // every per-key observation of a graph nobody listens to mints a
+    // dispatcher thread (computenet-v10ou.1). The post-close test below cannot
+    // see that: its thread is minted and torn down before the check.
+    @Test
+    fun `a per-key observation mints no dispatcher thread while nobody listens`() {
+        val app = SocialApp(port = 0)
+        try {
+            val before = observationThreadNames()
+            app.graph.addPerson(Person(1, "Unobserved", "Reader"))
+            awaitUntil("the per-key observation to read its creating write") {
+                app.graph.personFacts(1).isNotEmpty()
+            }
+            assertTrue(
+                (observationThreadNames() - before).isEmpty(),
+                "a per-key observation with no listener minted a dispatcher: ${observationThreadNames() - before}",
+            )
+        } finally {
+            app.stop()
+        }
     }
 
     @Test
