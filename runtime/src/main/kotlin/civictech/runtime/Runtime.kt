@@ -181,12 +181,16 @@ object Runtime {
     }
 
     /**
-     * A journaled promotion retires the incumbent handle while activating its already-declared
-     * shadow candidate. Accept that one missing original-spec handle without aliasing it back into
+     * A journaled promotion retires the incumbent handle while activating its recorded shadow
+     * candidate. Accept that one missing original-spec handle without aliasing it back into
      * [ApplyContext.handles]: the journal's post-promotion fold remains the live topology exposed
-     * through [Node.refs]. Requiring the same declared logical identity plus a recovered
-     * shadow-to-active transition keeps unrelated stale specs loud and survives topology
-     * checkpoint compaction, where the historical Promote event itself is no longer present.
+     * through [Node.refs]. Requiring the same logical identity plus a recovered shadow-to-active
+     * transition keeps unrelated stale specs loud and also covers candidates introduced by a
+     * journaled [Node.apply] delta. The recovered active spawn's promotion provenance is the
+     * durable evidence after topology checkpoint compaction, where the historical swap itself can
+     * no longer be re-applied. A checkpoint compacted before that provenance was retained carries
+     * no Promote at all; it is still accepted when [declared] names the same-logical shadow
+     * candidate and the fold shows it active, so journals written by earlier builds keep recovering.
      */
     private fun retiredByRecoveredPromotion(
         missing: SpawnStep,
@@ -195,7 +199,12 @@ object Runtime {
     ): Boolean {
         val logicalId = missing.identity.declaredLogicalId() ?: return false
         val live = context.live()
-        return declared.any { candidate ->
+        val provenance = live.promotions.any { (retired, event) ->
+            retired.id == logicalId &&
+                event.candidate.id == logicalId &&
+                live.spawns[event.candidate]?.shadow == false
+        }
+        return provenance || declared.any { candidate ->
             candidate.handle != missing.handle &&
                 candidate.shadow &&
                 candidate.identity.declaredLogicalId() == logicalId &&
@@ -244,6 +253,12 @@ object Runtime {
      * that journal is non-empty; otherwise its spec is applied and journaled as the first topology.
      * A recovered placed node reinstalls its physical bridge halves before [Node.open]
      * without reopening the logical edge or duplicating its edge-event accounting.
+     *
+     * For an unplaced node, recovery takes the original bootstrap [spec]. Its topology journal is
+     * the complete authority for later successful [Node.apply] deltas, including cells and links
+     * introduced by a declarative evolution; callers do not rebuild a cumulative spec after each
+     * delta. The original declaration is still checked against the recovered fold, with a
+     * journal-proven promotion allowed to retire one of its handles.
      *
      * For a placed node, [spec] on recovery MUST be the cumulative ordered graph history: the
      * original boot spec followed by every successfully applied [Node.apply] delta. Local cells
@@ -417,7 +432,9 @@ object Runtime {
 
         private var opened = false
         private var closed = false
-        private var bridgeHost: ManagedHost? = null
+        /** The peering bridge host, sharing [budget], after [open] (null before [open]). */
+        var bridgeHost: ManagedHost? = null
+            private set
         private var listener: PeerListener? = null
         private val connectionEndpoints = mutableListOf<PeerConnection>()
         private var inspectorExtras = InspectorExtras()
@@ -553,7 +570,7 @@ object Runtime {
             opened = true
 
             try {
-                val bridge = ManagedHost(registry = registry).also { bridgeHost = it }
+                val bridge = ManagedHost(registry = registry, budget = budget).also { bridgeHost = it }
                 val side = Peering.Side(
                     registry = registry,
                     bridgeHost = bridge,

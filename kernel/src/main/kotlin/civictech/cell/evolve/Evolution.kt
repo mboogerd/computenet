@@ -142,7 +142,9 @@ object Shadow {
 }
 
 /**
- * Promotion as the four-phase swap transaction (spec 53 §The promotion swap,
+ * Promotion as the low-level four-phase swap transaction used by [Evolve],
+ * the shadow → invariant gates → judge → swap composition entry point
+ * (spec 53 §The promotion swap,
  * decided 93 I-11, G-49): PRECHECK (no side effects, freely abortable) →
  * PREPARE (red, drain) → COMMIT (non-vetoing state handoff + relink) →
  * RETIRE (despawn). Every step is an existing kernel primitive — traffic
