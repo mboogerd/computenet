@@ -187,9 +187,15 @@ class AlignedDrainBarrier internal constructor(
  * are admitted to no completeness set — `WaveFrontier.offer`'s two catch-up
  * arms. A late-attached sink therefore catches each arm up as that arm's
  * baseline arrives, which can transiently expose arms seeded at different
- * points; from the first waved delta onward, every published composite is
- * aligned. Attach before the graph starts writing if the very first snapshot
- * must be aligned too.
+ * points. `AlignedComposite.alignedFrom` is the observable for when the
+ * guarantee starts: for each source `s`, a reader checks on one immutable
+ * composite that `alignedFrom[s] != null && frontier[s] >= alignedFrom[s]`.
+ * These are equivalent because the same release first writes both; a
+ * composite failing the check for `s` may still carry arms catch-up-seeded at
+ * different points for `s`. An install-only publication keeps the previous
+ * `alignedFrom` and `frontier`; from the first waved delta onward, every
+ * published composite is aligned. Attach before the graph starts writing if
+ * the very first snapshot must be aligned too.
  *
  * **Bridged (two-host frame-bridge) coverage.** `AlignedObserveBridgedTest`
  * proves the remote-arm invariant over the in-process `BridgeEgressCell` /
@@ -321,6 +327,9 @@ class AlignedCompositeCell(
 
     /** Highest flushed wave per source: a straggler installs late, it never re-buffers. */
     private val flushedHighWater = mutableMapOf<UUID, Long>()
+
+    /** First wave per source released through the completeness set; written once per source, never rewritten. */
+    private val alignedFrom = mutableMapOf<UUID, Long>()
 
     /** A delta held for its wave, tagged with the arm it arrived on (structural view identity). */
     private class Buffered(val arm: Arm, val delta: Any)
@@ -800,6 +809,7 @@ class AlignedCompositeCell(
             .sortedWith(compareBy({ it.sourceId }, { it.counter }))
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue
+            alignedFrom.putIfAbsent(timestamp.sourceId, timestamp.counter)
             val dropped = LinkedHashSet<DroppedEdge>()
             exclusions.remove(timestamp)?.let { dropped += it }
             edges.values
@@ -869,7 +879,7 @@ class AlignedCompositeCell(
         views = arms.entries.associateTo(LinkedHashMap()) { (name, arm) -> name to arm.view.current() },
         frontier = flushedHighWater.toMap(),
         droppedEdges = dropped.toSet(),
-        alignedFrom = emptyMap(),
+        alignedFrom = alignedFrom.toMap(),
     )
 
     /**
@@ -1010,8 +1020,9 @@ class AlignedCompositeCell(
  * @property droppedEdges every contributing edge this composite was released
  *   without (see [AlignedCompositeCell]'s class doc, §Stalled edges); empty for
  *   a fully aligned composite.
- * @property alignedFrom always empty in this delivery: F5 (`computenet-zvdt1`)
- *   adds the one write that fills it.
+ * @property alignedFrom the first wave per source released through the
+ *   completeness set, monotone and absent for a source never released; not
+ *   serialized in `snapshot()`.
  */
 data class AlignedComposite(
     val views: Map<String, Any?>,
