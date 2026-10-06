@@ -87,6 +87,7 @@ data class ProtocolAuthority(
     val maxTrackedPrincipals: Int = 1024,
 ) {
     init {
+        require(windowNanos == null || windowNanos > 0) { "windowNanos must be positive when declared" }
         require(maxTrackedPrincipals >= 1) { "maxTrackedPrincipals must be at least 1" }
     }
 }

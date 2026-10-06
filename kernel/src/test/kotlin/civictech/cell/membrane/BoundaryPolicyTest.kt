@@ -728,6 +728,19 @@ class BoundaryPolicyTest {
     }
 
     @Test
+    fun `ProtocolAuthority rejects non-positive windows but allows absent and positive windows`() {
+        assertThrows<IllegalArgumentException> {
+            ProtocolAuthority(ratePerWindow = 1, windowNanos = 0L)
+        }
+        assertThrows<IllegalArgumentException> {
+            ProtocolAuthority(ratePerWindow = 1, windowNanos = -1L)
+        }
+
+        ProtocolAuthority(ratePerWindow = 1, windowNanos = null).windowNanos shouldBe null
+        ProtocolAuthority(ratePerWindow = 1, windowNanos = 1L).windowNanos shouldBe 1L
+    }
+
+    @Test
     fun `local attention crossing is never attenuated, even under a strict policy`() {
         val controller = SimulationController(seed = 14)
         val host = ManagedHost(scheduler = controller.scheduler())
