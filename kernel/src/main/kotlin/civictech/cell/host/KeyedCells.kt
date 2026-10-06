@@ -8,6 +8,7 @@ import civictech.cell.graph.TopoEvent
 import java.io.File
 import java.util.IdentityHashMap
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 
 /**
  * A durable, dynamically-sized family of cells keyed by [K] — one cell per key,
@@ -19,10 +20,13 @@ import java.util.UUID
  * - **deterministic ref-per-key** — `nameUUIDFromBytes("$namespace:$key")`, so a
  *   key's cell carries the same [CellRef] (hence the same replay-stable tag
  *   source, [civictech.cell.data.SetCell]) across restarts;
- * - **lazy [getOrSpawn]** — spawn on first touch, and thereafter idempotent: a
- *   live key returns the same cell without re-spawning, so the `Exact` live-ref
- *   spawn guard ([civictech.cell.graph.IdentityBinding.Exact], G-51) is
- *   unreachable through this API;
+ * - **lazy [getOrSpawn] / [spawnAsync]** — spawn on first touch, and thereafter
+ *   idempotent: a live key returns the same cell without re-spawning, while
+ *   concurrent touches join one pending spawn. The family lock is released
+ *   before [getOrSpawn] waits on the host, so no normal spawn holds it across a
+ *   host wait. The `Exact` live-ref spawn guard
+ *   ([civictech.cell.graph.IdentityBinding.Exact], G-51) is unreachable through
+ *   these APIs;
  * - **journal-native durable membership** — the first touch records a
  *   [TopoEvent.FamilyKey] in the key cell's own selected journal before the
  *   cell is spawned. Recovery therefore encounters the key before any of its
@@ -52,6 +56,9 @@ class KeyedCells<K : Any>(
     /** Cells spawned this session, by key — the in-memory index (was the `writers` map). */
     private val live = mutableMapOf<K, Cell>()
 
+    /** One shared completion for every key whose cell has been prepared but not yet admitted. */
+    private val pending = mutableMapOf<K, CompletableFuture<Cell>>()
+
     /** Every key ever spawned, populated in journal order during recovery. */
     private val known = mutableSetOf<K>()
 
@@ -67,39 +74,87 @@ class KeyedCells<K : Any>(
      * returns the same cell — no second spawn (so the live-ref guard never
      * fires) and no second durable record.
      */
-    fun getOrSpawn(key: K): Cell = getOrSpawn(key, recovering = false)
+    fun getOrSpawn(key: K): Cell = host.awaitManagement(spawnAsync(key))
 
-    private fun getOrSpawn(key: K, recovering: Boolean): Cell = synchronized(lock) {
+    /**
+     * Start the cell for [key] without waiting on the host. Concurrent callers
+     * share the same future, including a factory that re-enters for its own key.
+     */
+    fun spawnAsync(key: K): CompletableFuture<Cell> {
+        lateinit var result: CompletableFuture<Cell>
+        var cell: Cell? = null
+        var fresh = false
+        var recorded = false
+        var startFailure: Throwable? = null
+        var hostSpawn: CompletableFuture<CellRef>? = null
+
+        synchronized(lock) {
+            live[key]?.let { return CompletableFuture.completedFuture(it) }
+            pending[key]?.let { return it }
+
+            result = CompletableFuture()
+            pending[key] = result
+            try {
+                val prepared = factory(key, refFor(key))
+                cell = prepared
+                fresh = known.add(key)
+                if (fresh) {
+                    recorded = host.recordTopology(
+                        prepared.ref,
+                        TopoEvent.FamilyKey(namespace, render(key)),
+                        prepared,
+                    ) { journal -> rememberForCheckpoint(journal, key) } != null
+                }
+                hostSpawn = host.spawnAsync(prepared)
+            } catch (failure: Throwable) {
+                pending.remove(key)
+                if (fresh && !recorded) forgetUnrecorded(key)
+                startFailure = failure
+            }
+        }
+
+        startFailure?.let {
+            result.completeExceptionally(it)
+            return result
+        }
+
+        val prepared = checkNotNull(cell)
+        checkNotNull(hostSpawn).whenComplete { _, failure ->
+            synchronized(lock) {
+                pending.remove(key)
+                if (failure == null) {
+                    live[key] = prepared
+                } else if (fresh && !recorded) {
+                    // A successful write-ahead record owns the key even if the following
+                    // spawn fails: recovery must retry it. A volatile key owns nothing.
+                    forgetUnrecorded(key)
+                }
+            }
+            if (failure == null) {
+                result.complete(prepared)
+            } else {
+                result.completeExceptionally(failure)
+            }
+        }
+        return result
+    }
+
+    /** Recovery deliberately remains synchronous so each key precedes its frames. */
+    private fun recoverSynchronously(key: K): Cell = synchronized(lock) {
         live[key]?.let { return it }
         val ref = refFor(key)
         val cell = factory(key, ref)
         val fresh = known.add(key)
-        var recorded = recovering
-        try {
-            if (fresh) {
-                if (recovering) {
-                    host.topologyJournal(ref, cell)?.let { rememberForCheckpoint(it, key) }
-                } else {
-                    recorded = host.recordTopology(
-                        ref,
-                        TopoEvent.FamilyKey(namespace, render(key)),
-                        cell,
-                    ) { journal -> rememberForCheckpoint(journal, key) } != null
-                }
-            }
-            host.managementInlet.call.spawn(cell)
-            live[key] = cell
-            cell
-        } catch (failure: Throwable) {
-            // A successful write-ahead record owns the key even if the following spawn fails:
-            // recovery must retry it. A volatile or refused record owns nothing.
-            if (fresh && !recorded) forgetUnrecorded(key)
-            throw failure
+        if (fresh) {
+            host.topologyJournal(ref, cell)?.let { rememberForCheckpoint(it, key) }
         }
+        host.managementInlet.call.spawn(cell)
+        live[key] = cell
+        cell
     }
 
     /** Decode the journal representation through this family's codec before spawning. */
-    internal fun recoverKey(rendered: String): Cell = getOrSpawn(parse(rendered), recovering = true)
+    internal fun recoverKey(rendered: String): Cell = recoverSynchronously(parse(rendered))
 
     /**
      * Restore the family after a crash. The journal's [TopoEvent.FamilyKey]
