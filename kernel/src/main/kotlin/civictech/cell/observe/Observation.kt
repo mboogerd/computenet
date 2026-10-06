@@ -12,6 +12,7 @@ import civictech.cell.data.op.QuorumSetApi
 import civictech.cell.graph.TypedRef
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.DeclaredWrite
 import civictech.cell.host.UpstreamAncestry
 import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
@@ -42,6 +43,9 @@ interface Observation {
 
     /** The aligned sink serving [id]. */
     fun group(id: String): AlignedCompositeCell
+
+    /** The declared multi-cell write registered under [name]. */
+    fun write(name: String): DeclaredWrite
 
     /** Group ids, in builder registration order. */
     val groups: Set<String>
@@ -110,6 +114,16 @@ class ObservationBuilder internal constructor() {
 
     internal val specs: Map<String, AlignedObserveBuilder.Spec> get() = aligned.specs
     internal val unchecked: Set<String> get() = aligned.unchecked
+    internal val writes = linkedMapOf<String, Set<CellRef>>()
+
+    /** Declares one named multi-cell write alongside this observation. */
+    fun write(name: String, cells: Set<CellRef>) {
+        val declaredCells = cells.toSet()
+        val existing = writes.putIfAbsent(name, declaredCells)
+        require(existing == null || existing == declaredCells) {
+            "observation write '$name' was already registered with cells $existing"
+        }
+    }
 
     /** Skip ungated-ancestor admission for the registered view [name] only. */
     fun unchecked(name: String) = aligned.unchecked(name)
@@ -192,6 +206,7 @@ private fun rootsOf(
 private class ObservationCoordinator(
     private val groupCells: LinkedHashMap<String, AlignedCompositeCell>,
     private val groupOfView: LinkedHashMap<String, String>,
+    private val declaredWrites: LinkedHashMap<String, DeclaredWrite>,
 ) : Observation {
     private val lock = Any()
     private val listeners = mutableListOf<(ObservationFrame) -> Unit>()
@@ -229,6 +244,11 @@ private class ObservationCoordinator(
 
     override fun group(id: String): AlignedCompositeCell =
         requireNotNull(groupCells[id]) { "no observation group '$id' (available: ${groupCells.keys})" }
+
+    override fun write(name: String): DeclaredWrite =
+        requireNotNull(declaredWrites[name]) {
+            "no observation write '$name' (available: ${declaredWrites.keys})"
+        }
 
     override val groups: Set<String> = groupCells.keys.toCollection(LinkedHashSet())
 
@@ -340,6 +360,10 @@ fun Use<HostManagementApi>.observation(
         }
     }
 
+    val declaredWrites = builder.writes.mapValuesTo(linkedMapOf()) { (name, cells) ->
+        call.declareWrite(name, cells)
+    }
+
     val groups = linkedMapOf<String, AlignedCompositeCell>()
     val groupOf = linkedMapOf<String, String>()
     definitions.forEach { definition ->
@@ -361,7 +385,7 @@ fun Use<HostManagementApi>.observation(
         }
         groups[definition.id] = cell
     }
-    return ObservationCoordinator(groups, groupOf)
+    return ObservationCoordinator(groups, groupOf, declaredWrites)
 }
 
 /** Convenience for observing cells on this [ManagedHost]. */
