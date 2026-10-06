@@ -10,6 +10,7 @@ import civictech.cell.data.SetOps
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.host.ManagedHost
@@ -51,9 +52,11 @@ class ProgressRelayObservationTest {
     }
 
     @Test
-    fun `relay preserves the exact source and counter through filter and group-by`() {
+    fun `relay preserves the exact source and counter through flat-map quorum filter and group-by`() {
         val host = ManagedHost()
         val source = ProgressSource()
+        val mapped = FlatMapSetCell<Int, Int> { listOf(it) }
+        val quorum = QuorumSetCell<Int> { 1 }
         val filtered = FilterCell<Int> { true }
         val grouped = GroupByCell(
             keyFn = { value: Int -> value },
@@ -61,8 +64,10 @@ class ProgressRelayObservationTest {
         )
         val probe = ProgressProbe()
         val management = host.managementInlet.call
-        listOf(source, filtered, grouped, probe).forEach(management::spawn)
-        management.connect(source.ref, "outlet", filtered.ref, "inlet")
+        listOf(source, mapped, quorum, filtered, grouped, probe).forEach(management::spawn)
+        management.connect(source.ref, "outlet", mapped.ref, "inlet")
+        management.connect(mapped.ref, "outlet", quorum.ref, "inlet")
+        management.connect(quorum.ref, "outlet", filtered.ref, "inlet")
         management.connect(filtered.ref, "outlet", grouped.ref, "inlet")
         management.connect(grouped.ref, "outlet", probe.ref, "inlet")
 

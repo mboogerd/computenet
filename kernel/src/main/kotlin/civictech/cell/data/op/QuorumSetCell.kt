@@ -16,6 +16,7 @@ import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -103,6 +104,10 @@ class QuorumSetCell<E>(
     private val ledger: JoinLedger<E> = MintedLedger(ref, "quorum")
 
     init {
+        // An upstream Progress carries no lane delta to fold. Forward its exact
+        // source/counter through this downstream operator hop to the next
+        // frontier; locally absorbed data waves still use emitOrAbsorb below.
+        inlet.relayAbsorbAcks()
         ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
             when (event) {
                 // n changed → the threshold shifted; re-evaluate the whole

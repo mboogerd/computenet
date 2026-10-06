@@ -188,9 +188,9 @@ class AlignedDrainBarrier internal constructor(
  * hold the other's waves until an ack, a later wave, or an unlink shrinks the
  * condition. Same caveat, same cause, as `WaveFrontier` and
  * `CoalescingCombineCell` both document. An ack remains sufficient across the
- * relay-enabled `FilterCell` / `GroupByCell` chain used by slotfinder; an
- * unrecognised transparent hop that does not opt into relay is still part of
- * the wider G-40/G-13 residual.
+ * relay-enabled `FilterCell` / `FlatMapSetCell` / `GroupByCell` chain (and a
+ * downstream `QuorumSetCell` hop); an unrecognised transparent hop that does
+ * not opt into relay is still part of the wider G-40/G-13 residual.
  *
  * **Catch-up is arm state, not a wave.** Unwaved traffic (push catch-up, the
  * `onLinked` state-as-delta, context-free sends) and pull-catch-up baselines

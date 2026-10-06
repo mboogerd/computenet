@@ -104,8 +104,9 @@ internal fun interface GatedFold<T> {
  *    `(sourceId, thru)` through each hop, without minting a wave or rewriting
  *    source/tag identity, until it lands on this gate's expected edge. A
  *    frontier installed on an intermediate inlet consumes the ack and is a
- *    relay terminal. `FilterCell` and `GroupByCell` install that transparent
- *    relay for the slotfinder `common -> filtered -> byDay` pipeline.
+ *    relay terminal. `FilterCell`, `FlatMapSetCell`, `GroupByCell`, and a
+ *    downstream `QuorumSetCell` install that transparent relay; the slotfinder
+ *    `common -> filtered -> byDay` pipeline is one exercised shape.
  *
  * A transparent operator that has not installed the relay retains F-15's old
  * failure mode: the expected edge advances only on a later real wave and can
