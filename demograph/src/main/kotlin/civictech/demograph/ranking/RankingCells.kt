@@ -2,8 +2,10 @@ package civictech.demograph.ranking
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
 import civictech.cell.Timestamp
 import civictech.cell.Propagate
+import civictech.cell.control.Progress
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -11,12 +13,14 @@ import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
+import civictech.cell.protocol.Protocols
 import civictech.gen.wire.CellBase
 import java.util.*
 import kotlin.math.abs
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.CombineLatestCell
+import civictech.cell.data.op.emitOrAbsorb
 import civictech.cell.data.view.MapDiffPublisher
 
 /**
@@ -105,7 +109,8 @@ class RatingCell(
  * MetaRankCell — Borda aggregation as dataflow: one named inlet per source
  * algorithm consumes that algorithm's rating `MapDelta` stream (including
  * the kernel-operator mean pipeline), and the combined ranking re-emits
- * effective-only on any upstream change. The cellular twin of [MetaRank]:
+ * effective-only on any upstream change. An effective no-op absorb-acks its
+ * input wave so an aligned downstream observation can settle. The cellular twin of [MetaRank]:
  * meta sits genuinely *downstream* of its delegates in the graph instead of
  * owning private copies of them.
  *
@@ -149,6 +154,21 @@ class MetaRankCell(
     }
 
     private fun publishDiff() {
-        publisher.publishAll(Borda.combine(folded.values.toList()))?.let { outlet.call.propagate(it) }
+        val delta = publisher.publishAll(Borda.combine(folded.values.toList()))
+        emitOrAbsorb(
+            delta == null,
+            emit = { outlet.call.propagate(delta!!) },
+            absorbAck = ::acknowledgeAbsorbedWave,
+        )
+    }
+
+    /** Advance downstream completeness when this effective-only fold emits no delta. */
+    private fun acknowledgeAbsorbedWave() {
+        val context = CurrentContext.get() ?: return
+        if (context.baseline != null) return
+        val progress = Progress(context.timestamp.sourceId, context.timestamp.counter)
+        outlet.linking.links.forEach { link ->
+            Protocols.sendDownstream(link, Protocols.Progress, progress)
+        }
     }
 }
