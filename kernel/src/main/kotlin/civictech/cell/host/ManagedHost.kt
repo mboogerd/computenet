@@ -2582,6 +2582,8 @@ open class ManagedHost(
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
+            } else if (method.name == "upstreamConsumeAncestors") {
+                internalApi.upstreamConsumeAncestors(args!![0] as CellRef)
             } else if (method.name.startsWith("connect")) {
                 // surfaces the LinkResult (management calls may await, spec 31 rule 4)
                 enqueueAwaiting(0) { invocation.invoke() }
