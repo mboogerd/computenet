@@ -9,10 +9,10 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 
 /**
- * BS-6 / [KX-17]: pins that a ref's declared [Interest] survives unpublish,
- * deliberately — this is **not an endorsement** of the retention leak, only
- * a record of current behaviour so a future change to it is a conscious
- * decision rather than an accident.
+ * BS-6 / [KX-17]: pins the vb7aq-D5 decision in
+ * `doc/spec/90-roadmap/93-feature-interactions.md` I-3 §4.7: a ref's declared
+ * [Interest] survives unpublish deliberately, because clearing it could widen
+ * a shed range when the ref is republished.
  *
  * The interest-assignment table (moved onto [InstanceIndex] by this task,
  * [KX-01]) is never cleared by [LocationRegistry.unpublish],
@@ -20,8 +20,9 @@ import java.util.UUID
  * Clearing it would let a republished ref fall back to [Interest.Total] and
  * silently **widen** a shed range, contradicting PN-6's no-widening rule
  * ("an older epoch cannot widen a shed range back" —
- * `civictech.cell.replication.InstanceSet` KDoc). The resulting unbounded
- * growth of the table is filed as computenet-2971 and is out of scope here.
+ * `civictech.cell.replication.InstanceSet` KDoc). An entry may be dropped only
+ * after the instance is evicted or despawned with no live assignment epoch;
+ * that drop path is not implemented here.
  */
 class InterestRetainedOnUnpublishTest {
 
@@ -42,6 +43,19 @@ class InterestRetainedOnUnpublishTest {
         registry.setInterest(ref, narrowed)
         registry.unpublish(ref)
         registry.publish(ref, sink())
+
+        registry.interestOf(ref) shouldBe narrowed
+    }
+
+    @Test
+    fun `interestOf still reports the narrowed interest after unpublish without republish`() {
+        val registry = LocationRegistry()
+        val ref = CellRef(UUID.randomUUID())
+        val narrowed = Interest.Slots(setOf(0), totalSlots = 2)
+
+        registry.publish(ref, sink())
+        registry.setInterest(ref, narrowed)
+        registry.unpublish(ref)
 
         registry.interestOf(ref) shouldBe narrowed
     }
