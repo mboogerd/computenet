@@ -199,15 +199,10 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         require((lateness == null) == (keyTime == null)) {
             "GroupByCell needs both lateness and keyTime, or neither (lateness=$lateness, keyTime=$keyTime)"
         }
-        // An upstream Progress carries no data to fold. Relay it unchanged to
-        // both registered outputs; a frontier later installed on either inlet
-        // becomes the terminal instead (G-40/F-15).
-        // Progress on either input is transparent only while the whole operator
-        // has one input edge. Count the sibling inlet on both relay paths;
-        // otherwise one arm could claim settlement while the other still has
-        // output for the wave.
-        inlet.relayAbsorbAcks(waterline)
-        waterline.relayAbsorbAcks(inlet)
+        // Data and waterline share one per-edge settlement fold. Progress on
+        // either input waits for every open sibling edge; a real emission on
+        // `outlet` or `late` suppresses that output's ack for the wave.
+        inlet.relayAbsorbAcks(listOf(outlet, late), waterline)
         // late-join catch-up (G-22): current aggregates as a delta-from-empty
         outlet.catchUpOnLinked {
             if (groups.isEmpty()) null

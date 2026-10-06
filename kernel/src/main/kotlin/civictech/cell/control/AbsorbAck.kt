@@ -1,11 +1,19 @@
 package civictech.cell.control
 
 import civictech.cell.CurrentContext
+import civictech.cell.Timestamp
+import civictech.cell.link.Link
 import civictech.cell.link.LinkRole
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.InletPolicy
+import civictech.cell.port.PolicyTier
+import civictech.cell.protocol.EdgeClose
+import civictech.cell.protocol.EdgeOpen
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
+import civictech.cell.proxy.Invocation
+import java.util.UUID
 
 /**
  * Metadata-plane absorb-ack (spec 20/22 §Completeness over silent or stuck
@@ -28,9 +36,14 @@ import civictech.cell.protocol.Protocols
 internal fun FanOutlet<*>.absorbAck() {
     val ctx = CurrentContext.get() ?: return
     if (ctx.baseline != null) return
+    if (AbsorbAckCapture.record(this, ctx.timestamp)) return
     if (linking.links.isEmpty()) return
     val ack = Progress(ctx.timestamp.sourceId, ctx.timestamp.counter)
-    linking.links.forEach { Protocols.sendDownstream(it, Protocols.Progress, ack) }
+    sendAbsorbAck(ack)
+}
+
+private fun FanOutlet<*>.sendAbsorbAck(progress: Progress) {
+    linking.links.forEach { Protocols.sendDownstream(it, Protocols.Progress, progress) }
 }
 
 /**
@@ -47,12 +60,14 @@ internal fun FanOutlet<*>.absorbAck() {
  * one open [LinkRole.Consume] input edge in total. The receiver is counted by
  * default; [otherInlets] must name every sibling inlet that can feed the same
  * operator. Source-to-edge reachability is not available at this layer, so the
- * count is deliberately conservative across sources: a multi-input hop never
- * claims whole-hop settlement from one edge's [Progress]. A proper per-edge
- * watermark fold can relax that limit later. [ProtocolSupport] evaluates the
- * predicate for every arriving acknowledgement, and [FanInlet.linking] exposes
- * only the currently active links, so links added after construction count and
- * an unlinked edge stops counting before the next acknowledgement.
+ * count is deliberately conservative across sources: this unary overload never
+ * claims whole-hop settlement from one edge's [Progress]. Operators that obey
+ * the uniform emit-or-[absorbAck] shape can use the `outputs`-taking overload
+ * below, which owns the proper per-edge watermark fold. [ProtocolSupport]
+ * evaluates this overload's predicate for every arriving acknowledgement, and
+ * [FanInlet.linking] exposes only the currently active links, so links added
+ * after construction count and an unlinked edge stops counting before the next
+ * acknowledgement.
  *
  * A frontier installed on this inlet is also a terminal: local delivery happens
  * first and the dynamic predicate then suppresses relay. This matters when a
@@ -66,5 +81,248 @@ internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
             (sequenceOf(this) + otherInlets.asSequence())
                 .flatMap { it.linking.links.asSequence() }
                 .count { it.role == LinkRole.Consume } != 1
+    }
+}
+
+/**
+ * Relays absorb-acks through a transparent **fan-in** hop using the same
+ * per-open-inlink completeness fold as `WaveFrontier` (spec 20/22
+ * `[22-LIVE-01]`). [this] and [otherInlets] form one input frontier;
+ * [outputs] are the data outlets whose waved handler obeys the uniform
+ * emit-or-[absorbAck] rule.
+ *
+ * Every real delta and [Progress] advances only the edge it arrived on. A
+ * later counter monotonically settles earlier counters on that edge. The
+ * exact `Progress(sourceId, thru)` is forwarded once every currently open
+ * [LinkRole.Consume] edge has settled it, except on an output that emitted a
+ * real delta for that wave. An `EdgeClose` immediately shrinks the condition;
+ * an `EdgeOpen` joins it with a floor at the already-flushed high-water, so it
+ * cannot resurrect an old wave but does participate in later arrivals.
+ *
+ * Data arrivals are observed by a transparent ADMIT policy. While its handler
+ * runs, [absorbAck] calls on [outputs] are captured instead of sent early. For
+ * each output, calling [absorbAck] means this delivery produced no delta;
+ * omitting it means the handler emitted data, as required by the operator
+ * suite's emit-or-absorb contract. This lets a data edge settle the input
+ * frontier without one absorbed lane claiming whole-hop settlement.
+ *
+ * An ALIGN policy installed on any participating inlet remains a terminal: it
+ * owns settlement and this relay becomes a pass-through. Unmatched, unwaved,
+ * baseline, and already-flushed data likewise bypass the fold.
+ *
+ * Like the shipped static frontiers, this fold has no source-to-edge
+ * reachability discovery: for a source that structurally reaches only one edge
+ * of an independent-source fan-in, the other open edges remain expected. That
+ * is the existing G-13 boundary; this overload relaxes the old fan-in terminal
+ * only when all open edges actually settle the source wave.
+ */
+internal fun FanInlet<*>.relayAbsorbAcks(
+    outputs: List<FanOutlet<*>>,
+    vararg otherInlets: FanInlet<*>,
+) {
+    SettledAbsorbAckRelay(
+        inlets = listOf(this) + otherInlets,
+        outputs = outputs,
+    )
+}
+
+/** One captured operator delivery; nested synchronous operators stack these frames. */
+private class AbsorbAckFrame(
+    val owner: SettledAbsorbAckRelay,
+    val timestamp: Timestamp,
+) {
+    val requested = LinkedHashSet<FanOutlet<*>>()
+}
+
+/**
+ * Thread-local interception for the uniform emit-or-absorb call shape. The
+ * frame is deliberately delivery-scoped: a synchronous downstream operator
+ * installs a nested frame and restores this one when it returns.
+ */
+private object AbsorbAckCapture {
+    private val current = ThreadLocal<AbsorbAckFrame?>()
+
+    fun record(outlet: FanOutlet<*>, timestamp: Timestamp): Boolean {
+        val frame = current.get() ?: return false
+        if (frame.timestamp != timestamp || !frame.owner.owns(outlet)) return false
+        frame.requested += outlet
+        return true
+    }
+
+    fun <R> within(
+        owner: SettledAbsorbAckRelay,
+        timestamp: Timestamp,
+        block: () -> R,
+    ): Pair<R, Set<FanOutlet<*>>> {
+        val previous = current.get()
+        val frame = AbsorbAckFrame(owner, timestamp)
+        current.set(frame)
+        try {
+            return block() to frame.requested.toSet()
+        } finally {
+            current.set(previous)
+        }
+    }
+}
+
+/** Per-edge settlement and per-output emission accounting for one operator hop. */
+private class SettledAbsorbAckRelay(
+    private val inlets: List<FanInlet<*>>,
+    outputs: List<FanOutlet<*>>,
+) {
+    private class EdgeState(
+        val inlet: FanInlet<*>,
+        val link: Link,
+        val floors: Map<UUID, Long>,
+        var open: Boolean = true,
+    )
+
+    private class Wave {
+        /** An output that emitted data needs no Progress for this wave. */
+        val emitted = LinkedHashSet<FanOutlet<*>>()
+    }
+
+    private data class Delivery(val outlet: FanOutlet<*>, val progress: Progress)
+
+    private val outputs = outputs.distinct()
+    private val edges = LinkedHashMap<UUID, EdgeState>()
+    private val watermark = mutableMapOf<UUID, MutableMap<UUID, Long>>()
+    private val flushedHighWater = mutableMapOf<UUID, Long>()
+    private val pending = LinkedHashMap<Timestamp, Wave>()
+    private val lock = Any()
+
+    init {
+        require(this.outputs.isNotEmpty()) { "fan-in Progress relay needs at least one output" }
+        require(inlets.isNotEmpty()) { "fan-in Progress relay needs at least one input" }
+        inlets.forEach { inlet ->
+            inlet.onEdgeEvent { link, event ->
+                val deliveries = synchronized(lock) {
+                    when (event) {
+                        EdgeOpen -> edges[link.id] = EdgeState(inlet, link, flushedHighWater.toMap())
+                        EdgeClose -> edges[link.id]?.open = false
+                    }
+                    flushReady()
+                }
+                deliver(deliveries)
+            }
+            ProtocolSupport.of(inlet).handle(Protocols.Progress) { link, message ->
+                onProgress(link, message as Progress)
+            }
+            inlet.install(RelayPolicy(inlet, this))
+        }
+    }
+
+    fun owns(outlet: FanOutlet<*>): Boolean = outputs.any { it === outlet }
+
+    /** Observe one waved data invocation while leaving its delivery order untouched. */
+    fun offer(inlet: FanInlet<*>, invocation: Invocation, release: (Invocation) -> Unit) {
+        val ctx = invocation.context
+        if (ctx == null || ctx.baseline != null || aligned()) {
+            if (aligned()) resetPending()
+            release(invocation)
+            return
+        }
+
+        val timestamp = ctx.timestamp
+        val tracked = synchronized(lock) {
+            val edge = edges.values.singleOrNull {
+                it.open && it.inlet === inlet && it.link.role == LinkRole.Consume && it.link.from == ctx.sourcePort
+            } ?: return@synchronized false
+            val floor = edge.floors[timestamp.sourceId] ?: Long.MIN_VALUE
+            val flushed = flushedHighWater[timestamp.sourceId] ?: Long.MIN_VALUE
+            if (timestamp.counter <= floor || timestamp.counter <= flushed) return@synchronized false
+            advanceWatermark(edge.link.id, timestamp.sourceId, timestamp.counter)
+            pending.getOrPut(timestamp) { Wave() }
+            true
+        }
+        if (!tracked) {
+            release(invocation)
+            return
+        }
+
+        val (_, absorbed) = AbsorbAckCapture.within(this, timestamp) { release(invocation) }
+        val deliveries = synchronized(lock) {
+            val wave = pending.getOrPut(timestamp) { Wave() }
+            // Every registered output must either emit or absorb on a waved
+            // operator delivery. Emission wins if another edge previously
+            // absorbed the same wave on that output.
+            outputs.filterNotTo(wave.emitted) { output -> output in absorbed }
+            flushReady()
+        }
+        deliver(deliveries)
+    }
+
+    fun resetPending() = synchronized(lock) { pending.clear() }
+
+    private fun aligned(): Boolean = inlets.any { it.hasPolicy(PolicyTier.ALIGN) }
+
+    private fun onProgress(link: Link, progress: Progress) {
+        if (aligned()) {
+            resetPending()
+            return
+        }
+        val deliveries = synchronized(lock) {
+            val edge = edges[link.id]
+            if (edge == null || !edge.open || edge.link.role != LinkRole.Consume) {
+                return@synchronized emptyList()
+            }
+            advanceWatermark(link.id, progress.sourceId, progress.thru)
+            val floor = edge.floors[progress.sourceId] ?: Long.MIN_VALUE
+            val flushed = flushedHighWater[progress.sourceId] ?: Long.MIN_VALUE
+            if (progress.thru > floor && progress.thru > flushed) {
+                pending.getOrPut(Timestamp(progress.sourceId, progress.thru)) { Wave() }
+            }
+            flushReady()
+        }
+        deliver(deliveries)
+    }
+
+    private fun advanceWatermark(edgeId: UUID, sourceId: UUID, counter: Long) {
+        watermark.getOrPut(edgeId) { mutableMapOf() }.merge(sourceId, counter, ::maxOf)
+    }
+
+    private fun expectedEdges(timestamp: Timestamp): Set<UUID> = edges.values
+        .asSequence()
+        .filter { it.open && it.link.role == LinkRole.Consume }
+        .filter { (it.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter }
+        .map { it.link.id }
+        .toSet()
+
+    private fun settled(edgeId: UUID, timestamp: Timestamp): Boolean =
+        (watermark[edgeId]?.get(timestamp.sourceId) ?: Long.MIN_VALUE) >= timestamp.counter
+
+    /** Called with [lock] held; returns protocol sends to perform after releasing it. */
+    private fun flushReady(): List<Delivery> {
+        val deliveries = mutableListOf<Delivery>()
+        val ready = pending.keys
+            .filter { timestamp -> expectedEdges(timestamp).all { settled(it, timestamp) } }
+            .sortedWith(compareBy({ it.sourceId }, { it.counter }))
+        ready.forEach { timestamp ->
+            val wave = pending.remove(timestamp) ?: return@forEach
+            flushedHighWater.merge(timestamp.sourceId, timestamp.counter, ::maxOf)
+            val progress = Progress(timestamp.sourceId, timestamp.counter)
+            outputs.filterNot { it in wave.emitted }.forEach { deliveries += Delivery(it, progress) }
+        }
+        return deliveries
+    }
+
+    private fun deliver(deliveries: List<Delivery>) {
+        deliveries.forEach { (outlet, progress) -> outlet.sendAbsorbAck(progress) }
+    }
+
+    private class RelayPolicy(
+        private val inlet: FanInlet<*>,
+        private val relay: SettledAbsorbAckRelay,
+    ) : InletPolicy {
+        override val tier: PolicyTier = PolicyTier.ADMIT
+        private lateinit var release: (Invocation) -> Unit
+
+        override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
+            this.release = release
+        }
+
+        override fun offer(invocation: Invocation) = relay.offer(inlet, invocation, release)
+
+        override fun reset() = relay.resetPending()
     }
 }

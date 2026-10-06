@@ -3,6 +3,7 @@ package civictech.cell.observe
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.control.Progress
@@ -48,6 +49,12 @@ class RelayFanInRegressionTest {
 
     private class IntProgressSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Int>>>())
+
+        fun send(timestamp: Timestamp, delta: SetDelta<Int>) {
+            CurrentContext.with(MessageContext(timestamp, outlet.ref)) {
+                outlet.call.propagate(delta)
+            }
+        }
     }
 
     private class WaterlineProgressSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
@@ -236,7 +243,77 @@ class RelayFanInRegressionTest {
     }
 
     @Test
-    fun `GroupBy waterline relays only while it is the sole open input edge`() {
+    fun `a fan-in hop relays once after every open edge settles and close releases a waiting wave`() {
+        val host = ManagedHost()
+        val first = IntProgressSource()
+        val second = IntProgressSource()
+        val quorum = QuorumSetCell<Int> { 1 }
+        val probe = SetProgressProbe()
+        val management = host.managementInlet.call
+        listOf(first, second, quorum, probe).forEach(management::spawn)
+        management.connect(first.ref, "outlet", quorum.ref, "inlet")
+        management.connect(second.ref, "outlet", quorum.ref, "inlet")
+        management.connect(quorum.ref, "outlet", probe.ref, "inlet")
+
+        val sourceId = UUID.randomUUID()
+        val bothSettle = Progress(sourceId, 1L)
+        Protocols.sendDownstream(first.outlet.linking.links.single(), Protocols.Progress, bothSettle)
+        probe.seen shouldBe emptyList()
+        Protocols.sendDownstream(second.outlet.linking.links.single(), Protocols.Progress, bothSettle)
+        probe.seen shouldBe listOf(bothSettle)
+
+        // Duplicate settlement cannot relay the same wave twice.
+        Protocols.sendDownstream(first.outlet.linking.links.single(), Protocols.Progress, bothSettle)
+        Protocols.sendDownstream(second.outlet.linking.links.single(), Protocols.Progress, bothSettle)
+        probe.seen shouldBe listOf(bothSettle)
+
+        // A close shrinks the live completeness condition immediately.
+        val releasedByClose = Progress(sourceId, 2L)
+        Protocols.sendDownstream(first.outlet.linking.links.single(), Protocols.Progress, releasedByClose)
+        probe.seen shouldBe listOf(bothSettle)
+        second.outlet.linking.links.single().unlink()
+        probe.seen shouldBe listOf(bothSettle, releasedByClose)
+
+        // A newly opened edge participates in the next arriving wave.
+        management.connect(second.ref, "outlet", quorum.ref, "inlet")
+        val afterReopen = Progress(sourceId, 3L)
+        Protocols.sendDownstream(first.outlet.linking.links.single(), Protocols.Progress, afterReopen)
+        probe.seen shouldBe listOf(bothSettle, releasedByClose)
+        Protocols.sendDownstream(second.outlet.linking.links.single(), Protocols.Progress, afterReopen)
+        probe.seen shouldBe listOf(bothSettle, releasedByClose, afterReopen)
+    }
+
+    @Test
+    fun `a fan-in data arrival settles its edge but an absorbed wave waits for every sibling`() {
+        val host = ManagedHost()
+        val first = IntProgressSource()
+        val second = IntProgressSource()
+        val quorum = QuorumSetCell<Int> { 2 }
+        val probe = SetProgressProbe()
+        val management = host.managementInlet.call
+        listOf(first, second, quorum, probe).forEach(management::spawn)
+        management.connect(first.ref, "outlet", quorum.ref, "inlet")
+        management.connect(second.ref, "outlet", quorum.ref, "inlet")
+        management.connect(quorum.ref, "outlet", probe.ref, "inlet")
+
+        val timestamp = Timestamp(UUID.randomUUID(), 1L)
+        first.send(
+            timestamp,
+            SetDelta(adds = mapOf(7 to setOf(Timestamp(UUID.randomUUID(), 1L)))),
+        )
+        probe.seen shouldBe emptyList()
+
+        val siblingSettled = Progress(timestamp.sourceId, timestamp.counter)
+        Protocols.sendDownstream(
+            second.outlet.linking.links.single(),
+            Protocols.Progress,
+            siblingSettled,
+        )
+        probe.seen shouldBe listOf(siblingSettled)
+    }
+
+    @Test
+    fun `GroupBy waterline waits for every sibling and relays when a sibling closes`() {
         val host = ManagedHost()
         val data = IntProgressSource()
         val waterline = WaterlineProgressSource()
@@ -270,17 +347,18 @@ class RelayFanInRegressionTest {
         probe.seen shouldBe listOf(waterlineOnly)
 
         data.outlet.linking.links.single().unlink()
+        probe.seen shouldBe listOf(waterlineOnly, withDataSibling)
         val afterDataClose = Progress(waterlineOnly.sourceId, 3L)
         Protocols.sendDownstream(
             waterline.outlet.linking.links.single(),
             Protocols.Progress,
             afterDataClose,
         )
-        probe.seen shouldBe listOf(waterlineOnly, afterDataClose)
+        probe.seen shouldBe listOf(waterlineOnly, withDataSibling, afterDataClose)
     }
 
     @Test
-    fun `GroupBy data inlet relays only while it is the sole open input edge`() {
+    fun `GroupBy data inlet waits for every sibling and relays when a sibling closes`() {
         val host = ManagedHost()
         val data = IntProgressSource()
         val waterline = WaterlineProgressSource()
@@ -306,8 +384,9 @@ class RelayFanInRegressionTest {
         probe.seen shouldBe listOf(dataOnly)
 
         waterline.outlet.linking.links.single().unlink()
+        probe.seen shouldBe listOf(dataOnly, withWaterlineSibling)
         val afterWaterlineClose = Progress(dataOnly.sourceId, 3L)
         Protocols.sendDownstream(data.outlet.linking.links.single(), Protocols.Progress, afterWaterlineClose)
-        probe.seen shouldBe listOf(dataOnly, afterWaterlineClose)
+        probe.seen shouldBe listOf(dataOnly, withWaterlineSibling, afterWaterlineClose)
     }
 }

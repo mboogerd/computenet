@@ -124,12 +124,13 @@ class AlignedDrainBarrier internal constructor(
  * `max`). Completed waves are applied in per-source counter order, and each
  * publishes **one** composite snapshot — effective-only: a completed wave in
  * which no view's [View.apply] reported a change publishes nothing.
- * Transparent unary operators between an absorber and this sink forward that
- * exact watermark through [civictech.cell.control.relayAbsorbAcks]; the relay
+ * Transparent operators between an absorber and this sink forward that exact
+ * watermark through [civictech.cell.control.relayAbsorbAcks]; the relay
  * preserves source/counter identity and stops when an intermediate frontier
- * consumes the acknowledgement. It is deliberately limited to a hop with one
- * open `Consume` input edge: a multi-input hop needs its own per-edge watermark
- * fold before it can safely claim that every in-edge settled the wave.
+ * consumes the acknowledgement. `FilterCell`/`FlatMapSetCell` use its bounded
+ * unary form. `QuorumSetCell` and `GroupByCell` use its fan-in form, which
+ * mirrors this per-edge watermark condition across their open input edges and
+ * relays only after all of them settle the wave by data or `Progress`.
  *
  * The condition is [civictech.cell.consistency.WaveFrontier]'s, *mirrored at
  * cell scope* rather than installed as an inlet policy — the same structural
