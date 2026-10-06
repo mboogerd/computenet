@@ -1,0 +1,313 @@
+package civictech.cell.observe
+
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.CurrentContext
+import civictech.cell.Propagate
+import civictech.cell.Timestamp
+import civictech.cell.control.Progress
+import civictech.cell.data.Aggregators
+import civictech.cell.data.Windows
+import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.WaterlineDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.QuorumSetCell
+import civictech.cell.data.op.SemiJoinCell
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
+import civictech.cell.onEach
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.LinkFrom
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
+import civictech.cell.port.registerPort
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
+import io.kotest.assertions.withClue
+import io.kotest.matchers.shouldBe
+import org.junit.jupiter.api.Test
+import java.util.UUID
+
+private interface RelaySetInletProxy {
+    val inlet: Use<Propagate<SetDelta<String>>>
+}
+
+class RelayFanInRegressionTest {
+
+    @Suppress("UNCHECKED_CAST")
+    private val setApi = Propagate::class.java as Class<Propagate<SetDelta<String>>>
+
+    private class Source(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<String>>>())
+
+        fun send(delta: SetDelta<String>) = outlet.call.propagate(delta)
+    }
+
+    private class IntProgressSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Int>>>())
+    }
+
+    private class WaterlineProgressSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<WaterlineDelta>>())
+    }
+
+    private data class Seen(val timestamp: Timestamp, val delta: SetDelta<String>)
+
+    private class Observer(
+        clazz: Class<Propagate<SetDelta<String>>>,
+        val seen: MutableList<Seen>,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet(clazz))
+
+        init {
+            inlet.onEach { seen += Seen(CurrentContext.get()!!.timestamp, it) }
+        }
+    }
+
+    private class EventProbe(
+        clazz: Class<Propagate<SetDelta<String>>>,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet(clazz))
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+        init {
+            inlet.onEach { delta ->
+                events += "D${CurrentContext.get()!!.timestamp.counter}:${delta.adds.keys}"
+            }
+            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message ->
+                events += "P${(message as Progress).thru}"
+            }
+        }
+    }
+
+    private class SetProgressProbe(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Int>>>())
+        val seen = mutableListOf<Progress>()
+
+        init {
+            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message ->
+                seen += message as Progress
+            }
+        }
+    }
+
+    private class MapProgressProbe(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<Int, Long>>>())
+        val seen = mutableListOf<Progress>()
+
+        init {
+            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message ->
+                seen += message as Progress
+            }
+        }
+    }
+
+    /**
+     * Five independently scheduled hosts expose the ordering that a one-host
+     * FIFO cannot: one branch absorbs odd waves while another branch still has
+     * data for them. Every send is drained before the next, so a failure is the
+     * relay's per-in-edge completeness bug, not the separate multi-wave hazard
+     * tracked by computenet-xas2g.
+     */
+    private fun runFanIn(seed: Long, waves: Int): List<String> {
+        val controller = SimulationController(seed)
+        val sourceHost = ManagedHost(scheduler = controller.scheduler())
+        val filteredHost = ManagedHost(scheduler = controller.scheduler())
+        val passHost = ManagedHost(scheduler = controller.scheduler())
+        val leftHost = ManagedHost(scheduler = controller.scheduler())
+        val joinHost = ManagedHost(scheduler = controller.scheduler())
+        val source = Source()
+        val filtered = FilterCell<String> { it.startsWith("x") }
+        val pass = FilterCell<String> { true }
+        val left = FilterCell<String> { true }
+        val quorum = QuorumSetCell<String>(threshold = { 1 })
+        val join = SemiJoinCell<String, String, String>(
+            leftKey = { it },
+            rightKey = { it },
+            negated = false,
+            emitOnFrontier = true,
+        )
+        val seen = mutableListOf<Seen>()
+        val observer = Observer(setApi, seen)
+        val probe = EventProbe(setApi)
+
+        sourceHost.managementInlet.call.spawn(source)
+        filteredHost.managementInlet.call.spawn(filtered)
+        passHost.managementInlet.call.spawn(pass)
+        leftHost.managementInlet.call.spawn(left)
+        listOf(quorum, join, observer, probe).forEach(joinHost.managementInlet.call::spawn)
+
+        source.outlet.subscribe(
+            Use.fixed(filteredHost.lookup<RelaySetInletProxy>(filtered.ref)!!.inlet.call, PortRef.generate()),
+        )
+        source.outlet.subscribe(
+            Use.fixed(passHost.lookup<RelaySetInletProxy>(pass.ref)!!.inlet.call, PortRef.generate()),
+        )
+        source.outlet.subscribe(
+            Use.fixed(leftHost.lookup<RelaySetInletProxy>(left.ref)!!.inlet.call, PortRef.generate()),
+        )
+        @Suppress("UNCHECKED_CAST")
+        filtered.outlet.linkTo(quorum.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        @Suppress("UNCHECKED_CAST")
+        pass.outlet.linkTo(quorum.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        @Suppress("UNCHECKED_CAST")
+        quorum.outlet.linkTo(join.right as LinkFrom<Propagate<SetDelta<String>>>)
+        @Suppress("UNCHECKED_CAST")
+        left.outlet.linkTo(join.left as LinkFrom<Propagate<SetDelta<String>>>)
+        join.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+        @Suppress("UNCHECKED_CAST")
+        join.outlet.linkTo(probe.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        controller.runToIdle()
+
+        val tagSource = UUID.randomUUID()
+        val elements = mutableMapOf<Long, String>()
+        for (counter in 1..waves) {
+            val element = if (counter % 2 == 0) "x$counter" else "y$counter"
+            elements[counter.toLong()] = element
+            source.send(
+                SetDelta(
+                    adds = mapOf(element to setOf(Timestamp(tagSource, counter.toLong()))),
+                ),
+            )
+            controller.runToIdle()
+        }
+
+        val problems = mutableListOf<String>()
+        if (join.bufferedWaves != 0) problems += "seed $seed buffered=${join.bufferedWaves}"
+        val emissions = seen.flatMap { result ->
+            result.delta.adds.keys.map { element -> element to result.timestamp.counter }
+        }
+        elements.forEach { (counter, element) ->
+            val emittedAt = emissions.filter { it.first == element }.map { it.second }
+            if (emittedAt != listOf(counter)) {
+                problems += "seed $seed element $element emitted at $emittedAt (expected [$counter])"
+            }
+        }
+        val events = synchronized(probe.events) { probe.events.toList() }
+        for (counter in 1..waves) {
+            val hasProgress = "P$counter" in events
+            val hasData = events.any { it.startsWith("D$counter:") }
+            if (hasProgress && hasData) {
+                problems += "seed $seed wave $counter emitted both Progress and data: $events"
+            }
+        }
+        return problems
+    }
+
+    @Test
+    fun `a fan-in hop does not relay one in-edge Progress as whole-hop settlement`() {
+        val problems = (0L until 300L).flatMap { runFanIn(it, waves = 8) }
+        println("RELAY_FAN_IN_PROBE failures=${problems.size} first=${problems.take(4)}")
+        withClue(problems.take(4).joinToString("\n")) {
+            problems.size shouldBe 0
+        }
+    }
+
+    @Test
+    fun `relay counts links added after construction and stops counting a closed link`() {
+        val host = ManagedHost()
+        val first = IntProgressSource()
+        val second = IntProgressSource()
+        val filter = FilterCell<Int> { true }
+        val probe = SetProgressProbe()
+        val management = host.managementInlet.call
+        listOf(first, second, filter, probe).forEach(management::spawn)
+        management.connect(first.ref, "outlet", filter.ref, "inlet")
+        management.connect(filter.ref, "outlet", probe.ref, "inlet")
+
+        val beforeFanIn = Progress(UUID.randomUUID(), 1L)
+        Protocols.sendDownstream(first.outlet.linking.links.single(), Protocols.Progress, beforeFanIn)
+        probe.seen shouldBe listOf(beforeFanIn)
+
+        management.connect(second.ref, "outlet", filter.ref, "inlet")
+        val duringFanIn = Progress(beforeFanIn.sourceId, 2L)
+        Protocols.sendDownstream(first.outlet.linking.links.single(), Protocols.Progress, duringFanIn)
+        probe.seen shouldBe listOf(beforeFanIn)
+
+        second.outlet.linking.links.single().unlink()
+        val afterClose = Progress(beforeFanIn.sourceId, 3L)
+        Protocols.sendDownstream(first.outlet.linking.links.single(), Protocols.Progress, afterClose)
+        probe.seen shouldBe listOf(beforeFanIn, afterClose)
+    }
+
+    @Test
+    fun `GroupBy waterline relays only while it is the sole open input edge`() {
+        val host = ManagedHost()
+        val data = IntProgressSource()
+        val waterline = WaterlineProgressSource()
+        val grouped = GroupByCell(
+            keyFn = { value: Int -> value },
+            aggregator = Aggregators.count<Int>(),
+            lateness = Windows.Lateness({ value: Int -> value.toLong() }, 0),
+            keyTime = { key: Int -> key.toLong() + 1 },
+        )
+        val probe = MapProgressProbe()
+        val management = host.managementInlet.call
+        listOf(data, waterline, grouped, probe).forEach(management::spawn)
+        management.connect(waterline.ref, "outlet", grouped.ref, "waterline")
+        management.connect(grouped.ref, "outlet", probe.ref, "inlet")
+
+        val waterlineOnly = Progress(UUID.randomUUID(), 1L)
+        Protocols.sendDownstream(
+            waterline.outlet.linking.links.single(),
+            Protocols.Progress,
+            waterlineOnly,
+        )
+        probe.seen shouldBe listOf(waterlineOnly)
+
+        management.connect(data.ref, "outlet", grouped.ref, "inlet")
+        val withDataSibling = Progress(waterlineOnly.sourceId, 2L)
+        Protocols.sendDownstream(
+            waterline.outlet.linking.links.single(),
+            Protocols.Progress,
+            withDataSibling,
+        )
+        probe.seen shouldBe listOf(waterlineOnly)
+
+        data.outlet.linking.links.single().unlink()
+        val afterDataClose = Progress(waterlineOnly.sourceId, 3L)
+        Protocols.sendDownstream(
+            waterline.outlet.linking.links.single(),
+            Protocols.Progress,
+            afterDataClose,
+        )
+        probe.seen shouldBe listOf(waterlineOnly, afterDataClose)
+    }
+
+    @Test
+    fun `GroupBy data inlet relays only while it is the sole open input edge`() {
+        val host = ManagedHost()
+        val data = IntProgressSource()
+        val waterline = WaterlineProgressSource()
+        val grouped = GroupByCell(
+            keyFn = { value: Int -> value },
+            aggregator = Aggregators.count<Int>(),
+            lateness = Windows.Lateness({ value: Int -> value.toLong() }, 0),
+            keyTime = { key: Int -> key.toLong() + 1 },
+        )
+        val probe = MapProgressProbe()
+        val management = host.managementInlet.call
+        listOf(data, waterline, grouped, probe).forEach(management::spawn)
+        management.connect(data.ref, "outlet", grouped.ref, "inlet")
+        management.connect(grouped.ref, "outlet", probe.ref, "inlet")
+
+        val dataOnly = Progress(UUID.randomUUID(), 1L)
+        Protocols.sendDownstream(data.outlet.linking.links.single(), Protocols.Progress, dataOnly)
+        probe.seen shouldBe listOf(dataOnly)
+
+        management.connect(waterline.ref, "outlet", grouped.ref, "waterline")
+        val withWaterlineSibling = Progress(dataOnly.sourceId, 2L)
+        Protocols.sendDownstream(data.outlet.linking.links.single(), Protocols.Progress, withWaterlineSibling)
+        probe.seen shouldBe listOf(dataOnly)
+
+        waterline.outlet.linking.links.single().unlink()
+        val afterWaterlineClose = Progress(dataOnly.sourceId, 3L)
+        Protocols.sendDownstream(data.outlet.linking.links.single(), Protocols.Progress, afterWaterlineClose)
+        probe.seen shouldBe listOf(dataOnly, afterWaterlineClose)
+    }
+}

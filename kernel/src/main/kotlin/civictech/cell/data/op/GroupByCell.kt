@@ -17,6 +17,7 @@ import java.util.*
 import civictech.cell.data.Aggregator
 import civictech.cell.data.Windows
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
@@ -198,6 +199,15 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         require((lateness == null) == (keyTime == null)) {
             "GroupByCell needs both lateness and keyTime, or neither (lateness=$lateness, keyTime=$keyTime)"
         }
+        // An upstream Progress carries no data to fold. Relay it unchanged to
+        // both registered outputs; a frontier later installed on either inlet
+        // becomes the terminal instead (G-40/F-15).
+        // Progress on either input is transparent only while the whole operator
+        // has one input edge. Count the sibling inlet on both relay paths;
+        // otherwise one arm could claim settlement while the other still has
+        // output for the wave.
+        inlet.relayAbsorbAcks(waterline)
+        waterline.relayAbsorbAcks(inlet)
         // late-join catch-up (G-22): current aggregates as a delta-from-empty
         outlet.catchUpOnLinked {
             if (groups.isEmpty()) null
