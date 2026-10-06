@@ -1,5 +1,6 @@
 package civictech.cell.observe
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
@@ -10,9 +11,11 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
+import civictech.cell.host.HostManagementApi
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.inlet
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
@@ -97,6 +100,60 @@ class AlignedObserveAttachTest {
         val items = views["items"] as Set<*>
         val filtered = views["filtered"] as Set<*>
         return filtered != items.filter { (it as Int) % 2 == 0 }.toSet()
+    }
+
+    @Test
+    fun `a wave released between arm connects stays outside the reader guarantee`() {
+        val graph = Graph(seed = 1)
+        val writer = ops(graph)
+        val delegate = graph.host.managementInlet.call
+        var connects = 0
+        var betweenConnects: AlignedComposite? = null
+        var spawnedSink: AlignedCompositeCell? = null
+        val driveBetweenConnects = object : HostManagementApi by delegate {
+            override fun spawn(cell: Cell): CellRef = delegate.spawn(cell).also {
+                spawnedSink = cell as? AlignedCompositeCell
+            }
+
+            override fun connect(
+                from: CellRef,
+                outletName: String,
+                to: CellRef,
+                inletName: String,
+            ): LinkResult {
+                val result = delegate.connect(from, outletName, to, inletName)
+                if (++connects == 1) {
+                    writer.add(2)
+                    graph.controller.runToIdle()
+                    betweenConnects = checkNotNull(spawnedSink).composite()
+                }
+                return result
+            }
+        }
+
+        val sink = Use.fixed<HostManagementApi>(driveBetweenConnects).observeAligned {
+            set("items", graph.source.ref)
+            set("filtered", graph.filter.ref)
+        }
+        try {
+            val between = checkNotNull(betweenConnects)
+            between.views shouldBe mapOf("items" to setOf(2), "filtered" to emptySet<Int>())
+            mixesWaves(between.views).shouldBeTrue()
+            between.frontier.values.single() shouldBe 1L
+            between.alignedFrom shouldBe emptyMap()
+
+            graph.controller.runToIdle()
+            writer.add(3)
+            graph.controller.runToIdle()
+
+            val aligned = sink.composite()
+            val sourceId = aligned.frontier.keys.single()
+            aligned.alignedFrom.getValue(sourceId) shouldBe 2L
+            (aligned.frontier.getValue(sourceId) >= aligned.alignedFrom.getValue(sourceId)).shouldBeTrue()
+            mixesWaves(aligned.views) shouldBe false
+        } finally {
+            sink.close()
+        }
     }
 
     @Test
