@@ -2402,6 +2402,9 @@ open class ManagedHost(
                 return this@ManagedHost.lookup(ref, clazz)
             }
 
+            override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
+                civictech.cell.host.upstreamConsumeAncestors(cells, ref)
+
             override fun despawn(ref: CellRef) {
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
                 registry?.unpublish(ref)

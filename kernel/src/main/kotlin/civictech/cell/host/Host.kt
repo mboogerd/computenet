@@ -47,6 +47,14 @@ interface HostManagementApi {
     fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T?
 
     /**
+     * Returns the upstream Consume ancestry of [ref] over this host's live,
+     * static link set. This is a synchronous, pure read: it performs no spawn,
+     * connect, or scheduler hop, and later link changes do not alter the
+     * returned collections.
+     */
+    fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry
+
+    /**
      * Unregisters a hosted cell and calls its [Cell.onDeactivate] on the
      * host's execution context. Subsequent invocations for the ref dead-letter.
      */
