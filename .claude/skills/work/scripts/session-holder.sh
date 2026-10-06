@@ -42,7 +42,8 @@
 #   whose epic it had written two minutes earlier read STALE twice, and following
 #   the rule put two sessions on one epic for ~3h (computenet-jqxqk). Pass the
 #   held bead's `updated_at` as the optional second argument: a write within
-#   HOLDER_RECENT_S (default 900) answers LIVE, because residue does not write.
+#   HOLDER_RECENT_S (default 7200, one CI-and-review wait; residue measured
+#   14h-2d old) answers LIVE, because residue does not write.
 # Exit: 0 for LIVE/MINE, 1 for DEAD or STALE, 3 for UNKNOWN or FOREIGN (nothing was
 #   established — treat exactly like ready-in-epic.sh's exit 3: not an
 #   all-clear; FOREIGN additionally means the row is NOT this machine's
@@ -107,7 +108,7 @@ if [ "${1:-}" = --check ]; then
       upd_epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$u" +%s 2>/dev/null \
                   || date -u -d "$updated" +%s 2>/dev/null)
       if [ -n "${upd_epoch:-}" ] && \
-         [ $(( $(date -u +%s) - upd_epoch )) -le "${HOLDER_RECENT_S:-900}" ]; then
+         [ $(( $(date -u +%s) - upd_epoch )) -le "${HOLDER_RECENT_S:-7200}" ]; then
         echo LIVE; exit 0
       fi
       echo STALE; exit 1     # releasable like DEAD; the WORKTREE is still not yours to enter

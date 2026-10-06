@@ -104,13 +104,23 @@ load_rows() {
   all_rows=$(printf '%s\n' "$all_rows" | sed -n '/^[[{]/,/^[]}]/p')
 }
 
+# The newest updated_at among descendants, of any status, stamped with holder
+# $1. A session writes its epic's CHILDREN, never the epic row, so this — not
+# the held row's own updated_at — is its "residue does not write" evidence
+# (computenet-2jx46).
+newest_by_holder() {
+  jq -r --arg e "$id" --arg h "$1" "[$DESC_JQ"' | select((.metadata.holder // "") == $h)
+      | .updated_at // empty] | max // ""' <<<"$all_rows" 2>/dev/null
+}
+
 # Prints "<id> held by <holder> (<verdict>)" per in_progress descendant whose
 # holder is someone else's live session.
 live_descendants() {
   jq -r --arg e "$id" "$DESC_JQ"' | select(.status == "in_progress")
       | select((.metadata.holder // "") != "")
-      | "\(.id)\t\(.metadata.holder)\t\(.updated_at // "")"' <<<"$all_rows" 2>/dev/null \
-  | while IFS=$'\t' read -r d h u; do
+      | "\(.id)\t\(.metadata.holder)"' <<<"$all_rows" 2>/dev/null \
+  | while IFS=$'\t' read -r d h; do
+      u=$(newest_by_holder "$h")
       v=$("$SCRIPT_DIR/session-holder.sh" --check "$h" "$u" 2>/dev/null)
       case "$v" in
         LIVE) echo "$d held by $h (LIVE)" ;;
@@ -148,6 +158,19 @@ if [ "$mode" = release ]; then
     exit 3
   fi
   live=$(live_descendants)
+  if [ -z "$obs_holder" ]; then
+    obs_holder=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
+                 | jq -r '.[0].metadata.holder // "none"' 2>/dev/null)
+  fi
+  # The epic's own holder, re-judged on its subtree writes: step 3 judged it on
+  # the epic row's updated_at, which a long-running session never bumps.
+  if [ -n "$obs_holder" ] && [ "$obs_holder" != none ]; then
+    wrote=$(newest_by_holder "$obs_holder")
+    if [ "$("$SCRIPT_DIR/session-holder.sh" --check "$obs_holder" "$wrote" 2>/dev/null)" = LIVE ]; then
+      live="${live:+$live
+}$id held by $obs_holder (LIVE, wrote beneath it at $wrote)"
+    fi
+  fi
   if [ -n "$live" ]; then
     echo "KEPT: $id — a live session works beneath it; leave it claimed and do not select it:" >&2
     printf '  %s\n' "$live" >&2
@@ -161,10 +184,6 @@ if [ "$mode" = release ]; then
     echo "KEPT: $id — a descendant was touched within ${STALE_MIN}m (a session without a holder may be in it); leave it claimed and do not select it:" >&2
     printf '  %s\n' "$hot" >&2
     exit 1
-  fi
-  if [ -z "$obs_holder" ]; then
-    obs_holder=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
-                 | jq -r '.[0].metadata.holder // "none"' 2>/dev/null)
   fi
   me=$("$SCRIPT_DIR/session-holder.sh" 2>/dev/null) || me="$BEADS_ACTOR (no holder token)"
   bd comment "$id" "released by $me: observed holder ${obs_holder:-none}, classified ${obs_answer:-unstated}" >/dev/null 2>&1 \
