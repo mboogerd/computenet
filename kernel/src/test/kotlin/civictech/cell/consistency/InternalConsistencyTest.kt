@@ -449,6 +449,10 @@ class InternalConsistencyTest {
             map("debitBalances", graph.debitByAccount.ref)
             map("creditBalances", graph.creditByAccount.ref)
             set("pairs", graph.joinRef)
+            if (!gatedJoin) {
+                // This control observes the ungated join on purpose; [KE2-09] would otherwise reject it (lw0mv-D8).
+                unchecked("pairs")
+            }
             map("outer", graph.outer.ref)
         }
         graph.controller.runToIdle()
