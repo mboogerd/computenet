@@ -502,6 +502,32 @@ class JournaledPromotionRecoveryTest {
     }
 
     @Test
+    fun `a recovered red gate suppresses replayed history before reopening`() {
+        val journal = InMemoryJournal()
+        val refs = refs()
+        val before = world(911, journal)
+        build(before, refs)
+        drive(before, refs, 1..5, Random(911))
+        val preCrash = collector(refs).received.toList()
+        preCrash shouldBe listOf(1L, 3L, 6L, 10L, 15L)
+
+        val recovered = world(911, journal)
+        val recovery = recovered.context.recover(journal)
+        recovered.controller.runToIdle()
+        recovery.awaitApplied(30_000)
+        recovered.controller.runToIdle()
+        collector(refs).received shouldBe preCrash
+
+        feed(recovered, refs, 6)
+        recovered.controller.runToIdle()
+        gate(recovered, refs).controlInlet.call.setGreen()
+        recovered.controller.runToIdle()
+
+        collector(refs).received shouldBe preCrash + 21L
+        recovered.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
     fun `a recovered red gate remains exactly once across a post-recovery checkpoint`() {
         val journal = InMemoryJournal()
         val refs = refs()
