@@ -476,14 +476,15 @@ fix it stayed empty forever with no second utterance supplying the endpoints
 separately, and it continues to pass now that the whole-segment claim is
 dropped, since the relation only ever needed the two endpoint claims.
 
-## F-15 — CP-A3's absorb-ack is edge-local, so `emitOnFrontier` withholds output at rest whenever a wave-dropping arm is more than one hop deep
+## F-15 — CP-A3's absorb-ack is edge-local; unary relay closes the measured two-hop case, while fan-in remains bounded
 
-**Observation** (computenet-23bf, discovered at `computenet-2aw.3.2` (F3 T2,
-RelationMint) and re-established at `915d574a9`): AGO1's relation leg splits
+**Historical observation** (computenet-23bf, discovered at `computenet-2aw.3.2` (F3 T2,
+RelationMint) and re-established at `915d574a9`, before the relay landed): AGO1's relation leg splits
 into a pending/resolvable pair of `SemiJoinCell`s (`DialoguePipeline` stages
 5d/5e), whose two inlets both descend from the single `utterances` root. That
 is exactly the "shared-source diamond" `SemiJoinCell`/`WaveGate` scope
-`emitOnFrontier` to. Turning the gate on nonetheless **wedges the graph**:
+`emitOnFrontier` to. Before computenet-6ovpx, turning the gate on nonetheless
+**wedged the graph**:
 with `emitOnFrontier = true` on both semijoins, 4 of `RelationMintTest`'s 5
 cases fail at quiescence with an **empty** canonical relation set. (The fifth,
 `REL-04`, asserts that a self-canonicalizing relation mints *nothing*, so a
@@ -499,14 +500,18 @@ that: a claim-only utterance is a real delta on the right arm
 left (`extractedItems → extractedRelations → relationCandidates →
 nonSelfRelations`); a relation-only utterance is the mirror image.
 
-The kernel already has the remedy for a structurally silent arm — CP-A3's
-absorb-ack (`civictech.cell.control.absorbAck`, G-40). What this finding
-establishes is that **the ack is edge-local and no plain operator relays it**.
-It is minted by the absorbing operator onto its own outlet links; a
-`FilterCell` / `FlatMapSetCell` hop installs no `Protocols.Progress` handler,
-so an ack arriving on such a hop's inlet neither advances anything nor is
-re-emitted. Only a cell that installs a frontier (`WaveGate`, `WaveFrontier`,
-`CoalescingCombineCell`, `AlignedCompositeCell`) consumes one.
+The kernel's remedy for a structurally silent arm is CP-A3's absorb-ack
+(`civictech.cell.control.absorbAck`, G-40). The ack remains **edge-local** and
+is minted by the absorbing operator onto its own outlet links, but
+computenet-6ovpx added `civictech.cell.control.relayAbsorbAcks`: a
+`FilterCell` / `FlatMapSetCell` / other transparent pure hop forwards the exact
+`Protocols.Progress` only while the hop has exactly one open
+`LinkRole.Consume` input. A hop with multiple open Consume inputs is still a
+relay terminal, because one edge's watermark cannot stand for the per-edge
+completeness rule; computenet-t6vex records that fan-in settlement as an open
+question. A frontier-installed cell (`WaveGate`, `WaveFrontier`,
+`CoalescingCombineCell`, `AlignedCompositeCell`) consumes the ack instead of
+relaying it.
 
 So the discriminator is the **depth of the silent arm**, not the disjointness
 of the waves:
@@ -514,48 +519,65 @@ of the waves:
 - absorber links **directly** into the gated inlet → the ack lands on the
   expected edge, the wave completes, the gate is correct (this is the
   pre-existing `a gated cell settles a wave one arm absorbs entirely` case);
-- absorber with **one or more pure hops below it** → the ack dies at the hop.
-  The wave is released only when that arm delivers a *later* wave (the
-  monotone-`max` watermark advance standing in for the lost ack), so
-  mid-stream output **lags**; and at rest, when the final wave is one the arm
-  never carries, output is **withheld permanently**. Both arms of AGO1's
-  relation leg are two hops deep, which is why the whole leg goes silent.
+- absorber with one or more **single-input, transparent relay-enabled hops** below it →
+  computenet-6ovpx forwards the ack unchanged through each hop, so the measured
+  two-`FilterCell` case now settles when the gate is forced on;
+- absorber with an uninstrumented hop, a frontier terminal, or a hop with
+  multiple open Consume inputs → the ack stops there. The wave can then be
+  released only when that arm delivers a *later* wave (the monotone-`max`
+  watermark advance standing in for the lost ack), so mid-stream output
+  **lags**; and at rest, when the final wave is one the arm never carries,
+  output is **withheld permanently**. The multi-input case is the parked
+  computenet-t6vex fan-in question, not a decision in this entry.
 
-**Reproduction**: `FrontierGatedEmissionTest` (`:kernel`), the pair
+The exact two-`FilterCell` F-15 shape is therefore a historical failure, not a
+current claim that no operator relays absorb-acks. `GatingEvidenceTest`
+(`:query`) now forces the gate on for both filter hop orders over [SEEDS]: both
+settle with `bufferedWaves == 0` and agree with the batch fold. The lowering's
+one-operator depth rule still refuses that shape, so computenet-25gh4 records
+that refusal as a measured over-refusal; computenet-o8a0f carries the separate
+open decision about relaxing the rule.
+
+**Historical reproduction (before computenet-6ovpx)**: `FrontierGatedEmissionTest` (`:kernel`), the pair
 `control - disjoint-wave arms one hop deep settle, because the absorb-ack
 lands on the gated edge` (green) and `disjoint-wave arms TWO hops deep
 withhold output at rest - the absorb-ack dies at the intervening hop`. Same
-rig, same disjoint waves, only the hop count differs — which is what pins the
-mechanism to ack non-relay rather than to the wave partition itself. The same
-file's `CombineDisjointArmRig` and its own control/case pair (`control -
-CombineLatestCell disjoint-wave arms one hop deep settle...` /
+rig, same disjoint waves, only the hop count differs — which pinned the
+pre-relay mechanism to ack non-relay rather than to the wave partition itself.
+The same file's `CombineDisjointArmRig` and its own control/case pair (`control
+- CombineLatestCell disjoint-wave arms one hop deep settle...` /
 `CombineLatestCell disjoint-wave arms TWO hops deep emit a null-extension that
-is never corrected at rest...`) repeat the measurement for `CombineLatestCell`
-— see "Measured" below.
+is never corrected at rest...`) repeat the historical measurement for
+`CombineLatestCell` — see "Measured" below. The unary two-hop case now settles;
+the `CombineLatestCell` case remains relevant as a multi-input frontier
+terminal under computenet-t6vex, whose per-edge settlement is still open.
 
-**Why it's a gap**: "derive two arms from one stream, split by element kind,
+**Why it was a gap**: "derive two arms from one stream, split by element kind,
 and join them" is generic incremental dataflow, not an AGO1 shape, and it is
-the *normal* way to build a diamond over a heterogeneous stream. Yet it is
-precisely the shape in which the flicker gate — the only remedy the kernel
-offers for a non-monotone binary operator's within-wave flicker — silently
-stops emitting. Silently is the sharp part: nothing throws, `bufferedWaves`
-is the only signal, and the symptom (an empty derived set at quiescence)
-looks like an extraction or key-canonicalization bug several stages upstream.
+the *normal* way to build a diamond over a heterogeneous stream. Before
+computenet-6ovpx, it was precisely the shape in which the flicker gate — the
+only remedy the kernel offered for a non-monotone binary operator's within-wave
+flicker — silently stopped emitting. Silently was the sharp part: nothing
+threw, `bufferedWaves` was the only signal, and the symptom (an empty derived
+set at quiescence) looked like an extraction or key-canonicalization bug several
+stages upstream. The unary relay closes that measured case; the multi-input
+fan-in and frontier-terminal cases remain open or bounded as described above.
 
-**Proposed shape** (not implemented here; this entry is the finding, not the
-fix). Two candidates, in increasing order of ambition:
+**Resolution and remaining shape**: the first historical candidate below is
+implemented for single-input transparent hops by computenet-6ovpx. It does not
+decide the fan-in relaxation or the lowering depth rule; those remain bounded
+by computenet-t6vex and computenet-o8a0f respectively. The broader frontier
+candidate remains open.
 
 1. **Relay `Progress` through pure operator hops.** A `FilterCell` /
    `FlatMapSetCell` that receives an ack on its inlet re-emits one on its
-   outlet, making the ack transitive along a chain of pure hops and reducing
-   the deep case to the working shallow one. Cheap and local, but it needs a
-   rule for operators with more than one inlet and for stateful hops that may
-   legitimately emit later, and it makes every pure hop carry metadata-plane
-   machinery it currently does not.
+   outlet, making the ack transitive along a chain of single-input transparent
+   hops. A hop with more than one open Consume input is not covered; its
+   per-edge rule is the open computenet-t6vex question.
 2. **Teach the frontier to tell a structurally silent arm from a stalled
    one** — the standing G-40/G-13 residual, identical in `WaveGate`,
    `WaveFrontier`, `CoalescingCombineCell` and `AlignedCompositeCell`. This
-   is the real fix and is out of proportion to one demo.
+   remains the wider unimplemented fix and is out of proportion to one demo.
 
 **What ships instead, and what it costs**: `DialoguePipeline` stages 5d/5e
 stay at the ungated default, with the rationale in the code. The open cost is
@@ -572,21 +594,27 @@ and **zero** agora operations. That tolerance is structural, not incidental,
 so it is a constraint on F4: an applier that ever becomes push-driven off the
 canonical relation fold re-opens this finding.
 
-**Honest limit of this entry**: the reproduction covers `SemiJoinCell`'s gate.
-`CombineLatestCell` shares `WaveGate` verbatim and so must share the defect,
-which was not measured when this entry was written — it since has been, see
-**Measured** below. Nor was the relay proposal (1) prototyped — its
-cost is argued, not weighed. And the "withheld permanently at rest" claim is
-about *this* graph's quiescence: a graph that keeps receiving waves on every
-arm sees only the lag.
+**Honest limit of this entry**: the historical reproduction covers
+`SemiJoinCell`'s gate, and `GatingEvidenceTest` now measures the unary relay
+resolution on both filter hop orders. `CombineLatestCell` remains a separate
+multi-input frontier-terminal case, measured below; its per-edge settlement is
+the open computenet-t6vex question. `WaveFrontier` and `AlignedCompositeCell`
+were not measured for the broader frontier behavior. The "withheld permanently
+at rest" claim is about the historical graph's quiescence (or a remaining
+unrelayed terminal): a graph that keeps receiving waves on every arm sees only
+the lag.
 
-**Measured (computenet-u0oa, 2026-09-03)**: `CombineLatestCell` does share the
-defect, extending `FrontierGatedEmissionTest`'s disjoint-wave-arm rig
+**Measured (computenet-u0oa, 2026-09-03, before computenet-6ovpx)**:
+`CombineLatestCell` shares the multi-input frontier-terminal behavior, extending
+`FrontierGatedEmissionTest`'s disjoint-wave-arm rig
 (`CombineDisjointArmRig`) to `CombineLatestCell` — same one-hop-settles /
 two-hop-withholds control/case pair, same arm shape (a kind-filtering head that
 CP-A3 absorb-acks every other wave, followed by `hops - 1` pure identity hops),
-gated cell and wire type (`MapDelta`) swapped and nothing else, so the green
-one-hop control pins the mechanism to the same ack non-relay as `SemiJoinCell`'s.
+gated cell and wire type (`MapDelta`) swapped and nothing else. The green
+one-hop control pins the historical mechanism, while the current bounded
+behavior is that `CombineLatestCell` has multiple inputs and does not relay one
+edge's `Progress` as whole-hop settlement; computenet-t6vex leaves the proper
+per-edge fold open.
 The manifestation differs from `SemiJoinCell`'s complete silence, though, in a
 way that matters: `CombineLatestCell`'s premature reconciliation (against a
 still-incomplete other side) does not withhold — it **emits a wrong value**, a
@@ -602,11 +630,10 @@ two-hop case loses is the *correction* — the null-extension is delivered late
 the last value on the wire at rest, with both real operands settled inside the
 cell.
 `WaveFrontier` and `AlignedCompositeCell` were not measured; both mirror the
-same static-frontier/CP-A3-non-relay shape `WaveGate` does (this entry's
-Mechanism paragraph, and `WaveGate`'s own KDoc), so the same failure is
-expected there too, but "shares the code" is exactly the inference this
-measurement exists to not repeat on a third and fourth cell — that pair stays
-an open gap.
+same static-frontier shape `WaveGate` does (this entry's Mechanism paragraph,
+and `WaveGate`'s own KDoc), so the same failure is expected there too, but
+"shares the code" is exactly the inference this measurement exists to not
+repeat on a third and fourth cell — that pair stays an open gap.
 
 **Recurrence surface: QRY1's compiled antijoins (computenet-cab.4.5,
 2026-09-14)**. The query lowering (`:query`, `Gating.decide`) sets
@@ -626,22 +653,23 @@ and `OuterJoin`, which reuse the rule; all three now run ungated with a
 on a live `SimWorld` host. With the gate forced on in test scope,
 `q(X, Y) :- e(X, Y), X > 1, Y > 0, not e(Y, X).` (arms `{e}` and `{e}`, so
 no phantom edge; left arm `src:e → FilterCell(X > 1) → FilterCell(Y > 0)`)
-reproduces this finding (computenet-cab.4.9). After `e.add(2,1)` nothing is
-buffered; `e.add(1,2)` then blocks `(2,1)`, the inner filter drops it on the
-left arm and its absorb-ack dies at the outer filter, so the wave stays
-buffered at rest and the stale `(2,1)` stays in `q`. The shipped ungated
-lowering retracts it. Swapping the two comparisons, so the filter that drops
-`(1,2)` links straight into the gate, settles that wave with nothing buffered;
-the swapped shape is not safe to gate either, because a final `e.add(5,-1)`
-that its now-inner `Y > 0` filter drops is still held at rest (its answer set
-stays equal to the batch fold, since such a row blocks nothing the arm
-carries). The depth-two
+reproduces the historical finding (computenet-cab.4.9). After `e.add(2,1)`
+nothing is buffered; `e.add(1,2)` then blocks `(2,1)`, and before
+computenet-6ovpx the inner filter's absorb-ack died at the outer filter, so the
+wave stayed buffered at rest and the stale `(2,1)` stayed in `q`. The shipped
+ungated lowering retracts it; the forced-gate test now retracts it too because
+the single-input outer `FilterCell` relays the ack. Swapping the two
+comparisons, so the filter that drops `(1,2)` links straight into the gate,
+also settles that wave with nothing buffered;
+the swapped shape now settles that final `e.add(5,-1)` as well because its
+single-input `FilterCell` hop relays the ack. Neither measured shape is admitted
+by the unchanged depth rule: depth two remains the conservative proxy, not the
+exact condition, and the precise safe rule is still open. The depth-two
 self-join `q(X, Z) :- e(X, Y), e(Y, Z), Y > 0, not e(X, Z).` does **not**
 reproduce it when forced either: `src:e` also feeds the join's other inlet, so
 the join absorb-acks straight onto the gated edge, which is this entry's safe
-case. Depth two is therefore the conservative proxy the rule claims to be, not
-the exact condition: the precise one is how deep the absorber sits on the
-silent arm. The rule was not widened. Only these three shapes were measured.
+case. Only these three shapes were measured, and the rule was not widened;
+computenet-o8a0f carries that separate decision.
 An earlier version of this paragraph (computenet-cab.4.5) cited
 `q(X, Z) :- e(X, Y), Y > 0, f(Y, Z), not e(X, Z).` as the reproduction; that
 shape does not isolate this finding, because its forced gate already withholds
