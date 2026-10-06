@@ -36,11 +36,13 @@ data class GateDecision(val emitOnFrontier: Boolean, val diagnostic: LoweringDia
  *    reported [LoweringDiagnostic.GateNotProvable].
  * 3. **Carry precondition** — each arm is at most ONE operator deep from the sources: either a
  *    `Scan` (the `src:*` cell links straight into the gated inlet) or a node whose children are
- *    all `Scan`s. `SemiJoinCell`'s KDoc and `WaveGate`'s "One root is NOT sufficient" section
- *    (computenet-23bf, `doc/demo-findings.md` F-15) establish that an absorbing operator's
- *    absorb-ack rescues a wave only when it links directly into the gated inlet; a further hop
- *    swallows the ack and the gate withholds output at rest. Deeper arms stay ungated and are
- *    reported [LoweringDiagnostic.GateNotProvable].
+ *    all `Scan`s. This remains the conservative lowering rule, but the kernel mechanism it
+ *    summarizes has changed: computenet-6ovpx added `Progress`/absorb-ack relay through a pure,
+ *    transparent hop while it has exactly one open `LinkRole.Consume` input. Thus a two-`Filter`
+ *    arm can now settle when the gate is forced on, even though this depth check still refuses
+ *    it. A hop with multiple open Consume inputs remains a relay terminal under the parked
+ *    computenet-t6vex fan-in question: per-edge settlement is not decided here. Deeper arms stay
+ *    ungated and are reported [LoweringDiagnostic.GateNotProvable].
  *
  * Limit of the claim: (2) and (3) together are a sufficient condition read from the kernel's
  * documented mechanism, measured only for the shapes computenet-23bf, computenet-cab.4.5,
@@ -50,14 +52,15 @@ data class GateDecision(val emitOnFrontier: Boolean, val diagnostic: LoweringDia
  * falsified that, so treat a newly found withholding shape as a gap in this rule, not in the
  * kernel. The depth check is conservative: what withholds is an absorbing operator with a
  * further hop below it, not the arm's depth as such, and depth is the maximum over every
- * child, not only the children carrying the shared relation. `GatingEvidenceTest` measures
- * both sides on one equal-provenance two-`Filter` arm (computenet-cab.4.9): with the gate
- * forced on, a wave the inner filter drops is held at rest and a wave the outer filter drops
- * settles. No over-refusal by the depth check is measured: every two-`Filter` arm has an inner
- * filter, and the swapped shape still holds an inner-dropped final wave at rest (its answers
- * happen to stay equal to the batch fold on the scripts run). The equality check claims no
- * such over-refusal: per `WaveGate` G-13 a one-arm-only source's waves never reach the other
- * inlet, so neither an ack nor a later wave of that source can release them there.
+ * child, not only the children carrying the shared relation. `GatingEvidenceTest` measures one
+ * equal-provenance two-`Filter` arm (computenet-cab.4.9): with the gate forced on, both hop
+ * orders settle on the test's `SEEDS`, including an inner-filter drop, and agree with the batch
+ * fold.
+ * That is a measured over-refusal of the current depth rule, not a decision to relax it; the
+ * follow-up is computenet-o8a0f. The equality check still claims no safety for unequal
+ * provenance: per `WaveGate` G-13 a one-arm-only source's waves never reach the other inlet,
+ * so neither an ack nor a later wave of that source can release them there. The multi-input
+ * relay limit likewise remains the open computenet-t6vex question, not a decision made here.
  */
 object Gating {
 

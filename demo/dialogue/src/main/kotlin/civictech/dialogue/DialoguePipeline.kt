@@ -396,17 +396,20 @@ object DialoguePipeline {
             // arising here from the item-kind split rather than from two
             // independent roots.
             //
-            // The kernel would normally rescue that with CP-A3's absorb-ack;
-            // computenet-23bf established why it does not here. The ack is
-            // EDGE-LOCAL and no plain operator relays it, so it survives only
-            // when the absorbing cell links DIRECTLY into the gated inlet.
-            // Both arms above are two hops deep (extractedRelations and
-            // extractedClaims are the absorbers; relationCandidates ->
-            // nonSelfRelations and claimKeys are pure hops below them), so
-            // each ack dies before reaching the semijoin. Reproduced
-            // minimally in :kernel's FrontierGatedEmissionTest (the
-            // one-hop/two-hop disjoint-wave-arm pair) and written up as
-            // doc/demo-findings.md F-15.
+            // The kernel would normally rescue that with CP-A3's absorb-ack.
+            // The ack remains EDGE-LOCAL, but computenet-6ovpx added a bounded
+            // relay: a pure transparent hop with exactly one open
+            // LinkRole.Consume input forwards Progress unchanged. The
+            // extractedRelations/extractedClaims absorbers and their
+            // relationCandidates/nonSelfRelations/claimKeys unary hops are
+            // therefore no longer a current example of an ack dying before
+            // the semijoin. A hop with multiple open Consume inputs remains a
+            // relay terminal; per-edge settlement is the open fan-in question
+            // in computenet-t6vex. :kernel's FrontierGatedEmissionTest two-hop
+            // disjoint-wave case now asserts that relay; the pre-6ovpx failure
+            // is recorded in doc/demo-findings.md F-15, while GatingEvidenceTest
+            // records the present two-Filter over-refusal of the conservative
+            // depth rule.
             //
             // Observed (task computenet-2aw.3.2, RelationMintTest): with
             // `emitOnFrontier = true` on BOTH semijoins, or on the first alone,
@@ -416,6 +419,10 @@ object DialoguePipeline {
             // pipeline satisfies it vacuously.) Re-measured at 915d574a9 by
             // computenet-23bf. All five pass ungated. A gate that
             // withholds output at rest is disqualifying, so the default stands.
+            // That measurement predates computenet-6ovpx: with both semijoins
+            // gated, RelationMintTest now passes 5/5 (computenet-25gh4 feature
+            // review). Whether to gate 5d/5e now is computenet-13dby; the
+            // default is unchanged here.
             //
             // What the ungated default leaves open is the transient the gate
             // exists for: admitting the utterance that mints a relation's last

@@ -75,11 +75,14 @@ interface SemiJoinApi<A, B> {
  * shared-source diamond (both inlets descending from one root, the only topology
  * in which the within-wave flicker exists at all), not two independent roots.
  * **One root is necessary and not sufficient** — each arm must also *carry* the
- * root's waves onto the gated edge, and where it structurally cannot, its
- * absorb-ack rescues the wave only when the absorbing operator links directly
- * into this cell's inlet; a pure hop in between swallows the ack and the gate
- * withholds output at rest. [WaveGate]'s "One root is NOT sufficient" section
- * has the mechanism and the measurement (computenet-23bf).
+ * root's waves onto the gated edge. Where it structurally cannot, its
+ * absorb-ack rescues the wave when the absorbing operator links directly into
+ * this cell's inlet or when the ack crosses the single-input, transparent
+ * relay-enabled hops added by computenet-6ovpx. A hop with multiple open
+ * `LinkRole.Consume` inputs remains a relay terminal: the per-edge settlement
+ * needed to relax that fan-in limit is the open question in computenet-t6vex.
+ * [WaveGate]'s "One root is NOT sufficient" section has the mechanism and the
+ * measurements (computenet-23bf and computenet-6ovpx).
  *
  * ### Lateness: the `waterline` inlet and the `lateLeft`/`lateRight` outlets (KE4.5)
  *
