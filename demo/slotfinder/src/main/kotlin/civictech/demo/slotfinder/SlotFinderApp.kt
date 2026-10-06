@@ -1,30 +1,19 @@
 package civictech.demo.slotfinder
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Propagate
 import civictech.cell.data.Aggregators
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.WaterlineCell
 import civictech.cell.data.Windows
-import civictech.cell.data.delta.MapDelta
-import civictech.cell.data.delta.SetDelta
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookupOrThrow
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.link.LinkOptions
-import civictech.cell.link.LinkResult
-import civictech.cell.link.LinkRole
-import civictech.cell.observe.get
-import civictech.cell.observe.observation
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
-import civictech.cell.port.registerPort
+import civictech.cell.observe.observeAll
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
@@ -34,7 +23,6 @@ import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
 import java.net.URLDecoder
-import java.util.UUID
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.FilterSetApi
 import civictech.cell.data.op.GroupByCell
@@ -60,26 +48,6 @@ data class Slot(val day: String, val hour: Int) : Serializable {
 }
 
 val PARTICIPANTS = listOf("alice", "bob", "carol")
-
-/**
- * An explicit app-edge forwarding cell for an observation arm. The source
- * remains part of the dataflow graph; the Observe link only makes the
- * materialized UI arm independent from the upstream Consume ancestry walk.
- * This matters for slotfinder because the quorum/filter/group-by chain can
- * legitimately absorb a source wave without emitting a value on every arm.
- */
-private class ObservationRelay<D : Any>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<D>>())
-    val outlet = registerPort("outlet", FanOutlet.create<Propagate<D>>())
-
-    init {
-        inlet.serve(object : Propagate<D> {
-            override fun propagate(value: D) {
-                outlet.call.propagate(value)
-            }
-        })
-    }
-}
 
 /**
  * The demo's explicit **element-derived event-time attribute** (`[KE4-37]`,
@@ -233,61 +201,21 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         host.lookupOrThrow(tref).inlet.call
     }
 
-    private val nearMissObservation = ObservationRelay<SetDelta<Slot>>()
-    private val commonObservation = ObservationRelay<SetDelta<Slot>>()
-    private val filteredObservation = ObservationRelay<SetDelta<Slot>>()
-    private val byDayObservation = ObservationRelay<MapDelta<String, Long>>()
-    private val lateObservation = ObservationRelay<SetDelta<Slot>>()
-    private val observationRelays: List<ObservationRelay<*>> = listOf(
-        nearMissObservation,
-        commonObservation,
-        filteredObservation,
-        byDayObservation,
-        lateObservation,
-    )
-    private val manage = host.managementInlet.call
-
-    // The canonical app-edge observation folds all outlets into materialized,
-    // independently published root groups with built-in late-join catch-up.
-    // The derived arms pass through explicit Observe links so a source wave
-    // absorbed by one operator does not become a phantom expected edge for the
-    // other derived UI arms. Typed overloads (T08 finding 2) keep the
-    // element/key type flowing from each TypedRef's API shape, so a
-    // wrong-shaped source is a compile error.
-    private val view = buildObservation()
-
-    private fun buildObservation() = host.observation {
+    // The observation edge: one composite sink folds every observed outlet into a
+    // materialized, thread-safe snapshot with built-in late-join catch-up — no hand-rolled
+    // hub cells, no synchronized mutable snapshot. Typed overloads (T08 finding 2): the
+    // element/key type flows from each TypedRef's API shape, so a wrong-shaped source
+    // here is a compile error, not an Any?-erased fold read back with an unchecked cast.
+    private val view = host.observeAll {
         PARTICIPANTS.forEach { set(it, refs.participants.getValue(it)) }
-        observationRelays.forEach { manage.spawn(it) }
-        fun observe(source: CellRef, outlet: String, relay: ObservationRelay<*>) {
-            val result = manage.connect(
-                source,
-                outlet,
-                relay.ref,
-                "inlet",
-                LinkOptions(role = LinkRole.Observe, staged = true),
-            )
-            check(result !is LinkResult.Rejected) {
-                "slotfinder observation relay link rejected: $source.$outlet -> ${relay.ref} ($result)"
-            }
-        }
-        observe(refs.nearMiss.ref, "outlet", nearMissObservation)
-        observe(refs.common.ref, "outlet", commonObservation)
-        observe(refs.filtered.ref, "outlet", filteredObservation)
-        observe(refs.byDay.ref, "outlet", byDayObservation)
-        observe(refs.byDay.ref, "late", lateObservation)
-
-        set("nearMiss", nearMissObservation.ref)
-        set("common", commonObservation.ref)
-        set("filtered", filteredObservation.ref)
-        count("byDay", byDayObservation.ref)
+        set("nearMiss", refs.nearMiss)
+        set("common", refs.common)
+        set("filtered", refs.filtered)
+        count("byDay", refs.byDay)
         // [24-WL-07] / [KE4-39]: the observable half of a late drop — byDay's `late`
         // outlet (a SetDelta port not on GroupByApi, so observed by CellRef + name).
-        set("late", lateObservation.ref)
+        set("late", refs.byDay.ref, outletName = "late")
     }
-
-    /** The computed app-edge partition, pinned by the demo test. */
-    internal val observationGroups: Set<String> get() = view.groups
 
     private val shell = DemoShell(port)
 

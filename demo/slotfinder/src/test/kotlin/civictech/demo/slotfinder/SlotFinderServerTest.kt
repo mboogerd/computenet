@@ -15,19 +15,6 @@ import kotlin.test.fail
 class SlotFinderServerTest {
 
     @Test
-    fun `canonical observation pins the app-edge partition`() {
-        val app = SlotFinderApp(port = 0).start()
-        try {
-            assertEquals(
-                setOf("alice", "bob", "carol", "nearMiss", "common", "filtered", "byDay", "late"),
-                app.observationGroups,
-            )
-        } finally {
-            app.stop()
-        }
-    }
-
-    @Test
     fun `a slot shared by all three flows through intersect, filter and count`() {
         val app = SlotFinderApp(port = 0).start()
         try {
@@ -41,7 +28,15 @@ class SlotFinderServerTest {
             }
 
             // ops flow writer → intersect chain → hubs asynchronously; poll /state.
-            // Await the JOINT condition, never one arm of it (computenet-i6vx).
+            // Await the JOINT condition, never one arm of it (computenet-i6vx). The
+            // panels are folded by `observeAll`, the point-consistent composite, so a
+            // read can pair `common` at wave t-1 with `byDay` at wave t (the F-5 flash;
+            // `observeAligned` is the wave-aligned sibling this demo does not use). The
+            // old gate — `byDay` reaching {"Tue":1} — carried *zero* information about
+            // the Tue-19 half of the assertion below: `byDay` counts the business-hours
+            // FILTERED set, which admits Tue-14 only, so it reads {"Tue":1} whether
+            // Tue-19 has propagated or not (measured: it holds identically when Tue-19
+            // is never written at all). The gate now IS the asserted state.
             var json = probe.await {
                 "\"common\":[\"Tue-14\",\"Tue-19\"]" in it &&
                     "\"filtered\":[\"Tue-14\"]" in it &&

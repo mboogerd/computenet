@@ -185,6 +185,10 @@ class DemoApp(
     /** The observation's computed root partition, used by the frame-level demo proof. */
     internal val observationGroups: Set<String> get() = observation.groups
 
+    /** The latest aligned frontier for one observation group, for frame-level proofs. */
+    internal fun observationFrontier(group: String): Map<UUID, Long> =
+        observation.current().groups.getValue(group).frontier
+
     /** The inspector the Runtime serves for `--inspect-port`, null when the flag is absent. */
     val inspector: civictech.inspect.InspectorServer? get() = node.inspector
 
@@ -273,6 +277,10 @@ class DemoApp(
         // the replicated source's direct observation in its own root group by
         // adding this downstream link after admission; the already-registered
         // `items` source still receives the shared output through itemsUnion.
+        // This order compensates for the builder's link-order dependence: its
+        // streamTo root walk cannot see those writer roots (computenet-b7c8t),
+        // so linking before admission would collapse `{shared}` into an
+        // `{items+produce+shared}` group.
         if (replication != null && sharedCell != null) {
             manage.link(sharedCell.outlet, itemsUnion.inlet)
         }
