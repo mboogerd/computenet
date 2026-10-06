@@ -5,9 +5,12 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Stateful
 import civictech.cell.control.Magnitude
+import civictech.cell.durability.InMemoryJournal
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.TrafficLightCell
@@ -326,6 +329,108 @@ class EvolveOrchestratorTest {
     }
 
     @Test
+    fun `candidate waves share one pending settlement fence`() {
+        val run = Run(seed = 15)
+        val handle = run.start()
+
+        (1..3).forEach(run::submit)
+        run.idle()
+
+        run.scheduler.lowestPrioritySubmissions.get() shouldBe 1
+        handle.verdict() shouldBe PromotionVerdict.Accept
+    }
+
+    @Test
+    fun `a terminated scheduler cannot throw from the candidate observation tap`() {
+        val run = Run(seed = 16)
+        val handle = run.start()
+        run.scheduler.refuseSubmissions()
+
+        val failure = runCatching { run.candidate.outlet.call.provide(1L) }.exceptionOrNull()
+
+        failure shouldBe null
+        handle.verdict() shouldBe PromotionVerdict.Pending
+    }
+
+    @Test
+    fun `recovery refuses while an evolution settlement fence is pending`() {
+        val run = Run(seed = 17)
+        run.start()
+        run.submit(1)
+        while (run.scheduler.lowestPrioritySubmissions.get() == 0) {
+            run.controller.step() shouldBe true
+        }
+
+        val refusal = shouldThrow<IllegalStateException> {
+            run.host.recoverFrom(InMemoryJournal())
+        }
+
+        refusal.message!!.shouldContain("external fence or drain is in flight")
+        run.idle()
+    }
+
+    @Test
+    fun `recovery can start during a candidate emission without leaking settlement refusal`() {
+        val scheduler = RecordingScheduler(VirtualThreadScheduler("evolve-recovery-overlap"))
+        val host = ManagedHost(scheduler = scheduler)
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = BlockingBeforeEmitSummer(CellRef(logicalId, instanceId = 1))
+        val candidateGate = nonDecreasingGate()
+        val view = CollectorCell()
+        val recoveryFailure = AtomicReference<Throwable>()
+        val recoveryDone = CountDownLatch(1)
+
+        try {
+            listOf<Cell>(source, gate, incumbent, candidateGate, view).forEach {
+                host.managementInlet.call.spawn(it)
+            }
+            val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java) as GateProxy).dataInlet.call
+            source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+            gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+            incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+            connectGate(candidate, candidateGate)
+            gate.controlInlet.call.setGreen()
+
+            val handle = Evolve.run(
+                host = host,
+                gate = gate,
+                incumbent = incumbent,
+                candidate = candidate,
+                outletName = "outlet",
+                downstream = listOf(view.inlet),
+                policy = policy(),
+                gates = listOf(candidateGate),
+            )
+            val recoveryFenceSubmitted = scheduler.expectManagementSubmission()
+            source.emit(1)
+            candidate.entered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            Thread.ofVirtual().start {
+                try {
+                    host.recoverFrom(InMemoryJournal()).awaitApplied(5_000)
+                } catch (failure: Throwable) {
+                    recoveryFailure.set(failure)
+                } finally {
+                    recoveryDone.countDown()
+                }
+            }
+            recoveryFenceSubmitted.await(5, TimeUnit.SECONDS) shouldBe true
+            candidate.release()
+
+            recoveryDone.await(5, TimeUnit.SECONDS) shouldBe true
+            recoveryFailure.get() shouldBe null
+            candidate.emissionFailure.get() shouldBe null
+            handle.verdict() shouldBe PromotionVerdict.Pending
+        } finally {
+            candidate.release()
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
     fun `await on a live host rejects after the window-filling violation leaves the queue`() {
         val host = ManagedHost()
         val logicalId = UUID.randomUUID()
@@ -513,6 +618,34 @@ class EvolveOrchestratorTest {
         }
     }
 
+    private class BlockingBeforeEmitSummer(override val ref: CellRef) : SummingCell {
+        override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
+        val entered = CountDownLatch(1)
+        val emissionFailure = AtomicReference<Throwable>()
+        private val release = CountDownLatch(1)
+        private var sum = 0L
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    sum += input
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "test did not release candidate emission" }
+                    try {
+                        outlet.call.provide(sum)
+                    } catch (failure: Throwable) {
+                        emissionFailure.set(failure)
+                    }
+                }
+            })
+        }
+
+        fun release() {
+            release.countDown()
+        }
+    }
+
     private class NonIdempotentSummer(override val ref: CellRef) : SummingCell, Promotion.NonIdempotentCatchUp {
         override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
         override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
@@ -608,6 +741,29 @@ class EvolveOrchestratorTest {
         }
     }
 
+    private class RecordingScheduler(private val delegate: HostScheduler) : HostScheduler by delegate {
+        val lowestPrioritySubmissions = AtomicInteger()
+        private val refusing = AtomicBoolean()
+        private val nextManagementSubmission = AtomicReference<CountDownLatch>()
+
+        override fun submit(priority: Int, action: suspend () -> Unit) {
+            check(!refusing.get()) { "host scheduler terminated" }
+            if (priority == Int.MAX_VALUE) lowestPrioritySubmissions.incrementAndGet()
+            if (priority == 0) nextManagementSubmission.getAndSet(null)?.countDown()
+            delegate.submit(priority, action)
+        }
+
+        fun refuseSubmissions() {
+            refusing.set(true)
+        }
+
+        fun expectManagementSubmission(): CountDownLatch = CountDownLatch(1).also { latch ->
+            check(nextManagementSubmission.compareAndSet(null, latch)) {
+                "a management submission expectation is already armed"
+            }
+        }
+    }
+
     private inner class Run(
         seed: Long,
         incumbentFactory: (CellRef) -> SummingCell = ::SummerV1,
@@ -617,7 +773,8 @@ class EvolveOrchestratorTest {
         stagedCandidateGate: Boolean = false,
     ) {
         val controller = SimulationController(seed)
-        val host = ManagedHost(scheduler = controller.scheduler())
+        val scheduler = RecordingScheduler(controller.scheduler())
+        val host = ManagedHost(scheduler = scheduler)
         val logicalId = UUID.randomUUID()
         val source = SourceCell(consumerInt)
         val gate = TrafficLightCell.create<Consumer<Int>>()
