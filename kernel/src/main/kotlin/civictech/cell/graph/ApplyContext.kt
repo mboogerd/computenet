@@ -57,9 +57,10 @@ internal class ApplyContextTopologyProvider(
  *
  * The selector is evaluated once at spawn, so [GraphSpec.apply] binds a
  * `journalId` before calling the host's spawn path. A promotion traffic gate
- * without an explicit `journalId` is bound to [topology]: its colour is part
- * of the durable promotion transaction even though ordinary gate traffic is
- * not application state.
+ * without an explicit `journalId` is bound to [topology], allowing
+ * [civictech.cell.host.HostDurability] to capture its internal checkpoint state and held
+ * frames. That hosting decision does not make the gate `Stateful` or publish the `DURABLE`
+ * nature; journal-less traffic gates remain valid.
  */
 class ApplyContext(
     val host: ManagedHost,

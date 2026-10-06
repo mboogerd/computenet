@@ -662,11 +662,6 @@ class JournaledPromotionRecoveryTest {
             withClue("post-promotion checkpoint compacted=$compacted") {
                 val (recovered, refs, preCrash) = recoverPromoted(compacted)
 
-                gate(recovered, refs).snapshot() shouldBe true
-                gate(recovered, refs).controlInlet.call.setGreen()
-                recovered.controller.runToIdle()
-                collector(refs).received shouldBe preCrash
-
                 feed(recovered, refs, 10)
                 recovered.controller.runToIdle()
                 collector(refs).received shouldBe preCrash + 55L

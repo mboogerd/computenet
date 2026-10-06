@@ -16,6 +16,19 @@ interface Stateful {
 }
 
 /**
+ * Checkpoint-only state for a cell whose public nature remains non-durable.
+ *
+ * [HostDurability][civictech.cell.host.HostDurability] captures this state only when the
+ * hosting graph explicitly binds the cell to a journal. Unlike [Stateful], this internal
+ * capability is not a `DURABLE` manifest marker and is not used for migration or supervision
+ * restart snapshots.
+ */
+internal interface CheckpointStateSource {
+    fun checkpointState(): Serializable
+    fun restoreCheckpointState(state: Serializable)
+}
+
+/**
  * A cell-owned holding tier whose accepted invocations have already left the host scheduler.
  * Checkpoint compaction carries these frames after the snapshot just like scheduler-, policy-
  * and cold-inlet-held work. Implementations return a stable, ordered copy and retain ownership
