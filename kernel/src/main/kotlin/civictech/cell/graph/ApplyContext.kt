@@ -714,6 +714,7 @@ class ApplyContext(
             factory = { key, ref -> factory.create(key, ref) },
             render = family.keys.render,
             parse = family.keys.parse,
+            spawnOnInterest = family.spawnOnInterest,
         )
     }
 }

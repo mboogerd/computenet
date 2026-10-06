@@ -63,6 +63,26 @@ data class ObservationsMonotone(val view: String, val order: String? = null) : C
 @SerialName("replicas-converge")
 data class ReplicasConverge(val logical: String) : Check
 
+/** The keyed family [family] holds exactly [keys], compared as an order-free set. */
+@Serializable
+@SerialName("family-holds")
+data class FamilyHolds(
+    val family: String,
+    val keys: List<Long>,
+) : Check
+
+/**
+ * Family [family] accounted exactly [count] refused interest declarations.
+ * This is separate from [RefusalCount], whose semantic is specifically an
+ * undeliverable contextless delivery at an effect boundary.
+ */
+@Serializable
+@SerialName("interest-refusals")
+data class InterestRefusals(
+    val family: String,
+    val count: Long,
+) : Check
+
 /** Zero dead letters across all hosts. */
 @Serializable
 @SerialName("no-dead-letters")

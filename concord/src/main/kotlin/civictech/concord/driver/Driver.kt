@@ -49,6 +49,18 @@ interface Driver {
     /** Drive the graph to quiescence within [budget] steps; report what settled. */
     fun quiesce(budget: Int): QuiesceReport
 
+    /**
+     * Declare [interest] on the registry hosting keyed family [cellId], and
+     * await every member spawn induced by that admission. The neutral value is
+     * the same closed interest grammar a `CellSpec.interest` descriptor uses.
+     * Typed admission refusals are accounted for [interestRefusalCount] rather
+     * than escaping this verb or becoming dead letters.
+     */
+    fun declareInterest(cellId: CellId, interest: Value)
+
+    /** The exact long-key membership of keyed family [cellId], in any order. */
+    fun familyKeys(cellId: CellId): List<Long>
+
     /** The current materialized value of a view cell. */
     fun readView(cellId: CellId): Value
 
@@ -317,6 +329,12 @@ interface Driver {
      * observation exists to prevent.
      */
     fun refusalCount(cellId: CellId): Long
+
+    /**
+     * How many declarations made through [declareInterest] for family [cellId]
+     * completed with a typed interest-spawn or budget refusal this run.
+     */
+    fun interestRefusalCount(cellId: CellId): Long
 }
 
 /** Opaque scenario-local cell handle. */

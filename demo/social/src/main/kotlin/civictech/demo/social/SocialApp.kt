@@ -33,8 +33,6 @@ import java.net.URLDecoder
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -104,7 +102,7 @@ class SocialApp(
     private val journal = KeyedCells.hostJournal(journalDir)
     private val host = ManagedHost(scheduler = hostScheduler, registry = registry, journal = journal)
 
-    val pipeline: SnbPipeline.Graph = SnbPipeline.build(host, journalDir, registry)
+    val pipeline: SnbPipeline.Graph = SnbPipeline.build(host, journalDir, registry, interestDriven)
     val graph: SocialGraph = SocialGraph(host, pipeline)
 
     // v10ou-D1/D3: staged here, in construction, before any source load below.
@@ -133,26 +131,6 @@ class SocialApp(
     /** IC8, IC3 (feature `computenet-flfkm`, flfkm-D4..D6) over [locator]. */
     val complexReads: ComplexReads = ComplexReads(boundedReader, locator)
 
-    // 4q9is-D7: opt-in join of a derived scope to KeyedCells.getOrSpawn over
-    // the authored family. Null unless interestDriven — the default app never
-    // spawns ahead of a post.
-    private val spawner: InterestDrivenFamily? =
-        if (interestDriven) InterestDrivenFamily(pipeline.families.authored) else null
-
-    // computenet-pvtcj: this app's own pool for FeedSession.fanOut to
-    // dispatch spawner.admit() onto (Feed.kt's companion KDoc explains why a
-    // separate thread is needed). Null unless interestDriven, matching
-    // [spawner] above — every FeedSession this app builds gets this instance
-    // instead of FeedSession's own (unused-here) default, so [stop] can shut
-    // it down rather than leaving its daemon threads running past the app's
-    // lifetime.
-    private val spawnExecutor: ExecutorService? =
-        if (interestDriven) {
-            Executors.newCachedThreadPool { r -> Thread(r, "FeedSession-spawn").apply { isDaemon = true } }
-        } else {
-            null
-        }
-
     /**
      * A scatter-gather feed for [viewer] over the authored cells [scope]
      * admits (feature `computenet-8eb53`). The scope is the caller's, fixed
@@ -160,11 +138,7 @@ class SocialApp(
      * and `SocialFeedScatterGatherTest` use this overload directly.
      */
     fun feedSession(viewer: Long, scope: Interest.Ranges, pageLimit: Int = 200): FeedSession =
-        if (spawnExecutor != null) {
-            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner, spawnExecutor)
-        } else {
-            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
-        }
+        FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit)
 
     /**
      * `/feed`'s session (4q9is-D8): the scope is [ViewerInterest], derived
@@ -174,11 +148,7 @@ class SocialApp(
      */
     fun feedSession(viewer: Long, pageLimit: Int = 200): FeedSession {
         val scope = ViewerInterest(locator, boundedReader, registry, pageLimit)
-        return if (spawnExecutor != null) {
-            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner, spawnExecutor)
-        } else {
-            FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit, spawner)
-        }
+        return FeedSession(viewer, scope, pipeline.families, registry, boundedReader, pageLimit)
     }
 
     /**
@@ -300,12 +270,7 @@ class SocialApp(
      * the same way and for the same reason [SocialGraph.close] does — the
      * sole implementation `host.observe` ever returns, and the one that
      * exposes `close`. Idempotent, since both [SocialGraph.close] and
-     * [ObserveCell.close] are. computenet-pvtcj: also shuts down [spawnExecutor]
-     * when this app minted one (`interestDriven = true`), so no
-     * `FeedSession-spawn` thread outlives the app; `shutdownNow` rather than
-     * `shutdown`, since a pending `admit()` running past `stop()` would race
-     * a graph this method just closed. `ExecutorService.shutdownNow` is
-     * itself idempotent.
+     * [ObserveCell.close] are.
      *
      * computenet-cpybp: returns only after every observe-cell dispatcher
      * thread this app caused has terminated, waiting at most
@@ -323,7 +288,6 @@ class SocialApp(
         shell?.stop()
         graph.close()
         listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
-        spawnExecutor?.shutdownNow()
         val survivors = graph.awaitDispatchers(STOP_DISPATCHER_BOUND_MS)
         check(survivors.isEmpty()) {
             "SocialApp.stop: ${survivors.size} observe-cell dispatcher(s) still alive " +
