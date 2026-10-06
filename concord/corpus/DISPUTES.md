@@ -59,13 +59,14 @@ follow-up; each full by-scenario entry below names the wave that resolved it.
   default-nature source's `connect` is refused by the kernel's own
   `NatureNegotiation` reconciler (CP-F3) — no schema field, no driver-side fake.
 - `23-SPSC-01` — **RESOLVED** (`schema-gap` + `driver-binding-gap`). New
-  `exclusive-source`/`exclusive-sink` catalog cells
-  (`KernelAdapters.ExclusiveSourceCell`/`ExclusiveSinkCell`) emit a genuine
-  `Owned` payload, so a second `Consume` link is refused by the kernel's own
-  `FanOutlet` exclusivity check (M5.6). The core driver now lowers
-  `role: observe` to `LinkOptions(role = Observe)`, so host admission installs
-  the kernel's `FanOutlet.tap` path and admits that link without consuming the
-  exclusive slot.
+  `exclusive-source`/`exclusive-sink`/`exclusive-observer` catalog cells
+  (`KernelAdapters.ExclusiveSourceCell`/`ExclusiveSinkCell`/`ExclusiveObserverCell`)
+  emit, consume, and borrow a genuine `Owned` payload. A second `Consume` link
+  is refused by the kernel's own `FanOutlet` exclusivity check (M5.6). The core
+  driver lowers `role: observe` to `LinkOptions(role = Observe)`, so host admission
+  installs the kernel's `FanOutlet.tap` path and admits that link without consuming
+  the exclusive slot; a post-attachment delivery reaches both the borrowing
+  observer and the sole consumer without dead letters.
 - `42-REPL-DEPART-01` — **RESOLVED** (`check-vocabulary-gap`).
   `Checks.replicasConverge` now scopes to *live* replicas — it drops any declared
   replica whose `readView` no longer resolves (the departed-cell signal `despawn`
@@ -318,11 +319,13 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   `role: observe` to the host's typed `LinkOptions(role = LinkRole.Observe)`
   overload. `LinkAdmission` therefore invokes `FanOutlet.tap`, the kernel's
   genuine uncounted Observe funnel, rather than `FanOutlet.linkTo`; no
-  driver-side admission exception is involved. Scenario `23-SPSC-01.yaml`
-  asserts that connect as `connected`, then asserts a second ordinary Consume
-  connect as `rejected`, while the original consumer's settled delivery and
-  dead-letter-free path remain pinned. `13-TAP-01` continues to pass with its
-  declared Observe link now bound honestly.
+  driver-side admission exception is involved. The `exclusive-observer` catalog
+  cell handles that tap by calling `Owned.borrow()` and counting the delivery,
+  never `take()`ing it. Scenario `23-SPSC-01.yaml` asserts that connect as
+  `connected`, then asserts a second ordinary Consume connect as `rejected`,
+  pushes again after the tap attaches, and pins both the observer's count and the
+  sole consumer's count with no dead letters. `13-TAP-01` continues to pass with
+  its declared Observe link now bound honestly.
 - **Remaining G-47 work is outside this scenario gap**: KSP-derived Borrowed
   contract projection and validation, attach-forward-only catch-up semantics,
   and copy-fork/cloneability remain open as recorded in 10/12 and 20/23.

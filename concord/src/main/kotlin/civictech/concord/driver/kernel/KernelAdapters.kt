@@ -862,3 +862,46 @@ class ExclusiveSinkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) 
         count = state as Long
     }
 }
+
+/**
+ * Binds the catalog `exclusive-observer` id: an Observe-role endpoint for
+ * [ExclusivePush] that reads each payload through [Owned.borrow] and never
+ * consumes it. The running count lets `23-SPSC-01` prove that a post-attachment
+ * emission reached this tap before [ExclusiveSinkCell] took the same payload.
+ */
+class ExclusiveObserverCell(
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : Cell, Stateful, ObservationSink<Long> {
+    val inlet = registerPort("inlet", FanInlet.create<ExclusivePush>())
+
+    private val lock = Any()
+    private var count = 0L
+    private val listeners = mutableListOf<(Long) -> Unit>()
+
+    init {
+        inlet.serve(object : ExclusivePush {
+            override fun push(payload: Owned<Any>) {
+                payload.borrow()
+                synchronized(lock) {
+                    count++
+                    listeners.forEach { it(count) }
+                }
+            }
+        })
+    }
+
+    override fun current(): Long = count
+
+    override fun onChange(listener: (Long) -> Unit) {
+        synchronized(lock) {
+            listeners += listener
+            listener(count)
+        }
+    }
+
+    override fun snapshot(): Serializable = count
+
+    override fun restore(state: Serializable) {
+        count = state as Long
+    }
+}
