@@ -192,6 +192,7 @@ class InterestSpawnTest {
         val admittedRef = CellRef(UUID.nameUUIDFromBytes("authored:11".toByteArray()))
         registry.location(admittedRef).shouldNotBeNull()
         val retry = registry.setInterest(declaringRef, interest)
+        controller.runToIdle()
         retry.spawned.get(5, TimeUnit.SECONDS) shouldBe setOf(admittedRef)
 
         val admitted = family.getOrSpawn(11L)
