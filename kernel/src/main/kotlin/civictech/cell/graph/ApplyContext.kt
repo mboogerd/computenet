@@ -21,7 +21,6 @@ import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
-import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -29,7 +28,6 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.identity
 import civictech.cell.replication.Replication
-import civictech.cell.verify.InvariantCell
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -173,10 +171,7 @@ class ApplyContext(
     }
 
     private fun isEvolutionTap(edge: TopoEvent.Connect): Boolean {
-        val gate = cells[edge.from] as? TrafficLightApi<*> ?: return false
-        val outlet = gate.dataOutlet as? FanOutlet<*> ?: return false
-        val identity = outlet.identity() ?: return false
-        return identity.owner == edge.from && identity.name == edge.outlet
+        return Evolve.isTrafficLightDataOutlet(cells[edge.from], edge.from, edge.outlet)
     }
 
     /**
@@ -191,7 +186,7 @@ class ApplyContext(
         val before = live()
         if (before.spawns[event.to]?.shadow != true) return
         val feedsInvariant = before.links.values.any { edge ->
-            edge.from == event.to && cells[edge.to] is InvariantCell<*, *>
+            edge.from == event.to && Evolve.isInvariant(cells[edge.to])
         }
         if (feedsInvariant) recoveredEvolutionCandidates += event.to
     }
