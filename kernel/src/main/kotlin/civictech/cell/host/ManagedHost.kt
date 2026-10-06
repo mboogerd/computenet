@@ -1104,6 +1104,31 @@ open class ManagedHost(
     }
 
     /**
+     * Submit one spawn on the management band without awaiting it. The caller
+     * owns the returned outcome, so a refusal completes it exceptionally rather
+     * than entering this host's dead-letter stream.
+     */
+    internal fun spawnAsync(cell: Cell): CompletableFuture<CellRef> {
+        val stamp = CurrentPeer.stamp()
+        val future = CompletableFuture<CellRef>()
+        try {
+            scheduler.submit(0) {
+                try {
+                    future.complete(CurrentPeer.withStamp(stamp) { internalApi.spawn(cell) })
+                } catch (failure: Throwable) {
+                    future.completeExceptionally(failure)
+                }
+            }
+        } catch (failure: Throwable) {
+            future.completeExceptionally(failure)
+        }
+        return future
+    }
+
+    /** Await a caller-owned management future using this host's scheduler semantics. */
+    internal fun <T> awaitManagement(future: CompletableFuture<T>): T = scheduler.await(future)
+
+    /**
      * Test seam for `DurableGlitchFreeReplayTest`'s control (PN-2); forwards to
      * [HostDurability.replayAsBaseline] (RS-8.2). Production always replays as
      * baseline; see [HostDurability]'s KDoc for the full semantics.
