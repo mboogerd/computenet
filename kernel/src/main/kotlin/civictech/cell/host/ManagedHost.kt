@@ -2402,6 +2402,9 @@ open class ManagedHost(
                 return this@ManagedHost.lookup(ref, clazz)
             }
 
+            override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
+                civictech.cell.host.upstreamConsumeAncestors(cells, ref)
+
             override fun despawn(ref: CellRef) {
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
                 registry?.unpublish(ref)
@@ -2579,6 +2582,8 @@ open class ManagedHost(
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
+            } else if (method.name == "upstreamConsumeAncestors") {
+                internalApi.upstreamConsumeAncestors(args!![0] as CellRef)
             } else if (method.name.startsWith("connect")) {
                 // surfaces the LinkResult (management calls may await, spec 31 rule 4)
                 enqueueAwaiting(0) { invocation.invoke() }
