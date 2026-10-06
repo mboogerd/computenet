@@ -325,4 +325,25 @@ class SocialServerTest {
                 "were still alive when stop() returned: $survivors",
         )
     }
+
+    @Test
+    fun `a per-key sink admitted after graph close is terminally closed at creation`() {
+        val app = SocialApp(port = 0)
+        try {
+            // Make a late sink eligible for listener attachment, then close
+            // before any per-key sink exists: the creation path, not close's
+            // existing-sink iteration, must enforce terminal shutdown.
+            app.graph.onChange { }
+            app.graph.close()
+
+            app.graph.addPerson(Person(1, "Late", "Admission"))
+
+            assertTrue(
+                app.graph.awaitDispatchers(1_000).isEmpty(),
+                "a sink created after graph close must already be terminally closed",
+            )
+        } finally {
+            app.stop()
+        }
+    }
 }

@@ -211,9 +211,17 @@ class SocialGraph(
         return { if (!caughtUp.compareAndSet(false, true)) fireChange() }
     }
 
-    /** Gives a newly created [sink] the change listener once any [onChange] exists. */
+    /**
+     * Gives a newly created [sink] the change listener once any [onChange]
+     * exists. A sink admitted after [close] is terminally closed here: it may
+     * have missed [close]'s map snapshot, but it must never mint a dispatcher
+     * that can outlive application shutdown.
+     */
     private fun <S> attach(sink: ObservationSink<S>): ObservationSink<S> =
-        sink.also { if (listening.get()) it.onChange { fireChange() } }
+        sink.also {
+            if (closed.get()) (it as ObserveCell<*, *>).close()
+            else if (listening.get()) it.onChange { fireChange() }
+        }
 
     private fun fireChange() {
         if (closed.get()) return
@@ -500,9 +508,9 @@ class SocialGraph(
      * cells itself, so nothing else releases the thread each one may have
      * minted.
      *
-     * [ObserveCell.close] is `ExecutorService.shutdown()`: it returns at once
-     * and the thread exits only after its queue drains. Call
-     * [awaitDispatchers] to wait for that (computenet-cpybp).
+     * [ObserveCell.close] returns after graceful shutdown starts; call
+     * [awaitDispatchers] to wait for every accepted listener invocation to
+     * finish (computenet-cpybp / computenet-iltfm).
      */
     fun close() {
         closed.set(true)
@@ -510,12 +518,12 @@ class SocialGraph(
     }
 
     /**
-     * Waits, up to [timeoutMs] in total, for every dispatcher thread minted by
-     * a sink of this graph to terminate, and returns the names of any still
-     * alive at the deadline — empty on success (computenet-cpybp). Valid only
-     * after [close]: that is what guarantees no sink mints another dispatcher
-     * (`ObserveCell.dispatchIfOpen` refuses under the same lock `close` sets
-     * `closed` under), so the set enumerated here is final.
+     * Waits, up to [timeoutMs] in total, for every sink of this graph to report
+     * terminal dispatcher shutdown through [ObserveCell.awaitTermination], and
+     * returns the [CellRef.id] strings of sinks still draining at the deadline
+     * — empty on success. Valid only after [close], which terminally closes the
+     * existing sinks; [attach] terminally closes any in-flight admission that
+     * lands afterward, before it can register a listener.
      *
      * **Why a wait is needed at all** (measured 2026-09-25, darwin/arm64, a
      * throwaway probe against `SocialApp(source = SnbGenerator(42, 0.05))`):
@@ -531,47 +539,25 @@ class SocialGraph(
      * without broadcasting, so that queue is short. The wait stays: any
      * listener invocation can still be queued or running at `stop()`.)
      *
-     * **How the threads are found — a stated dependency on a kernel naming
-     * convention, not an API.** [ObserveCell] exposes no handle to its
-     * dispatcher and no way to await it, so this enumerates live threads named
-     * `observe-cell-<ref.id>` (`ObserveCell.newDispatcher`, Observe.kt) for
-     * this graph's sinks and joins them. Should that naming change, this finds
-     * nothing and returns empty without waiting; `SocialServerTest`'s
-     * dispatcher test, which selects the same threads by the same prefix,
-     * then fails to see any minted and goes red rather than passing silently.
-     * The proper seam is an `ObserveCell.awaitTermination`, a kernel change
-     * this demo does not make.
-     *
-     * **Not covered:** a sink the host re-activates after [close] (a
-     * `SupervisionPolicy.RESTART` landing mid-stop reopens it,
-     * `ObserveCell.reopen`) may mint a fresh dispatcher after this returns.
+     * Production shutdown does not enumerate JVM threads or depend on the
+     * dispatcher's diagnostic name. `SocialServerTest` deliberately keeps its
+     * independent thread-name witness so removing this wait still leaves a
+     * live dispatcher at the instant [civictech.demo.social.SocialApp.stop]
+     * returns and turns the test red.
      */
     fun awaitDispatchers(timeoutMs: Long): List<String> {
-        val names = allSinks().mapTo(HashSet()) { "observe-cell-${it.ref.id}" }
-        val dispatchers = liveThreads().filter { it.name in names }
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
-        for (thread in dispatchers) {
-            val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
-            if (remainingMs <= 0) break
-            thread.join(remainingMs)
+        require(timeoutMs >= 0) { "timeoutMs must not be negative (was $timeoutMs)" }
+        val started = System.nanoTime()
+        val survivors = mutableListOf<String>()
+        for (sink in allSinks()) {
+            val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+            val remainingMs = (timeoutMs - elapsedMs).coerceAtLeast(0)
+            if (!sink.awaitTermination(remainingMs)) survivors += sink.ref.id.toString()
         }
-        return dispatchers.filter { it.isAlive }.map { it.name }
+        return survivors
     }
 
     private fun allSinks(): List<ObserveCell<*, *>> =
         listOf(personSinks.values, forumSinks.values, messageSinks.values, authoredSinks.values)
             .flatMap { sinks -> sinks.map { it as ObserveCell<*, *> } }
-
-    /** Every live thread in the JVM, enumerated from the root thread group. */
-    private fun liveThreads(): List<Thread> {
-        var root = Thread.currentThread().threadGroup
-        while (root.parent != null) root = root.parent
-        var buffer = arrayOfNulls<Thread>(root.activeCount() * 2 + 64)
-        var n = root.enumerate(buffer, true)
-        while (n == buffer.size) {
-            buffer = arrayOfNulls(buffer.size * 2)
-            n = root.enumerate(buffer, true)
-        }
-        return buffer.take(n).filterNotNull()
-    }
 }

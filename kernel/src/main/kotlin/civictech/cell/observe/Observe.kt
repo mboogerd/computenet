@@ -32,6 +32,21 @@ import civictech.cell.data.view.SetView
 import civictech.cell.data.view.CountView
 import civictech.cell.data.view.TaggedMapView
 
+/** Await [executors] against one shared timeout budget. */
+internal fun awaitExecutorsTermination(
+    executors: Collection<ExecutorService?>,
+    timeoutMillis: Long,
+): Boolean {
+    require(timeoutMillis >= 0) { "timeoutMillis must not be negative (was $timeoutMillis)" }
+    val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    val started = System.nanoTime()
+    return executors.filterNotNull().distinct().all { executor ->
+        val remaining = timeoutNanos - (System.nanoTime() - started)
+        if (remaining <= 0L) executor.isTerminated
+        else executor.awaitTermination(remaining, TimeUnit.NANOSECONDS)
+    }
+}
+
 /**
  * The read/observe dual of the `graph { }` builder (spec
  * `observation-sink-materialized-edge`): a hosted sink that folds one (or more)
@@ -195,7 +210,7 @@ class ObserveCell<D : Any, S>(
     private var dispatcher: ExecutorService? = null
 
     /**
-     * A [close]d dispatcher awaiting hand-off: [reopen] does not mint a
+     * A deactivated dispatcher awaiting hand-off: [reopen] does not mint a
      * replacement eagerly (that would resurrect a thread for a sink that may
      * never dispatch again), so the superseded executor is parked here and the
      * *next* mint chains a drain-wait on it as its first task, preserving the
@@ -204,8 +219,10 @@ class ObserveCell<D : Any, S>(
      */
     private var draining: ExecutorService? = null
 
-    @Volatile
-    private var closed = false
+    private enum class Lifecycle { OPEN, CLOSED, DEACTIVATED }
+
+    /** Guarded by [lock], alongside dispatcher submission and lifecycle changes. */
+    private var lifecycle = Lifecycle.OPEN
 
     @Volatile
     private var latest: S = view.current()
@@ -242,7 +259,7 @@ class ObserveCell<D : Any, S>(
     }
 
     /**
-     * Submits [block] to [dispatcher] unless [close]d, minting the dispatcher
+     * Submits [block] to [dispatcher] only while open, minting the dispatcher
      * on first use; silently drops on a close race (no live listener to reach).
      *
      * **Must be called holding [lock]** — asserted, not merely documented,
@@ -253,7 +270,7 @@ class ObserveCell<D : Any, S>(
      */
     private fun dispatchIfOpen(block: () -> Unit) {
         check(Thread.holdsLock(lock)) { "dispatchIfOpen must be called under the sink lock" }
-        if (closed) return
+        if (lifecycle != Lifecycle.OPEN) return
         val target = dispatcher ?: newDispatcher().also { fresh ->
             dispatcher = fresh
             // First act of a post-[reopen] dispatcher: wait out the superseded
@@ -281,27 +298,38 @@ class ObserveCell<D : Any, S>(
     }
 
     /**
-     * T08 finding 4 lifecycle: stops [dispatcher] if one was ever minted (a
-     * never-observed sink has no thread to stop, so this is a pure flag flip).
-     * Idempotent. Wired into
-     * [onDeactivate] — the host already calls this on despawn (`Cell`'s own
-     * disposal hook) — so a despawned sink's dispatch thread does not
-     * outlive it; a caller that never despawns the sink (the common demo
-     * shape: the sink lives for the process) may call this directly at
-     * shutdown instead.
+     * Terminally closes this sink and gracefully shuts down [dispatcher] if one
+     * was ever minted. Idempotent. A later [onActivate] is deliberately a
+     * no-op: terminal close is the application-shutdown boundary, while
+     * [onDeactivate] is the reopenable host pause used by restart and migration.
      */
     fun close() {
         val doomed = synchronized(lock) {
-            if (closed) return
-            closed = true
+            if (lifecycle == Lifecycle.CLOSED) return
+            lifecycle = Lifecycle.CLOSED
             dispatcher
         }
         doomed?.shutdown()
     }
 
     /**
-     * Reopens a [close]d sink so it can dispatch again. Idempotent, and a
-     * no-op on an already-open sink.
+     * Waits for every listener invocation accepted before terminal [close] to
+     * return. The shared timeout includes both the current dispatcher and a
+     * predecessor parked by a deactivate/activate cycle.
+     *
+     * @throws IllegalStateException if terminal [close] has not happened.
+     */
+    fun awaitTermination(timeoutMillis: Long): Boolean {
+        val executors = synchronized(lock) {
+            check(lifecycle == Lifecycle.CLOSED) { "awaitTermination requires close() first" }
+            listOf(dispatcher, draining)
+        }
+        return awaitExecutorsTermination(executors, timeoutMillis)
+    }
+
+    /**
+     * Reopens a sink paused by [onDeactivate]. Idempotent, and a no-op on an
+     * already-open or terminally [close]d sink.
      *
      * Necessary because [onDeactivate] is **not** only a despawn hook:
      * `ManagedHost` calls it on the `SupervisionPolicy.RESTART` path (paired
@@ -320,22 +348,22 @@ class ObserveCell<D : Any, S>(
      * the new one, which is the same "delays only its own sink" property,
      * unchanged.
      *
-     * The replacement is *not* minted here: reopen only clears the closed flag
-     * and parks the superseded executor in [draining], leaving the mint to the
-     * next actual submission ([dispatchIfOpen], which chains the drain-wait
-     * there). A restart or migration of a sink nobody observes therefore stays
-     * thread-free, exactly as its first activation was.
+     * The replacement is *not* minted here: reopen only restores the open
+     * lifecycle and parks the superseded executor in [draining], leaving the
+     * mint to the next actual submission ([dispatchIfOpen], which chains the
+     * drain-wait there). A restart or migration of a sink nobody observes
+     * therefore stays thread-free, exactly as its first activation was.
      */
     private fun reopen() {
         synchronized(lock) {
-            if (!closed) return
-            // Whatever close() shut down becomes the next mint's predecessor.
+            if (lifecycle != Lifecycle.DEACTIVATED) return
+            // Whatever onDeactivate() shut down becomes the next mint's predecessor.
             // Only overwrite when there is something to hand off, so a
             // close/reopen cycle that dispatches nothing in between cannot
             // lose an earlier still-draining executor.
             dispatcher?.let { draining = it }
             dispatcher = null
-            closed = false
+            lifecycle = Lifecycle.OPEN
         }
     }
 
@@ -344,7 +372,12 @@ class ObserveCell<D : Any, S>(
     }
 
     override fun onDeactivate(ctx: CellContext) {
-        close()
+        val doomed = synchronized(lock) {
+            if (lifecycle != Lifecycle.OPEN) return
+            lifecycle = Lifecycle.DEACTIVATED
+            dispatcher
+        }
+        doomed?.shutdown()
     }
 }
 
@@ -637,6 +670,20 @@ class CompositeSink internal constructor(
             dispatcher
         }
         doomed?.shutdown()
+    }
+
+    /**
+     * Waits for this composite's listener queue to finish after [close].
+     * Member sinks have independent lifecycles and are not included.
+     *
+     * @throws IllegalStateException if [close] has not happened.
+     */
+    fun awaitTermination(timeoutMillis: Long): Boolean {
+        val executor = synchronized(lock) {
+            check(closed) { "awaitTermination requires close() first" }
+            dispatcher
+        }
+        return awaitExecutorsTermination(listOf(executor), timeoutMillis)
     }
 }
 
