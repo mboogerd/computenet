@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.Journal
 import civictech.cell.graph.TopoEvent
+import civictech.cell.link.Interest
 import java.io.File
 import java.util.IdentityHashMap
 import java.util.UUID
@@ -31,6 +32,11 @@ import java.util.concurrent.CompletableFuture
  *   [TopoEvent.FamilyKey] in the key cell's own selected journal before the
  *   cell is spawned. Recovery therefore encounters the key before any of its
  *   frames and spawns it under the deterministic ref in journal order;
+ * - **optional interest-driven membership** — with [spawnOnInterest], every
+ *   bounded [Interest.Ranges] admitted by this host's registry asynchronously
+ *   materializes its keys. This path records membership after the budgeted
+ *   spawn succeeds, inside that same management task, so a refusal owns
+ *   neither an in-memory key nor a durable key record;
  * - **checkpoint-safe membership** — the family contributes its recorded keys
  *   to each journal's topology fold, so compaction preserves membership.
  *
@@ -50,6 +56,7 @@ class KeyedCells<K : Any>(
     private val factory: (K, CellRef) -> Cell,
     private val render: (K) -> String = { it.toString() },
     private val parse: (String) -> K = { @Suppress("UNCHECKED_CAST") (it as K) },
+    private val spawnOnInterest: Boolean = false,
 ) {
     private val lock = Any()
 
@@ -65,8 +72,18 @@ class KeyedCells<K : Any>(
     /** Keys whose topology provider belongs to each selected journal (journal identity is semantic). */
     private val keysByJournal = IdentityHashMap<Journal, LinkedHashSet<K>>()
 
+    /** Kept for the family's lifetime so the registry subscription can be detached by a future lifecycle owner. */
+    private val interestSubscription: AutoCloseable?
+
     init {
+        val registry = if (spawnOnInterest) {
+            host.interestRegistry()
+                ?: throw IllegalStateException("family '$namespace': spawnOnInterest needs a host with a registry")
+        } else {
+            null
+        }
         host.registerFamily(namespace, this)
+        interestSubscription = registry?.onInterest { _, interest -> spawnForInterest(interest) }
     }
 
     /**
@@ -86,6 +103,41 @@ class KeyedCells<K : Any>(
      * share the same future, including a factory that re-enters for its own key.
      */
     fun spawnAsync(key: K): CompletableFuture<Cell> {
+        return spawn(key, recordAfterSpawn = false)
+    }
+
+    /** Spawn one key from an admitted interest, recording membership only after host admission succeeds. */
+    private fun spawnForInterest(key: K): CompletableFuture<Cell> =
+        spawn(key, recordAfterSpawn = true)
+
+    /** Translate one bounded interest into the keys this family owns. */
+    private fun spawnForInterest(interest: Interest): CompletableFuture<Set<CellRef>> =
+        try {
+            when (interest) {
+                Interest.Empty -> CompletableFuture.completedFuture(emptySet())
+                is Interest.Ranges -> {
+                    val keys = linkedSetOf<K>()
+                    interest.ranges.forEach { range ->
+                        for (value in range.lo until range.hi) keys += parse(value.toString())
+                    }
+                    val spawns = keys.map(::spawnForInterest)
+                    if (spawns.isEmpty()) {
+                        CompletableFuture.completedFuture(emptySet())
+                    } else {
+                        CompletableFuture.allOf(*spawns.toTypedArray()).thenApply {
+                            spawns.mapTo(linkedSetOf()) { it.join().ref }
+                        }
+                    }
+                }
+                else -> CompletableFuture.failedFuture(
+                    InterestSpawnRefused(namespace, interest.javaClass.simpleName),
+                )
+            }
+        } catch (failure: Exception) {
+            CompletableFuture.failedFuture(failure)
+        }
+
+    private fun spawn(key: K, recordAfterSpawn: Boolean): CompletableFuture<Cell> {
         lateinit var result: CompletableFuture<Cell>
         var cell: Cell? = null
         var fresh = false
@@ -102,15 +154,35 @@ class KeyedCells<K : Any>(
             try {
                 val prepared = factory(key, refFor(key))
                 cell = prepared
-                fresh = known.add(key)
-                if (fresh) {
-                    recorded = host.recordTopology(
-                        prepared.ref,
-                        TopoEvent.FamilyKey(namespace, render(key)),
-                        prepared,
-                    ) { journal -> rememberForCheckpoint(journal, key) } != null
+                if (recordAfterSpawn) {
+                    fresh = key !in known
+                    hostSpawn = host.spawnAsync(prepared) {
+                        synchronized(lock) {
+                            if (fresh && known.add(key)) {
+                                try {
+                                    recorded = host.recordTopology(
+                                        prepared.ref,
+                                        TopoEvent.FamilyKey(namespace, render(key)),
+                                        prepared,
+                                    ) { journal -> rememberForCheckpoint(journal, key) } != null
+                                } catch (failure: Throwable) {
+                                    forgetUnrecorded(key)
+                                    throw failure
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    fresh = known.add(key)
+                    if (fresh) {
+                        recorded = host.recordTopology(
+                            prepared.ref,
+                            TopoEvent.FamilyKey(namespace, render(key)),
+                            prepared,
+                        ) { journal -> rememberForCheckpoint(journal, key) } != null
+                    }
+                    hostSpawn = host.spawnAsync(prepared)
                 }
-                hostSpawn = host.spawnAsync(prepared)
             } catch (failure: Throwable) {
                 pending.remove(key)
                 if (fresh && !recorded) forgetUnrecorded(key)
