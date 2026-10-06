@@ -21,6 +21,7 @@ import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -28,6 +29,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.identity
 import civictech.cell.replication.Replication
+import civictech.cell.verify.InvariantCell
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -74,7 +76,9 @@ class ApplyContext(
     private val activeLinks = mutableMapOf<TopologyLinkKey, Link>()
     private val cells = ConcurrentHashMap<CellRef, Cell>()
     private val familyInstances = mutableMapOf<String, KeyedCells<*>>()
+    private val recoveredEvolutionCandidates = linkedSetOf<CellRef>()
     private var replayDepth = 0
+    private var checkpointRehandshakeDepth = 0
 
     init {
         topology?.let { journal ->
@@ -106,22 +110,90 @@ class ApplyContext(
      * Apply only topology records from [journal]. Checkpoints and frames remain untouched; this
      * is the offline topology seam used by consumers that need the fold but not a live replay.
      */
-    fun replayTopology(journal: Journal): TopologyFold = replaying {
-        journal.replay().forEach { record ->
-            val decoded = JournalRecords.decode(record)
-            if (decoded is DecodedJournalRecord.Topology) decoded.events.forEach(::apply)
+    fun replayTopology(journal: Journal): TopologyFold {
+        replaying {
+            journal.replay().forEach { record ->
+                val decoded = JournalRecords.decode(record)
+                if (decoded is DecodedJournalRecord.Topology) decoded.events.forEach(::apply)
+            }
         }
-        live()
+        return live()
     }
 
-    /** Suppress topology recording for the dynamic extent of a recovery replay. */
+    /**
+     * Suppress topology recording for the dynamic extent of a recovery replay, then abort any
+     * recovered evolution whose imperative judge/handle died with the prior process. Cleanup
+     * runs after the final replay record, while [ManagedHost]'s recovery record-loop gate is
+     * still held, so a later Promote record wins and data cannot race the abort.
+     */
     internal fun <T> replaying(action: () -> T): T {
+        val outermost = replayDepth == 0
+        if (outermost) recoveredEvolutionCandidates.clear()
         replayDepth++
+        var completed = false
         return try {
-            action()
+            action().also { completed = true }
         } finally {
             replayDepth--
+            if (outermost) {
+                try {
+                    if (completed) abortRecoveredEvolutions()
+                } finally {
+                    recoveredEvolutionCandidates.clear()
+                }
+            }
         }
+    }
+
+    /**
+     * A candidate recorded by [markRecoveredEvolutionTap] but left shadowed after the complete
+     * journal has replayed is an interrupted evolution. A completed promotion has already folded
+     * its candidate to `shadow = false`. Write the whole reversal before applying any part of it
+     * so another crash deterministically finishes the same abort. Gate colour is deliberately
+     * untouched.
+     */
+    private fun abortRecoveredEvolutions() {
+        val recovered = live()
+        recovered.spawns.values
+            .filter { it.shadow && it.ref in recoveredEvolutionCandidates }
+            .mapNotNull { spawn ->
+                val taps = recovered.links.values.filter { edge ->
+                    edge.to == spawn.ref && edge.options.staged && isEvolutionTap(edge)
+                }
+                taps.takeIf { it.isNotEmpty() }?.let { spawn.ref to it }
+            }
+            .forEach { (candidate, taps) ->
+                val unlinks = taps.map { edge ->
+                    TopoEvent.Unlink(edge.from, edge.outlet, edge.to, edge.inlet)
+                }
+                journalTopology(unlinks + TopoEvent.Despawn(candidate))
+                unlinks.forEach(::applyUnlink)
+                applyDespawn(TopoEvent.Despawn(candidate))
+            }
+    }
+
+    private fun isEvolutionTap(edge: TopoEvent.Connect): Boolean {
+        val gate = cells[edge.from] as? TrafficLightApi<*> ?: return false
+        val outlet = gate.dataOutlet as? FanOutlet<*> ?: return false
+        val identity = outlet.identity() ?: return false
+        return identity.owner == edge.from && identity.name == edge.outlet
+    }
+
+    /**
+     * Evolve installs its write-ahead tap only after the declarative candidate/gate graph has
+     * applied, so the shadow's invariant edge is already in the fold when this record replays.
+     * An ordinary reusable promotion shadow is constructed in graph order (inbound link first)
+     * and is not an interrupted EvolutionHandle. Re-handshaking a checkpoint sees the complete
+     * fold too, so it is explicitly excluded rather than mistaken for a new tap record.
+     */
+    private fun markRecoveredEvolutionTap(event: TopoEvent.Connect) {
+        if (replayDepth == 0 || checkpointRehandshakeDepth > 0 || !isEvolutionTap(event)) return
+        val before = live()
+        if (before.spawns[event.to]?.shadow != true) return
+        val feedsInvariant = before.links.values.any { edge ->
+            edge.from == event.to && cells[edge.to] is InvariantCell<*, *>
+        }
+        if (feedsInvariant) recoveredEvolutionCandidates += event.to
     }
 
     /** One write-ahead topology record for one GraphSpec delta or one builder operation. */
@@ -161,10 +233,15 @@ class ApplyContext(
      * state; an uncompacted frame tail needs no such nudge because its replay emits normally.
      */
     override fun checkpointRestored() {
-        live().links.values.forEach { event ->
-            val key = TopologyLinkKey.of(event)
-            synchronized(activeLinks) { activeLinks.remove(key) }?.unlink()
-            applyConnect(event)
+        checkpointRehandshakeDepth++
+        try {
+            live().links.values.forEach { event ->
+                val key = TopologyLinkKey.of(event)
+                synchronized(activeLinks) { activeLinks.remove(key) }?.unlink()
+                applyConnect(event)
+            }
+        } finally {
+            checkpointRehandshakeDepth--
         }
     }
 
@@ -202,6 +279,7 @@ class ApplyContext(
     }
 
     internal fun applyConnect(event: TopoEvent.Connect): Link? {
+        markRecoveredEvolutionTap(event)
         val key = TopologyLinkKey.of(event)
         val link = when (
             val result = host.managementInlet.call.connectStep(

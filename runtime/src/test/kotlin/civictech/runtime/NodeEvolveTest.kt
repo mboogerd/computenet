@@ -10,12 +10,15 @@ import civictech.cell.evolve.Evolve
 import civictech.cell.evolve.ObservationWindow
 import civictech.cell.evolve.PromotionPolicy
 import civictech.cell.evolve.StateMigrating
+import civictech.cell.host.DecodedJournalRecord
+import civictech.cell.host.JournalRecords
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.PromoteStep
 import civictech.cell.graph.SpawnStep
+import civictech.cell.graph.TopoEvent
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.PeerId
@@ -125,6 +128,56 @@ class NodeEvolveTest {
             assertEquals(beforeClose + listOf(15L, 21L), collector(third).received.toList())
         } finally {
             third?.close()
+            second?.close()
+            first?.close()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `a node closed while shadowing aborts the recovered evolution and keeps production serving`() {
+        singleCaptured.clear()
+        val logicalId = UUID.randomUUID()
+        val manifest = manifest("interrupted-shadow")
+        val spec = baseSpec(logicalId)
+        var first: Runtime.Node? = null
+        var second: Runtime.Node? = null
+        try {
+            first = Runtime.boot(manifest, "solo", spec)
+            gate(first).controlInlet.call.setGreen()
+            val applied = first.apply(evolutionDelta(logicalId))
+            val handle = checkNotNull(applied.evolutions["evo"])
+            val candidate = applied.refs.getValue("candidate")
+
+            feed(first, 1)
+            feed(first, 2)
+            first.mainHost.quiescence().await(10_000, "interrupted shadow input")
+            assertEquals(EvolutionHandle.State.SHADOWING, handle.state)
+            val beforeClose = collector(first).received.toList()
+            assertEquals(listOf(1L, 3L), beforeClose)
+            first.close()
+
+            second = Runtime.boot(manifest, "solo", spec)
+            assertTrue(second.recovered)
+            assertTrue("incumbent" in second.refs, "recovery removed the serving incumbent")
+            assertFalse("candidate" in second.refs, "recovery retained an unjudged shadow")
+
+            val cleanup = topologyEvents(second)
+            assertTrue(
+                cleanup.filterIsInstance<TopoEvent.Unlink>().any { it.to == candidate },
+                "recovery did not journal the interrupted evolution's tap unlink",
+            )
+            assertTrue(
+                cleanup.filterIsInstance<TopoEvent.Despawn>().any { it.ref == candidate },
+                "recovery did not journal the interrupted evolution's shadow despawn",
+            )
+            assertEquals(beforeClose, collector(second).received.toList())
+
+            gate(second).controlInlet.call.setGreen()
+            feed(second, 3)
+            second.mainHost.quiescence().await(10_000, "incumbent after interrupted evolution recovery")
+            assertEquals(beforeClose + 6L, collector(second).received.toList())
+        } finally {
             second?.close()
             first?.close()
         }
@@ -257,6 +310,11 @@ class NodeEvolveTest {
     private fun feed(node: Runtime.Node, value: Int) {
         node.mainHost.lookup<RelayProxy>(node.refs.getValue("relay"))!!.inlet.call.provide(value)
     }
+
+    private fun topologyEvents(node: Runtime.Node): List<TopoEvent> = node.journals.getValue("main").replay()
+        .map(JournalRecords::decode)
+        .filterIsInstance<DecodedJournalRecord.Topology>()
+        .flatMap { it.events }
 
     @Suppress("UNCHECKED_CAST")
     private fun gate(node: Runtime.Node): TrafficLightCell<Consumer<Int>> =
