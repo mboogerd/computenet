@@ -4,8 +4,6 @@ import civictech.agora.AgoraService
 import civictech.cell.CellRef
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.data.SetOps
-import civictech.cell.data.delta.MapDelta
-import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -13,9 +11,9 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.durability.Journal
 import civictech.cell.graph.ApplyContext
-import civictech.cell.link.LinkResult
-import civictech.cell.observe.ObserveCell
-import civictech.cell.observe.View
+import civictech.cell.observe.Observation
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import civictech.dialogue.apply.BindingTable
 import civictech.dialogue.apply.GraphApplier
 import civictech.dialogue.apply.ReconcileReport
@@ -128,7 +126,8 @@ class DialogueRuntime(
         scheduler ?: VirtualThreadScheduler("DialogueRuntime-${UUID.randomUUID()}")
 
     private val volatileRefs: Set<CellRef> =
-        (DERIVED_HANDLES.map { pipelineRef(it) } + SINK_NAMES.map { sinkRef(it) }).toSet()
+        (DERIVED_HANDLES.map { pipelineRef(it) } +
+            (SINK_NAMES + SINK_GROUP_NAMES).map { sinkRef(it) }).toSet()
 
     private val journal: Journal? = KeyedCells.hostJournal(journalDir)
 
@@ -174,56 +173,17 @@ class DialogueRuntime(
     // (5) the applier, which spawns its own deterministic-ref sinks.
     val applier = GraphApplier(host, refs, service, bindings)
 
+    private val observation: Observation = host.observation(groupRef = ::sinkRef) {
+        set("utterances", refs.utterances)
+        map("claimProvenance", refs.claimProvenance.ref)
+        map("relationProvenance", refs.relationProvenance.ref)
+    }
+
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
+
     /** The ingress handle the driver writes through. */
     private val utteranceOps: SetOps<Utterance> = DialoguePipeline.utteranceOps(host, refs)
-
-    // (6) the recovery-only ingress sink. Spawned in every mode (its ref must
-    //     be stable across restarts whether or not this run recovers), read
-    //     only by completeRecovery().
-    private val utterancesSink: ObserveCell<SetDelta<Utterance>, Set<Utterance>> =
-        sink("utterances", refs.utterances.ref, View.set())
-
-    // (6b) the two ProvenanceIndex read sinks (2aw.5-D9, [AGO1-PROV-01]).
-    //
-    //      Spawned here rather than in GraphApplier because they are a *read*
-    //      surface, not part of the write path: the applier deliberately holds
-    //      only what it reconciles from. Both names are in SINK_NAMES, so both
-    //      refs are volatile: their MapDelta payloads carry
-    //      Claim/RelationProvenanceEntry, which have no polymorphic WireCodec
-    //      registration, so a journaled frame of theirs could not encode.
-    //      See SINK_NAMES for why that is design intent here rather than an
-    //      enforced guard — a linked sink's frames never reach the WAL to be
-    //      encoded in the first place.
-    private val claimProvenanceSink:
-        ObserveCell<MapDelta<ClaimKey, Set<ClaimProvenanceEntry>>, Map<ClaimKey, Set<ClaimProvenanceEntry>>> =
-        sink("claimProvenance", refs.claimProvenance.ref, View.map())
-
-    private val relationProvenanceSink:
-        ObserveCell<MapDelta<RelationKey, Set<RelationProvenanceEntry>>, Map<RelationKey, Set<RelationProvenanceEntry>>> =
-        sink("relationProvenance", refs.relationProvenance.ref, View.map())
-
-    /**
-     * Spawn one [ObserveCell] under the deterministic ref [sinkRef] gives
-     * [name] and connect it to [source]'s outlet — `GraphApplier.sink`'s
-     * idiom, with the same rationale for the deterministic ref (a journalled
-     * host replaying frames addressed to last run's random sink ref would
-     * dead-letter every one of them).
-     *
-     * Every name passed here should also be in [SINK_NAMES], so [isDurable]
-     * calls the sink volatile. Note that omitting one does **not** fail
-     * loudly — see [SINK_NAMES].
-     */
-    private fun <D : Any, S> sink(name: String, source: CellRef, view: View<D, S>): ObserveCell<D, S> {
-        val cell = ObserveCell(view, sinkRef(name))
-        val management = host.managementInlet.call
-        management.spawn(cell)
-        val result = management.connect(source, "outlet", cell.ref, "inlet")
-        check(result !is LinkResult.Rejected) {
-            "DialogueRuntime: link $source.outlet -> $name sink rejected: " +
-                "${(result as LinkResult.Rejected).reason}"
-        }
-        return cell
-    }
 
     /**
      * The utterance ids justifying claim [key] ([AGO1-PROV-01], read side).
@@ -232,15 +192,17 @@ class DialogueRuntime(
      * distinct from an empty set, which the caller can then report as "bound,
      * no sources" rather than "unknown key" ([AGO1-PROV-04]'s distinction).
      *
-     * Safe to call from an HTTP thread: [ObserveCell.current] is a `@Volatile`
-     * immutable snapshot.
+     * Safe to call from an HTTP thread: [observation] exposes an immutable
+     * point-consistent snapshot.
      */
     fun claimProvenance(key: ClaimKey): Set<String>? =
-        claimProvenanceSink.current()[key]?.let(ProvenanceIndex::claimProvenance)
+        observation.get<Map<ClaimKey, Set<ClaimProvenanceEntry>>>("claimProvenance")[key]
+            ?.let(ProvenanceIndex::claimProvenance)
 
     /** The relation-leg mirror of [claimProvenance]. */
     fun relationProvenance(key: RelationKey): Set<String>? =
-        relationProvenanceSink.current()[key]?.let(ProvenanceIndex::relationProvenance)
+        observation.get<Map<RelationKey, Set<RelationProvenanceEntry>>>("relationProvenance")[key]
+            ?.let(ProvenanceIndex::relationProvenance)
 
     private var recovered: TranscriptSource? =
         if (journalDir == null) TranscriptSource(utteranceOps, transcript, recovered = emptyList()) else null
@@ -285,7 +247,7 @@ class DialogueRuntime(
         if (journalDir == null || recovered != null) return
         service.repairTornRemovals()
         service.rebuildIndex()
-        recovered = TranscriptSource(utteranceOps, transcript, recovered = utterancesSink.current())
+        recovered = TranscriptSource(utteranceOps, transcript, recovered = observation.get("utterances"))
     }
 
     /**
@@ -421,6 +383,12 @@ class DialogueRuntime(
          */
         private val SINK_NAMES =
             listOf("claims", "relations", "stances", "utterances", "claimProvenance", "relationProvenance")
+
+        /** Group ids produced by the two equal-root observation registrations above. */
+        private val SINK_GROUP_NAMES = listOf(
+            "claims+relations+stances",
+            "utterances+claimProvenance+relationProvenance",
+        )
 
         /**
          * The pipeline's cell-ref namespace. Fixed, not a parameter: two runs

@@ -14,6 +14,8 @@ import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.observe.ObservationFrame
+import civictech.cell.observe.observation
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
@@ -49,8 +51,6 @@ import kotlin.io.path.extension
 import kotlin.io.path.nameWithoutExtension
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
-import civictech.cell.data.view.SetHubCell
-import civictech.cell.data.view.MapHubCell
 
 /**
  * backlog-triage: agents submit backlog features and pairwise value
@@ -171,6 +171,9 @@ val ALGOS = listOf("mean", "elo", "bt", "trueskill", "glicko", "wenglin", "wilso
 private const val HOST_JOURNAL_ID = "host"
 internal const val TRIAGE_JOURNAL_FILE = "host.journal"
 
+@Suppress("UNCHECKED_CAST")
+private fun <T> ObservationFrame.view(name: String): T = views.getValue(name) as T
+
 /** The one host/context pair that owns an optional backlog-triage journal. */
 private data class TriageRuntime(
     val registry: LocationRegistry,
@@ -220,7 +223,6 @@ class TriageApp(
     private val runtime = TriageRuntime.create(journalPath)
     private val registry = runtime.registry
     private val host = runtime.host
-    private val manage = host.managementInlet.call
     private val refs = runtime.refs
     private val featureOps = host.lookup(refs.features)!!.inlet.call
     private val prefOps = host.lookup(refs.prefs)!!.inlet.call
@@ -245,6 +247,17 @@ class TriageApp(
 
     private val shell = DemoShell(port)
 
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
+
+    private val observation = host.observation {
+        set("features", refs.features)
+        set("prefs", refs.prefs)
+        map("score", refs.score)
+        map("votes", refs.votes)
+        refs.ratings.forEach { (algo, ref) -> map("rating:$algo", ref) }
+    }
+
     val boundPort: Int get() = shell.boundPort
 
     /** Non-null once [start] has run with an opt-in `--inspect-port` (`InspectorFlag`). */
@@ -257,24 +270,17 @@ class TriageApp(
             host.checkpoint(checkNotNull(runtime.journal))
         }
 
-        fun <E> setHub(ref: CellRef, sink: (Set<E>) -> Unit) {
-            val hub = SetHubCell<E>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-
-        fun <K, V> mapHub(ref: CellRef, sink: (Map<K, V>) -> Unit) {
-            val hub = MapHubCell<K, V>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-
-        setHub<String>(refs.features.ref) { features = it }
-        setHub<Pref>(refs.prefs.ref) { prefs = it }
-        mapHub<String, Double>(refs.score) { score = it }
-        mapHub<String, Long>(refs.votes) { votes = it }
-        refs.ratings.forEach { (algo, ref) ->
-            mapHub<String, Double>(ref) { algoScores[algo] = it }
+        observation.onChange { frame ->
+            synchronized(state) {
+                features = frame.view("features")
+                prefs = frame.view("prefs")
+                score = frame.view("score")
+                votes = frame.view("votes")
+                refs.ratings.keys.forEach { algo ->
+                    algoScores[algo] = frame.view("rating:$algo")
+                }
+            }
+            broadcast()
         }
 
         shell.route("/") { ex ->

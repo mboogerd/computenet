@@ -2,11 +2,11 @@ package civictech.dialogue.apply
 
 import civictech.agora.AgoraService
 import civictech.cell.CellRef
-import civictech.cell.data.delta.MapDelta
 import civictech.cell.host.ManagedHost
-import civictech.cell.link.LinkResult
-import civictech.cell.observe.ObserveCell
-import civictech.cell.observe.View
+import civictech.cell.observe.Observation
+import civictech.cell.observe.ObservationFrame
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import civictech.dialogue.ClaimKey
 import civictech.dialogue.DialogueRuntime
 import civictech.dialogue.DialoguePipeline
@@ -14,6 +14,9 @@ import civictech.dialogue.RelationKey
 import civictech.dialogue.mint.ClaimAggregate
 import civictech.dialogue.mint.RelationAggregate
 import civictech.dialogue.mint.StanceAggregate
+
+@Suppress("UNCHECKED_CAST")
+private fun <T> ObservationFrame.view(name: String): T = views.getValue(name) as T
 
 /**
  * Pipeline stage 8 (epic computenet-2aw §2.2, §2.5 "Stage 8 sink",
@@ -148,49 +151,14 @@ class GraphApplier(
      */
     private val appliedStances = mutableMapOf<Pair<String, ClaimKey>, Double>()
 
-    private val claimSink = sink("claims", refs.canonicalClaims.ref, View.map<ClaimKey, ClaimAggregate>())
-    private val relationSink =
-        sink("relations", refs.canonicalRelations.ref, View.map<RelationKey, RelationAggregate>())
-    private val stanceSink =
-        sink("stances", refs.projectedStances.ref, View.map<Pair<String, ClaimKey>, StanceAggregate>())
-
-    /**
-     * Spawn one [ObserveCell] under a **deterministic** ref and connect it to
-     * [source]'s outlet.
-     *
-     * The ref matters: `ObserveCell`'s default is `CellRef(randomUUID())`, and
-     * a journalled host replaying frames addressed to last run's random sink
-     * ref would dead-letter every one of them — the same hazard
-     * `AgoraService.hub`'s "deterministic ref: journaled hub frames re-deliver
-     * after a restart" comment records. `dialogue:sink:` is disjoint from
-     * `BindingTable`'s `dialogue:claim:`/`dialogue:relation:` prefixes, from
-     * the pipeline's own `$namespace:$handle` refs, and from `agora:hub`.
-     *
-     * The ref is derived from [DialogueRuntime.sinkRef] rather than
-     * re-literalizing `dialogue:sink:$name` here: `DialogueRuntime` uses the
-     * same prefix, via [DialogueRuntime.SINK_PREFIX], to build `volatileRefs`
-     * and decide [DialogueRuntime.isDurable]. A second, independent literal
-     * would silently drift out of `volatileRefs` if `SINK_PREFIX` ever
-     * changed, making these sinks durable and routing `MapDelta` payloads
-     * over a non-`@Serializable` vocabulary through the journal
-     * (computenet-oy26).
-     *
-     * No `onChange` listener is registered here — see the class doc.
-     */
-    private fun <K, V> sink(
-        name: String,
-        source: CellRef,
-        view: View<MapDelta<K, V>, Map<K, V>>,
-    ): ObserveCell<MapDelta<K, V>, Map<K, V>> {
-        val cell = ObserveCell(view, DialogueRuntime.sinkRef(name))
-        val management = host.managementInlet.call
-        management.spawn(cell)
-        val result = management.connect(source, "outlet", cell.ref, "inlet")
-        check(result !is LinkResult.Rejected) {
-            "GraphApplier: link $source.outlet -> $name sink rejected: ${(result as LinkResult.Rejected).reason}"
-        }
-        return cell
+    private val observation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        map("claims", refs.canonicalClaims.ref)
+        map("relations", refs.canonicalRelations.ref)
+        map("stances", refs.projectedStances.ref)
     }
+
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
 
     /** The claim keys currently bound — [AGO1-APPLY-07]'s "bound" half. */
     fun boundClaims(): Set<ClaimKey> = bindings.boundClaims()
@@ -199,13 +167,13 @@ class GraphApplier(
     fun boundRelations(): Set<RelationKey> = bindings.boundRelations()
 
     /** The canonical claim snapshot the next [reconcile] would read. */
-    fun observedClaims(): Map<ClaimKey, ClaimAggregate> = claimSink.current()
+    fun observedClaims(): Map<ClaimKey, ClaimAggregate> = observation.get("claims")
 
     /** The canonical relation snapshot the next [reconcile] would read. */
-    fun observedRelations(): Map<RelationKey, RelationAggregate> = relationSink.current()
+    fun observedRelations(): Map<RelationKey, RelationAggregate> = observation.get("relations")
 
     /** The projected-stance snapshot the next [reconcile] would read. */
-    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> = stanceSink.current()
+    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> = observation.get("stances")
 
     /**
      * Apply the current canonical snapshots to the agora graph and return
@@ -218,9 +186,10 @@ class GraphApplier(
      * this method does not throw on a rejection.
      */
     fun reconcile(): ReconcileReport {
-        val claims = claimSink.current()
-        val relations = relationSink.current()
-        val stances = stanceSink.current()
+        val frame = observation.current()
+        val claims: Map<ClaimKey, ClaimAggregate> = frame.view("claims")
+        val relations: Map<RelationKey, RelationAggregate> = frame.view("relations")
+        val stances: Map<Pair<String, ClaimKey>, StanceAggregate> = frame.view("stances")
 
         val ops = mutableListOf<ApplyOp>()
         val failures = mutableListOf<ApplyFailure>()
