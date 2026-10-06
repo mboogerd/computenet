@@ -59,6 +59,60 @@ class AlignedFrameTest {
         }
 
     @Test
+    fun `canonical observation partitions shopping views by equal roots`() {
+        val app = DemoApp(port = 0).start()
+        try {
+            assertEquals(
+                setOf("items+produce", "votes", "wanted"),
+                app.observationGroups,
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `replication keeps shared observation in its own root group`() {
+        val app = DemoApp(port = 0, replicate = true).start()
+        try {
+            assertEquals(
+                setOf("items+produce", "votes", "wanted", "shared"),
+                app.observationGroups,
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `item-only ops leave the votes group frontier unchanged`() {
+        val app = DemoApp(port = 0).start()
+        try {
+            val base = "http://localhost:${app.boundPort}"
+            val probe = HttpProbe(base)
+
+            // Establish a non-empty votes frontier, then advance only the item
+            // writer. The independent votes group must not move with those ops.
+            probe.post("user=tester&action=vote&item=banana")
+            awaitSseData(base + "/events", timeoutMs = 5_000) { "\"banana\"" in it }
+            val afterVote = app.observationFrontier("votes")
+
+            probe.post("user=tester&action=add&item=apples")
+            awaitSseData(base + "/events", timeoutMs = 5_000) { "\"apples\"" in it }
+            val afterFirstItem = app.observationFrontier("votes")
+
+            probe.post("user=tester&action=add&item=pears")
+            awaitSseData(base + "/events", timeoutMs = 5_000) { "\"pears\"" in it }
+            val afterSecondItem = app.observationFrontier("votes")
+
+            assertEquals(afterVote, afterFirstItem, "an item-only op advanced the votes group frontier")
+            assertEquals(afterFirstItem, afterSecondItem, "a second item-only op advanced the votes group frontier")
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
     fun `an in-range add settles as one aligned frame with both fields changed`() {
         val app = DemoApp(port = 0).start()
         try {
