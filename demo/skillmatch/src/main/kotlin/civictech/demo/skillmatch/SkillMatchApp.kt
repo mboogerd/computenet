@@ -12,11 +12,8 @@ import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.observe.AlignedCompositeCell
-import civictech.cell.observe.ObservationSink
-import civictech.cell.observe.View
-import civictech.cell.observe.observe
-import civictech.cell.observe.observeAligned
+import civictech.cell.observe.Observation
+import civictech.cell.observe.observation
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
@@ -243,19 +240,16 @@ class SkillMatchApp(port: Int = 8080) {
     private val candOps = host.lookup(refs.candSkills)!!.inlet.call
     private val jobOps = host.lookup(refs.jobSkills)!!.inlet.call
 
-    // The raw inputs have different root sets, so they stay point-consistent.
-    private val candSkills: ObservationSink<Set<CandidateSkill>> =
-        host.observe(refs.candSkills.ref, View.set<CandidateSkill>())
-    private val jobSkills: ObservationSink<Set<JobSkill>> =
-        host.observe(refs.jobSkills.ref, View.set<JobSkill>())
-
+    // The raw inputs have different root sets, so they stay in separate groups.
     // These four views sit over ungated JoinSetCell/SemiJoinCell/LookupJoinCell/
     // CombineLatestCell instances, which [KE2-09] (computenet-lw0mv) rejects at
     // build. Opting out per view preserves this demo's observable behaviour;
-    // the known intra-wave tear remains visible through alignedBufferedWaves.
+    // the known intra-wave tear remains visible through bufferedWaves.
     // Gating these cells with emitOnFrontier would change the frame shape and
     // belongs to the separate operator follow-up.
-    private val aligned: AlignedCompositeCell = host.observeAligned {
+    private val observation: Observation = host.observation {
+        set("candSkills", refs.candSkills.ref)
+        set("jobSkills", refs.jobSkills.ref)
         unchecked("matches")
         unchecked("gap")
         unchecked("qualification")
@@ -267,7 +261,10 @@ class SkillMatchApp(port: Int = 8080) {
     }
 
     /** Diagnostic for the frame-level contract: no same-root wave remains held at idle. */
-    internal val alignedBufferedWaves: Int get() = aligned.bufferedWaves
+    internal val alignedBufferedWaves: Int get() = observation.bufferedWaves
+
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
 
     private val shell = DemoShell(port)
     private var inspector: InspectorServer? = null
@@ -281,7 +278,7 @@ class SkillMatchApp(port: Int = 8080) {
      *
      * The kernel has no cell-name registry (graph-builder handle names live in
      * the `GraphSpec`, not at runtime), so the app hands the inspector the
-     * names it knows; the observation-sink cells `host.observe` spawns are
+     * names it knows; the observation-sink cells spawned by the app are
      * unnamed and report `null`, per the contract.
      *
      * [withSideGraph] spawns [SideGraph] first, so the M4 navigator has a
@@ -341,11 +338,9 @@ class SkillMatchApp(port: Int = 8080) {
         shell.route("/op") { handleOp(it) }
         shell.sse("/events") { stateJson() }
 
-        // The raw roots broadcast independently. The derived group broadcasts
-        // once after all four named arms settle the same frontier.
-        candSkills.onChange { broadcast() }
-        jobSkills.onChange { broadcast() }
-        aligned.onChange { broadcast() }
+        // The observation publishes one point-consistent frame assembled from
+        // its independent root groups.
+        observation.onChange { broadcast() }
     }
 
     private fun handleOp(exchange: HttpExchange) {
@@ -387,11 +382,16 @@ class SkillMatchApp(port: Int = 8080) {
                     "${esc(owner)}:${skills.sorted().joinToString(",", "[", "]") { esc(it) }}"
                 }
 
+        val snapshot = observation.current().views
+        @Suppress("UNCHECKED_CAST")
+        val candSkills = snapshot["candSkills"] as Set<CandidateSkill>
+        @Suppress("UNCHECKED_CAST")
+        val jobSkills = snapshot["jobSkills"] as Set<JobSkill>
+
         // qualification = incremental foreign-key join (LookupJoinCell): each
         // (candidate,job) fact enriched with its job's required-skill count,
         // folded into `qualification`. Replaces the former edge computation
         // (kernel gap F-1 — now closed by the join cell).
-        val snapshot = aligned.current()
         @Suppress("UNCHECKED_CAST")
         val matches = snapshot["matches"] as Set<Match>
         @Suppress("UNCHECKED_CAST")
@@ -419,8 +419,8 @@ class SkillMatchApp(port: Int = 8080) {
             """{"skill":${esc(skill)},"supply":${e.supply},"demand":${e.demand},"scarce":${e.scarce}}"""
         }
 
-        return """{"candidates":${grouped(candSkills.current().map { it.candidate to it.skill })},""" +
-                """"jobs":${grouped(jobSkills.current().map { it.job to it.skill })},""" +
+        return """{"candidates":${grouped(candSkills.map { it.candidate to it.skill })},""" +
+                """"jobs":${grouped(jobSkills.map { it.job to it.skill })},""" +
                 """"matches":$matchList,"progress":$progress,"gap":$gaps,"market":$marketJson}"""
     }
 

@@ -14,6 +14,19 @@ class TieringAlignedFrameTest {
     fun `one valuation changes the valuation and average views in one SSE frame`() {
         val app = TieringApp(port = 0).start()
         try {
+            assertEquals(
+                mapOf(
+                    "valuations" to "valuations+tierAvg",
+                    "tierAvg" to "valuations+tierAvg",
+                    "prefs" to "prefs+prefAvg",
+                    "prefAvg" to "prefs+prefAvg",
+                    "items" to "items",
+                    "fused" to "fused",
+                    "manual" to "manual",
+                    "board" to "board",
+                ),
+                app.observationGroups,
+            )
             val base = "http://localhost:${app.boundPort}"
             val probe = HttpProbe(base)
             probe.post("action=item&name=pizza")

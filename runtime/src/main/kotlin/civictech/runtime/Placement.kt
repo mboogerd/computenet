@@ -10,6 +10,7 @@ import civictech.cell.graph.InstanceSetStep
 import civictech.cell.graph.PromoteStep
 import civictech.cell.graph.SpawnStep
 import civictech.cell.graph.UnlinkStep
+import civictech.cell.graph.WriteStep
 import civictech.cell.link.LinkOptions
 import java.nio.charset.StandardCharsets.UTF_8
 import java.util.UUID
@@ -249,6 +250,13 @@ class PlacementPlan private constructor(
                             localSteps += step
                         }
                         active.remove(step.handle)
+                    }
+
+                    is WriteStep -> {
+                        step.cells.forEach { requireActive(active, it) }
+                        if (step.cells.isEmpty() || local(step.cells.first())) {
+                            localSteps += step
+                        }
                     }
 
                     is PromoteStep -> {
