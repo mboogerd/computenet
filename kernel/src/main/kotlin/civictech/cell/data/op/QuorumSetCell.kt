@@ -105,8 +105,9 @@ class QuorumSetCell<E>(
 
     init {
         // An upstream Progress carries no lane delta to fold. Forward its exact
-        // source/counter through this downstream operator hop to the next
-        // frontier; locally absorbed data waves still use emitOrAbsorb below.
+        // source/counter only when this QuorumSetCell has one input edge. With
+        // fan-in, one lane's ack cannot settle the other lanes; this cell's own
+        // absorbed data waves still use emitOrAbsorb below.
         inlet.relayAbsorbAcks()
         ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
             when (event) {

@@ -127,7 +127,9 @@ class AlignedDrainBarrier internal constructor(
  * Transparent unary operators between an absorber and this sink forward that
  * exact watermark through [civictech.cell.control.relayAbsorbAcks]; the relay
  * preserves source/counter identity and stops when an intermediate frontier
- * consumes the acknowledgement.
+ * consumes the acknowledgement. It is deliberately limited to a hop with one
+ * open `Consume` input edge: a multi-input hop needs its own per-edge watermark
+ * fold before it can safely claim that every in-edge settled the wave.
  *
  * The condition is [civictech.cell.consistency.WaveFrontier]'s, *mirrored at
  * cell scope* rather than installed as an inlet policy — the same structural

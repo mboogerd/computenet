@@ -37,9 +37,9 @@ class FilterCell<E>(
     private val op = TaggedSetOperator<E>()
 
     init {
-        // A Progress ack means the upstream wave produced no input delta here;
-        // this transparent unary hop therefore has nothing to evaluate and
-        // forwards the same watermark to every downstream edge (G-40/F-15).
+        // With exactly one input edge, Progress means the upstream wave
+        // produced no input delta anywhere in this hop. A fan-in FilterCell
+        // conservatively stops the relay until it owns a per-edge fold.
         inlet.relayAbsorbAcks()
         outlet.catchUpOnLinked { if (op.state.size > 0) op.state.asDelta() else null }
     }

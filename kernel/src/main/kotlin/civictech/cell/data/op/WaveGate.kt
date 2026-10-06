@@ -99,14 +99,18 @@ internal fun interface GatedFold<T> {
  *  - the absorber links **directly** into the gated inlet — its
  *    [civictech.cell.control.absorbAck] lands on the expected edge, the wave
  *    completes, the gate is correct;
- *  - the absorber has **one or more transparent relay-enabled hops below it** —
- *    [civictech.cell.control.relayAbsorbAcks] forwards the same `Progress`
- *    `(sourceId, thru)` through each hop, without minting a wave or rewriting
- *    source/tag identity, until it lands on this gate's expected edge. A
- *    frontier installed on an intermediate inlet consumes the ack and is a
- *    relay terminal. `FilterCell`, `FlatMapSetCell`, `GroupByCell`, and a
- *    downstream `QuorumSetCell` install that transparent relay; the slotfinder
- *    `common -> filtered -> byDay` pipeline is one exercised shape.
+ *  - the absorber has **one or more single-input, transparent relay-enabled
+ *    hops below it** — [civictech.cell.control.relayAbsorbAcks] forwards the
+ *    same `Progress` `(sourceId, thru)` through each hop, without minting a wave
+ *    or rewriting source/tag identity, until it lands on this gate's expected
+ *    edge. A frontier installed on an intermediate inlet consumes the ack and
+ *    is a relay terminal. A hop with more than one open `Consume` input edge
+ *    never relays: one edge's watermark cannot stand for the per-inlink
+ *    completeness condition `[22-LIVE-01]`; a future per-edge watermark fold
+ *    may relax that conservative limit. `FilterCell`, `FlatMapSetCell`,
+ *    `GroupByCell`, and a single-input downstream `QuorumSetCell` install that
+ *    bounded relay; the slotfinder `common -> filtered -> byDay` pipeline is
+ *    one exercised shape (`common` absorbs, while the latter two are unary).
  *
  * A transparent operator that has not installed the relay retains F-15's old
  * failure mode: the expected edge advances only on a later real wave and can

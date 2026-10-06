@@ -1,6 +1,7 @@
 package civictech.cell.control
 
 import civictech.cell.CurrentContext
+import civictech.cell.link.LinkRole
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.protocol.ProtocolSupport
@@ -41,12 +42,29 @@ internal fun FanOutlet<*>.absorbAck() {
  * fans it over this inlet's owning cell's downstream links and carries a
  * visited-edge set, so a local cycle cannot amplify the acknowledgement.
  *
- * A frontier installed on this inlet is a terminal: local delivery happens
+ * Relaying one input edge's settlement is sound only when it settles the whole
+ * transparent hop. This helper therefore relays only while the hop has exactly
+ * one open [LinkRole.Consume] input edge in total. The receiver is counted by
+ * default; [otherInlets] must name every sibling inlet that can feed the same
+ * operator. Source-to-edge reachability is not available at this layer, so the
+ * count is deliberately conservative across sources: a multi-input hop never
+ * claims whole-hop settlement from one edge's [Progress]. A proper per-edge
+ * watermark fold can relax that limit later. [ProtocolSupport] evaluates the
+ * predicate for every arriving acknowledgement, and [FanInlet.linking] exposes
+ * only the currently active links, so links added after construction count and
+ * an unlinked edge stops counting before the next acknowledgement.
+ *
+ * A frontier installed on this inlet is also a terminal: local delivery happens
  * first and the dynamic predicate then suppresses relay. This matters when a
  * policy is installed after cell construction — one [Progress] must either be
  * consumed by that frontier or pass through this transparent hop, never both.
  */
-internal fun FanInlet<*>.relayAbsorbAcks() {
+internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
     val support = ProtocolSupport.of(this)
-    support.relay(Protocols.Progress) { support.handles(Protocols.Progress) }
+    support.relay(Protocols.Progress) {
+        support.handles(Protocols.Progress) ||
+            (sequenceOf(this) + otherInlets.asSequence())
+                .flatMap { it.linking.links.asSequence() }
+                .count { it.role == LinkRole.Consume } != 1
+    }
 }
