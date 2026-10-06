@@ -334,7 +334,13 @@ object Evolve {
                     state = EvolutionHandle.State.SHADOWING
                     state
                 }
-                is PromotionVerdict.Reject -> reject(verdict.reason)
+                is PromotionVerdict.Reject -> {
+                    if (verdict.terminal) reject(verdict.reason)
+                    else {
+                        state = EvolutionHandle.State.SHADOWING
+                        state
+                    }
+                }
                 PromotionVerdict.Accept -> promote()
             }
         }

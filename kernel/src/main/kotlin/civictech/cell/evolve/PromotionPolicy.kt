@@ -62,12 +62,17 @@ data class PromotionPolicy(
  * The judge's verdict on a [PromotionPolicy] (spec 53). [Pending] means the
  * observation window has not yet been filled — never a rejection, never an
  * acceptance, just "ask again after more waves". A rejection always carries
- * a [Reject.reason] naming which clause failed.
+ * a [Reject.reason] naming which clause failed. [Reject.terminal] distinguishes
+ * a settled policy failure from a retryable gate deferral; low-level promotion
+ * still refuses either kind during PRECHECK.
  */
 sealed interface PromotionVerdict {
     object Pending : PromotionVerdict
     object Accept : PromotionVerdict
-    data class Reject(val reason: String) : PromotionVerdict
+    data class Reject(
+        val reason: String,
+        val terminal: Boolean = true,
+    ) : PromotionVerdict
 }
 
 /**
@@ -120,6 +125,7 @@ class PromotionJudge(
                 return PromotionVerdict.Reject(
                     "cycle promotion deferred, not attempted: the cycle has not confirmed quiescence " +
                         "under G-19 throttling yet (spec 53 §Cycle promotion gates on quiescence, 93 I-6)",
+                    terminal = false,
                 )
             }
         }
