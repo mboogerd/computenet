@@ -159,7 +159,9 @@ class ObservationBuilderTest {
         frames.size shouldBe 4
         observation.get<Set<Int>>("votes") shouldBe setOf(1, 2, 3)
         frames.last().views.getValue("votes") shouldBe setOf(1, 2, 3)
-        callbackThreads.all { it == "aligned-observe-${expectedRef.id}" } shouldBe true
+        synchronized(callbackThreads) {
+            callbackThreads.all { it == "aligned-observe-${expectedRef.id}" }
+        } shouldBe true
 
         observation.close()
     }
@@ -224,7 +226,9 @@ class ObservationBuilderTest {
                 frames += it
             }
             awaitUntil("multi-group catch-up dispatched (seed $seed)") { frames.isNotEmpty() }
-            callbackThreads.all { it.startsWith("observation-") } shouldBe true
+            synchronized(callbackThreads) {
+                callbackThreads.all { it.startsWith("observation-") }
+            } shouldBe true
 
             val itemA = graph.ops(graph.writerA)
             val itemB = graph.ops(graph.writerB)
@@ -257,7 +261,9 @@ class ObservationBuilderTest {
             awaitUntil("multi-group final frame dispatched (seed $seed)") {
                 frames.lastOrNull()?.views?.get("wanted") == (0..12).toSet()
             }
-            callbackThreads.all { it.startsWith("observation-") } shouldBe true
+            synchronized(callbackThreads) {
+                callbackThreads.all { it.startsWith("observation-") }
+            } shouldBe true
 
             val frame = observation.current()
             frame.groups.getValue("votes").frontier shouldBe votesFrontier
