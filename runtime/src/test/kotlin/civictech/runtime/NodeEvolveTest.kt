@@ -81,13 +81,14 @@ class NodeEvolveTest {
         singleCaptured.clear()
         val logicalId = UUID.randomUUID()
         val manifest = manifest("recovery")
-        val spec = prePromotionSpec(logicalId)
+        val spec = baseSpec(logicalId)
         var first: Runtime.Node? = null
         var second: Runtime.Node? = null
+        var third: Runtime.Node? = null
         try {
             first = Runtime.boot(manifest, "solo", spec)
             gate(first).controlInlet.call.setGreen()
-            val applied = first.apply(evolutionDeltaWithoutCandidate())
+            val applied = first.apply(evolutionDelta(logicalId))
             val handle = checkNotNull(applied.evolutions["evo"])
 
             (1..3).forEach { feed(first!!, it) }
@@ -110,7 +111,20 @@ class NodeEvolveTest {
             feed(second, 5)
             second.mainHost.quiescence().await(10_000, "post-recovery input")
             assertEquals(beforeClose + 15L, collector(second).received.toList())
+
+            second.mainHost.checkpoint(second.journals.getValue("main"))
+            second.close()
+            third = Runtime.boot(manifest, "solo", spec)
+            assertTrue(third.recovered)
+            assertTrue("candidate" in third.refs, "compacted refs ${third.refs.keys} lack candidate")
+            assertFalse("incumbent" in third.refs, "compacted refs ${third.refs.keys} keep incumbent")
+            assertEquals(beforeClose + 15L, collector(third).received.toList())
+
+            feed(third, 6)
+            third.mainHost.quiescence().await(10_000, "post-compaction recovery input")
+            assertEquals(beforeClose + listOf(15L, 21L), collector(third).received.toList())
         } finally {
+            third?.close()
             second?.close()
             first?.close()
         }
@@ -166,23 +180,6 @@ class NodeEvolveTest {
         ),
     )
 
-    /** The original pre-promotion declaration includes the same-logical shadow for recovery. */
-    private fun prePromotionSpec(logicalId: UUID): GraphSpec = GraphSpec(
-        buildList {
-            addAll(baseSpec(logicalId).steps)
-            add(
-                SpawnStep(
-                    "candidate",
-                    SingleFactory("candidate"),
-                    identity = IdentityBinding.NewInstanceOf(logicalId),
-                    journalId = "main",
-                    shadow = true,
-                ),
-            )
-            add(ConnectStep("gate", "dataOutlet", "candidate", "inlet", staged))
-        },
-    )
-
     private fun evolutionDelta(logicalId: UUID): GraphSpec = GraphSpec(
         listOf(
             SpawnStep(
@@ -192,14 +189,6 @@ class NodeEvolveTest {
                 journalId = "main",
                 shadow = true,
             ),
-            SpawnStep("gate-inv", InvariantFactory),
-            ConnectStep("candidate", "outlet", "gate-inv", "inlet", staged),
-            promoteStep(),
-        ),
-    )
-
-    private fun evolutionDeltaWithoutCandidate(): GraphSpec = GraphSpec(
-        listOf(
             SpawnStep("gate-inv", InvariantFactory),
             ConnectStep("candidate", "outlet", "gate-inv", "inlet", staged),
             promoteStep(),
