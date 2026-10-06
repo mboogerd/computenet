@@ -81,6 +81,11 @@ interface EvolutionHandle {
      * Evaluate the latest host-drained observation prefix and, when settled, perform its
      * terminal action. A wave that has emitted but whose gate delivery is still queued is
      * deliberately absent from that prefix, so calling from outside the host is safe.
+     *
+     * The prefix carries [civictech.cell.host.Quiescence]'s limits: it covers gate deliveries
+     * that travel this host's scheduler queue, not gates hosted elsewhere or attention-parked
+     * traffic. It advances only when the host queue drains, so a host that never drains keeps
+     * the handle [State.SHADOWING].
      */
     fun advance(): State
 
