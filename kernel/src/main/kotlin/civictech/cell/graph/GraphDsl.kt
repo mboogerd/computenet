@@ -11,6 +11,7 @@ import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.DurableInput
+import civictech.cell.host.DeclaredWrite
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
@@ -182,6 +183,9 @@ data class UnlinkStep(val from: String, val outlet: String, val to: String, val 
 
 /** Unlinks every live edge touching [handle], then removes that cell and frees its handle. */
 data class DespawnStep(val handle: String) : GraphStep
+
+/** Declares one host-local write lane over the cells named by [cells]. */
+data class WriteStep(val name: String, val cells: List<String>) : GraphStep
 
 /**
  * Declarative request to run the live evolution pipeline over cells already
@@ -415,6 +419,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val eventSteps = ArrayList<GraphStep>(lowered.size)
         val preparedReplicas = mutableMapOf<String, Cell>()
         val displayKeys = mutableMapOf<Int, String>()
+        val writes = mutableListOf<Pair<String, Set<CellRef>>>()
         fun resolve(handle: String): CellRef = active[handle]
             ?: throw IllegalStateException("unknown handle '$handle'")
         lowered.forEach { step ->
@@ -486,6 +491,10 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     eventSteps += step
                 }
 
+                is WriteStep -> {
+                    writes += step.name to step.cells.mapTo(linkedSetOf(), ::resolve)
+                }
+
                 is PromoteStep -> {
                     check(occupied.add(step.handle)) { "duplicate handle '${step.handle}'" }
                     buildList {
@@ -545,6 +554,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val links = deltaLinks.mapNotNull { (key, topologyKey) ->
             context.linkFor(topologyKey)?.let { key to it }
         }.toMap()
+        writes.forEach { (name, cells) ->
+            context.host.managementInlet.call.declareWrite(name, cells)
+        }
         val evolutions = lowered.filterIsInstance<PromoteStep>().associate { step ->
             step.handle to context.evolve(step)
         }
@@ -623,6 +635,10 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         endpoints.remove(key)
                     }
                     host.call.despawn(ref)
+                }
+
+                is WriteStep -> {
+                    host.call.declareWrite(step.name, step.cells.mapTo(linkedSetOf(), refs::getValue))
                 }
 
                 is PromoteStep -> error("PromoteStep must be refused before applyTo")
@@ -745,6 +761,13 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         "despawn step '${step.handle}' is not supported by applyRemote",
                     )
                     progress.onStep(StepEvent(index, key, results.getValue(key)))
+                }
+
+                is WriteStep -> {
+                    results[step.name] = StepResult.Rejected(
+                        "write step '${step.name}' is not supported by applyRemote",
+                    )
+                    progress.onStep(StepEvent(index, step.name, results.getValue(step.name)))
                 }
 
                 is PromoteStep -> {
@@ -1063,6 +1086,20 @@ class GraphBuilder private constructor(
             linkSteps[stepKey(step)] = step
         }
         steps += step
+    }
+
+    /**
+     * Declares and records one host-local multi-cell write. The returned
+     * boundary can be invoked immediately; replay resolves the recorded cell
+     * handles to the target host's refs before declaring the same write.
+     */
+    fun write(name: String, cells: List<CellHandle>): DeclaredWrite {
+        require(names.add(name)) { "duplicate handle '$name'" }
+        require(context?.hasHandle(name) != true) { "duplicate handle '$name'" }
+        val step = WriteStep(name, cells.map(CellHandle::name))
+        val write = host.call.declareWrite(name, cells.mapTo(linkedSetOf(), CellHandle::ref))
+        steps += step
+        return write
     }
 
     /**
