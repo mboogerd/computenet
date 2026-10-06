@@ -278,4 +278,36 @@ class RelayFanInRegressionTest {
         )
         probe.seen shouldBe listOf(waterlineOnly, afterDataClose)
     }
+
+    @Test
+    fun `GroupBy data inlet relays only while it is the sole open input edge`() {
+        val host = ManagedHost()
+        val data = IntProgressSource()
+        val waterline = WaterlineProgressSource()
+        val grouped = GroupByCell(
+            keyFn = { value: Int -> value },
+            aggregator = Aggregators.count<Int>(),
+            lateness = Windows.Lateness({ value: Int -> value.toLong() }, 0),
+            keyTime = { key: Int -> key.toLong() + 1 },
+        )
+        val probe = MapProgressProbe()
+        val management = host.managementInlet.call
+        listOf(data, waterline, grouped, probe).forEach(management::spawn)
+        management.connect(data.ref, "outlet", grouped.ref, "inlet")
+        management.connect(grouped.ref, "outlet", probe.ref, "inlet")
+
+        val dataOnly = Progress(UUID.randomUUID(), 1L)
+        Protocols.sendDownstream(data.outlet.linking.links.single(), Protocols.Progress, dataOnly)
+        probe.seen shouldBe listOf(dataOnly)
+
+        management.connect(waterline.ref, "outlet", grouped.ref, "waterline")
+        val withWaterlineSibling = Progress(dataOnly.sourceId, 2L)
+        Protocols.sendDownstream(data.outlet.linking.links.single(), Protocols.Progress, withWaterlineSibling)
+        probe.seen shouldBe listOf(dataOnly)
+
+        waterline.outlet.linking.links.single().unlink()
+        val afterWaterlineClose = Progress(dataOnly.sourceId, 3L)
+        Protocols.sendDownstream(data.outlet.linking.links.single(), Protocols.Progress, afterWaterlineClose)
+        probe.seen shouldBe listOf(dataOnly, afterWaterlineClose)
+    }
 }
