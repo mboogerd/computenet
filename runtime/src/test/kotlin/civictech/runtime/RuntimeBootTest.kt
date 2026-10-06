@@ -16,6 +16,7 @@ import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.JournalRecords
 import civictech.cell.host.KeyedCells
+import civictech.cell.host.ManagedHost
 import civictech.cell.link.AuthLevel
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
@@ -521,6 +522,47 @@ class RuntimeBootTest {
             // The worker's first stamped spawn is refused only if it charges the SAME
             // bucket main just drained: an unbudgeted or separately-budgeted worker admits it.
             assertThrows<BudgetRefusedException> { spawnOn("worker") }
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `the peering bridge charges the one node ledger`() {
+        val policy = EconomicPolicy.placeholder().copy(
+            prices = mapOf(ClaimClass.Spawn to 1L),
+            capacities = mapOf(ClaimClass.Spawn to 10L),
+            refill = mapOf(
+                ClaimClass.Spawn to EconomicPolicy.Refill(
+                    tokensPerInterval = 1L,
+                    intervalNanos = 3_600_000_000_000L,
+                ),
+            ),
+            unvouchedBootstrap = mapOf(ClaimClass.Spawn to 2L),
+        )
+        val policyFile = tempDir.resolve("bridge-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.serializer(), policy))
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(hosts = listOf("main"), budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+        )
+        val principal = PeerId("bridge-principal")
+        fun spawnOn(host: ManagedHost) = CurrentPeer.with(principal, AuthLevel.Authenticated) {
+            host.managementInlet.call.spawn(SetCell<String>())
+        }
+
+        try {
+            node.open()
+            val bridge = node.bridgeHost!!
+            repeat(2) { spawnOn(bridge) }
+            assertThrows<BudgetRefusedException> { spawnOn(bridge) }
+            assertThrows<BudgetRefusedException> { spawnOn(node.mainHost) }
+            assertEquals(
+                0L,
+                (node.budget as TokenBucketLedger).snapshot()
+                    .bucket(principal, ClaimClass.Spawn)?.balance,
+            )
         } finally {
             node.close()
         }

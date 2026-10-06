@@ -3,6 +3,7 @@ package civictech.cell.data.delta
 import civictech.cell.ReBaselineNotice
 import civictech.cell.Timestamp
 import java.io.Serializable
+import java.util.LinkedHashSet
 import java.util.UUID
 
 /**
@@ -229,21 +230,31 @@ internal class TagState<E>(
      * tombstones to carry (D-UNION) it becomes the two-map list instead, so
      * a checkpoint-restored merge point keeps its tombstones and a
      * re-delivered writer catch-up still cannot resurrect a removed element.
-     * Additive: the single-map form is emitted verbatim whenever there are no
-     * tombstones, and [restore] accepts both.
+     * A non-empty dead-source fence (93 I-22 R5c) rides as a third element,
+     * `[live, tombstones, dead]` (tombstones possibly empty): the fence is
+     * negative knowledge catch-up cannot rebuild, so a restored consumer that
+     * forgot it would re-admit a superseded lane's stragglers. Additive in
+     * both directions: a snapshot without the third element restores with an
+     * empty fence, and an older [restore] reads only elements 0 and 1, so it
+     * loads this shape (dropping only the fence) rather than failing.
      */
     fun snapshot(): Serializable {
         val liveOut = HashMap(live.mapValues { HashSet(it.value) })
-        if (tombstones.isEmpty()) return liveOut
-        return arrayListOf<Serializable>(liveOut, HashMap(tombstones.mapValues { HashSet(it.value) }))
+        if (tombstones.isEmpty() && deadSources.isEmpty()) return liveOut
+        val tombOut = HashMap(tombstones.mapValues { HashSet(it.value) })
+        if (deadSources.isEmpty()) return arrayListOf<Serializable>(liveOut, tombOut)
+        return arrayListOf<Serializable>(liveOut, tombOut, LinkedHashSet(deadSources))
     }
 
     fun restore(state: Serializable) {
         live.clear()
         tombstones.clear()
+        deadSources.clear()
         if (state is List<*>) {
             restoreInto(live, state[0])
             restoreInto(tombstones, state.getOrNull(1))
+            @Suppress("UNCHECKED_CAST")
+            (state.getOrNull(2) as? Set<UUID>)?.let { deadSources += it }
         } else {
             restoreInto(live, state)
         }

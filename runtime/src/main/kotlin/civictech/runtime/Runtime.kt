@@ -432,7 +432,9 @@ object Runtime {
 
         private var opened = false
         private var closed = false
-        private var bridgeHost: ManagedHost? = null
+        /** The peering bridge host, sharing [budget], after [open] (null before [open]). */
+        var bridgeHost: ManagedHost? = null
+            private set
         private var listener: PeerListener? = null
         private val connectionEndpoints = mutableListOf<PeerConnection>()
         private var inspectorExtras = InspectorExtras()
@@ -568,7 +570,7 @@ object Runtime {
             opened = true
 
             try {
-                val bridge = ManagedHost(registry = registry).also { bridgeHost = it }
+                val bridge = ManagedHost(registry = registry, budget = budget).also { bridgeHost = it }
                 val side = Peering.Side(
                     registry = registry,
                     bridgeHost = bridge,
