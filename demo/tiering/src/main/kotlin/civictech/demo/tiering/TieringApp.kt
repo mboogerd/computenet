@@ -388,6 +388,11 @@ class TieringApp(
         map("tierAvg", refs.tierAvg.ref)
         set("prefs", refs.prefs.ref)
         map("prefAvg", refs.prefAvg.ref)
+        // `fused` is an existing point-consistent one-view read over the
+        // ungated CombineLatestCell. The canonical builder currently admits
+        // every group through aligned admission, so this preserves its former
+        // single-view behavior until that builder can represent point views.
+        unchecked("fused")
         map("fused", refs.fused.ref)
         map("manual", refs.manualEffective.ref)
         map("board", refs.board.ref)
