@@ -4,28 +4,34 @@ import civictech.agora.AgoraService
 import civictech.cell.CellRef
 import civictech.cell.host.ManagedHost
 import civictech.cell.observe.Observation
-import civictech.cell.observe.ObservationFrame
 import civictech.cell.observe.get
 import civictech.cell.observe.observation
 import civictech.dialogue.ClaimKey
 import civictech.dialogue.DialogueRuntime
 import civictech.dialogue.DialoguePipeline
 import civictech.dialogue.RelationKey
+import civictech.dialogue.extract.ExtractedClaim
+import civictech.dialogue.extract.ExtractedRelation
+import civictech.dialogue.extract.ExtractedStance
 import civictech.dialogue.mint.ClaimAggregate
+import civictech.dialogue.mint.ClaimMint
 import civictech.dialogue.mint.RelationAggregate
+import civictech.dialogue.mint.RelationMint
 import civictech.dialogue.mint.StanceAggregate
-
-@Suppress("UNCHECKED_CAST")
-private fun <T> ObservationFrame.view(name: String): T = views.getValue(name) as T
+import civictech.dialogue.mint.StanceProject
+import civictech.dialogue.Utterance
+import civictech.dialogue.mint.claimKey
 
 /**
  * Pipeline stage 8 (epic computenet-2aw §2.2, §2.5 "Stage 8 sink",
  * [AGO1-APPLY-01]..[AGO1-APPLY-07], DESIGN D3 / 2aw.F4-D1): the **sole
  * writer** into the agora graph.
  *
- * It observes the pipeline's three canonical folds — `canonicalClaims`,
- * `canonicalRelations`, `projectedStances` — and, when the driver says the
- * graph is at rest, reconciles those snapshots against a fold-backed
+ * It observes the pipeline's direct typed split outputs — claim, relation and
+ * stance extractions — and rebuilds the same pure canonical aggregates at the
+ * app edge. The direct outputs are used because the final GroupBy/semi-join
+ * chain contains pure hops that do not relay progress to an aligned sink.
+ * When the driver says the graph is at rest, it reconciles those snapshots against a fold-backed
  * [BindingTable] by issuing `AgoraService.createClaim` / `createEdge` /
  * `remove` / `setStance`. Nothing else in `:demo:dialogue` holds an
  * [AgoraService].
@@ -151,14 +157,45 @@ class GraphApplier(
      */
     private val appliedStances = mutableMapOf<Pair<String, ClaimKey>, Double>()
 
-    private val observation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
-        map("claims", refs.canonicalClaims.ref)
-        map("relations", refs.canonicalRelations.ref)
-        map("stances", refs.projectedStances.ref)
+    private val stanceAggregator = StanceProject.StanceAggregator()
+    private val claimAggregator = ClaimMint.ClaimAggregator()
+    private val relationAggregator = RelationMint.RelationAggregator()
+
+    private val claimsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        // The item-kind split is the direct, progress-relaying source; the
+        // later GroupByCell has a pure hop that does not relay absorb
+        // acknowledgements to an aligned sink.
+        set("claims", refs.extractedClaims.ref)
+    }
+
+    private val relationsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        // The item-kind split is the direct, progress-relaying source; the
+        // later semijoin/fold chain has pure hops that do not relay absorb
+        // acknowledgements to an aligned sink.
+        set("relations", refs.extractedRelations.ref)
+    }
+
+    private val stancesObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        set("stances", refs.extractedStances.ref)
+    }
+
+    private val stanceUtterancesObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        set("stanceUtterances", refs.utterances.ref)
     }
 
     internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf
+        get() = mapOf(
+            "claims" to claimsObservation.groups.single(),
+            "relations" to relationsObservation.groups.single(),
+            "stances" to stancesObservation.groups.single(),
+        )
+
+    internal val observationGroupRefs: Map<String, CellRef>
+        get() = mapOf(
+            "claims" to claimsObservation.group("claims").ref,
+            "relations" to relationsObservation.group("relations").ref,
+            "stances" to stancesObservation.group("stances").ref,
+        )
 
     /** The claim keys currently bound — [AGO1-APPLY-07]'s "bound" half. */
     fun boundClaims(): Set<ClaimKey> = bindings.boundClaims()
@@ -167,13 +204,57 @@ class GraphApplier(
     fun boundRelations(): Set<RelationKey> = bindings.boundRelations()
 
     /** The canonical claim snapshot the next [reconcile] would read. */
-    fun observedClaims(): Map<ClaimKey, ClaimAggregate> = observation.get("claims")
+    fun observedClaims(): Map<ClaimKey, ClaimAggregate> =
+        claimsObservation.get<Set<ExtractedClaim>>("claims")
+            .groupBy { claimKey(it.text) }
+            .mapValues { (_, claims) ->
+                claimAggregator.value(
+                    ClaimMint.ClaimAggregator.Acc(
+                        claims.mapTo(mutableSetOf()) { ClaimMint.ClaimAggregator.Contribution(it.text, it.utteranceId) },
+                    ),
+                )
+            }
 
     /** The canonical relation snapshot the next [reconcile] would read. */
-    fun observedRelations(): Map<RelationKey, RelationAggregate> = observation.get("relations")
+    fun observedRelations(): Map<RelationKey, RelationAggregate> {
+        val claimedKeys = observedClaims().keys
+        return relationsObservation.get<Set<ExtractedRelation>>("relations")
+            .flatMap(RelationMint::candidates)
+            .filter { !it.isSelfRelation && it.sourceKey in claimedKeys && it.targetKey in claimedKeys }
+            .groupBy { it.relationKey }
+            .mapValues { (_, candidates) ->
+                relationAggregator.value(
+                    RelationMint.RelationAggregator.Acc(
+                        candidates.mapTo(mutableSetOf()) {
+                            RelationMint.RelationAggregator.Contribution(
+                                it.sourceKey.value,
+                                it.targetKey.value,
+                                it.polarity.name,
+                                it.utteranceId,
+                            )
+                        },
+                    ),
+                )
+            }
+    }
 
     /** The projected-stance snapshot the next [reconcile] would read. */
-    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> = observation.get("stances")
+    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> {
+        val utterances = stanceUtterancesObservation.get<Set<Utterance>>("stanceUtterances")
+            .associateBy { it.id }
+        return stancesObservation.get<Set<ExtractedStance>>("stances")
+            .mapNotNull { stance -> utterances[stance.utteranceId]?.let { StanceProject.joinRow(stance, it) } }
+            .groupBy { it.speaker to it.key }
+            .mapValues { (_, rows) ->
+                stanceAggregator.value(
+                    StanceProject.StanceAggregator.Acc(
+                        rows.mapTo(mutableSetOf()) {
+                            StanceProject.StanceAggregator.Contribution(it.turn, it.utteranceId, it.value)
+                        },
+                    ),
+                )
+            }
+    }
 
     /**
      * Apply the current canonical snapshots to the agora graph and return
@@ -186,10 +267,9 @@ class GraphApplier(
      * this method does not throw on a rejection.
      */
     fun reconcile(): ReconcileReport {
-        val frame = observation.current()
-        val claims: Map<ClaimKey, ClaimAggregate> = frame.view("claims")
-        val relations: Map<RelationKey, RelationAggregate> = frame.view("relations")
-        val stances: Map<Pair<String, ClaimKey>, StanceAggregate> = frame.view("stances")
+        val claims = observedClaims()
+        val relations = observedRelations()
+        val stances: Map<Pair<String, ClaimKey>, StanceAggregate> = observedStances()
 
         val ops = mutableListOf<ApplyOp>()
         val failures = mutableListOf<ApplyFailure>()

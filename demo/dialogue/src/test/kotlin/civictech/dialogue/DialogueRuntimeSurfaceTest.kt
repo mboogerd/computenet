@@ -34,10 +34,9 @@ import kotlin.test.assertTrue
  * - `onCredence`, forwarded verbatim into `AgoraService` (2aw.5-D10), which
  *   is how the surface learns a credence settled after a stance write.
  * - `claimProvenance` / `relationProvenance`, read from the two
- *   ProvenanceIndex `ObserveCell` sinks this runtime spawns (2aw.5-D9), and
- *   the durability half that goes with them: both sink names are in
- *   `SINK_NAMES`, so both refs are volatile and their non-`@Serializable`
- *   `MapDelta` payloads never reach the WAL.
+ *   ProvenanceIndex views in this runtime's canonical observation (2aw.5-D9),
+ *   and the durability half that goes with them: their deterministic group
+ *   ref is volatile and their non-`@Serializable` payloads never reach the WAL.
  *
  * Deliberately **not** here: recovery order, BS-18 and BS-19 — those are
  * [DialogueRuntimeTest]'s, which this file does not touch. The worlds here
@@ -181,6 +180,22 @@ class DialogueRuntimeSurfaceTest {
         // The whole point of the default is that every pre-existing call site
         // still compiles and behaves identically: this world names no hook.
         val world = World()
+        assertEquals(
+            mapOf(
+                "utterances" to "utterances+claimProvenance+relationProvenance",
+                "claimProvenance" to "utterances+claimProvenance+relationProvenance",
+                "relationProvenance" to "utterances+claimProvenance+relationProvenance",
+            ),
+            world.runtime.observationGroups,
+        )
+        assertEquals(
+            mapOf(
+                "utterances" to DialogueRuntime.sinkRef("utterances+claimProvenance+relationProvenance"),
+                "claimProvenance" to DialogueRuntime.sinkRef("utterances+claimProvenance+relationProvenance"),
+                "relationProvenance" to DialogueRuntime.sinkRef("utterances+claimProvenance+relationProvenance"),
+            ),
+            world.runtime.observationGroupRefs,
+        )
         world.admit(through = 3)
 
         assertEquals(setOf(keyOne, keyTwo), world.runtime.bindings.boundClaims())
@@ -246,24 +261,23 @@ class DialogueRuntimeSurfaceTest {
     fun `2aw_5-D9 - a journalled world drives both provenance sinks and writes neither into the WAL`(
         @TempDir dir: File,
     ) {
-        // The provenance sinks carry MapDelta<_, Set<Claim|RelationProvenanceEntry>>,
-        // and those entry types have no polymorphic WireCodec registration. If
-        // either sink name were missing from SINK_NAMES, isDurable() would call
-        // it durable and the first frame it accepted would fail to encode —
-        // this world would not reach its assertions at all.
+        // The provenance views are derived read state, and their entry types
+        // have no polymorphic WireCodec registration. If the deterministic
+        // observation group were treated as durable, the world would fail
+        // while writing its first derived frame rather than reach these checks.
         val world = World(dir = dir).admit(through = 3)
 
         assertEquals(setOf("u1", "u2"), world.runtime.claimProvenance(keyOne))
         assertEquals(setOf("u3"), world.runtime.relationProvenance(relationKey))
 
-        // …and neither sink's ref appears in the WAL. WireCodec encodes a
+        // …and the observation group's ref does not appear in the WAL. WireCodec encodes a
         // frame as JSON (`json.encodeToString(WireFrame.serializer(), …)`)
         // and a frame names its target cell by ref, so a journaled sink would
         // be visible as its UUID in the journal bytes.
         //
         // HONEST LIMIT (computenet-2aw.5.1, measured): this pins the property
-        // but is NOT mutation-killed. Dropping "claimProvenance" from
-        // SINK_NAMES — which makes isDurable() call that sink durable — leaves
+        // but is NOT mutation-killed. Dropping the joined group id from
+        // SINK_NAMES — which makes isDurable() call that group durable — leaves
         // every assertion in this method green: no SerializationException is
         // raised (the acceptance criterion predicted one) and the ref still
         // does not appear, because the deltas these sinks receive arrive over
@@ -271,19 +285,17 @@ class DialogueRuntimeSurfaceTest {
         // (ManagedHost's `journalSelector(...)?.append(...)`). So SINK_NAMES
         // membership for the sinks is belt-and-braces here, not a load-bearing
         // guard this suite can demonstrate; the guard it demonstrably IS
-        // load-bearing for is the ingress cell, below. Keep both names in
+        // load-bearing for is the ingress cell, below. Keep the group id in
         // SINK_NAMES anyway: the design intent (isDurable's KDoc, and
         // computenet-oy26's note on GraphApplier.sink) is that a sink is never
         // durable, and nothing here licenses relying on the delivery path
         // staying non-journaling.
         val journalText = File(dir, "host.journal").readBytes().toString(Charsets.ISO_8859_1)
-        listOf("claimProvenance", "relationProvenance").forEach { name ->
-            val ref = DialogueRuntime.sinkRef(name)
-            assertFalse(
-                journalText.contains(ref.id.toString()),
-                "no journal frame names the $name sink ($ref)",
-            )
-        }
+        val provenanceGroupRef = world.runtime.observationGroupRefs.getValue("claimProvenance")
+        assertFalse(
+            journalText.contains(provenanceGroupRef.id.toString()),
+            "no journal frame names the provenance observation group ($provenanceGroupRef)",
+        )
         // Positive control for the instrument: the ingress cell IS durable, so
         // an assertion of this shape can see a ref when there is one to see.
         assertTrue(

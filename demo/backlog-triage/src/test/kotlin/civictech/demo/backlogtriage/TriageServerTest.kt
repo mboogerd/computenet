@@ -29,6 +29,33 @@ class TriageServerTest {
     fun `preferences fold into a collective ranking that reorders live`() {
         val app = TriageApp(port = 0).start()
         try {
+            val joined = listOf(
+                "prefs",
+                "score",
+                "votes",
+                "rating:elo",
+                "rating:bt",
+                "rating:trueskill",
+                "rating:glicko",
+                "rating:wenglin",
+                "rating:wilson",
+            ).joinToString("+")
+            assertEquals(
+                mapOf(
+                    "features" to "features",
+                    "prefs" to joined,
+                    "score" to joined,
+                    "votes" to joined,
+                    "rating:elo" to joined,
+                    "rating:bt" to joined,
+                    "rating:trueskill" to joined,
+                    "rating:glicko" to joined,
+                    "rating:wenglin" to joined,
+                    "rating:wilson" to joined,
+                    "rating:meta" to "rating:meta",
+                ),
+                app.observationGroups,
+            )
             val probe = HttpProbe("http://localhost:${app.boundPort}")
 
             // submit: explicit id, and a slug derived from the title

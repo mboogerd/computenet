@@ -66,7 +66,7 @@ import java.util.concurrent.TimeUnit
  * from [onSettled] inside the [settle] fence, from the boot sequence, and
  * from the synchronous `load` action), [DialogueRuntime.bindings]
  * (`synchronized`) and [DialogueRuntime.claimProvenance]/
- * [DialogueRuntime.relationProvenance] (backed by `ObserveCell.current()`,
+ * [DialogueRuntime.relationProvenance] (backed by the canonical observation,
  * itself a `@Volatile` snapshot). The snapshot can therefore lag live state
  * by at most the one utterance currently being settled. The one field
  * [handleTranscriptGet] does *not* take from the snapshot is `replaying`: it

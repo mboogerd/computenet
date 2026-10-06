@@ -19,9 +19,13 @@ import civictech.dialogue.apply.GraphApplier
 import civictech.dialogue.apply.ReconcileReport
 import civictech.dialogue.extract.ExtractionAccounting
 import civictech.dialogue.extract.Extractor
+import civictech.dialogue.extract.ExtractedClaim
+import civictech.dialogue.extract.ExtractedRelation
 import civictech.dialogue.mint.ClaimProvenanceEntry
 import civictech.dialogue.mint.ProvenanceIndex
+import civictech.dialogue.mint.RelationMint
 import civictech.dialogue.mint.RelationProvenanceEntry
+import civictech.dialogue.mint.claimKey
 import java.io.File
 import java.util.UUID
 
@@ -58,14 +62,12 @@ import java.util.UUID
  *    cells sit under the refs last run's journal frames were written against.
  * 4. [AgoraService] shares that context, and [BindingTable] reads its
  *    read-only live topology fold.
- * 5. [GraphApplier], which spawns its three deterministic-ref observation
- *    sinks and connects them.
- * 6. The utterances sink below — a `View.set` over `refs.utterances` under
- *    `dialogue:sink:utterances`, spawned for one purpose only: to read back
- *    what the WAL restored into the ingress `SetCell`, so [completeRecovery]
- *    can seed the driver's ledger from it. Alongside it, the two
- *    ProvenanceIndex read sinks (`dialogue:sink:claimProvenance` and
- *    `…:relationProvenance`) behind [claimProvenance]/[relationProvenance].
+ * 5. [GraphApplier], which registers its direct typed observation views under
+ *    deterministic group refs.
+ * 6. The observation below, whose `utterances` view reads back what the WAL
+ *    restored into the ingress `SetCell`, so [completeRecovery] can seed the
+ *    driver's ledger; its other two views back [claimProvenance] and
+ *    [relationProvenance].
  *
  * Only then may the caller run [recover] (step 7), drain the host, and call
  * [completeRecovery] (step 8). The drain between them is the caller's because
@@ -126,8 +128,7 @@ class DialogueRuntime(
         scheduler ?: VirtualThreadScheduler("DialogueRuntime-${UUID.randomUUID()}")
 
     private val volatileRefs: Set<CellRef> =
-        (DERIVED_HANDLES.map { pipelineRef(it) } +
-            (SINK_NAMES + SINK_GROUP_NAMES).map { sinkRef(it) }).toSet()
+        (DERIVED_HANDLES.map { pipelineRef(it) } + SINK_NAMES.map { sinkRef(it) }).toSet()
 
     private val journal: Journal? = KeyedCells.hostJournal(journalDir)
 
@@ -173,14 +174,29 @@ class DialogueRuntime(
     // (5) the applier, which spawns its own deterministic-ref sinks.
     val applier = GraphApplier(host, refs, service, bindings)
 
+    // The observation reads the direct extraction splits rather than the final
+    // provenance GroupBy/SemiJoin folds. Those later folds contain pure hops
+    // which do not relay absorb acknowledgements to an aligned sink; rebuilding
+    // the small provenance maps at this read boundary keeps the frame live
+    // while preserving the same ProvenanceIndex semantics.
     private val observation: Observation = host.observation(groupRef = ::sinkRef) {
         set("utterances", refs.utterances)
-        map("claimProvenance", refs.claimProvenance.ref)
-        map("relationProvenance", refs.relationProvenance.ref)
+        set("claimProvenance", refs.extractedClaims.ref)
+        set("relationProvenance", refs.extractedRelations.ref)
     }
 
     internal val observationGroups: Map<String, String>
         get() = observation.current().groupOf
+
+    internal val observationGroupRefs: Map<String, CellRef>
+        get() = mapOf(
+            "utterances" to groupRefFor("utterances"),
+            "claimProvenance" to groupRefFor("claimProvenance"),
+            "relationProvenance" to groupRefFor("relationProvenance"),
+        )
+
+    private fun groupRefFor(view: String): CellRef =
+        observation.group(observation.current().groupOf.getValue(view)).ref
 
     /** The ingress handle the driver writes through. */
     private val utteranceOps: SetOps<Utterance> = DialoguePipeline.utteranceOps(host, refs)
@@ -195,14 +211,30 @@ class DialogueRuntime(
      * Safe to call from an HTTP thread: [observation] exposes an immutable
      * point-consistent snapshot.
      */
-    fun claimProvenance(key: ClaimKey): Set<String>? =
-        observation.get<Map<ClaimKey, Set<ClaimProvenanceEntry>>>("claimProvenance")[key]
-            ?.let(ProvenanceIndex::claimProvenance)
+    fun claimProvenance(key: ClaimKey): Set<String>? = claimProvenanceSnapshot()[key]
+        ?.let(ProvenanceIndex::claimProvenance)
 
     /** The relation-leg mirror of [claimProvenance]. */
-    fun relationProvenance(key: RelationKey): Set<String>? =
-        observation.get<Map<RelationKey, Set<RelationProvenanceEntry>>>("relationProvenance")[key]
-            ?.let(ProvenanceIndex::relationProvenance)
+    fun relationProvenance(key: RelationKey): Set<String>? = relationProvenanceSnapshot()[key]
+        ?.let(ProvenanceIndex::relationProvenance)
+
+    private fun claimProvenanceSnapshot(): Map<ClaimKey, Set<ClaimProvenanceEntry>> =
+        observation.get<Set<ExtractedClaim>>("claimProvenance")
+            .map(ProvenanceIndex::claimEntry)
+            .groupBy { ClaimKey(it.key) }
+            .mapValues { (_, entries) -> entries.toSet() }
+
+    private fun relationProvenanceSnapshot(): Map<RelationKey, Set<RelationProvenanceEntry>> {
+        val claimKeys = observation.get<Set<ExtractedClaim>>("claimProvenance")
+            .mapTo(mutableSetOf()) { claimKey(it.text) }
+        return observation.get<Set<ExtractedRelation>>("relationProvenance")
+            .asSequence()
+            .flatMap { RelationMint.candidates(it).asSequence() }
+            .filter { !it.isSelfRelation && it.sourceKey in claimKeys && it.targetKey in claimKeys }
+            .map(ProvenanceIndex::relationEntry)
+            .groupBy { RelationKey(it.key) }
+            .mapValues { (_, entries) -> entries.toSet() }
+    }
 
     private var recovered: TranscriptSource? =
         if (journalDir == null) TranscriptSource(utteranceOps, transcript, recovered = emptyList()) else null
@@ -361,9 +393,12 @@ class DialogueRuntime(
         )
 
         /**
-         * [GraphApplier]'s three observation sinks, plus this class's own
-         * three: the recovery-only `utterances` sink and the two
-         * ProvenanceIndex read sinks (2aw.5-D9).
+         * Deterministic ids used by the observation groups in [GraphApplier]
+         * and this class. The runtime's three views share one extraction root
+         * and therefore use the joined `utterances+claimProvenance+
+         * relationProvenance` group id; the applier keeps its direct typed
+         * reads in separate groups because its downstream pure folds do not
+         * relay progress to an aligned sink.
          *
          * Every name here becomes a volatile ref via [isDurable].
          *
@@ -382,13 +417,18 @@ class DialogueRuntime(
          * `DialogueRuntimeSurfaceTest` pins the property and says the same.
          */
         private val SINK_NAMES =
-            listOf("claims", "relations", "stances", "utterances", "claimProvenance", "relationProvenance")
-
-        /** Group ids produced by the two equal-root observation registrations above. */
-        private val SINK_GROUP_NAMES = listOf(
-            "claims+relations+stances",
-            "utterances+claimProvenance+relationProvenance",
-        )
+            listOf(
+                "claims",
+                "relations",
+                "stances",
+                "utterances",
+                "stanceUtterances",
+                "claimProvenance",
+                "relationProvenance",
+                // All three runtime views share the ingress root under the
+                // grouping rule, so their aligned sink uses the joined id.
+                "utterances+claimProvenance+relationProvenance",
+            )
 
         /**
          * The pipeline's cell-ref namespace. Fixed, not a parameter: two runs
