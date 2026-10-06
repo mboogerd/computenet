@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CheckpointFrameSource
 import civictech.cell.CheckpointReplayPositions
+import civictech.cell.CheckpointStateSource
 import civictech.cell.ReplayScope
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
@@ -754,7 +755,8 @@ internal class HostDurability(
 
     /**
      * Checkpoint (M10.2, extended G-59; keyed per-cell CP-C1): capture the
-     * `Stateful` snapshot AND processed-frontier of exactly the cells whose
+     * public [Stateful] or internal [CheckpointStateSource] snapshot AND processed-frontier
+     * of exactly the cells whose
      * selector tees to THIS [journal], as one record, and compact that journal
      * down to it — replay after a checkpoint is restore + tail. Keying keeps a
      * per-cell journal free of state belonging to another journal (or to a
@@ -832,8 +834,11 @@ internal class HostDurability(
             val state = CheckpointReplayPositions.capturing(journal, replayed) {
                 HashMap<CellRef, Serializable>().also { snapshots ->
                     cells.forEach { (cellRef, cell) ->
-                        if (cell is Stateful && cellJournalSelector(cellRef) === journal) {
-                            snapshots[cellRef] = cell.snapshot()
+                        if (cellJournalSelector(cellRef) === journal) {
+                            when (cell) {
+                                is Stateful -> snapshots[cellRef] = cell.snapshot()
+                                is CheckpointStateSource -> snapshots[cellRef] = cell.checkpointState()
+                            }
                         }
                     }
                 }
@@ -1001,8 +1006,13 @@ internal class HostDurability(
     private fun restoreCheckpoint(record: DecodedJournalRecord.Checkpoint) {
         val cells = cellsView()
         record.state.forEach { (cellRef, snapshot) ->
-            (cells[cellRef] as? Stateful)?.restore(snapshot)
-                ?: deadLetter("checkpoint state for $cellRef but no Stateful cell — graph rebuilt differently?")
+            when (val cell = cells[cellRef]) {
+                is Stateful -> cell.restore(snapshot)
+                is CheckpointStateSource -> cell.restoreCheckpointState(snapshot)
+                else -> deadLetter(
+                    "checkpoint state for $cellRef but no checkpoint-state cell — graph rebuilt differently?",
+                )
+            }
         }
         record.frontier.forEach { (key, sources) -> processedFrontier.getOrPut(key) { mutableMapOf() } += sources }
     }

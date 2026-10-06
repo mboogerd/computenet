@@ -5,9 +5,9 @@ import civictech.cell.CellRef
 import civictech.cell.CheckpointFrameSource
 import civictech.cell.CheckpointReplayPosition
 import civictech.cell.CheckpointReplayPositions
+import civictech.cell.CheckpointStateSource
 import civictech.cell.ReplayProvenance
 import civictech.cell.ReplayScope
-import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -45,17 +45,20 @@ interface TrafficLightApi<T> {
  * in the LocationRegistry; this is its port-granular form.
  *
  * Eager cell (C-7): serves in `init` so it composes host-free; starts red.
- * The green/red bit is [Stateful] so a checkpoint taken after a completed
- * promotion does not erase its green COMMIT. Older checkpoints contain no
- * entry for this formerly-stateless cell and therefore retain their original
- * starts-red recovery behavior. A red gate exposes its parked invocations as
- * checkpoint frames: compaction carries them after the snapshot instead of
- * rejecting the checkpoint or silently dropping exclusive payloads.
+ * An internal checkpoint-only capability preserves the green/red bit when a
+ * hosting graph explicitly binds the gate to a journal; it deliberately does
+ * not publish the `Stateful`/`DURABLE` nature, so ordinary gates remain
+ * journal-optional. Topology checkpoints retain and replay `TopoEvent.Promote`,
+ * which is what completes a recovered promotion rather than the colour state
+ * standing in for that event. Older checkpoints contain no colour entry and
+ * therefore retain their original starts-red recovery behavior. A red gate
+ * exposes its parked invocations as checkpoint frames: compaction carries them
+ * after the snapshot instead of silently dropping exclusive payloads.
  */
 class TrafficLightCell<T : Any>(
     private val clazz: Class<T>,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell, TrafficLightApi<T>, Stateful, CheckpointFrameSource {
+) : Cell, TrafficLightApi<T>, CheckpointStateSource, CheckpointFrameSource {
     override val controlInlet = registerPort("controlInlet", FanInlet.create<TrafficLightControl>())
     override val dataInlet = registerPort("dataInlet", FanInlet(clazz))
     override val dataOutlet = registerPort("dataOutlet", FanOutlet(clazz))
@@ -74,7 +77,6 @@ class TrafficLightCell<T : Any>(
 
     private val buffer = ParkQueue<ParkedInvocation>()
     private val restoredReplayPositions = ArrayDeque<List<CheckpointReplayPosition>>()
-    private var openAfterCheckpointFrames = false
 
     private fun park(invocation: Invocation) {
         val replayOf = ReplayProvenance.get()
@@ -87,18 +89,10 @@ class TrafficLightCell<T : Any>(
                 replayOf = replayOf,
             ),
         )
-        if (openAfterCheckpointFrames && restoredReplayPositions.isEmpty()) {
-            openAfterCheckpointFrames = false
-            setGreen()
-        }
     }
 
     private fun setGreen() {
         if (!isStopped) return
-        if (restoredReplayPositions.isNotEmpty()) {
-            openAfterCheckpointFrames = true
-            return
-        }
         runBlocking {
             buffer.drain().forEach { parked ->
                 ReplayScope.withSuspending(parked.replayFrontier) {
@@ -113,7 +107,6 @@ class TrafficLightCell<T : Any>(
     }
 
     private fun setRed() {
-        openAfterCheckpointFrames = false
         if (isStopped) return
         dataInlet.serve(Proxy.fromClass(clazz, Buffering(::park)))
         isStopped = true
@@ -128,7 +121,7 @@ class TrafficLightCell<T : Any>(
         dataInlet.serve(Proxy.fromClass(clazz, Buffering(::park)))
     }
 
-    override fun snapshot(): Serializable {
+    override fun checkpointState(): Serializable {
         if (buffer.isEmpty()) return !isStopped
         return CheckpointState(
             green = !isStopped,
@@ -141,7 +134,7 @@ class TrafficLightCell<T : Any>(
         )
     }
 
-    override fun restore(state: Serializable) {
+    override fun restoreCheckpointState(state: Serializable) {
         check(buffer.isEmpty()) { "traffic light $ref restored over ${buffer.size} live parked invocation(s)" }
         restoredReplayPositions.clear()
         when (state) {
