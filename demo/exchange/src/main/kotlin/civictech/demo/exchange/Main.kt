@@ -12,9 +12,9 @@ import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.observe.View
+import civictech.cell.observe.Observation
+import civictech.cell.observe.observation
 import civictech.cell.host.link
-import civictech.cell.observe.observe
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.link.Interest
@@ -166,6 +166,15 @@ class ExchangeApp(
     private val boardApi = Propagate::class.java as Class<Propagate<MapDelta<String, Long>>>
     private val boardCell = GlitchFreeCell(boardApi)
 
+    private val observation: Observation by lazy {
+        host.observation {
+            map("board", boardCell.ref)
+        }
+    }
+
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
+
     // Per-region durable writers (CP-C1): one SetCell per region, journaled, its
     // ref registered so `journalFor` selects the WAL for it. The factory wires
     // the streamTo into the union, so recover() re-establishes it per key.
@@ -247,9 +256,12 @@ class ExchangeApp(
             }
         })
 
-        // observe the board's aligned outlet → SSE state
-        host.observe(boardCell.ref, View.map<String, Long>()) {
-            synchronized(state) { board = it }; broadcast()
+        // Read the board through the canonical observation → SSE state.
+        observation.onChange { frame ->
+            @Suppress("UNCHECKED_CAST")
+            val next = frame.views.getValue("board") as Map<String, Long>
+            synchronized(state) { board = next }
+            broadcast()
         }
 
         if (wire != null) {
