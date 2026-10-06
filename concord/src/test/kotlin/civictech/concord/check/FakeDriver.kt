@@ -27,6 +27,8 @@ class FakeDriver(
     private val effects: Map<CellId, List<Effect>> = emptyMap(),
     private val emissions: Map<CellId, Long> = emptyMap(),
     private val refusals: Map<CellId, Long> = emptyMap(),
+    private val families: Map<CellId, List<Long>> = emptyMap(),
+    private val interestRefusals: Map<CellId, Long> = emptyMap(),
     // Cells whose replica has departed (despawned/evicted): readView throws
     // NoSuchElementException for these, exactly as the real in-process binding
     // does for a removed cell table key (see Checks.replicasConverge's KDoc,
@@ -40,6 +42,9 @@ class FakeDriver(
     override fun disconnect(linkRef: LinkRef): LinkResult = LinkResult.Connected(linkRef)
     override fun apply(cellId: CellId, op: String, value: Value?) {}
     override fun quiesce(budget: Int): QuiesceReport = QuiesceReport(settled = true, steps = 0)
+    override fun declareInterest(cellId: CellId, interest: Value) {}
+    override fun familyKeys(cellId: CellId): List<Long> =
+        families[cellId] ?: error("FakeDriver: no family fixture for '$cellId'")
     override fun readView(cellId: CellId): Value {
         if (cellId in departed) throw NoSuchElementException("FakeDriver: '$cellId' has departed")
         return views[cellId] ?: error("FakeDriver: no view fixture for '$cellId'")
@@ -84,6 +89,9 @@ class FakeDriver(
     // exercising the driver-refusal arm the check is built to report.
     override fun refusalCount(cellId: CellId): Long =
         refusals[cellId] ?: error("FakeDriver: no refusal-count fixture for '$cellId'")
+
+    override fun interestRefusalCount(cellId: CellId): Long =
+        interestRefusals[cellId] ?: error("FakeDriver: no interest-refusals fixture for '$cellId'")
 }
 
 /**

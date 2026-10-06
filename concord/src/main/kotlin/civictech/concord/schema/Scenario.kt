@@ -155,6 +155,13 @@ data class CellSpec(
      */
     val interest: InterestSpec? = null,
     /**
+     * A lazily materialized keyed family (`computenet-vb7aq`,
+     * `42-INTEREST-SPAWN-01`). Present only when [type] is a catalog cell the
+     * driver admits as a family member; today that is `set-source`. The cell id
+     * names the family handle, not a cell with ports or a view of its own.
+     */
+    val family: FamilySpec? = null,
+    /**
      * Window descriptor (M11.6 "windowing = key derivation",
      * `24-data-cells.md` §Grouped aggregation, `24-OP-WINDOW-01`/`-02`):
      * present only on a `window` cell. Optional and additive — existing
@@ -237,6 +244,18 @@ data class InterestSpec(
     @SerialName("total-slots") val totalSlots: Int? = null,
     /** Half-open `[lo, hi)` integer ranges this instance admits, over a numeric key. */
     val ranges: List<List<Long>>? = null,
+)
+
+/**
+ * A keyed-family descriptor (`computenet-vb7aq`, `42-INTEREST-SPAWN-01`).
+ * Long keys are the only neutral family-key vocabulary today. When
+ * [spawnOnInterest] is true, bounded interests declared on the family's host
+ * materialize their named members; false keeps the family touch-driven.
+ */
+@Serializable
+data class FamilySpec(
+    val keys: String = "long",
+    @SerialName("spawn-on-interest") val spawnOnInterest: Boolean = false,
 )
 
 /**

@@ -169,7 +169,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 24-WL-20 | 24-WL-JOINLOW-01, 24-WL-REBASE-01 | covered |
 | 33-MOVE-01 | 33-MIGRATE-01 | covered |
 | 41-LOC-01 | 41-SPLIT-01 | covered |
-| 42-INT-01 | 42-INTEREST-01 | covered |
+| 42-INT-01 | 42-INTEREST-01, 42-INTEREST-SPAWN-01 | covered |
 | 42-REPL-04 | 42-REPL-01, 42-REPL-DELDOT-01, 42-REPL-LATE-01, 42-TMAP-REPL-01 | covered |
 | 42-REPL-05 | 42-REPL-LATE-01 | covered |
 | 42-REPL-06 | 42-REPL-DEPART-01, CTL-REPLCONV-ID-01 | covered |

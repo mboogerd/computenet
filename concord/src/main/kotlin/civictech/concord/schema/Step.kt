@@ -42,6 +42,19 @@ data class ApplyStep(
 data class QuiesceStep(val budget: Int? = null) : Step
 
 /**
+ * Declare [interest] on the host registry of family [on]
+ * (`computenet-vb7aq`, `42-INTEREST-SPAWN-01`). The driver awaits the
+ * declaration's induced spawns before returning. A typed refusal is accounted
+ * by `interest-refusals` rather than thrown or dead-lettered.
+ */
+@Serializable
+@SerialName("declare-interest")
+data class DeclareInterestStep(
+    val on: String,
+    val interest: InterestSpec,
+) : Step
+
+/**
  * A topology add applied mid-script (`connect(from, to, inlet?, role?)`).
  * [expect] pins the construction-time result: `connected` (default) or `rejected`
  * (a negative / admission-policy scenario, §1.2 exemplar (d)).
