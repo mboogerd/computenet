@@ -250,7 +250,6 @@ class DemoApp(
         // it is what makes the pilot narratable in the UI.
         if (replication != null && sharedCell != null) {
             replication.replicate(sharedCell, host)
-            manage.link(sharedCell.outlet, itemsUnion.inlet)
         }
 
         /*
@@ -269,6 +268,14 @@ class DemoApp(
             if (sharedCell != null) set("shared", sharedCell.ref)
         }
         observation.onChange { broadcast() }
+
+        // Per-user writer streams are opaque to the host topology walk. Keep
+        // the replicated source's direct observation in its own root group by
+        // adding this downstream link after admission; the already-registered
+        // `items` source still receives the shared output through itemsUnion.
+        if (replication != null && sharedCell != null) {
+            manage.link(sharedCell.outlet, itemsUnion.inlet)
+        }
 
         // V4-PEERID: `peerName = netName` is in the manifest above, so the peer's
         // inspector labels our cells with our own --net-name and keeps that label
