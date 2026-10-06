@@ -3,7 +3,6 @@ package civictech.cell.evolve
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
-import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.control.Magnitude
 import civictech.cell.host.HostedCellProxy
@@ -27,6 +26,11 @@ import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
 class EvolveOrchestratorTest {
@@ -298,6 +302,117 @@ class EvolveOrchestratorTest {
         hooks.promoted shouldBe listOf(run.incumbent.ref)
     }
 
+    @Test
+    fun `a window-filling wave cannot promote before its queued violation is judged`() {
+        val run = Run(
+            seed = 14,
+            candidateFactory = ::ThirdWaveRegressingSummer,
+            stagedCandidateGate = true,
+        )
+        val hooks = RecordingHooks()
+        val handle = run.start(hooks = hooks)
+        run.emit(1)
+        run.emit(2)
+
+        run.submit(3)
+        run.controller.step() shouldBe true
+
+        handle.advance() shouldBe EvolutionHandle.State.SHADOWING
+        hooks.promoted shouldBe emptyList()
+        run.idle()
+        handle.advance() shouldBe EvolutionHandle.State.REJECTED
+        hooks.promoted shouldBe emptyList()
+        (run.host.portAt(run.incumbent.ref, "outlet") != null) shouldBe true
+    }
+
+    @Test
+    fun `await on a live host rejects after the window-filling violation leaves the queue`() {
+        val host = ManagedHost()
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = ThirdWaveRegressingSummer(CellRef(logicalId, instanceId = 1))
+        val candidateGate = nonDecreasingGate()
+        val adapter = BlockingInvariantAdapterCell(candidateGate)
+        val view = CollectorCell()
+        val hooks = RecordingHooks()
+        val polling = AtomicBoolean(false)
+        val pollCount = AtomicInteger()
+        val secondPoll = CountDownLatch(1)
+        val authority = EvolutionAuthority {
+            if (polling.get() && pollCount.incrementAndGet() == 2) secondPoll.countDown()
+            null
+        }
+
+        listOf<Cell>(source, gate, incumbent, candidateGate, adapter, view).forEach {
+            host.managementInlet.call.spawn(it)
+        }
+        val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java) as GateProxy).dataInlet.call
+        val routedInvariant =
+            (HostedCellProxy.create(adapter.ref, host, LongConsumerProxy::class.java) as LongConsumerProxy).inlet.call
+        source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+        gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+        incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+        candidate.outlet.subscribe(Use.fixed(routedInvariant, PortRef.generate()))
+        gate.controlInlet.call.setGreen()
+
+        val handle = Evolve.run(
+            host = host,
+            gate = gate,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = "outlet",
+            downstream = listOf(view.inlet),
+            policy = policy(),
+            gates = listOf(candidateGate),
+            authority = authority,
+            hooks = hooks,
+        )
+        source.emit(1)
+        host.quiescence().await(5_000, "first live evolution wave")
+        source.emit(2)
+        host.quiescence().await(5_000, "second live evolution wave")
+
+        val awaitResult = AtomicReference<EvolutionHandle.State>()
+        val awaitFailure = AtomicReference<Throwable>()
+        val awaitDone = CountDownLatch(1)
+        var waiter: Thread? = null
+        try {
+            adapter.arm()
+            source.emit(3)
+            adapter.entered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            polling.set(true)
+            waiter = Thread.ofVirtual().start {
+                try {
+                    awaitResult.set(handle.await(5_000))
+                } catch (failure: Throwable) {
+                    awaitFailure.set(failure)
+                } finally {
+                    awaitDone.countDown()
+                }
+            }
+
+            // A second poll proves the first one saw only the last drained prefix. Before the
+            // fix the first poll accepted immediately while the adapter held the violation.
+            secondPoll.await(5, TimeUnit.SECONDS) shouldBe true
+            handle.state shouldBe EvolutionHandle.State.SHADOWING
+            hooks.promoted shouldBe emptyList()
+
+            adapter.release()
+            awaitDone.await(5, TimeUnit.SECONDS) shouldBe true
+            awaitFailure.get() shouldBe null
+            awaitResult.get() shouldBe EvolutionHandle.State.REJECTED
+            host.quiescence().await(5_000, "live rejected shadow teardown")
+            hooks.promoted shouldBe emptyList()
+            (host.portAt(incumbent.ref, "outlet") != null) shouldBe true
+        } finally {
+            adapter.release()
+            waiter?.join(5_000)
+        }
+    }
+
     private interface SummingCell : Cell {
         val inlet: FanInlet<Consumer<Int>>
         val outlet: FanOutlet<Consumer<Long>>
@@ -381,6 +496,23 @@ class EvolveOrchestratorTest {
         }
     }
 
+    private class ThirdWaveRegressingSummer(override val ref: CellRef) : SummingCell {
+        override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
+        private var sum = 0L
+        private var inputs = 0
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    inputs++
+                    sum += input
+                    outlet.call.provide(if (inputs == 3) sum - 100 else sum)
+                }
+            })
+        }
+    }
+
     private class NonIdempotentSummer(override val ref: CellRef) : SummingCell, Promotion.NonIdempotentCatchUp {
         override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
         override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
@@ -409,8 +541,57 @@ class EvolveOrchestratorTest {
         }
     }
 
+    private class InvariantAdapterCell(
+        invariant: InvariantCell<Long, Pair<Long, Long>>,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Long>>())
+
+        init {
+            inlet.serve(object : Consumer<Long> {
+                override fun provide(input: Long) {
+                    invariant.inlet.call.propagate(input)
+                }
+            })
+        }
+    }
+
+    private class BlockingInvariantAdapterCell(
+        invariant: InvariantCell<Long, Pair<Long, Long>>,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Long>>())
+        val entered = CountDownLatch(1)
+        private val release = CountDownLatch(1)
+        private val armed = AtomicBoolean()
+
+        init {
+            inlet.serve(object : Consumer<Long> {
+                override fun provide(input: Long) {
+                    if (armed.compareAndSet(true, false)) {
+                        entered.countDown()
+                        check(release.await(10, TimeUnit.SECONDS)) { "test did not release the invariant adapter" }
+                    }
+                    invariant.inlet.call.propagate(input)
+                }
+            })
+        }
+
+        fun arm() {
+            armed.set(true)
+        }
+
+        fun release() {
+            release.countDown()
+        }
+    }
+
     private interface GateProxy {
         val dataInlet: Use<Consumer<Int>>
+    }
+
+    private interface LongConsumerProxy {
+        val inlet: Use<Consumer<Long>>
     }
 
     private class RecordingHooks : EvolutionHooks {
@@ -433,6 +614,7 @@ class EvolveOrchestratorTest {
         candidateFactory: (CellRef) -> SummingCell = ::SummerV2,
         baselineFactory: ((CellRef) -> SummingCell)? = null,
         val policy: PromotionPolicy = policy(baseline = baselineFactory != null),
+        stagedCandidateGate: Boolean = false,
     ) {
         val controller = SimulationController(seed)
         val host = ManagedHost(scheduler = controller.scheduler())
@@ -443,11 +625,12 @@ class EvolveOrchestratorTest {
         val candidate = candidateFactory(CellRef(logicalId, instanceId = 1))
         val baselineTwin = baselineFactory?.invoke(CellRef(logicalId, instanceId = 2))
         val candidateGate = nonDecreasingGate()
+        val candidateGateAdapter = if (stagedCandidateGate) InvariantAdapterCell(candidateGate) else null
         val baselineGate = baselineTwin?.let { nonDecreasingGate() }
         val view = CollectorCell()
 
         init {
-            listOfNotNull<Cell>(source, gate, incumbent, view, candidateGate, baselineGate).forEach {
+            listOfNotNull<Cell>(source, gate, incumbent, view, candidateGate, candidateGateAdapter, baselineGate).forEach {
                 host.managementInlet.call.spawn(it)
             }
             controller.runToIdle()
@@ -456,7 +639,8 @@ class EvolveOrchestratorTest {
             source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
             gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
             incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
-            connectGate(candidate, candidateGate)
+            if (stagedCandidateGate) connectGateStaged(candidate)
+            else connectGate(candidate, candidateGate)
             baselineTwin?.let { twin -> connectGate(twin, baselineGate!!) }
             gate.controlInlet.call.setGreen()
         }
@@ -483,8 +667,20 @@ class EvolveOrchestratorTest {
             controller.runToIdle()
         }
 
+        fun submit(value: Int) {
+            source.emit(value)
+        }
+
         fun idle() {
             controller.runToIdle()
+        }
+
+        private fun connectGateStaged(cell: SummingCell) {
+            @Suppress("UNCHECKED_CAST")
+            val adapter = requireNotNull(candidateGateAdapter)
+            val routed = (HostedCellProxy.create(adapter.ref, host, LongConsumerProxy::class.java) as LongConsumerProxy)
+                .inlet.call
+            cell.outlet.subscribe(Use.fixed(routed, PortRef.generate()))
         }
     }
 

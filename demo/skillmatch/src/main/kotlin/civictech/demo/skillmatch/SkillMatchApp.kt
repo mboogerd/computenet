@@ -249,9 +249,17 @@ class SkillMatchApp(port: Int = 8080) {
     private val jobSkills: ObservationSink<Set<JobSkill>> =
         host.observe(refs.jobSkills.ref, View.set<JobSkill>())
 
-    // These four derived views all have exactly the candidate+job root set.
-    // One aligned sink therefore publishes their settled state in one frame.
+    // These four views sit over ungated JoinSetCell/SemiJoinCell/LookupJoinCell/
+    // CombineLatestCell instances, which [KE2-09] (computenet-lw0mv) rejects at
+    // build. Opting out per view preserves this demo's observable behaviour;
+    // the known intra-wave tear remains visible through alignedBufferedWaves.
+    // Gating these cells with emitOnFrontier would change the frame shape and
+    // belongs to the separate operator follow-up.
     private val aligned: AlignedCompositeCell = host.observeAligned {
+        unchecked("matches")
+        unchecked("gap")
+        unchecked("qualification")
+        unchecked("market")
         set("matches", refs.matches.ref)
         set("gap", refs.gap.ref)
         map("qualification", refs.qualification.ref)

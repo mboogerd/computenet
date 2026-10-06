@@ -78,18 +78,21 @@ interface EvolutionHandle {
     fun verdict(): PromotionVerdict
 
     /**
-     * Evaluate the current verdict and, when settled, perform its terminal action.
+     * Evaluate the latest host-drained observation prefix and, when settled, perform its
+     * terminal action. A wave that has emitted but whose gate delivery is still queued is
+     * deliberately absent from that prefix, so calling from outside the host is safe.
      *
-     * Call it between waves, after the host has drained: the wave counter fires inside the
-     * candidate's emission while a gate's violation for that same wave arrives in a later
-     * host task, so a verdict read mid-wave can count a window-filling wave whose violation
-     * is still queued (a candidate can then be accepted that its gates would reject).
+     * The prefix carries [civictech.cell.host.Quiescence]'s limits: it covers gate deliveries
+     * that travel this host's scheduler queue, not gates hosted elsewhere or attention-parked
+     * traffic. It advances only when the host queue drains, so a host that never drains keeps
+     * the handle [State.SHADOWING].
      */
     fun advance(): State
 
     /**
-     * Poll [advance] until the handle is terminal or [timeoutMillis] elapses. It takes no host
-     * fence, so it carries [advance]'s mid-wave caveat while production traffic flows.
+     * Poll [advance] until the handle is terminal or [timeoutMillis] elapses. Production may
+     * continue while it polls; each candidate wave arranges publication after the host queue
+     * has applied that wave's already-enqueued gate deliveries.
      */
     fun await(timeoutMillis: Long): State
 }
@@ -191,7 +194,14 @@ object Evolve {
 
         val candidateOutlet = outlet(candidate, outletName)
         val observerRef = PortRef.generate()
-        candidateOutlet.observe(observerRef) { judge.observeCandidateWave() }
+        candidateOutlet.observe(observerRef) {
+            judge.observeCandidateWave()
+            // Observe taps fire before consumers. Taking the lowest-priority fence here means
+            // every delivery that this emission enqueues afterwards still runs before the
+            // settlement callback. The callback itself runs synchronously on the thread that
+            // completes the fence future: the host's single scheduler thread.
+            host.quiescence().asFuture().thenRun { judge.settleObservation() }
+        }
 
         return Handle(
             host = host,
@@ -322,14 +332,14 @@ object Evolve {
         override val candidateRef: CellRef = candidate.ref
         override val baselineRef: CellRef? = baseline?.twin?.ref
 
-        override fun verdict(): PromotionVerdict = judge.verdict()
+        override fun verdict(): PromotionVerdict = judge.settledVerdict()
 
         @Synchronized
         override fun advance(): EvolutionHandle.State {
             checkAuthority(authority)
             if (state.isTerminal()) return state
 
-            return when (val verdict = judge.verdict()) {
+            return when (val verdict = judge.settledVerdict()) {
                 PromotionVerdict.Pending -> {
                     state = EvolutionHandle.State.SHADOWING
                     state
@@ -384,7 +394,10 @@ object Evolve {
                     candidate = candidate,
                     outletName = outletName,
                     downstream = downstream,
-                    judge = judge,
+                    // advance() already consumed a host-drained verdict. Re-reading the raw
+                    // counters in Promotion PRECHECK would reopen the same tap-before-gate
+                    // race if a newer wave emitted between that verdict and this call.
+                    judge = null,
                     journal = hooks.journal,
                 )
             } catch (aborted: Promotion.PromotionAborted) {

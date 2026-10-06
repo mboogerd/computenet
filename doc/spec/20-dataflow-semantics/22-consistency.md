@@ -385,7 +385,11 @@ and an edge opened mid-stream floors below the waves already flushed — so a
 sink attached while the graph is already writing can transiently expose arms
 seeded at different points; the sink publishes, per source, the wave from
 which the guarantee holds in `AlignedComposite.alignedFrom` (the first wave
-released through the completeness set), and catch-up never sets it.
+released through the completeness set after every named arm has an open
+Consume edge), and catch-up never sets it. A wave released while
+`observeAligned` is still connecting those arms may advance the published
+frontier but cannot set `alignedFrom`, so a transient mixed composite from that
+attach race fails the reader check rather than claiming the aligned guarantee.
 `cell.observe.CompositeSink` remains the shipped
 point-consistent fallback — honestly documented as not wave-aligned, and the
 right choice when a stalled arm must not delay a read.)*

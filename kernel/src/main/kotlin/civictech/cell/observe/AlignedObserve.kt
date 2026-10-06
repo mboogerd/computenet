@@ -190,12 +190,16 @@ class AlignedDrainBarrier internal constructor(
  * points. `AlignedComposite.alignedFrom` is the observable for when the
  * guarantee starts: for each source `s`, a reader checks on one immutable
  * composite that `alignedFrom[s] != null && frontier[s] >= alignedFrom[s]`.
- * These are equivalent because the same release first writes both; a
- * composite failing the check for `s` may still carry arms catch-up-seeded at
- * different points for `s`. An install-only publication keeps the previous
- * `alignedFrom` and `frontier`; from the first waved delta onward, every
- * published composite is aligned. Attach before the graph starts writing if
- * the very first snapshot must be aligned too.
+ * The release that first writes `alignedFrom` also advances `frontier` to at
+ * least that counter; a composite failing the check for `s` may still carry
+ * arms catch-up-seeded at different points for `s`. An install-only
+ * publication keeps the previous
+ * `alignedFrom` and `frontier`. A wave released while [observeAligned] is still
+ * connecting its named arms advances `frontier` but cannot set `alignedFrom`;
+ * the guarantee starts at the first completeness-set release after every named
+ * arm has an open `Consume` edge. From that release onward, every composite
+ * passing the reader check is aligned. Attach before the graph starts writing
+ * if the very first snapshot must be aligned too.
  *
  * **Bridged (two-host frame-bridge) coverage.** `AlignedObserveBridgedTest`
  * proves the remote-arm invariant over the in-process `BridgeEgressCell` /
@@ -742,6 +746,11 @@ class AlignedCompositeCell(
 
     private fun ready(timestamp: Timestamp): Boolean = expectedEdges(timestamp).all { isSettled(it, timestamp) }
 
+    /** Whether every named arm has joined the completeness set through an open Consume edge. */
+    private fun allArmsLinked(): Boolean = arms.values.all { arm ->
+        edges.values.any { edge -> edge.arm === arm && edge.open && edge.link.role == LinkRole.Consume }
+    }
+
     /**
      * Records [edge] as dropped from every wave it is expected for and has not
      * settled — every pending wave, or (with [through]) the pending waves of that
@@ -809,7 +818,7 @@ class AlignedCompositeCell(
             .sortedWith(compareBy({ it.sourceId }, { it.counter }))
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue
-            alignedFrom.putIfAbsent(timestamp.sourceId, timestamp.counter)
+            if (allArmsLinked()) alignedFrom.putIfAbsent(timestamp.sourceId, timestamp.counter)
             val dropped = LinkedHashSet<DroppedEdge>()
             exclusions.remove(timestamp)?.let { dropped += it }
             edges.values
@@ -1021,7 +1030,8 @@ class AlignedCompositeCell(
  *   without (see [AlignedCompositeCell]'s class doc, §Stalled edges); empty for
  *   a fully aligned composite.
  * @property alignedFrom the first wave per source released through the
- *   completeness set, monotone and absent for a source never released; not
+ *   completeness set after every named arm has an open `Consume` edge,
+ *   monotone and absent for a source never released under that condition; not
  *   serialized in `snapshot()`.
  */
 data class AlignedComposite(
@@ -1042,12 +1052,23 @@ data class AlignedComposite(
  * [civictech.cell.graph.refAs] at graph-build time, so wiring a wrong-shaped
  * source is a compile error rather than an `Any?` fold. As there, a JVM
  * signature clash forces a distinct `@JvmName` per typed overload.
+ *
+ * Admission rejects an ungated non-monotone cell in any named view's upstream
+ * Consume ancestry, and rejects a re-origination point that divides shared
+ * provenance across the view set. [unchecked] exempts one view from the
+ * ungated-cell rule only; divergent origination is never unchecked.
  */
 class AlignedObserveBuilder internal constructor() {
 
     internal class Spec(val source: CellRef, val outletName: String, val view: View<*, *>, val kind: String)
 
     internal val specs = LinkedHashMap<String, Spec>()
+    internal val unchecked = LinkedHashSet<String>()
+
+    /** Skip ungated-ancestor admission for the registered view [name] only. */
+    fun unchecked(name: String) {
+        unchecked += name
+    }
 
     private fun add(name: String, source: CellRef, outletName: String, view: View<*, *>, kind: String) {
         require(specs.put(name, Spec(source, outletName, view, kind)) == null) { "duplicate observe name '$name'" }
@@ -1118,6 +1139,15 @@ class AlignedObserveBuilder internal constructor() {
  * settles it (see its class doc for the phantom-expected-edge caveat); pass
  * [mode] `DEGRADE` to shrink the frontier on a recoverable stall instead, with
  * the dropped edges disclosed on [AlignedCompositeCell.composite].
+ *
+ * Before constructing or spawning the sink, this builder inspects each view's
+ * current local Consume ancestry. It rejects ungated non-monotone contributors
+ * and re-origination points that split shared provenance; remote producers are
+ * opaque and admitted. [AlignedObserveBuilder.unchecked] opts one view out of
+ * the ungated rule only. This is a synchronous build-time check over links
+ * visible at the call: later links are not rechecked, bypass wiring the host
+ * cannot see reads as a root, and graph construction must not mutate links
+ * concurrently with admission.
  */
 fun Use<HostManagementApi>.observeAligned(
     maxOutstandingHandles: Int = 1024,
@@ -1126,6 +1156,14 @@ fun Use<HostManagementApi>.observeAligned(
     block: AlignedObserveBuilder.() -> Unit,
 ): AlignedCompositeCell {
     val builder = AlignedObserveBuilder().apply(block)
+    require(builder.unchecked.all { it in builder.specs }) {
+        "observeAligned: unchecked views must be registered: " +
+            builder.unchecked.filterNot { it in builder.specs }
+    }
+    when (val verdict = admitAligned(call, builder.specs, builder.unchecked)) {
+        is AdmissionVerdict.Rejected -> throw AlignedAdmissionException(verdict)
+        is AdmissionVerdict.Admitted -> Unit
+    }
     val cell = AlignedCompositeCell(
         views = builder.specs.mapValues { it.value.view },
         registeredAs = builder.specs.mapValues { it.value.kind },
