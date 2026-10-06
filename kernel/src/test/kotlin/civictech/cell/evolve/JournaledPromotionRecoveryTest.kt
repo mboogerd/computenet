@@ -408,6 +408,28 @@ class JournaledPromotionRecoveryTest {
         secondHost.consume(journal, target, "inlet", position.timestamp) shouldBe false
     }
 
+    @Test
+    fun `checkpoint replay positions for an absent target are neither retained nor captured`() {
+        val journal = Any()
+        val live = CellRef(UUID.randomUUID())
+        val retired = CellRef(UUID.randomUUID())
+        val present = mutableSetOf(live to "inlet", retired to "inlet")
+        val registry = CheckpointReplayPositions { cellRef, portName -> (cellRef to portName) in present }
+        val timestamp = Timestamp(UUID.randomUUID(), 1L)
+
+        registry.register(journal, listOf(CheckpointReplayPosition(live, "inlet", timestamp)))
+        present.remove(retired to "inlet")
+        registry.register(journal, listOf(CheckpointReplayPosition(retired, "inlet", timestamp)))
+        registry.retainedPositionCount() shouldBe 1
+
+        present.remove(live to "inlet")
+        registry.capturing(journal, emptyMap()) {
+            CheckpointReplayPositions.get() shouldBe registry
+            registry.capture(journal, timestamp)
+        } shouldBe emptyList()
+        CheckpointReplayPositions.get() shouldBe null
+    }
+
     private fun assertRecovery(seed: Long) {
         val journal = InMemoryJournal()
         val refs = refs()
