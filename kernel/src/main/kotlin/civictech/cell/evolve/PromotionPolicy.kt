@@ -103,23 +103,60 @@ class PromotionJudge(
     private var candidateWaves = 0
     private var candidateViolations = 0
     private var incumbentViolations = 0
+    private var settledCandidateWaves = 0
+    private var settledCandidateViolations = 0
+    private var settledIncumbentViolations = 0
 
     /** Record that the candidate has shadowed one more production wave. */
+    @Synchronized
     fun observeCandidateWave() {
         candidateWaves++
     }
 
     /** Record a gate violation observed on the candidate's shadow. */
+    @Synchronized
     fun observeCandidateViolation(violation: Violation) {
         candidateViolations++
     }
 
     /** Record a gate violation observed on the incumbent's shadow (differential baseline). */
+    @Synchronized
     fun observeIncumbentViolation(violation: Violation) {
         incumbentViolations++
     }
 
-    fun verdict(): PromotionVerdict {
+    /**
+     * Publish the observation prefix whose host queue has drained. An [EvolutionHandle]
+     * evaluates only this prefix: a wave tap fires before the wave's consumers, so the raw
+     * counters may include a wave whose invariant delivery is still queued.
+     */
+    @Synchronized
+    internal fun settleObservation() {
+        settledCandidateWaves = candidateWaves
+        settledCandidateViolations = candidateViolations
+        settledIncumbentViolations = incumbentViolations
+    }
+
+    /** Verdict over the last host-drained observation prefix. */
+    @Synchronized
+    internal fun settledVerdict(): PromotionVerdict = verdict(
+        candidateWaves = settledCandidateWaves,
+        candidateViolations = settledCandidateViolations,
+        incumbentViolations = settledIncumbentViolations,
+    )
+
+    @Synchronized
+    fun verdict(): PromotionVerdict = verdict(
+        candidateWaves = candidateWaves,
+        candidateViolations = candidateViolations,
+        incumbentViolations = incumbentViolations,
+    )
+
+    private fun verdict(
+        candidateWaves: Int,
+        candidateViolations: Int,
+        incumbentViolations: Int,
+    ): PromotionVerdict {
         cycleHead?.let { head ->
             if (head.feedbackInput.lastQuiescent != true) {
                 return PromotionVerdict.Reject(
