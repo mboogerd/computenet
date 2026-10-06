@@ -249,6 +249,55 @@ class InterestSpawnTest {
     }
 
     @Test
+    fun `a checkpoint recovers an adopted member whose family key append failed`() {
+        val firstController = SimulationController(seed = 13)
+        val firstRegistry = LocationRegistry()
+        val journal = FamilyKeyFailingJournal(failuresRemaining = 1)
+        val firstHost = ManagedHost(
+            scheduler = firstController.scheduler(),
+            registry = firstRegistry,
+            journal = journal,
+        )
+        val firstFamily = longFamily(firstHost)
+        val declaringRef = CellRef(UUID.randomUUID())
+        val interest = Interest.Ranges(listOf(Interest.Ranges.Range(11, 12)))
+
+        val failedAdmission = firstRegistry.setInterest(declaringRef, interest)
+        firstController.runToIdle()
+        failed(failedAdmission.spawned).message shouldBe "FamilyKey append failed"
+
+        val adopted = firstFamily.getOrSpawn(11L)
+        opsFor(firstRegistry, adopted).add("kept")
+        firstController.runToIdle()
+        familyKeys(journal) shouldBe emptyList()
+
+        firstHost.checkpoint(journal)
+        val checkpointRecords = journal.replay().map(JournalRecords::decode)
+        val familyKeyIndex = checkpointRecords.indexOfFirst { record ->
+            record is DecodedJournalRecord.Topology &&
+                TopoEvent.FamilyKey("authored", "11") in record.events
+        }
+        val checkpointIndex = checkpointRecords.indexOfFirst { it is DecodedJournalRecord.Checkpoint }
+        familyKeyIndex shouldBe 0
+        checkpointIndex shouldBe 1
+
+        val recoveredController = SimulationController(seed = 14)
+        val recoveredRegistry = LocationRegistry()
+        val recoveredHost = ManagedHost(
+            scheduler = recoveredController.scheduler(),
+            registry = recoveredRegistry,
+            journal = journal,
+        )
+        val recoveredFamily = longFamily(recoveredHost)
+        recoveredHost.recoverFrom(journal)
+        recoveredController.runToIdle()
+
+        recoveredFamily.keys() shouldBe setOf(11L)
+        membership(recoveredFamily.getOrSpawn(11L)) shouldBe setOf("kept")
+        recoveredHost.supervisionAccounting().deadLetters shouldBe 0L
+    }
+
+    @Test
     fun `unbounded arms stay recorded and fail the admission without spawning`() {
         val registry = LocationRegistry()
         val family = longFamily(ManagedHost(registry = registry))
