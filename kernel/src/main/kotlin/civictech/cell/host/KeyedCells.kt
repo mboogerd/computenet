@@ -35,8 +35,12 @@ import java.util.concurrent.CompletableFuture
  * - **optional interest-driven membership** — with [spawnOnInterest], every
  *   bounded [Interest.Ranges] admitted by this host's registry asynchronously
  *   materializes its keys. This path records membership after the budgeted
- *   spawn succeeds, inside that same management task, so a refusal owns
- *   neither an in-memory key nor a durable key record;
+ *   spawn succeeds, inside that same management task. A host-admitted cell
+ *   whose membership append then fails is retained as a volatile live member
+ *   while the admission future reports the append failure: it is not
+ *   recoverable after restart, but retries join it instead of spawning its
+ *   deterministic ref twice. A spawn refusal still owns neither an in-memory
+ *   key nor a durable key record;
  * - **checkpoint-safe membership** — the family contributes its recorded keys
  *   to each journal's topology fold, so compaction preserves membership.
  *
@@ -142,6 +146,7 @@ class KeyedCells<K : Any>(
         var cell: Cell? = null
         var fresh = false
         var recorded = false
+        var hostAdmitted = false
         var startFailure: Throwable? = null
         var hostSpawn: CompletableFuture<CellRef>? = null
 
@@ -158,6 +163,7 @@ class KeyedCells<K : Any>(
                     fresh = key !in known
                     hostSpawn = host.spawnAsync(prepared) {
                         synchronized(lock) {
+                            hostAdmitted = true
                             if (fresh && known.add(key)) {
                                 try {
                                     recorded = host.recordTopology(
@@ -200,6 +206,12 @@ class KeyedCells<K : Any>(
             synchronized(lock) {
                 pending.remove(key)
                 if (failure == null) {
+                    live[key] = prepared
+                } else if (recordAfterSpawn && hostAdmitted) {
+                    // Host admission cannot be rolled back here. Keep the cell as a
+                    // volatile family member so its deterministic ref stays reachable;
+                    // the append failure still completes the admission exceptionally.
+                    known.add(key)
                     live[key] = prepared
                 } else if (fresh && !recorded) {
                     // A successful write-ahead record owns the key even if the following
