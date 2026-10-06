@@ -95,6 +95,35 @@ class KeyedCellsSpawnAsyncTest {
     }
 
     @Test
+    fun `getOrSpawn returns an already-live cell from the host thread without awaiting`() {
+        val scheduler = VirtualThreadScheduler("keyed-live-fast-path")
+        try {
+            val host = ManagedHost(scheduler = scheduler)
+            val family = KeyedCells<String>(
+                host,
+                null,
+                "writer",
+                factory = { _, ref -> SetCell<String>(ref) },
+            )
+            val live = family.getOrSpawn("alice")
+            val returned = CompletableFuture<Cell>()
+            val trigger = TriggerCell(action = { returned.complete(family.getOrSpawn("alice")) })
+            host.managementInlet.call.spawn(trigger)
+
+            host.routerInlet.call.route(
+                trigger.ref,
+                "inlet",
+                Invocation.of(provide, arrayOf(Unit)),
+            )
+
+            returned.get(5, TimeUnit.SECONDS) shouldBeSameInstanceAs live
+            host.supervisionAccounting().deadLetters shouldBe 0L
+        } finally {
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
     fun `concurrent host and test thread calls join one pending spawn`() {
         val scheduler = VirtualThreadScheduler("keyed-pending-join")
         val releaseHandler = CountDownLatch(1)

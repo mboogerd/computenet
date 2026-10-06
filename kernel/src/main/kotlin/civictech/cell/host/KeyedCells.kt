@@ -74,7 +74,12 @@ class KeyedCells<K : Any>(
      * returns the same cell — no second spawn (so the live-ref guard never
      * fires) and no second durable record.
      */
-    fun getOrSpawn(key: K): Cell = host.awaitManagement(spawnAsync(key))
+    fun getOrSpawn(key: K): Cell {
+        synchronized(lock) {
+            live[key]?.let { return it }
+        }
+        return host.awaitManagement(spawnAsync(key))
+    }
 
     /**
      * Start the cell for [key] without waiting on the host. Concurrent callers
