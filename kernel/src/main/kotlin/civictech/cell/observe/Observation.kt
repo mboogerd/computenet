@@ -21,6 +21,7 @@ import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 
 /**
  * One app-edge observation over one or more internally aligned [groups].
@@ -55,6 +56,14 @@ interface Observation {
 
     /** Closes every aligned group and the multi-group dispatcher, if one was minted. */
     fun close()
+
+    /**
+     * Waits for every group listener queue and the multi-group dispatcher to
+     * terminate within one shared timeout budget.
+     *
+     * @throws IllegalStateException if [close] has not happened.
+     */
+    fun awaitTermination(timeoutMillis: Long): Boolean
 }
 
 /**
@@ -219,8 +228,15 @@ private class ObservationCoordinator(
     private var latest: ObservationFrame = assemble(groupSnapshots)
 
     init {
-        groupCells.forEach { (id, cell) ->
-            cell.onComposite { composite -> onGroup(id, composite) }
+        // A one-group observation reads that group directly and forwards
+        // listeners to it below. Registering this coordinator as a second
+        // listener would eagerly mint the group's dispatcher even when the
+        // app only calls current(), defeating the one-group/no-extra-thread
+        // contract used by per-key observations.
+        if (singleGroup == null) {
+            groupCells.forEach { (id, cell) ->
+                cell.onComposite { composite -> onGroup(id, composite) }
+            }
         }
     }
 
@@ -320,6 +336,26 @@ private class ObservationCoordinator(
         }
         doomed?.shutdown()
         groupCells.values.forEach(AlignedCompositeCell::close)
+    }
+
+    override fun awaitTermination(timeoutMillis: Long): Boolean {
+        val ownDispatcher = synchronized(lock) {
+            check(closed) { "awaitTermination requires close() first" }
+            dispatcher
+        }
+        require(timeoutMillis >= 0) { "timeoutMillis must not be negative (was $timeoutMillis)" }
+        val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        val started = System.nanoTime()
+
+        fun remainingMillis(): Long {
+            val remaining = timeoutNanos - (System.nanoTime() - started)
+            return if (remaining <= 0L) 0L else TimeUnit.NANOSECONDS.toMillis(remaining)
+        }
+
+        for (group in groupCells.values) {
+            if (!group.awaitTermination(remainingMillis())) return false
+        }
+        return awaitExecutorsTermination(listOf(ownDispatcher), remainingMillis())
     }
 }
 
