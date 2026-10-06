@@ -42,7 +42,7 @@ class AlignedDrainBarrierTest {
     }
 
     @Test
-    fun `deactivation is distinct repeated shutdown is stable and activation reopens`() {
+    fun `repeated deactivation is stable and activation reopens paused sink`() {
         val ctx = object : CellContext {}
         val sink = emptySink()
 
@@ -50,7 +50,6 @@ class AlignedDrainBarrierTest {
         sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Deactivated
 
         sink.onDeactivate(ctx)
-        sink.close()
         sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Deactivated
 
         sink.onActivate(ctx)
@@ -59,17 +58,16 @@ class AlignedDrainBarrierTest {
     }
 
     @Test
-    fun `deactivation after direct close records deactivated lifecycle`() {
+    fun `deactivation and activation after direct close preserve terminal lifecycle`() {
         val sink = emptySink()
         val ctx = object : CellContext {}
 
         sink.close()
         sink.onDeactivate(ctx)
 
-        sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Deactivated
+        sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Closed
         sink.onActivate(ctx)
-        sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Drained
-        sink.close()
+        sink.drainBarrier().await(1_000) shouldBe AlignedDrainResult.Closed
     }
 
     @Test
@@ -125,7 +123,7 @@ class AlignedDrainBarrierTest {
     }
 
     @Test
-    fun `barrier after reopen waits for callbacks accepted by the predecessor dispatcher`() {
+    fun `barrier after reactivation waits for callbacks accepted by the predecessor dispatcher`() {
         val ctx = object : CellContext {}
         val sink = emptySink()
         val entered = CountDownLatch(1)
@@ -136,7 +134,7 @@ class AlignedDrainBarrierTest {
         }
         check(entered.await(30, TimeUnit.SECONDS)) { "listener did not enter" }
 
-        sink.close()
+        sink.onDeactivate(ctx)
         sink.onActivate(ctx)
         val barrier = sink.drainBarrier()
         barrier.await(1) shouldBe AlignedDrainResult.TimedOut
