@@ -8,6 +8,7 @@ import civictech.cell.data.delta.TaggedMapDelta
  * dot-tagged puts/tombstones into `{k -> value(k) : k in membership()}` — the
  * canonical fold for anything holding an `OrMapCell` outlet (an app
  * subscriber, a test, the observation sink). No ports, no host, no wave logic.
+ * Not an app-edge API; apps read through [civictech.cell.observe.observation].
  *
  * Membership and value resolution are delegated entirely to [TaggedMapDelta]
  * ([TaggedMapDelta.membership], [TaggedMapDelta.value]) — this view never

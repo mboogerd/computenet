@@ -10,6 +10,7 @@ import civictech.cell.data.delta.MapDelta
  * accessor; it shares MapView's last-writer-per-key semantics — upstream (a
  * `GroupByCell`-style fold) recomputes each count and re-puts it — so it does
  * not diverge from the map fold. No ports, no host, no wave logic.
+ * Not an app-edge API; apps read through [civictech.cell.observe.observation].
  *
  * Not thread-safe: apply deltas from one thread at a time, like the cells.
  */

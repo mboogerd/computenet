@@ -13,6 +13,7 @@ import civictech.cell.data.delta.TagState
  * agrees with the cell on what "current membership" means (important once tags
  * carry convergence identity across `wire`). No ports, no host, no wave logic —
  * just the fold; usable unhosted and in a plain unit test.
+ * Not an app-edge API; apps read through [civictech.cell.observe.observation].
  *
  * Not thread-safe: apply deltas from one thread at a time, like the cells.
  */

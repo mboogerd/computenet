@@ -1,0 +1,311 @@
+package civictech.cell.observe
+
+import civictech.cell.CellRef
+import civictech.cell.Propagate
+import civictech.cell.data.OrMapApi
+import civictech.cell.data.OrMapCell
+import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.IntersectSetCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.graph.TypedRef
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
+import civictech.cell.host.inlet
+import civictech.cell.port.PortRef
+import civictech.cell.port.Subscribe
+import civictech.cell.port.Use
+import civictech.testkit.awaitUntil
+import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertDoesNotThrow
+import org.junit.jupiter.api.assertThrows
+import java.util.Collections
+import java.util.Random
+import java.util.UUID
+
+/**
+ * Exit criterion for the canonical app-edge [observation] builder: equal root
+ * sets share one aligned sink, unequal root sets never gate each other, and the
+ * combined frame states exactly which group frontiers remain comparable.
+ */
+class ObservationBuilderTest {
+
+    private interface IntSetInlet {
+        val inlet: Use<SetOps<Int>>
+    }
+
+    private class ShoppingGraph(seed: Long = 0) {
+        val controller = SimulationController(seed)
+        val registry = LocationRegistry()
+        val host = ManagedHost(registry = registry, scheduler = controller.scheduler())
+        val writerA = SetCell<Int>()
+        val writerB = SetCell<Int>()
+        val writerV = SetCell<Int>()
+        val items = UnionSetCell<Int>()
+        val votes = UnionSetCell<Int>()
+        val produce = FilterCell<Int> { it % 2 == 0 }
+        val wanted = IntersectSetCell<Int>()
+
+        init {
+            val management = host.managementInlet.call
+            listOf(writerA, writerB, writerV, items, votes, produce, wanted).forEach(management::spawn)
+            management.connect(writerA.ref, "outlet", items.ref, "inlet")
+            management.connect(writerB.ref, "outlet", items.ref, "inlet")
+            management.connect(writerV.ref, "outlet", votes.ref, "inlet")
+            management.connect(items.ref, "outlet", produce.ref, "inlet")
+            management.connect(items.ref, "outlet", wanted.ref, "left")
+            management.connect(votes.ref, "outlet", wanted.ref, "right")
+        }
+
+        fun ops(cell: SetCell<Int>): SetOps<Int> = host.lookup<IntSetInlet>(cell.ref)!!.inlet.call
+    }
+
+    private fun rerouteThroughHostQueue(
+        host: ManagedHost,
+        outlet: Subscribe<Propagate<SetDelta<Int>>>,
+        inletRef: PortRef,
+        target: CellRef,
+        portName: String,
+    ) {
+        val routed: Propagate<SetDelta<Int>> = host.inlet(target, portName)
+        outlet.unsubscribe(inletRef)
+        outlet.subscribe(Use.fixed(routed, inletRef))
+    }
+
+    @Test
+    fun `equal root views share one aligned group across seeded schedules`() {
+        val waves = 20
+        for (seed in 0L until 50L) {
+            val graph = ShoppingGraph(seed)
+            val observation = graph.host.observation {
+                set("items", graph.items.ref)
+                set("produce", graph.produce.ref)
+            }
+            observation.groups shouldContainExactly setOf("items+produce")
+            observation.current().groupOf shouldBe mapOf(
+                "items" to "items+produce",
+                "produce" to "items+produce",
+            )
+
+            val group = observation.group("items+produce")
+            rerouteThroughHostQueue(
+                graph.host,
+                graph.items.outlet,
+                group.inlets.getValue("items").ref,
+                group.ref,
+                "items",
+            )
+            val frames = Collections.synchronizedList(mutableListOf<ObservationFrame>())
+            observation.onChange { frames += it }
+
+            val a = graph.ops(graph.writerA)
+            val b = graph.ops(graph.writerB)
+            val random = Random(seed)
+            for (value in 1..waves) {
+                if ((value + seed) % 2L == 0L) a.add(value) else b.add(value)
+                repeat(random.nextInt(4)) { graph.controller.step() }
+            }
+            graph.controller.runToIdle()
+
+            awaitUntil("all canonical aligned frames delivered (seed $seed)") {
+                frames.size >= waves + 1
+            }
+            frames.size shouldBe waves + 1
+            frames.forEach { frame ->
+                val items = frame.views.getValue("items") as Set<*>
+                val produce = frame.views.getValue("produce") as Set<*>
+                produce shouldBe items.filter { (it as Int) % 2 == 0 }.toSet()
+            }
+            observation.get<Set<Int>>("items") shouldBe (1..waves).toSet()
+            observation.get<Set<Int>>("produce") shouldBe (1..waves).filter { it % 2 == 0 }.toSet()
+            observation.bufferedWaves shouldBe 0
+
+            observation.close()
+        }
+    }
+
+    @Test
+    fun `one view uses the same API dispatcher catch-up and stable group ref`() {
+        val graph = ShoppingGraph(seed = 91)
+        val expectedRef = CellRef(UUID.fromString("3ddde027-6305-4ef0-b694-c9e420a3d216"))
+        val observation = graph.host.observation(groupRef = { expectedRef }) {
+            set("votes", graph.votes.ref)
+        }
+        observation.groups shouldBe setOf("votes")
+        observation.current().groups.size shouldBe 1
+        observation.group("votes").ref shouldBe expectedRef
+
+        val frames = Collections.synchronizedList(mutableListOf<ObservationFrame>())
+        val callbackThreads = Collections.synchronizedList(mutableListOf<String>())
+        observation.onChange {
+            callbackThreads += Thread.currentThread().name
+            frames += it
+        }
+        val votes = graph.ops(graph.writerV)
+        votes.add(1)
+        votes.add(2)
+        votes.add(3)
+        graph.controller.runToIdle()
+
+        awaitUntil("one-group catch-up and three settled waves") { frames.size >= 4 }
+        frames.size shouldBe 4
+        observation.get<Set<Int>>("votes") shouldBe setOf(1, 2, 3)
+        frames.last().views.getValue("votes") shouldBe setOf(1, 2, 3)
+        callbackThreads.all { it == "aligned-observe-${expectedRef.id}" } shouldBe true
+
+        observation.close()
+    }
+
+    @Test
+    fun `unequal roots partition without holding and disclose every group pair`() {
+        for (seed in 0L until 20L) {
+            val graph = ShoppingGraph(seed)
+            val observation = graph.host.observation {
+                set("items", graph.items.ref)
+                set("produce", graph.produce.ref)
+                set("votes", graph.votes.ref)
+                // IntersectSetCell is intentionally ungated: this is the F-27
+                // independent-root shape whose output must be its own group.
+                unchecked("wanted")
+                set("wanted", graph.wanted.ref)
+            }
+
+            observation.groups shouldContainExactly setOf("items+produce", "votes", "wanted")
+            observation.current().groupOf shouldBe mapOf(
+                "items" to "items+produce",
+                "produce" to "items+produce",
+                "votes" to "votes",
+                "wanted" to "wanted",
+            )
+            val frames = Collections.synchronizedList(mutableListOf<ObservationFrame>())
+            val callbackThreads = Collections.synchronizedList(mutableListOf<String>())
+            observation.onChange {
+                callbackThreads += Thread.currentThread().name
+                frames += it
+            }
+            awaitUntil("multi-group catch-up dispatched (seed $seed)") { frames.isNotEmpty() }
+            callbackThreads.all { it.startsWith("observation-") } shouldBe true
+
+            val itemA = graph.ops(graph.writerA)
+            val itemB = graph.ops(graph.writerB)
+            val votes = graph.ops(graph.writerV)
+
+            // Establish one wanted value, then pre-vote every value in the
+            // item-only burst. Wanted's latest publication consequently carries
+            // both the item and vote source frontiers.
+            itemA.add(0)
+            graph.controller.runToIdle()
+            for (value in 0..12) votes.add(value)
+            graph.controller.runToIdle()
+            awaitUntil("pre-vote state assembled (seed $seed)") {
+                observation.current().views["votes"] == (0..12).toSet() &&
+                    observation.current().views["wanted"] == setOf(0)
+            }
+            val votesFrontier = observation.current().groups.getValue("votes").frontier
+
+            val random = Random(seed)
+            for (value in 1..12) {
+                if ((value + seed) % 2L == 0L) itemA.add(value) else itemB.add(value)
+                repeat(random.nextInt(3)) { graph.controller.step() }
+            }
+            graph.controller.runToIdle()
+            awaitUntil("item-only burst assembled (seed $seed)") {
+                observation.current().views["items"] == (0..12).toSet() &&
+                    observation.current().views["wanted"] == (0..12).toSet() &&
+                    observation.bufferedWaves == 0
+            }
+            awaitUntil("multi-group final frame dispatched (seed $seed)") {
+                frames.lastOrNull()?.views?.get("wanted") == (0..12).toSet()
+            }
+            callbackThreads.all { it.startsWith("observation-") } shouldBe true
+
+            val frame = observation.current()
+            frame.groups.getValue("votes").frontier shouldBe votesFrontier
+            observation.groups.forEach { observation.group(it).bufferedWaves shouldBe 0 }
+            frame.crossRoot.size shouldBe 3
+
+            val itemVotes = frame.crossRoot.getValue(GroupPair("items+produce", "votes"))
+            val itemWanted = frame.crossRoot.getValue(GroupPair("items+produce", "wanted"))
+            val voteWanted = frame.crossRoot.getValue(GroupPair("votes", "wanted"))
+            itemVotes.independent shouldBe true
+            itemWanted.independent shouldBe false
+            voteWanted.independent shouldBe false
+
+            frame.crossRoot.forEach { (pair, disclosure) ->
+                val left = frame.groups.getValue(pair.a).frontier
+                val right = frame.groups.getValue(pair.b).frontier
+                disclosure.lagBySource shouldBe left.keys.intersect(right.keys).associateWith { source ->
+                    left.getValue(source) - right.getValue(source)
+                }
+            }
+
+            observation.close()
+        }
+    }
+
+    @Test
+    fun `admission rejects before spawning any group and unchecked exempts only its view`() {
+        val controller = SimulationController()
+        val registry = LocationRegistry()
+        val host = ManagedHost(registry = registry, scheduler = controller.scheduler())
+        val management = host.managementInlet.call
+        val left = SetCell<Int>()
+        val right = SetCell<Int>()
+        val wanted = IntersectSetCell<Int>()
+        listOf(left, right, wanted).forEach(management::spawn)
+        management.connect(left.ref, "outlet", wanted.ref, "left")
+        management.connect(right.ref, "outlet", wanted.ref, "right")
+
+        val refsBefore = registry.localRefs().size
+        val linksBefore = wanted.outlet.linking.links.size
+        val error = assertThrows<AlignedAdmissionException> {
+            host.observation { set("wanted", wanted.ref) }
+        }
+        error.verdict.shouldBeInstanceOf<AdmissionVerdict.Rejected.UngatedAncestor>().cell shouldBe wanted.ref
+        registry.localRefs().size shouldBe refsBefore
+        wanted.outlet.linking.links.size shouldBe linksBefore
+
+        val admitted = assertDoesNotThrow {
+            host.observation {
+                unchecked("wanted")
+                set("wanted", wanted.ref)
+            }
+        }
+        admitted.groups shouldBe setOf("wanted")
+        admitted.close()
+    }
+
+    @Test
+    fun `tagged map supports both untyped and typed registrars`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val management = host.managementInlet.call
+        val board = OrMapCell<String, String>()
+        val typedBoard = OrMapCell<String, String>()
+        management.spawn(board)
+        management.spawn(typedBoard)
+        board.inlet.call.put("x", "1")
+        typedBoard.inlet.call.put("y", "2")
+        controller.runToIdle()
+
+        val observation = host.observation {
+            taggedMap("board", board.ref)
+            taggedMap("typedBoard", TypedRef<OrMapApi<String, String>>(typedBoard.ref))
+        }
+        controller.runToIdle()
+        awaitUntil("canonical tagged-map catch-up") {
+            observation.current().views["board"] == mapOf("x" to "1") &&
+                observation.current().views["typedBoard"] == mapOf("y" to "2")
+        }
+        observation.get<Map<String, String>>("board") shouldBe mapOf("x" to "1")
+        observation.get<Map<String, String>>("typedBoard") shouldBe mapOf("y" to "2")
+
+        observation.close()
+    }
+}

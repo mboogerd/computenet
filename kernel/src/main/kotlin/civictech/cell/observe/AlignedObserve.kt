@@ -90,6 +90,10 @@ class AlignedDrainBarrier internal constructor(
  * frontier, `[22-OBS-01]`/`[22-OBS-02]`; 96 §E2.3): several named outlets folded
  * into one composite read that is never assembled from mixed waves.
  *
+ * This is the lower-level equal-root-group specialization; apps normally enter
+ * through [observation], which creates one of these per equal structural root
+ * set and discloses cross-root staleness without over-aligning the groups.
+ *
  * [CompositeSink] — behind [observeAll] — is the honest *point-consistent*
  * fallback: each named outlet is folded by its own [ObserveCell] and the
  * composite republishes on every per-outlet change, so a read can pair `items`
@@ -1070,7 +1074,7 @@ class AlignedObserveBuilder internal constructor() {
         unchecked += name
     }
 
-    private fun add(name: String, source: CellRef, outletName: String, view: View<*, *>, kind: String) {
+    internal fun add(name: String, source: CellRef, outletName: String, view: View<*, *>, kind: String) {
         require(specs.put(name, Spec(source, outletName, view, kind)) == null) { "duplicate observe name '$name'" }
     }
 
@@ -1124,6 +1128,9 @@ class AlignedObserveBuilder internal constructor() {
  * }
  * view.current()   // { items, filtered, byDay } — never assembled from mixed waves
  * ```
+ *
+ * This equal-root aligned specialization remains behaviorally unchanged. Apps
+ * should normally use [observation] as the canonical app-edge entry point.
  *
  * Spawns one [AlignedCompositeCell] carrying one inlet per named view and
  * connects each source outlet to its own inlet (whose `onLinked` catch-up seeds
