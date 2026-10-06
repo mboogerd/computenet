@@ -227,8 +227,9 @@ class AlignedDrainBarrier internal constructor(
  * dispatch. Every submission is made while holding [lock], so submission order
  * is a strict total order and a single-consumer executor executes it in that
  * order — a fresh subscriber's catch-up never interleaves out of order with a
- * change. [onDeactivate]/[onActivate] close and reopen the dispatcher across a
- * `SupervisionPolicy.RESTART` or a migration, as [ObserveCell] does.
+ * change. [onDeactivate]/[onActivate] pause and reopen the dispatcher across a
+ * `SupervisionPolicy.RESTART` or a migration, as [ObserveCell] does; [close]
+ * is the separate terminal application-shutdown boundary.
  *
  * **The dispatcher is minted lazily, on the first submission** — and a
  * submission only ever happens when at least one listener is registered
@@ -928,51 +929,62 @@ class AlignedCompositeCell(
     // ---- lifecycle ----
 
     /**
-     * Stops the listener-dispatch executor if one was ever minted (a
-     * never-observed sink has no thread to stop, so this is a pure flag flip).
-     * Idempotent. Wired into [onDeactivate] (which the host calls on despawn),
-     * so a despawned sink's dispatch thread does not outlive it; a caller that
-     * never despawns the sink may call this directly at shutdown.
+     * Terminally closes the listener-dispatch executor if one was ever minted.
+     * Idempotent. A later [onActivate] is deliberately a no-op: terminal close
+     * is the application-shutdown boundary, while [onDeactivate] is the
+     * reopenable host pause used by restart and migration.
      *
      * Every outstanding write-visibility handle is abandoned with
      * [VisibilityAbandoned.Reason.SINK_CLOSED] (zvq3e-D6); [onDeactivate]
      * abandons them first with `HOST_SHUTDOWN`, so this finds none on that path.
      */
     fun close() {
-        close(Lifecycle.CLOSED, VisibilityAbandoned.Reason.SINK_CLOSED)
-    }
-
-    private fun close(state: Lifecycle, handleReason: VisibilityAbandoned.Reason) {
         val closed = synchronized(lock) {
-            if (lifecycle != Lifecycle.OPEN) return
-            lifecycle = state
+            if (lifecycle == Lifecycle.CLOSED) return
+            lifecycle = Lifecycle.CLOSED
             dispatcher to drainHandles()
         }
         val (doomed, abandoned) = closed
         doomed?.shutdown()
-        abandon(abandoned, handleReason)
+        abandon(abandoned, VisibilityAbandoned.Reason.SINK_CLOSED)
     }
 
     /**
-     * Reopens a [close]d sink so it can dispatch again — [ObserveCell.reopen]'s
-     * reason verbatim: [onDeactivate] is not only a despawn hook (`RESTART` and
-     * migration drain call it too), and without this one restart would leave the
-     * sink permanently deaf.
+     * Waits for every listener invocation accepted before terminal [close] to
+     * return. The shared timeout includes both the current dispatcher and a
+     * predecessor parked by a deactivate/activate cycle.
+     *
+     * @throws IllegalStateException if terminal [close] has not happened.
+     */
+    fun awaitTermination(timeoutMillis: Long): Boolean {
+        val executors = synchronized(lock) {
+            check(lifecycle == Lifecycle.CLOSED) { "awaitTermination requires close() first" }
+            listOf(dispatcher, draining)
+        }
+        return awaitExecutorsTermination(executors, timeoutMillis)
+    }
+
+    /**
+     * Reopens a sink paused by [onDeactivate] — [ObserveCell]'s reason
+     * verbatim: deactivation is not only a despawn hook (`RESTART` and migration
+     * drain call it too), and without this one restart would leave the sink
+     * permanently deaf. A terminally [close]d sink never reopens.
      *
      * Ordering across the reopen: the replacement dispatcher's first act is to
      * wait for the old one to drain, so a listener invocation queued before the
      * restart can never be overtaken by one submitted after it.
      *
-     * The replacement is *not* minted here: reopen only clears the closed flag
-     * and parks the superseded executor in [draining], leaving the mint to the
-     * next actual submission ([dispatchIfOpen], which chains the drain-wait
-     * there). A restart or migration of an aligned view nobody observes
-     * therefore stays thread-free, exactly as its first activation was.
+     * The replacement is *not* minted here: reopen only restores the open
+     * lifecycle and parks the superseded executor in [draining], leaving the
+     * mint to the next actual submission ([dispatchIfOpen], which chains the
+     * drain-wait there). A restart or migration of an aligned view nobody
+     * observes therefore stays thread-free, exactly as its first activation
+     * was.
      */
     private fun reopen() {
         synchronized(lock) {
-            if (lifecycle == Lifecycle.OPEN) return
-            // Whatever close() shut down becomes the next mint's predecessor.
+            if (lifecycle != Lifecycle.DEACTIVATED) return
+            // Whatever onDeactivate() shut down becomes the next mint's predecessor.
             // Only overwrite when there is something to hand off, so a
             // close/reopen cycle that dispatches nothing in between cannot lose
             // an earlier still-draining executor.
@@ -995,16 +1007,16 @@ class AlignedCompositeCell(
      * [close] runs, and [snapshot]/[restore] never carry them.
      */
     override fun onDeactivate(ctx: CellContext) {
-        val (doomed, abandoned) = synchronized(lock) {
+        val deactivated = synchronized(lock) {
             pending.clear()
             if (lifecycle == Lifecycle.OPEN) {
                 lifecycle = Lifecycle.DEACTIVATED
                 dispatcher to drainHandles()
             } else {
-                lifecycle = Lifecycle.DEACTIVATED
-                null to emptyList()
+                null
             }
-        }
+        } ?: return
+        val (doomed, abandoned) = deactivated
         doomed?.shutdown()
         abandon(abandoned, VisibilityAbandoned.Reason.HOST_SHUTDOWN)
     }

@@ -272,10 +272,10 @@ class SocialApp(
      * exposes `close`. Idempotent, since both [SocialGraph.close] and
      * [ObserveCell.close] are.
      *
-     * computenet-cpybp: returns only after every observe-cell dispatcher
-     * thread this app caused has terminated, waiting at most
-     * [STOP_DISPATCHER_BOUND_MS] ([SocialGraph.awaitDispatchers] says how the
-     * threads are found, and the one case it does not cover). Only
+     * computenet-cpybp / computenet-iltfm: returns only after every observe-cell
+     * dispatcher this app caused has terminated, waiting at most
+     * [STOP_DISPATCHER_BOUND_MS] through the sinks' termination handles (see
+     * [SocialGraph.awaitDispatchers]). Only
      * [SocialGraph]'s sinks can have minted one: the four static-set sinks
      * never get a listener, and `ObserveCell` mints its dispatcher only to run
      * a listener. Every other step runs first, so a bound overrun still leaves
@@ -290,8 +290,8 @@ class SocialApp(
         listOf(tags, tagClasses, places, organisations).forEach { (it as ObserveCell<*, *>).close() }
         val survivors = graph.awaitDispatchers(STOP_DISPATCHER_BOUND_MS)
         check(survivors.isEmpty()) {
-            "SocialApp.stop: ${survivors.size} observe-cell dispatcher(s) still alive " +
-                "${STOP_DISPATCHER_BOUND_MS}ms after stop: $survivors"
+            "SocialApp.stop: ${survivors.size} observe-cell sink dispatcher(s) still draining " +
+                "${STOP_DISPATCHER_BOUND_MS}ms after stop; sink refs: $survivors"
         }
     }
 
