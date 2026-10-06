@@ -308,8 +308,8 @@ class SocialServerTest {
     // threads BY NAME rather than a process-wide COUNT. `aligned-observe-`
     // names embed a per-instance UUID, so the exact set this app minted can be
     // captured at mint time and diffed against later, independent of any
-    // unrelated `observe-cell-` thread that happens to be alive in the same
-    // JVM (another test class's dispatcher still winding down) — a false
+    // unrelated observation thread that happens to be alive in the same JVM
+    // (another test class's dispatcher still winding down) — a false
     // positive/negative the old raw-count comparison could not tell apart
     // from a real leak.
 

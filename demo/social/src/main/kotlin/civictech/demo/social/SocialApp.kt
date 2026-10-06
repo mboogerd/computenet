@@ -277,8 +277,8 @@ class SocialApp(
      * dispatcher this app caused has terminated, waiting at most
      * [STOP_DISPATCHER_BOUND_MS] through the observations' termination handles
      * (see [SocialGraph.awaitDispatchers]). Both sets share that one deadline.
-     * Every other step runs first, so a
-     * bound overrun still leaves the app fully stopped.
+     * Every other step runs first, so a bound overrun still leaves the app
+     * fully stopped.
      *
      * @throws IllegalStateException naming the survivors, if any dispatcher is
      *   still alive after [STOP_DISPATCHER_BOUND_MS].

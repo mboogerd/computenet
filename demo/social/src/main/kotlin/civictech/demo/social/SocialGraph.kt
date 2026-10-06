@@ -126,12 +126,13 @@ class SocialGraph(
      * Set by the first [onChange]; until then no observation carries a listener
      * (computenet-v10ou.1). A listener is not free: each one-view [Observation]
      * forwards to its aligned group's dedicated dispatcher thread, minted on
-     * its first fire and released by [close]. Registering `{ fireChange() }` on every observation
-     * unconditionally cost one idle thread per keyed cell of every graph ever
-     * built — also for graphs nobody listens to (every sim-scheduler test
-     * graph) — and a test JVM building a handful of seed-42 graphs hit the
-     * per-process native-thread ceiling. [SocialApp] registers its broadcast
-     * only in `start()`, so an unstarted app now owns no sink threads.
+     * its first fire and released by [close]. Registering `{ fireChange() }`
+     * on every observation unconditionally cost one idle thread per keyed cell
+     * of every graph ever built — also for graphs nobody listens to (every
+     * sim-scheduler test graph) — and a test JVM building a handful of seed-42
+     * graphs hit the per-process native-thread ceiling. [SocialApp] registers
+     * its broadcast only in `start()`, so an unstarted app now owns no sink
+     * threads.
      */
     private val listening = AtomicBoolean(false)
 
@@ -160,10 +161,11 @@ class SocialGraph(
     private val unadmittedMessages = ConcurrentHashMap.newKeySet<Long>()
 
     /**
-     * Registers [listener] to fire on every settled change of every observation,
-     * present and future, made AFTER this call. An observation's state as it already
-     * stands at registration is not announced: a caller that needs it reads it
-     * (`/state`, and `/events`' own connect frame, do exactly that).
+     * Registers [listener] to fire on every settled change of every
+     * observation, present and future, made AFTER this call. An observation's
+     * state as it already stands at registration is not announced: a caller
+     * that needs it reads it (`/state`, and `/events`' own connect frame, do
+     * exactly that).
      *
      * **The bulk attach skips each pre-existing observation's catch-up**
      * (computenet-l3msn). [Observation.onChange] always delivers one
