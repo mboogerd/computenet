@@ -2,11 +2,14 @@ package civictech.cell.evolve
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.CheckpointReplayPosition
+import civictech.cell.CheckpointReplayPositions
 import civictech.cell.Consumer
 import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.Stateful
+import civictech.cell.Timestamp
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.graph.ApplyContext
@@ -386,6 +389,47 @@ class JournaledPromotionRecoveryTest {
         return Triple(recovered, refs, preCrash)
     }
 
+    @Test
+    fun `checkpoint replay positions are host scoped`() {
+        val journal = Any()
+        val target = CellRef(UUID.randomUUID())
+        val position = CheckpointReplayPosition(
+            target,
+            "inlet",
+            Timestamp(UUID.randomUUID(), 1L),
+        )
+        val firstHost = CheckpointReplayPositions { _, _ -> true }
+        val secondHost = CheckpointReplayPositions { _, _ -> true }
+
+        firstHost.register(journal, listOf(position))
+
+        firstHost.retainedPositionCount() shouldBe 1
+        secondHost.retainedPositionCount() shouldBe 0
+        secondHost.consume(journal, target, "inlet", position.timestamp) shouldBe false
+    }
+
+    @Test
+    fun `checkpoint replay positions for an absent target are neither retained nor captured`() {
+        val journal = Any()
+        val live = CellRef(UUID.randomUUID())
+        val retired = CellRef(UUID.randomUUID())
+        val present = mutableSetOf(live to "inlet", retired to "inlet")
+        val registry = CheckpointReplayPositions { cellRef, portName -> (cellRef to portName) in present }
+        val timestamp = Timestamp(UUID.randomUUID(), 1L)
+
+        registry.register(journal, listOf(CheckpointReplayPosition(live, "inlet", timestamp)))
+        present.remove(retired to "inlet")
+        registry.register(journal, listOf(CheckpointReplayPosition(retired, "inlet", timestamp)))
+        registry.retainedPositionCount() shouldBe 1
+
+        present.remove(live to "inlet")
+        registry.capturing(journal, emptyMap()) {
+            CheckpointReplayPositions.get() shouldBe registry
+            registry.capture(journal, timestamp)
+        } shouldBe emptyList()
+        CheckpointReplayPositions.get() shouldBe null
+    }
+
     private fun assertRecovery(seed: Long) {
         val journal = InMemoryJournal()
         val refs = refs()
@@ -561,6 +605,45 @@ class JournaledPromotionRecoveryTest {
         recovered.controller.runToIdle()
         collector(refs).received shouldBe preCrash + 21L
         firstRecovered.deadLetters.shouldBeEmpty()
+        recovered.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
+    fun `promotion releases checkpoint replay positions for its retired target`() {
+        val journal = InMemoryJournal()
+        val refs = refs()
+        val before = world(915, journal)
+        build(before, refs)
+        drive(before, refs, 1..5, Random(915))
+
+        val firstRecovered = world(915, journal)
+        val firstRecovery = firstRecovered.context.recover(journal)
+        firstRecovered.controller.runToIdle()
+        firstRecovery.awaitApplied(30_000)
+        firstRecovered.controller.runToIdle()
+        firstRecovered.host.checkpoint(journal)
+
+        val recovered = world(915, journal)
+        val recovery = recovered.context.recover(journal)
+        recovered.controller.runToIdle()
+        recovery.awaitApplied(30_000)
+        recovered.controller.runToIdle()
+        (recovered.host.retainedCheckpointReplayPositionCount() > 0).shouldBeTrue()
+        // Same journal object, different host: the positions belong to the host that recovered them.
+        firstRecovered.host.retainedCheckpointReplayPositionCount() shouldBe 0
+
+        recovered.context.promote(
+            gate = refs.gate,
+            incumbent = refs.incumbent,
+            candidate = refs.candidate,
+            outletName = "outlet",
+            downstream = listOf(refs.collector to "inlet"),
+        )
+        recovered.controller.runToIdle()
+
+        recovered.host.retainedCheckpointReplayPositionCount() shouldBe 0
+        recovered.host.portAt(refs.incumbent, "inlet") shouldBe null
+        cells.getValue(refs.candidate).shouldBeInstanceOf<SummerV2>()
         recovered.deadLetters.shouldBeEmpty()
     }
 
