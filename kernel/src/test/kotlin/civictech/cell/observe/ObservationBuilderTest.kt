@@ -142,7 +142,11 @@ class ObservationBuilderTest {
         observation.group("votes").ref shouldBe expectedRef
 
         val frames = Collections.synchronizedList(mutableListOf<ObservationFrame>())
-        observation.onChange { frames += it }
+        val callbackThreads = Collections.synchronizedList(mutableListOf<String>())
+        observation.onChange {
+            callbackThreads += Thread.currentThread().name
+            frames += it
+        }
         val votes = graph.ops(graph.writerV)
         votes.add(1)
         votes.add(2)
@@ -153,6 +157,7 @@ class ObservationBuilderTest {
         frames.size shouldBe 4
         observation.get<Set<Int>>("votes") shouldBe setOf(1, 2, 3)
         frames.last().views.getValue("votes") shouldBe setOf(1, 2, 3)
+        callbackThreads.all { it == "aligned-observe-${expectedRef.id}" } shouldBe true
 
         observation.close()
     }
@@ -178,6 +183,14 @@ class ObservationBuilderTest {
                 "votes" to "votes",
                 "wanted" to "wanted",
             )
+            val frames = Collections.synchronizedList(mutableListOf<ObservationFrame>())
+            val callbackThreads = Collections.synchronizedList(mutableListOf<String>())
+            observation.onChange {
+                callbackThreads += Thread.currentThread().name
+                frames += it
+            }
+            awaitUntil("multi-group catch-up dispatched (seed $seed)") { frames.isNotEmpty() }
+            callbackThreads.all { it.startsWith("observation-") } shouldBe true
 
             val itemA = graph.ops(graph.writerA)
             val itemB = graph.ops(graph.writerB)
@@ -207,6 +220,10 @@ class ObservationBuilderTest {
                     observation.current().views["wanted"] == (0..12).toSet() &&
                     observation.bufferedWaves == 0
             }
+            awaitUntil("multi-group final frame dispatched (seed $seed)") {
+                frames.lastOrNull()?.views?.get("wanted") == (0..12).toSet()
+            }
+            callbackThreads.all { it.startsWith("observation-") } shouldBe true
 
             val frame = observation.current()
             frame.groups.getValue("votes").frontier shouldBe votesFrontier
