@@ -1839,6 +1839,14 @@ open class ManagedHost(
      */
     fun checkpoint(journal: Journal) = hostDurability.checkpoint(journal)
 
+    /**
+     * Compact [journal] inline when the caller already owns this host's management task.
+     * Unlike [checkpoint], this never self-submits or self-awaits. The post-spawn callback
+     * used by [KeyedCells] is the only production caller.
+     */
+    internal fun checkpointInManagementTask(journal: Journal) =
+        hostDurability.checkpointInManagementTask(journal)
+
     internal fun retainedCheckpointReplayPositionCount(): Int =
         hostDurability.retainedCheckpointReplayPositionCount()
 

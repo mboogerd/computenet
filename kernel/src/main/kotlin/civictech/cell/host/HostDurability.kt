@@ -829,7 +829,17 @@ internal class HostDurability(
      * for that delivery. Its completed effect is therefore in the snapshot.
      */
     fun checkpoint(journal: Journal) {
-        awaitOnManagementBand {
+        awaitOnManagementBand { checkpointInManagementTask(journal) }
+    }
+
+    /**
+     * Run [checkpoint] without submitting and awaiting another management task.
+     * The caller must already be executing in this host's management task; this
+     * seam exists for recovery work that must finish before that task releases
+     * later data deliveries.
+     */
+    internal fun checkpointInManagementTask(journal: Journal) {
+        run checkpointBody@ {
             val cells = cellsView()
             val (hasTopologyProvider, topologyEvents) = topologyFor(journal)
             val topology = if (hasTopologyProvider) {
@@ -939,7 +949,7 @@ internal class HostDurability(
                         "file/path as the host's own journal is `===`-unequal to it and hits " +
                         "exactly this)"
                 }
-                return@awaitOnManagementBand
+                return@checkpointBody
             }
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
