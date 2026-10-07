@@ -28,6 +28,7 @@ import civictech.cell.port.registerPort
 import civictech.cell.replication.Replication
 import civictech.cell.verify.InvariantCell
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -482,6 +483,52 @@ class GraphSpecPromoteStepTest {
     }
 
     @Test
+    fun `a replicated incumbent naming both a handle candidate and a factory is refused at precheck`() {
+        val world = replicatedWorld(10)
+        val logicalId = UUID.randomUUID()
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    "incumbent",
+                    ReplicatedFactory,
+                    IdentityBinding.Exact(CellRef(logicalId, 0)),
+                    replicated = true,
+                ),
+                SpawnStep("candidate", EmptyFactory, IdentityBinding.Exact(CellRef(logicalId, 1)), shadow = true),
+                PromoteStep(
+                    "rollout", "incumbent", "candidate", "", "outlet", emptyList(),
+                    policy(gates = emptyList()), emptyList(),
+                    replicatedCandidateFactory = ReplicatedCandidateFactory,
+                ),
+            ),
+        )
+
+        shouldThrow<Promotion.PromotionAborted> { spec.apply(world.context) }
+            .message!!.shouldContain("no candidate handle")
+    }
+
+    @Test
+    fun `a single-instance incumbent naming a replicated candidate factory is refused at precheck`() {
+        val world = world(11)
+        val logicalId = UUID.randomUUID()
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep("incumbent", EmptyFactory, IdentityBinding.Exact(CellRef(logicalId, 0))),
+                SpawnStep("candidate", EmptyFactory, IdentityBinding.Exact(CellRef(logicalId, 1)), shadow = true),
+                SpawnStep("gate", EmptyFactory),
+                PromoteStep(
+                    "rollout", "incumbent", "candidate", "gate", "outlet", emptyList(),
+                    policy(gates = emptyList()), emptyList(),
+                    replicatedCandidateFactory = ReplicatedCandidateFactory,
+                ),
+            ),
+        )
+
+        shouldThrow<Promotion.PromotionAborted> { spec.apply(world.context) }
+            .message!!.shouldContain("no replicated candidate factory")
+    }
+
+    @Test
     fun `a declarative replicated candidate accepts and records one same-ref promotion`() {
         val world = replicatedWorld(6)
         val run = replicatedEvolution(world)
@@ -532,13 +579,15 @@ class GraphSpecPromoteStepTest {
         }
         run.handle.advance() shouldBe EvolutionHandle.State.PROMOTED
         before.controller.runToIdle()
+        // Forget the pre-restart candidate so only a replay-constructed one can satisfy the read.
+        replicaCandidates.remove(run.ref).shouldNotBeNull()
 
         val recovered = replicatedWorld(9, journal)
         val recovery = recovered.context.recover(journal)
         recovered.controller.runToIdle()
         recovery.awaitApplied(30_000)
 
-        replicaCandidates.getValue(run.ref).membership() shouldBe setOf("a", "b", "c")
+        replicaCandidates[run.ref].shouldNotBeNull().membership() shouldBe setOf("a", "b", "c")
         recovered.context.live().spawns.getValue(run.ref).factory.javaClass shouldBe
             ReplicatedCandidateFactory.javaClass
     }
