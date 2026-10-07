@@ -14,6 +14,7 @@ import civictech.cell.host.link
 import civictech.cell.observe.Observation
 import civictech.cell.observe.ObservationFrame
 import civictech.cell.observe.observation
+import civictech.cell.port.PortRef
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.replication.Replication
@@ -127,6 +128,10 @@ class DemoApp(
     private fun unionRef(name: String, role: String) =
         CellRef(UUID.nameUUIDFromBytes("demo-union:$name@$role".toByteArray()))
 
+    /** Stable opaque root for the per-user family, including before its first member exists. */
+    private fun writerFamilyRoot(name: String) =
+        PortRef(UUID.nameUUIDFromBytes("demo-writer-family:$name@$myRole".toByteArray()))
+
     private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
     private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
 
@@ -167,7 +172,9 @@ class DemoApp(
         namespace = "demo-writer@$myRole",
         factory = { key, ref ->
             val union = if (key.endsWith(":items")) itemsUnion else votesUnion
-            SetCell<String>(ref).also { it.outlet.streamTo(routedDelta(union.ref)) }
+            SetCell<String>(ref).also {
+                it.outlet.streamTo(routedDelta(union.ref), at = union.inlet.ref)
+            }
         },
     )
 
@@ -255,6 +262,7 @@ class DemoApp(
         // it is what makes the pilot narratable in the UI.
         if (replication != null && sharedCell != null) {
             replication.replicate(sharedCell, host)
+            manage.link(sharedCell.outlet, itemsUnion.inlet)
         }
 
         /*
@@ -265,6 +273,11 @@ class DemoApp(
          * ungated independent-root operator recorded by F-27.
          */
         observation = host.observation {
+            // Writer members are lazy (and recovery runs below), so name each
+            // routed family before its first streamTo exists. The live links
+            // use the target inlet ref above and are discoverable too.
+            unmanagedFeed(itemsUnion.ref, writerFamilyRoot("items"))
+            unmanagedFeed(votesUnion.ref, writerFamilyRoot("votes"))
             set("items", itemsUnion.ref)
             set("produce", produceCell.ref)
             set("votes", votesUnion.ref)
@@ -273,18 +286,6 @@ class DemoApp(
             if (sharedCell != null) set("shared", sharedCell.ref)
         }
         observation.onChange { frame -> broadcast(frame) }
-
-        // Per-user writer streams are opaque to the host topology walk. Keep
-        // the replicated source's direct observation in its own root group by
-        // adding this downstream link after admission; the already-registered
-        // `items` source still receives the shared output through itemsUnion.
-        // This order compensates for the builder's link-order dependence: its
-        // streamTo root walk cannot see those writer roots (computenet-b7c8t),
-        // so linking before admission would collapse `{shared}` into an
-        // `{items+produce+shared}` group.
-        if (replication != null && sharedCell != null) {
-            manage.link(sharedCell.outlet, itemsUnion.inlet)
-        }
 
         // V4-PEERID: `peerName = netName` is in the manifest above, so the peer's
         // inspector labels our cells with our own --net-name and keeps that label

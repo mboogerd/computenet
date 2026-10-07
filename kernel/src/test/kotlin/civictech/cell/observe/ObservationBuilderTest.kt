@@ -18,6 +18,7 @@ import civictech.cell.host.inlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
+import civictech.cell.port.streamTo
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -78,6 +79,69 @@ class ObservationBuilderTest {
         val routed: Propagate<SetDelta<Int>> = host.inlet(target, portName)
         outlet.unsubscribe(inletRef)
         outlet.subscribe(Use.fixed(routed, inletRef))
+    }
+
+    @Test
+    fun `unmanaged union feed keeps its managed source in a separate group regardless of link order`() {
+        listOf(true, false).forEach { linkBeforeObservation ->
+            val controller = SimulationController()
+            val host = ManagedHost(scheduler = controller.scheduler())
+            val management = host.managementInlet.call
+            val source = SetCell<Int>()
+            val writer = SetCell<Int>()
+            val union = UnionSetCell<Int>()
+            listOf(source, writer, union).forEach(management::spawn)
+
+            writer.outlet.streamTo(union.inlet.call, at = union.inlet.ref)
+            management.upstreamConsumeAncestors(union.ref).opaque shouldBe setOf(writer.outlet.ref)
+            if (linkBeforeObservation) {
+                management.connect(source.ref, "outlet", union.ref, "inlet")
+            }
+
+            val observation = host.observation {
+                set("union", union.ref)
+                set("source", source.ref)
+            }
+
+            observation.groups shouldContainExactly setOf("union", "source")
+            observation.current().groupOf shouldBe mapOf(
+                "union" to "union",
+                "source" to "source",
+            )
+
+            if (!linkBeforeObservation) {
+                management.connect(source.ref, "outlet", union.ref, "inlet")
+            }
+            observation.close()
+        }
+    }
+
+    @Test
+    fun `declared future unmanaged feed propagates to downstream view roots`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        val filtered = FilterCell<Int> { true }
+        listOf(source, union, filtered).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+        management.connect(union.ref, "outlet", filtered.ref, "inlet")
+        val futureWriterFamily = PortRef.generate()
+
+        val observation = host.observation {
+            unmanagedFeed(union.ref, futureWriterFamily)
+            set("union", union.ref)
+            set("filtered", filtered.ref)
+            set("source", source.ref)
+        }
+
+        observation.groups shouldContainExactly setOf("union+filtered", "source")
+        observation.current().groupOf shouldBe mapOf(
+            "union" to "union+filtered",
+            "filtered" to "union+filtered",
+            "source" to "source",
+        )
+        observation.close()
     }
 
     @Test

@@ -124,6 +124,19 @@ class ObservationBuilder internal constructor() {
     internal val specs: Map<String, AlignedObserveBuilder.Spec> get() = aligned.specs
     internal val unchecked: Set<String> get() = aligned.unchecked
     internal val writes = linkedMapOf<String, Set<CellRef>>()
+    internal val declaredOpaqueRoots = linkedMapOf<CellRef, LinkedHashSet<PortRef>>()
+
+    /**
+     * Declares the stable structural [root] of an unmanaged feed into [target].
+     *
+     * A live `streamTo` whose destination names a hosted port is discovered
+     * automatically. This declaration is for an anonymous routed feed, or one
+     * that may be linked only after this observation is built. Descendant views
+     * inherit the root through the ordinary managed ancestry walk.
+     */
+    fun unmanagedFeed(target: CellRef, root: PortRef) {
+        declaredOpaqueRoots.getOrPut(target) { linkedSetOf() } += root
+    }
 
     /** Declares one named multi-cell write alongside this observation. */
     fun write(name: String, cells: Set<CellRef>) {
@@ -200,16 +213,21 @@ private fun rootsOf(
     api: HostManagementApi,
     spec: AlignedObserveBuilder.Spec,
     walks: MutableMap<CellRef, UpstreamAncestry>,
+    declaredOpaqueRoots: Map<CellRef, Set<PortRef>>,
 ): RootSet {
     val ancestry = walks.getOrPut(spec.source) { api.upstreamConsumeAncestors(spec.source) }
     val candidates = linkedSetOf<CellRef>()
     if (ancestry.self != null) candidates += spec.source
     candidates += ancestry.local.keys
+    val declared = candidates.flatMapTo(linkedSetOf()) { declaredOpaqueRoots[it].orEmpty() }
     val localRoots = candidates.filterTo(linkedSetOf()) { candidate ->
         val candidateAncestry = walks.getOrPut(candidate) { api.upstreamConsumeAncestors(candidate) }
-        candidateAncestry.self != null && candidateAncestry.local.isEmpty() && candidateAncestry.opaque.isEmpty()
+        candidateAncestry.self != null &&
+            candidateAncestry.local.isEmpty() &&
+            candidateAncestry.opaque.isEmpty() &&
+            declaredOpaqueRoots[candidate].isNullOrEmpty()
     }
-    return RootSet(localRoots, ancestry.opaque.toSet())
+    return RootSet(localRoots, ancestry.opaque + declared)
 }
 
 private class ObservationCoordinator(
@@ -369,9 +387,19 @@ private class ObservationCoordinator(
  * each group a stable sink identity; its argument is the group's registered
  * view names, in order, joined by `+`.
  *
+ * **Unmanaged-inbound decision (computenet-b7c8t).** A `streamTo`/routed feed
+ * remains a supported kernel path, so observation does not reject a view merely
+ * because the feed was not host-admitted. When the source-side link names a
+ * hosted destination port, its producer [PortRef] is retained as an opaque root:
+ * the feed affects grouping without being mistaken for traversable managed
+ * topology. A feed that is anonymous or will be linked later must be represented
+ * up front with [ObservationBuilder.unmanagedFeed]. This is deliberately a
+ * structural declaration, not a claim that the host can traverse that feed.
+ *
  * Admission for every group completes before any group cell is spawned. The
- * topology read has [observeAligned]'s live-link caveat: later links are not
- * rechecked and graph construction must not mutate the link set concurrently.
+ * topology read has [observeAligned]'s live-link caveat: later managed links and
+ * undeclared later unmanaged feeds are not rechecked, and graph construction
+ * must not mutate the link set concurrently.
  */
 fun Use<HostManagementApi>.observation(
     mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
@@ -389,7 +417,18 @@ fun Use<HostManagementApi>.observation(
     val walks = mutableMapOf<CellRef, UpstreamAncestry>()
     val byRoots = LinkedHashMap<RootSet, LinkedHashMap<String, AlignedObserveBuilder.Spec>>()
     builder.specs.forEach { (name, spec) ->
-        byRoots.getOrPut(rootsOf(call, spec, walks)) { linkedMapOf() }[name] = spec
+        byRoots.getOrPut(rootsOf(call, spec, walks, builder.declaredOpaqueRoots)) { linkedMapOf() }[name] = spec
+    }
+    val observedAncestry = builder.specs.values.flatMapTo(linkedSetOf()) { spec ->
+        val ancestry = walks.getValue(spec.source)
+        buildList {
+            if (ancestry.self != null) add(spec.source)
+            addAll(ancestry.local.keys)
+        }
+    }
+    val unusedDeclarations = builder.declaredOpaqueRoots.keys - observedAncestry
+    require(unusedDeclarations.isEmpty()) {
+        "observation: unmanaged feed targets must be a registered view or its managed ancestor: $unusedDeclarations"
     }
     val definitions = byRoots.values.map { specs -> GroupDefinition(specs.keys.joinToString("+"), specs) }
 
