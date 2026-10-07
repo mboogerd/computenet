@@ -27,6 +27,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
+import civictech.cell.proxy.InvocationSink
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -181,6 +182,57 @@ class MultiCellWriteTest {
 
         failure.message shouldContain "update"
         context.live().handles shouldBe emptyMap()
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep for a non-hosted adopted cell refuses before spawning`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 97).scheduler())
+        val context = ApplyContext(host)
+        val foreignRef = CellRef(UUID.randomUUID())
+        context.adopt("foreign", foreignRef)
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("foreign")),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("foreign" to foreignRef)
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep for a remote-published adopted cell refuses before spawning`() {
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = SimulationController(seed = 98).scheduler(), registry = registry)
+        val context = ApplyContext(host)
+        val foreignRef = CellRef(UUID.randomUUID())
+        // lookup() answers a remote proxy for this ref; declareWrite still refuses it.
+        registry.publish(foreignRef, InvocationSink { })
+        context.adopt("foreign", foreignRef)
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("foreign")),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("foreign" to foreignRef)
         host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
     }
 
