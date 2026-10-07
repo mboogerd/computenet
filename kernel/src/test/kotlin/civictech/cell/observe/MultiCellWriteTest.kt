@@ -7,10 +7,13 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.HostLiveView
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.PlannedAction
 import civictech.cell.graph.RefusalCode
+import civictech.cell.graph.SpawnStep
 import civictech.cell.graph.StepCheck
 import civictech.cell.graph.StepResult
 import civictech.cell.graph.TypedRef
@@ -153,6 +156,32 @@ class MultiCellWriteTest {
         assertThrows<IllegalArgumentException> {
             management.declareWrite("foreign", setOf(a.ref, CellRef(UUID.randomUUID())))
         }
+    }
+
+    @Test
+    fun `a conflicting WriteStep refuses the whole GraphSpec before spawning`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 96).scheduler())
+        val existing = SetCell<String>()
+        host.managementInlet.call.spawn(existing)
+        host.managementInlet.call.declareWrite("update", setOf(existing.ref))
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("spawned")),
+            ),
+        )
+        val context = ApplyContext(host)
+
+        val failure = assertThrows<IllegalStateException> { spec.apply(context) }
+
+        failure.message shouldContain "update"
+        context.live().handles shouldBe emptyMap()
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
     }
 
     @Test

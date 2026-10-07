@@ -420,6 +420,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val preparedReplicas = mutableMapOf<String, Cell>()
         val displayKeys = mutableMapOf<Int, String>()
         val writes = mutableListOf<Pair<String, Set<CellRef>>>()
+        val writeScopes = mutableMapOf<String, Set<CellRef>>()
         fun resolve(handle: String): CellRef = active[handle]
             ?: throw IllegalStateException("unknown handle '$handle'")
         lowered.forEach { step ->
@@ -492,7 +493,17 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 }
 
                 is WriteStep -> {
-                    writes += step.name to step.cells.mapTo(linkedSetOf(), ::resolve)
+                    val cells = step.cells.mapTo(linkedSetOf(), ::resolve)
+                    val existingCells = writeScopes[step.name]
+                        ?: context.host.managementInlet.call.declaredWrite(step.name)?.cells
+                    if (existingCells != null && existingCells != cells) {
+                        throw IllegalStateException(
+                            "declared write '${step.name}' already exists with cells $existingCells, " +
+                                "cannot redeclare it with $cells",
+                        )
+                    }
+                    writeScopes.putIfAbsent(step.name, cells)
+                    writes += step.name to cells
                 }
 
                 is PromoteStep -> {
