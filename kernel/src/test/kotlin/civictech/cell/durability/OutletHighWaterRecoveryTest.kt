@@ -5,11 +5,16 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.MessageContext
 import civictech.cell.ReBaselineEmitting
+import civictech.cell.Timestamp
+import civictech.cell.data.delta.SetDelta
 import civictech.cell.evolve.Effectful
 import civictech.cell.control.Attention
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.IntakeBound
 import civictech.cell.host.JournalRecords
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.SaturationPolicy
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.link.Link
@@ -517,5 +522,232 @@ class OutletHighWaterRecoveryTest {
         after.feed(4)
         controller.runToIdle()
         effects shouldBe liveEffects + 4
+    }
+
+    /**
+     * Wire-capable (T06 §B needs the journal to actually encode/decode these frames,
+     * same reason `TwoWriterDurabilityTest.LogApi` is `@Contract`): [CoalesceRelayCell]'s
+     * inlet, so `Invocation.of` can populate `contractId`/`methodId` from
+     * [civictech.nature.ContractRegistry] for the hand-built, explicit-context frames
+     * [CoalesceWorld.feed] journals below.
+     */
+    @civictech.gen.wire.Contract
+    interface CoalesceRelayApi {
+        fun provide(delta: SetDelta<Int>)
+    }
+
+    /**
+     * The journaled source for the computenet-ggxrq coalesce scenario below: unlike
+     * [RelayCell] (one `Int` per frame), its inlet takes a [SetDelta] and reacts
+     * **per added element** — `outlet.call.provide` once per key in `adds`, in sorted
+     * order for a deterministic effect sequence. That per-element shape is exactly
+     * the one the council's DECIDED verdict (computenet-ggxrq, 2026-10-07) requires for
+     * the "exactly-once, not merely never-zero" bound: a `SaturationPolicy.Coalesce`
+     * merge of two originals this handler reacts to still fires once per original
+     * ELEMENT, so counting the merge's originals in `precedesFrameCount` (option A's
+     * mechanism) makes replay reproduce live EXACTLY for this shape — see the test's
+     * own KDoc for the weaker-guarantee carve-out this shape does NOT need.
+     */
+    class CoalesceRelayCell(override val ref: CellRef) : Cell, ReBaselineEmitting {
+        val outlet = registerPort("outlet", FanOutlet.create<Consumer<Int>>())
+        val restartOutlet = registerPort("restartOutlet", FanOutlet.create<Consumer<String>>())
+        val inlet = registerPort("inlet", FanInlet.create<CoalesceRelayApi>())
+
+        init {
+            inlet.serve(object : CoalesceRelayApi {
+                override fun provide(delta: SetDelta<Int>) {
+                    delta.adds.keys.sorted().forEach { element ->
+                        if (element == Int.MIN_VALUE) throw IllegalStateException("restart requested")
+                        // originate (not outlet.call.provide), so EACH element mints its own
+                        // fresh wave: a plain reactive provide() for every element of one
+                        // merged delivery would inherit the SAME incoming timestamp for all
+                        // of them, and the Effectful sink's own dedup frontier (keyed on that
+                        // timestamp) would then silently suppress every element but the
+                        // first — exactly the shape the park comment's probe avoids by
+                        // minting "from the relay's own outlet counter" per element.
+                        outlet.originate { provide(element) }
+                    }
+                }
+            })
+        }
+
+        override fun reBaseline(supersedes: Set<UUID>, supersede: Boolean) {
+            restartOutlet.reBaseline(supersedes, supersede) { provide("restart") }
+        }
+    }
+
+    /**
+     * [CoalesceRelayCell] on its own journaled, [IntakeBound]ed host A; [NotifierCell]
+     * on a SEPARATE journaled host B with no bound, the two joined only by a shared
+     * [LocationRegistry] — exactly the park comment's probe shape, and NOT the
+     * single-host convenience [World] uses elsewhere in this file. Measured why it
+     * matters: co-hosting both cells (one shared [IntakeBound]'s `dataQueuedCount`
+     * sums across every cell on the host) lets the merged entry's SECOND per-element
+     * emission (`outlet.call.provide(22)`, downstream of the first, `provide(2)`,
+     * which already re-saturates the host once its own frame stages) throw
+     * `IntakeSaturatedException` back INTO [CoalesceRelayCell]'s own handler — a
+     * second, spurious RESTART that silently drops the first element's effect. That
+     * is the double-restart confound the park comment's probe names from an earlier,
+     * inconclusive attempt (reproduced here while iterating on this test: co-hosted,
+     * `restarts` came back `2`, not the expected `1`). Host B's independent
+     * `dataLock`/`AttentionScheduler` has no [IntakeBound] at all, so the
+     * `Effectful` sink's own inbound frames are never gated by host A's saturation.
+     */
+    private class CoalesceWorld(
+        controller: SimulationController,
+        val journalA: InMemoryJournal,
+        val journalB: InMemoryJournal,
+        relayRef: CellRef,
+        notifierRef: CellRef,
+        val effects: MutableList<Int>,
+    ) {
+        private val registry = LocationRegistry()
+        val hostA = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journal = journalA,
+            intakeBound = IntakeBound(highWater = 1, lowWater = 0, policy = SaturationPolicy.Coalesce),
+        )
+        val hostB = ManagedHost(scheduler = controller.scheduler(), registry = registry, journal = journalB)
+        val relay = CoalesceRelayCell(relayRef)
+        val notifier = NotifierCell(notifierRef, effects)
+
+        /** One fixed synthetic upstream source/port for every [feed] call, so repeated
+         * calls at the SAME [counter] land in the same source+wave slot — the exact
+         * condition `IntakeControl.coalesce` requires to merge two entries. */
+        private val feedSource = PortRef.generate()
+
+        private val provideMethod = CoalesceRelayApi::class.java.methods.single { it.name == "provide" }
+
+        init {
+            hostB.managementInlet.call.spawn(notifier)
+            hostA.managementInlet.call.spawn(relay)
+            hostA.managementInlet.call.supervise(relay.ref, SupervisionPolicy.RESTART)
+            val sink = (HostedCellProxy.create(notifierRef, registry, NotifierProxy::class.java) as NotifierProxy)
+                .inlet.call
+            relay.outlet.subscribe(Use.fixed(sink, PortRef.generate()))
+        }
+
+        /** A root-driven `SetDelta` add of one [element], carrying an explicit wave
+         * [counter] (unlike [World.feed]'s context-free root frame) so two calls at
+         * the same counter are the same source+wave slot a saturated intake coalesces. */
+        fun feed(element: Int, counter: Long) {
+            val context = MessageContext(Timestamp(feedSource.id, counter), feedSource)
+            val delta = SetDelta(adds = mapOf(element to setOf(Timestamp(feedSource.id, counter))))
+            hostA.enqueueHostedInvocation(
+                HostedPortInvocation(
+                    relay.ref,
+                    "inlet",
+                    HostedPortInvocation.Type.PORT_API,
+                    // Invocation.of (not the raw constructor) so contractId/methodId are
+                    // populated from ContractRegistry — WireCodec.encode (the journal
+                    // frame path) requires them.
+                    Invocation.of(provideMethod, arrayOf(delta), context),
+                ),
+            )
+        }
+    }
+
+    /**
+     * computenet-ggxrq (I-22 amendment, council DECIDED 2026-10-07, option C): a
+     * triggerless metadata-plane RESTART overtaking a `SaturationPolicy.Coalesce`
+     * staged entry must count every coalesced ORIGINAL in `precedesFrameCount`
+     * (option A's mechanism), not the merge's own identity — `IntakeControl.coalesce`
+     * replaces the staged queue entry with a NEW `HostedPortInvocation` that neither
+     * `journaledFrames` nor `replayedFrames` ever keyed, so a bare identity count
+     * undercounted it as 0 even though the WAL holds one `RECORD_FRAME` per original
+     * (coalescing is acceptance, not loss: `ManagedHost`'s saturated-Coalesce branch
+     * journals every incoming frame before merging it away). Measured on this bead
+     * before the fix: `precedesFrameCount=0`, live effects `[1, 2, 22, 3]`, recovered
+     * `[1, 2, 3, 2, 22]` with the post-recovery live frame SILENTLY LOST (`[KFX-11]`) —
+     * a regression vs origin/main, which only duplicated.
+     *
+     * The council's documented weaker guarantee applies only to a handler that emits
+     * once per MERGED DELTA (replay would then reproduce k waves where live produced
+     * one); [CoalesceRelayCell] is the OTHER shape this amendment names — one emission
+     * per COALESCED ELEMENT — for which counting the originals makes replay reproduce
+     * live EXACTLY, not merely without loss. This test therefore pins the council's
+     * caveat directly: the post-recovery frame fires EXACTLY once, and the full
+     * recovered effect sequence equals the live one position-for-position, not just
+     * "never zero".
+     */
+    @Test
+    fun `a metadata-plane RESTART that overtakes a coalesced staged entry survives crash recovery without dropping the post-recovery frame`() {
+        val controller = SimulationController(seed = 49)
+        val journalA = InMemoryJournal()
+        val journalB = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val world = CoalesceWorld(controller, journalA, journalB, relayRef, notifierRef, effects)
+        controller.runToIdle()
+
+        // Drain frame 1 while intake is OPEN, so it never competes with the saturation
+        // window below (`[1]` is delivered and forgotten long before the merge).
+        world.feed(1, counter = 1)
+        controller.runToIdle()
+        effects shouldBe listOf(1)
+
+        ProtocolSupport.of(world.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = world.relay.inlet.ref
+            override val to = world.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+
+        // feed(2) saturates the host (highWater = 1); feed(22) lands in the SAME
+        // source+wave slot (counter 7) and is coalesced into the staged {2} entry —
+        // the WAL still gets a RECORD_FRAME for each original.
+        world.feed(2, counter = 7)
+        world.feed(22, counter = 7)
+
+        // The metadata task runs at band 0 and overtakes the already-coalesced,
+        // still-staged entry at band 20 — the same overtaking shape as this file's
+        // other metadata-plane RESTART tests, now landing on a merge instead of a
+        // plain staged frame.
+        world.hostA.enqueueHostedInvocation(
+            HostedPortInvocation(
+                world.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+
+        world.hostA.supervisionAccounting().restarts shouldBe 1
+        val restartRecord = journalA.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        restartRecord.triggerFramePayload shouldBe null
+        // computenet-ggxrq: BOTH coalesced originals, not the pre-fix 0.
+        restartRecord.precedesFrameCount shouldBe 2
+
+        world.feed(3, counter = 8)
+        controller.runToIdle()
+        val liveEffects = effects.toList()
+        liveEffects shouldBe listOf(1, 2, 22, 3)
+
+        // Crash: both hosts, the registry and both live instances vanish; the journals do not.
+        val after = CoalesceWorld(controller, journalA, journalB, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.hostA.recoverFrom(journalA)
+        after.hostB.recoverFrom(journalB)
+        controller.runToIdle()
+
+        // Exact agreement, not merely "no loss": for this per-element handler shape
+        // the fix reproduces live position-for-position.
+        effects shouldBe liveEffects
+
+        after.feed(4, counter = 9)
+        controller.runToIdle()
+        effects shouldBe liveEffects + 4
+        // The council's caveat: exactly-once for a per-element/single-emit handler,
+        // not merely "at least once".
+        effects.count { it == 4 } shouldBe 1
     }
 }

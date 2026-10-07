@@ -945,6 +945,11 @@ open class ManagedHost(
                 action(pending.sortedBy(CheckpointFrame::sequence))
             }
         },
+        // computenet-ggxrq: `intakeControl` is declared later in this file, so this is a
+        // deferred lookup (read when invoked, not when this constructor argument is
+        // built) — the same forward-reference pattern `cellsView = { cells }` above
+        // already relies on, not a bound method reference evaluated eagerly here.
+        coalesceOriginals = { invocation -> intakeControl.coalesceOriginalsOf(invocation) },
     )
 
     /**
@@ -2150,6 +2155,9 @@ open class ManagedHost(
             if (portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) != null) {
                 hostDurability.forgetJournaledFrame(hostedInvocation)
             }
+            // computenet-ggxrq: drop coalesce bookkeeping once the merged entry is
+            // delivered — a no-op for the common (non-merged) invocation.
+            intakeControl.forgetCoalesceOriginals(hostedInvocation)
             if (!retainCheckpointSequence && hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
                 synchronized(dataLock) { checkpointSequences.remove(hostedInvocation) }
             }

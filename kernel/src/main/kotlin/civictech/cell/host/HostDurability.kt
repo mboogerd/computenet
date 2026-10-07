@@ -481,6 +481,17 @@ internal class HostDurability(
      * built without a host (`JournalRecordsTest`); `ManagedHost` always passes its own.
      */
     private val underIntakeLock: ((pending: List<CheckpointFrame>) -> Unit) -> Unit = { it(emptyList()) },
+    /**
+     * computenet-ggxrq (I-22 amendment): the original per-record invocations a pending
+     * entry subsumes if it is the current staged result of an `IntakeControl.coalesce`
+     * merge, or empty otherwise — `IntakeControl.coalesceOriginalsOf`. [journalRestart]'s
+     * `precedesFrameCount` count uses this so a staged Coalesce merge counts the k WAL
+     * records its originals actually appended, instead of zero (the merged invocation's
+     * own identity is never a key of [journaledFrames] or [replayedFrames]). The default —
+     * always empty — is for a delegate built without a host (`JournalRecordsTest`);
+     * `ManagedHost` always passes its own `intakeControl::coalesceOriginalsOf`.
+     */
+    private val coalesceOriginals: (HostedPortInvocation) -> List<HostedPortInvocation> = { emptyList() },
 ) {
 
     /**
@@ -847,15 +858,33 @@ internal class HostDurability(
                 // A frame replayed from this same journal and not yet delivered is also one
                 // of its records: a metadata RESTART during recovery overtakes it exactly as
                 // it would a live-journaled one.
+                //
+                // computenet-ggxrq (I-22 amendment): a pending entry that is the current
+                // staged result of a SaturationPolicy.Coalesce merge is counted by its
+                // original per-record invocations (coalesceOriginals), not by its own
+                // identity — the merge is a NEW HostedPortInvocation that journaledFrames/
+                // replayedFrames never keyed, even though the WAL holds one RECORD_FRAME
+                // per original (coalescing is acceptance, not loss). Counting the originals
+                // places the boundary ahead of all k of them, so replay delivers every
+                // original on the correct (old) epoch instead of silently dropping the
+                // post-recovery live frame that follows ([KFX-11]). This is exact for a
+                // handler that reacts once per original element; a handler that instead
+                // emits once per MERGED delta sees replay deliver k waves where live
+                // delivered one — see 93 I-22's amendment for the documented weaker
+                // guarantee (never zero, not exactly-once, for that handler shape).
                 synchronized(journaledFrames) {
                     synchronized(replayedFrames) {
-                        pending.count { (_, invocation) ->
-                            invocation.cellRef == trigger.cellRef &&
-                                journalSelector(invocation.cellRef, invocation.portName) === journal &&
-                                (
-                                    journaledFrames.containsKey(invocation) ||
-                                        replayedFrames[invocation]?.journal === journal
-                                    )
+                        fun isJournaledOrReplayed(invocation: HostedPortInvocation): Boolean =
+                            journaledFrames.containsKey(invocation) || replayedFrames[invocation]?.journal === journal
+                        pending.sumOf { (_, invocation) ->
+                            if (invocation.cellRef != trigger.cellRef) return@sumOf 0
+                            if (journalSelector(invocation.cellRef, invocation.portName) !== journal) return@sumOf 0
+                            val originals = coalesceOriginals(invocation)
+                            if (originals.isEmpty()) {
+                                if (isJournaledOrReplayed(invocation)) 1 else 0
+                            } else {
+                                originals.count(::isJournaledOrReplayed)
+                            }
                         }
                     }
                 }

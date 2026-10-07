@@ -8170,6 +8170,35 @@ artifact, or kept as a separate orchestrator input.
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The reconciliation core: host-held generation bookkeeping, the ReBaseline(source, supersedes, state, supersede) catch-up mode, the R5 dead-lane filter on convergent consumers, the re-baseline trigger on every RESTART with direction-by-class (push-authoritat…
 > ⚠ Divergence with landed code: Landed RESTART (spec 31 rule 5, M3.5) is exactly the bare local rollback the resolution forbids: deactivate → activate → restore the spawn-time Stateful checkpoint, same sourceId with a rolled-back counter (tag/wave aliasing possible), no downstream reconci…
 > Reconciled after cross-check: wire Timestamp keeps the opaque per-epoch UUID; generation demoted to host bookkeeping seeding an explicit ReBaseline.supersedes list; R5 fence keys on the list.
+> R6 amendment (2026-10-07, council DECIDED, `computenet-ggxrq`): **DECIDED / LANDED** —
+> a triggerless metadata-plane RESTART (R4's durable boundary, `HostDurability.journalRestart`)
+> that overtakes a staged `SaturationPolicy.Coalesce` merge (`IntakeControl.coalesce`) now
+> counts every coalesced ORIGINAL frame in the type-8 record's `precedesFrameCount`, not the
+> merge's own identity — the merge replaces the staged queue entry with a NEW
+> `HostedPortInvocation` that neither `journaledFrames` nor `replayedFrames` (both
+> identity-keyed) ever held, even though the WAL holds one `RECORD_FRAME` per original
+> (coalescing is acceptance, not loss: the saturated-Coalesce accept path journals every
+> incoming frame before merging it away). Pre-fix this undercounted the merge as zero WAL
+> records, so recovery rotated the epoch too early and SILENTLY DROPPED the first
+> post-recovery live frame ([KFX-11]) — a regression against the pre-R4 baseline, which only
+> duplicated. **Documented weaker guarantee, not a universal exact-replay claim**: counting
+> the originals makes recovery deliver each of them separately where live delivered one
+> merged invocation. For a handler that reacts once per COALESCED ELEMENT (iterates the
+> merged payload and reacts per entry), replay reproduces live EXACTLY — no duplication, no
+> loss. For a handler that instead reacts once per MERGED DELTA (one reaction per accepted
+> invocation, not per element), replay delivers k waves where live delivered one: never zero,
+> but not exactly-once either. A cell whose `SaturationPolicy.Coalesce` inlet needs an
+> exact replay bound for that second shape is out of this amendment's scope (candidates B/D
+> below were considered and rejected for PR #1318's mandate; see the council verdict on
+> `computenet-ggxrq` for the full scoring). Mechanism: `IntakeControl` tracks, per currently
+> staged merge result (identity-keyed, flattened across a chain of coalesces into the same
+> slot), the list of original invocations it subsumes
+> (`IntakeControl.coalesceOriginalsOf`/`forgetCoalesceOriginals`); `HostDurability.journalRestart`
+> consults it when counting pending frames, falling back to the pre-amendment single-identity
+> check for the non-merged case. Pinned by
+> `OutletHighWaterRecoveryTest` (`a metadata-plane RESTART that overtakes a coalesced staged
+> entry survives crash recovery without dropping the post-recovery frame`), which asserts
+> EXACTLY-ONCE (not merely never-zero) for its per-element handler, per the council's caveat.
 
 #### 1. Challenge restatement
 

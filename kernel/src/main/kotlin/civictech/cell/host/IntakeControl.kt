@@ -8,6 +8,7 @@ import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
+import java.util.IdentityHashMap
 
 /**
  * Intake closed/saturated gating (spec 33, G-5), coalescing, and saturation
@@ -51,6 +52,25 @@ internal class IntakeControl(
 
     private val lowWaterListeners = mutableListOf<() -> Unit>()
 
+    /**
+     * computenet-ggxrq (I-22 amendment): a [SaturationPolicy.Coalesce] merge replaces the
+     * queued entry with a NEW [HostedPortInvocation] identity (`old.copy(...)` in
+     * [coalesce]), so neither [HostDurability]'s `journaledFrames` nor `replayedFrames`
+     * — both identity-keyed — ever holds that merged object. Without this map,
+     * `HostDurability.journalRestart`'s `precedesFrameCount` undercounts a staged merge
+     * as zero WAL records instead of the k originals actually appended (one `RECORD_FRAME`
+     * per coalesced original, since coalescing is acceptance, not loss —
+     * `ManagedHost.accept`'s saturated-Coalesce branch journals every incoming frame before
+     * merging it away). Keyed by the merged entry CURRENTLY staged in the queue, so a chain
+     * of coalesces (a third frame merging into an already-merged entry) flattens to the
+     * full set of original per-record invocations rather than nesting.
+     *
+     * Not cleaned up when a merged entry is delivered: `HostDurability.forgetCoalesceOriginals`
+     * removes the map entry in [ManagedHost]'s delivery `finally` block, the same place
+     * `forgetJournaledFrame`/`forgetReplayedFrame` already run.
+     */
+    private val coalesceOriginals = IdentityHashMap<HostedPortInvocation, List<HostedPortInvocation>>()
+
     fun onIntakeAvailable(listener: () -> Unit) {
         val runNow = synchronized(dataLock) {
             if (intakeState == IntakeState.SATURATED) {
@@ -85,10 +105,37 @@ internal class IntakeControl(
         val entries = queue.toMutableList()
         val (sequence, old) = entries[index]
         val merged = (old.invocation.args.single() as MergeablePayload).mergeWith(payload)
-        entries[index] = sequence to old.copy(invocation = old.invocation.copy(args = listOf(merged)))
+        val mergedInvocation = old.copy(invocation = old.invocation.copy(args = listOf(merged)))
+        // computenet-ggxrq: flatten rather than nest, so a chain of coalesces into the
+        // same slot still resolves to the full set of original per-record invocations.
+        // Synchronized on the map itself (not just dataLock, which this method's caller
+        // already holds) so it never races forgetCoalesceOriginals, which is called
+        // without dataLock from the delivery finally block.
+        synchronized(coalesceOriginals) {
+            coalesceOriginals[mergedInvocation] = (coalesceOriginals.remove(old) ?: listOf(old)) + incoming
+        }
+        entries[index] = sequence to mergedInvocation
         queue.clear()
         queue.addAll(entries)
         return true
+    }
+
+    /**
+     * The original per-record invocations [invocation] subsumes if it is the current
+     * staged result of a [SaturationPolicy.Coalesce] merge, or empty if it is not (the
+     * common case — see [coalesceOriginals]).
+     */
+    fun coalesceOriginalsOf(invocation: HostedPortInvocation): List<HostedPortInvocation> =
+        synchronized(coalesceOriginals) { coalesceOriginals[invocation] } ?: emptyList()
+
+    /**
+     * Drops bookkeeping once [invocation] is delivered or discarded — mirrors
+     * `HostDurability.forgetJournaledFrame`/`forgetReplayedFrame`, synchronizing on the
+     * map itself rather than requiring the caller to hold [dataLock] (the delivery
+     * `finally` block that calls this does not hold it).
+     */
+    fun forgetCoalesceOriginals(invocation: HostedPortInvocation) {
+        synchronized(coalesceOriginals) { coalesceOriginals.remove(invocation) }
     }
 
     /**
