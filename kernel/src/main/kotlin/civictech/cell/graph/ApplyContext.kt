@@ -295,8 +295,21 @@ class ApplyContext(
 
     /** Lower one declarative [PromoteStep] onto the live evolution pipeline. */
     fun evolve(step: PromoteStep): EvolutionHandle {
-        val gateRef = evolutionRef(step.gate, "gate")
         val incumbentRef = evolutionRef(step.incumbent, "incumbent")
+        val incumbentSpawn = live().spawns[incumbentRef]
+            ?: throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "incumbent '${step.incumbent}' ($incumbentRef) has no recorded spawn",
+            )
+        if (incumbentSpawn.replicated) return evolveReplica(step, incumbentRef)
+        if (step.candidate.isBlank() || step.replicatedCandidateFactory != null) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "single-instance promotion requires one candidate handle and no replicated candidate factory",
+            )
+        }
+
+        val gateRef = evolutionRef(step.gate, "gate")
         val candidateRef = evolutionRef(step.candidate, "candidate")
         val downstream = step.downstream.map { (handle, inlet) ->
             evolutionRef(handle, "downstream") to inlet
@@ -397,6 +410,72 @@ class ApplyContext(
             gates = gates,
             baselineTwin = baselineTwin,
             baselineGates = baselineGates,
+            hooks = hooks,
+        )
+    }
+
+    private fun evolveReplica(step: PromoteStep, incumbentRef: CellRef): EvolutionHandle {
+        val candidateFactory = step.replicatedCandidateFactory
+        if (step.candidate.isNotBlank() || candidateFactory == null) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion requires one replicated candidate factory and no candidate handle",
+            )
+        }
+        val gates = step.gates.map { handle ->
+            handle to cells.getValue(evolutionRef(handle, "gate"))
+        }
+        val prepared = prepareReplicatedPromotion(
+            ref = incumbentRef,
+            candidateFactory = candidateFactory,
+            outletName = step.outletName,
+        )
+        var replicaTapSeen = false
+        var activeReplicaTap: PortRef? = null
+        val hooks = object : EvolutionHooks {
+            override val journal: PromotionJournal = prepared.journal
+
+            override fun <T : Any> tapReplicatedShadow(
+                outlet: FanOutlet<T>,
+                inlet: FanInlet<T>,
+            ): PortRef {
+                check(activeReplicaTap == null) { "replicated evolution already has an active shadow tap" }
+                outlet.subscribe(inlet)
+                replicaTapSeen = true
+                activeReplicaTap = inlet.ref
+                return inlet.ref
+            }
+
+            override fun <T : Any> untapReplicatedShadow(outlet: FanOutlet<T>, inlet: PortRef) {
+                check(activeReplicaTap == inlet) {
+                    "replicated evolution shadow tap $inlet was not installed by this handle"
+                }
+                outlet.unsubscribe(inlet)
+                activeReplicaTap = null
+            }
+
+            override fun promotedReplica(ref: CellRef) {
+                check(replicaTapSeen && activeReplicaTap == null) {
+                    "replicated promotion committed without closing its graph-owned shadow tap"
+                }
+                cells[ref] = prepared.candidateCell
+            }
+        }
+
+        return Evolve.runReplica(
+            host = host,
+            replication = prepared.replication,
+            incumbent = prepared.incumbent,
+            candidate = prepared.candidate,
+            policy = step.policy,
+            gates = gates.map { (handle, cell) ->
+                cell as? civictech.cell.verify.InvariantCell<*, *>
+                    ?: throw Promotion.PromotionAborted(
+                        "PRECHECK",
+                        "gate handle '$handle' (${cell.ref}) is not an InvariantCell",
+                    )
+            },
+            outletName = step.outletName,
             hooks = hooks,
         )
     }
@@ -537,6 +616,34 @@ class ApplyContext(
         judge: PromotionJudge? = null,
     ) {
         checkEvolutionAuthority(authorityRefusal)
+        val prepared = prepareReplicatedPromotion(ref, candidateFactory, outletName)
+
+        Promotion.promoteReplica(
+            host = host,
+            replication = prepared.replication,
+            incumbent = prepared.incumbent,
+            candidate = prepared.candidate,
+            outletName = outletName,
+            judge = judge,
+            journal = prepared.journal,
+        )
+        cells[ref] = prepared.candidateCell
+    }
+
+    private data class PreparedReplicatedPromotion(
+        val replication: Replication,
+        val incumbent: Replicable<*>,
+        val candidate: Replicable<*>,
+        val candidateCell: Cell,
+        val journal: PromotionJournal,
+    )
+
+    /** Shared PRECHECK and durability seam for direct and declarative rolling promotion. */
+    private fun prepareReplicatedPromotion(
+        ref: CellRef,
+        candidateFactory: CellFactory,
+        outletName: String,
+    ): PreparedReplicatedPromotion {
         val before = live()
         val service = replication
             ?: throw Promotion.PromotionAborted("PRECHECK", "replicated promotion requires a Replication service")
@@ -605,16 +712,13 @@ class ApplyContext(
             }
         }
 
-        Promotion.promoteReplica(
-            host = host,
+        return PreparedReplicatedPromotion(
             replication = service,
             incumbent = incumbent,
             candidate = candidate,
-            outletName = outletName,
-            judge = judge,
+            candidateCell = candidateCell,
             journal = promotionJournal,
         )
-        cells[ref] = candidateCell
     }
 
     private fun checkEvolutionAuthority(authorityRefusal: () -> String?) {

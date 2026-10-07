@@ -12,7 +12,6 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
-import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
@@ -57,7 +56,25 @@ interface EvolutionHooks {
         outlet.unsubscribe(inlet)
     }
 
+    /**
+     * Attach the same-ref, unhosted candidate used by rolling replicated evolution.
+     * Kept separate from [tapShadow] because the candidate has no topology address of
+     * its own until COMMIT; graph owners may still journal this ephemeral observation.
+     */
+    fun <T : Any> tapReplicatedShadow(outlet: FanOutlet<T>, inlet: FanInlet<T>): PortRef {
+        outlet.subscribe(inlet)
+        return inlet.ref
+    }
+
+    /** Remove a tap previously installed by [tapReplicatedShadow]. */
+    fun <T : Any> untapReplicatedShadow(outlet: FanOutlet<T>, inlet: PortRef) {
+        outlet.unsubscribe(inlet)
+    }
+
     fun promoted(incumbent: CellRef) {}
+
+    /** Same-ref counterpart to [promoted], where no incumbent ref is retired. */
+    fun promotedReplica(ref: CellRef) {}
 }
 
 /** A running shadow/judge/promotion orchestration. */
@@ -263,9 +280,9 @@ object Evolve {
      * **Limit of this judgment.** Because the shadow is fed the incumbent's *effective deltas*
      * on its [Replicable.deltaInlet], it exercises only the candidate's merge/re-emit path:
      * local write ops (the cell's own op inlet) are never delivered to it, so a candidate
-     * that changes how local ops are interpreted is not judged on that change. The swap also
-     * passes only [EvolutionHooks.journal]; the shadow tap bypasses [EvolutionHooks.tapShadow],
-     * and no declarative `PromoteStep` lowers onto this arm yet.
+     * that changes how local ops are interpreted is not judged on that change. The same-ref
+     * shadow tap is installed through [EvolutionHooks.tapReplicatedShadow], allowing a graph
+     * owner to account for its ephemeral observation separately from hosted topology.
      *
      * A differential baseline is not offered here: a twin would need a third distinct
      * replica object and tap with no spec-settled meaning. The authority gate is checked at
@@ -295,12 +312,13 @@ object Evolve {
         val judge = PromotionJudge(policy, cycleHead = incumbent as? CycleHead<*>)
 
         @Suppress("UNCHECKED_CAST")
-        val incumbentOutlet = incumbent.outlet as Subscribe<Propagate<Any?>>
+        val incumbentOutlet = incumbent.outlet as? FanOutlet<Propagate<Any?>>
+            ?: throw Refused("gates: replicated incumbent outlet must be a FanOutlet")
         @Suppress("UNCHECKED_CAST")
-        val shadowInlet = candidate.deltaInlet as Use<Propagate<Any?>>
+        val shadowInlet = candidate.deltaInlet as? FanInlet<Propagate<Any?>>
+            ?: throw Refused("gates: replicated candidate delta inlet must be a FanInlet")
         val candidateOutlet = outlet(candidate, outletName)
-        val tapRef = shadowInlet.ref
-        incumbentOutlet.subscribe(shadowInlet)
+        attachReplicaGates(candidateOutlet, gates)
 
         val violationSubscriptions = mutableListOf<ViolationSubscription>()
         gates.forEach { invariant ->
@@ -309,6 +327,7 @@ object Evolve {
         val observerRef = PortRef.generate()
         val settlement = ObservationSettlement(host, judge)
         candidateOutlet.observe(observerRef) { settlement.observeCandidateWave() }
+        var tapRef = activeHooks.tapReplicatedShadow(incumbentOutlet, shadowInlet)
 
         return Handle(
             candidateRef = candidate.ref,
@@ -318,7 +337,7 @@ object Evolve {
             observerRef = observerRef,
             violationSubscriptions = violationSubscriptions,
             authority = authority,
-            detachCandidateInputs = { incumbentOutlet.unsubscribe(tapRef) },
+            detachCandidateInputs = { activeHooks.untapReplicatedShadow(incumbentOutlet, tapRef) },
             // The candidate was never hosted and shares the incumbent's ref: despawning it
             // would despawn the live incumbent.
             discardCandidate = {},
@@ -326,7 +345,7 @@ object Evolve {
             swap = {
                 // COMMIT rebinds the candidate under the incumbent's ref, so the tap must be
                 // gone first; the shadow then re-syncs by snapshot handoff plus anti-entropy.
-                incumbentOutlet.unsubscribe(tapRef)
+                activeHooks.untapReplicatedShadow(incumbentOutlet, tapRef)
                 try {
                     Promotion.promoteReplica(
                         host = host,
@@ -341,15 +360,30 @@ object Evolve {
                     // A PRECHECK refusal leaves the evolution retryable, so the shadow keeps
                     // being fed; a COMMIT abort is terminal and the handle detaches it.
                     if (aborted.message?.startsWith("promotion aborted at COMMIT:") != true) {
-                        incumbentOutlet.subscribe(shadowInlet)
+                        tapRef = activeHooks.tapReplicatedShadow(incumbentOutlet, shadowInlet)
                     }
                     throw aborted
                 }
             },
-            // The ref survives a replicated promotion, so there is no retired incumbent ref
-            // for hooks.promoted to forget.
-            onPromoted = {},
+            onPromoted = { activeHooks.promotedReplica(incumbent.ref) },
         )
+    }
+
+    private fun attachReplicaGates(
+        candidateOutlet: FanOutlet<*>,
+        gates: List<InvariantCell<*, *>>,
+    ) {
+        gates.forEach { invariant ->
+            val inlet = invariant.inlet
+            if (candidateOutlet.clazz != inlet.clazz) {
+                throw Refused(
+                    "gates: replicated candidate outlet ${candidateOutlet.clazz.name} is incompatible " +
+                        "with invariant '${invariant.name}' inlet ${inlet.clazz.name}",
+                )
+            }
+            @Suppress("UNCHECKED_CAST")
+            (candidateOutlet as FanOutlet<Any>).subscribe(inlet as FanInlet<Any>)
+        }
     }
 
     private fun checkAuthority(authority: EvolutionAuthority) {

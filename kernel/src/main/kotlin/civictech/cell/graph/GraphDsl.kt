@@ -192,6 +192,11 @@ data class WriteStep(val name: String, val cells: List<String>) : GraphStep
  * named by this graph. Unlike topology steps, this emits no [TopoEvent] while
  * applying the spec: the eventual accept/reject hooks record the committed
  * promotion or rejected shadow despawn at the point the decision is made.
+ *
+ * The single-instance arm names an already-spawned [candidate] and [gate]. The
+ * replicated arm leaves those strings empty and supplies [replicatedCandidateFactory];
+ * [ApplyContext] selects the arm from the incumbent's recorded replicated flag and
+ * refuses any mixed or missing candidate binding during PRECHECK.
  */
 data class PromoteStep(
     val handle: String,
@@ -204,15 +209,20 @@ data class PromoteStep(
     val gates: List<String>,
     val baseline: String? = null,
     val baselineGates: List<String> = emptyList(),
+    /** Same-ref, unhosted candidate construction for the replicated arm. */
+    val replicatedCandidateFactory: CellFactory? = null,
 ) : GraphStep {
     init {
         require(handle.isNotBlank()) { "promote step handle must not be blank" }
         require(incumbent.isNotBlank()) { "promote step '$handle': incumbent must not be blank" }
-        require(candidate.isNotBlank()) { "promote step '$handle': candidate must not be blank" }
-        require(gate.isNotBlank()) { "promote step '$handle': gate must not be blank" }
         require((baseline != null) == policy.baseline) {
             "promote step '$handle': baseline must be supplied exactly when policy.baseline is true"
         }
+    }
+
+    companion object {
+        // Preserve GraphSpecs serialized before replicatedCandidateFactory was added.
+        private const val serialVersionUID: Long = -1909086562882852722L
     }
 }
 
@@ -529,8 +539,8 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     check(occupied.add(step.handle)) { "duplicate handle '${step.handle}'" }
                     buildList {
                         add(step.incumbent)
-                        add(step.candidate)
-                        add(step.gate)
+                        step.candidate.takeIf(String::isNotBlank)?.let(::add)
+                        step.gate.takeIf(String::isNotBlank)?.let(::add)
                         addAll(step.downstream.map { it.first })
                         addAll(step.gates)
                         step.baseline?.let(::add)
@@ -1161,6 +1171,39 @@ class GraphBuilder private constructor(
             gates = gates.map(CellHandle::name),
             baseline = baseline?.name,
             baselineGates = baselineGates.map(CellHandle::name),
+        )
+        val applyContext = context
+            ?: throw unsupportedPromote(handle, "graph(Use<HostManagementApi>)")
+        val evolution = applyContext.evolve(step)
+        steps += step
+        return evolution
+    }
+
+    /**
+     * Declare and start the rolling replicated arm of live evolution. The candidate is
+     * constructed outside hosting under the incumbent's exact ref;
+     * [civictech.cell.evolve.Evolve.runReplica] installs the temporary shadow tap and
+     * performs the authoritative same-ref rebind.
+     */
+    fun promoteReplica(
+        handle: String,
+        incumbent: CellHandle,
+        candidateFactory: CellFactory,
+        policy: PromotionPolicy,
+        gates: List<CellHandle>,
+        outletName: String = "outlet",
+    ): EvolutionHandle {
+        require(names.add(handle)) { "duplicate handle '$handle'" }
+        val step = PromoteStep(
+            handle = handle,
+            incumbent = incumbent.name,
+            candidate = "",
+            gate = "",
+            outletName = outletName,
+            downstream = emptyList(),
+            policy = policy,
+            gates = gates.map(CellHandle::name),
+            replicatedCandidateFactory = candidateFactory,
         )
         val applyContext = context
             ?: throw unsupportedPromote(handle, "graph(Use<HostManagementApi>)")
