@@ -489,6 +489,15 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 is DespawnStep -> {
                     val ref = active.remove(step.handle)
                         ?: throw IllegalStateException("unknown handle '${step.handle}'")
+                    // declareWrite runs after every topology event, so a write over a cell this
+                    // spec later despawns would fail post-journal. Matched by ref, not handle:
+                    // two adopted handles may alias one cell.
+                    writes.firstOrNull { (_, cells) -> ref in cells }?.let { (name, _) ->
+                        throw IllegalArgumentException(
+                            "declared write '$name' targets $ref, despawned later in the same GraphSpec " +
+                                "(handle '${step.handle}')",
+                        )
+                    }
                     occupied.remove(step.handle)
                     events += TopoEvent.Despawn(ref)
                     eventSteps += step
