@@ -206,10 +206,11 @@ import java.io.Serializable
  *   or completeness-set member) remains disputed, while `[24-WL-15]` (a schema gap: no script
  *   verb reaches `retire(sourceId)`), `[24-WL-17]` and `[24-WL-18]` (driver-binding gaps: no
  *   catalog id emits an `Owned`/`Replicable` set stream into an evicting cell) remain open `gap`
- *   rows for reasons unrelated to this exclusion — plus a fourth, undropped, B16 entry recording
+ *   rows for reasons unrelated to this exclusion — plus a fifth, undropped, B16 entry recording
  *   a glitch-free-wrap scenario that was designed and deliberately not authored. None of the
- *   four concludes eviction itself goes unchecked; each names the kernel test that checks it
- *   directly instead (for example `[24-WL-15]`'s `WaterlineChurnTest` pins).
+ *   five concludes eviction itself goes unchecked; each names the kernel test that checks it
+ *   directly instead (for example `[24-WL-04]`'s `WaterlineCellTest` pin, `[24-WL-15]`'s
+ *   `WaterlineChurnTest` pins).
  *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
  *   not touch lateness.
  *
