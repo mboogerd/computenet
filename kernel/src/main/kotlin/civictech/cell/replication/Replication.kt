@@ -87,6 +87,16 @@ class Replication(
     private val adapters = mutableMapOf<CellRef, AuthorityGossip>()
     private val authorityBindings = mutableMapOf<CellRef, AuthorityBinding>()
 
+    /**
+     * One counter sequence per signing peer for this Replication's lifetime.
+     * A ref re-replicated here (rebind, evict-then-return, supersede) keeps
+     * signing above its earlier counters: peers retain those `(author, counter)`
+     * pairs, so restarting the sequence would refuse the owner's next writes
+     * as `REPLAY` while its own replica applied them. Cross-process restart is
+     * the incarnation's job (ermvz-D10), not this map's.
+     */
+    private val countingSigners = mutableMapOf<civictech.cell.link.PeerId, CountingWriteSigner>()
+
     /** The local authority adapter for [ref], or null on the byte-identical open path. */
     fun authorityOf(ref: CellRef): AuthorityGossip? = adapters[ref]
 
@@ -509,7 +519,9 @@ class Replication(
             AuthorityGossip(
                 cell = cell,
                 authority = authority,
-                signer = CountingWriteSigner(requiredSigner) { 0L },
+                signer = countingSigners.getOrPut(requiredSigner.peerId) {
+                    CountingWriteSigner(requiredSigner) { 0L }
+                },
                 verifier = requiredVerifier,
             )
         }

@@ -5,6 +5,7 @@ import civictech.cell.DenialReason
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.OrMapCell
+import civictech.cell.data.SetCell
 import civictech.cell.host.SimulationController
 import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
@@ -168,6 +169,31 @@ class WriteAuthorityGossipTest {
 
         map.membership().shouldBeEmpty()
         b.replication.authorityOf(map.ref)!!.boundaryDenials["write-authority"]!!.denialCount shouldBe 2L
+    }
+
+    @Test
+    fun `a rebound owner keeps signing above the counters its peers retained`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val a = AuthorityTestPeer(controller, pA, signing)
+        val b = AuthorityTestPeer(controller, pB, signing)
+        Peering.loopback(a.side, b.side)
+        val logicalId = UUID.randomUUID()
+        val onA = a.replica(logicalId, 0, WriteAuthority.Principal(pA))
+        val onB = b.replica(logicalId, 1, WriteAuthority.Principal(pA))
+        controller.runToIdle()
+        a.ops(onA).add("before-rebind")
+        controller.runToIdle()
+
+        val candidate = SetCell<String>(onA.ref)
+        a.replication.rebind(onA, candidate, a.host)
+        controller.runToIdle()
+        a.ops(candidate).add("after-rebind")
+        controller.runToIdle()
+
+        candidate.membership() shouldBe setOf("before-rebind", "after-rebind")
+        onB.membership() shouldBe setOf("before-rebind", "after-rebind")
+        b.denialReasons().shouldBeEmpty()
     }
 
     /**
