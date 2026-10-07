@@ -12,6 +12,46 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink
 import java.lang.reflect.Method
+import java.nio.charset.StandardCharsets.UTF_8
+import java.util.Collections
+import java.util.UUID
+import java.util.WeakHashMap
+
+/**
+ * A live routed ingress, identified without depending on `streamTo`'s
+ * attachment ref. The root is target-derived rather than the target port's own
+ * identity so observation cannot mistake this unmanaged ingress family for an
+ * admitted edge endpoint.
+ */
+internal data class RoutedIngress(
+    val cellRef: CellRef,
+    val portName: String,
+) {
+    val root: PortRef = PortRef(
+        UUID.nameUUIDFromBytes(
+            "routed-inbound:${cellRef.id}:${cellRef.instanceId}:$portName".toByteArray(UTF_8),
+        ),
+        cellRef,
+    )
+}
+
+/**
+ * Weak index of reusable [RoutedPropagate] handles. A `streamTo` attachment
+ * holds its target strongly through `Use.fixed`, so an installed routed feed
+ * stays visible here. A discarded, unlinked handle does not become permanent
+ * host topology merely because it was once resolved.
+ */
+private object RoutedIngresses {
+    private val live = Collections.synchronizedMap(
+        WeakHashMap<RoutedPropagate<*>, RoutedIngress>(),
+    )
+
+    fun register(handle: RoutedPropagate<*>, ingress: RoutedIngress) {
+        live[handle] = ingress
+    }
+
+    fun snapshot(): Set<RoutedIngress> = synchronized(live) { live.values.toSet() }
+}
 
 /**
  * A first-class, routed write-handle to a named [Propagate] inlet on a cell
@@ -49,6 +89,10 @@ class RoutedPropagate<D>(
     private val sink: InvocationSink,
 ) : Propagate<D> {
 
+    init {
+        RoutedIngresses.register(this, RoutedIngress(cellRef, portName))
+    }
+
     /**
      * Steady-state send: one [HostedPortInvocation] built and handed to the
      * sink, matching [HostedCellProxy]'s `apiInvocation` (data path carries the
@@ -67,9 +111,11 @@ class RoutedPropagate<D>(
         )
     }
 
-    private companion object {
+    companion object {
         /** The one method a `Propagate<D>` send targets — reflected once, reused every send. */
-        val PROPAGATE: Method = Propagate::class.java.getMethod("propagate", Any::class.java)
+        private val PROPAGATE: Method = Propagate::class.java.getMethod("propagate", Any::class.java)
+
+        internal fun liveIngresses(): Set<RoutedIngress> = RoutedIngresses.snapshot()
     }
 }
 

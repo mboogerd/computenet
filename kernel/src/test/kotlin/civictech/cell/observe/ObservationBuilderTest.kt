@@ -117,6 +117,59 @@ class ObservationBuilderTest {
     }
 
     @Test
+    fun `anonymous routed union feed does not collapse onto its managed source`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val writer = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, writer, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val routed: Propagate<SetDelta<Int>> = host.inlet(union.ref, "inlet")
+        writer.outlet.streamTo(routed)
+        val routedRoots = management.upstreamConsumeAncestors(union.ref).opaque
+        routedRoots.size shouldBe 1
+        routedRoots.single().cell shouldBe union.ref
+        (writer.outlet.ref in routedRoots) shouldBe false
+
+        val observation = host.observation {
+            set("union", union.ref)
+            set("source", source.ref)
+        }
+
+        observation.groups shouldContainExactly setOf("union", "source")
+        observation.current().groupOf shouldBe mapOf(
+            "union" to "union",
+            "source" to "source",
+        )
+        observation.close()
+    }
+
+    @Test
+    fun `hosted bypass producer remains an opaque root instead of being traversed`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val writer = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, writer, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", writer.ref, "inlet")
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+        writer.outlet.streamTo(union.inlet.call, at = union.inlet.ref)
+
+        management.upstreamConsumeAncestors(union.ref).opaque shouldBe setOf(writer.outlet.ref)
+        val observation = host.observation {
+            set("union", union.ref)
+            set("source", source.ref)
+        }
+
+        observation.groups shouldContainExactly setOf("union", "source")
+        observation.close()
+    }
+
+    @Test
     fun `declared future unmanaged feed propagates to downstream view roots`() {
         val host = ManagedHost()
         val management = host.managementInlet.call
