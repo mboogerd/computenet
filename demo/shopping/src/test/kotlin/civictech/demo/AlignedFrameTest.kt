@@ -15,16 +15,15 @@ import kotlin.test.assertTrue
  * SSE frame in which both fields change, `produce` is always a subset of
  * `items`, and the aligned sink drains to zero buffered waves at idle.
  *
- * **Frame-attribution method**: the multi-group observation listener is a
- * latest-state callback: the coordinator queues each group publication, but
- * `broadcast()` reads `observation.current()` when its callback runs.
- * Back-to-back waves can therefore coalesce into one serialized SSE state even
- * though the aligned sink published each wave. Each test subscribes (the first
- * frame is the initial state), performs the op(s) under test, waits until the
- * tap shows the op's own aligned state, then posts a sentinel `add` of an item
- * outside the `a..m` range (`zebra`, which changes `items` only). The frames
- * strictly between the initial frame and the sentinel frame are consequently
- * the op's own frames.
+ * **Frame-attribution method**: the multi-group observation listener receives
+ * the frame for the group publication that triggered it, and `broadcast()`
+ * serializes that delivered frame. Each test subscribes (the first frame is
+ * the initial state), performs the op(s) under test, waits until the tap shows
+ * the op's own aligned state, then posts a sentinel `add` of an item outside
+ * the `a..m` range (`zebra`, which changes `items` only). The frames strictly
+ * between the initial frame and the sentinel frame are consequently the op's
+ * own frames, including every intermediate frame that would expose a
+ * non-atomic aligned publication.
  */
 class AlignedFrameTest {
 
