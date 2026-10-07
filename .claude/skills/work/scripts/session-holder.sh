@@ -37,7 +37,7 @@
 #   session-holder.sh                 # print this session's holder token
 #   session-holder.sh --check <token> [<updated-at>] # LIVE | DEAD | STALE | UNKNOWN | MINE | FOREIGN
 # STALE: the pid is alive but the token is older than any slot (>HOLDER_MAX_AGE_S,
-#   default 21600s) — host-process residue, releasable like DEAD (computenet-nkz3).
+#   default 43200s, the 12h slot backstop) — host-process residue, releasable like DEAD (computenet-nkz3).
 #   Token age alone cannot tell residue from a long-running session: a 9h token
 #   whose epic it had written two minutes earlier read STALE twice, and following
 #   the rule put two sessions on one epic for ~3h (computenet-jqxqk). Pass the
@@ -102,8 +102,14 @@ if [ "${1:-}" = --check ]; then
     start_epoch=$(date -j -f "%a %b %d %T %Y" "$start" +%s 2>/dev/null \
                   || date -d "$start" +%s 2>/dev/null)
     if [ -n "$start_epoch" ] && \
-       [ $(( $(date +%s) - start_epoch )) -gt "${HOLDER_MAX_AGE_S:-21600}" ]; then
-      # Unless the holder wrote recently: residue does not write.
+       [ $(( $(date +%s) - start_epoch )) -gt "${HOLDER_MAX_AGE_S:-43200}" ]; then
+      # Unless the holder wrote recently: residue does not write. An orchestrator
+      # writes its CHILDREN for hours, not the epic row, so the newest bead
+      # stamped with this token counts too (computenet-q8ksa).
+      kid=$(bd list --all --metadata-field "holder=$token" --json 2>/dev/null \
+            | sed -n '/^[[{]/,$p' \
+            | jq -r '[(if type=="array" then . else (.issues // []) end)[].updated_at] | max // empty' 2>/dev/null)
+      [ -n "$kid" ] && { [ -z "$updated" ] || [[ "$kid" > "$updated" ]]; } && updated=$kid
       u=${updated%Z}; u=${u%%.*}
       upd_epoch=$(date -u -j -f "%Y-%m-%dT%H:%M:%S" "$u" +%s 2>/dev/null \
                   || date -u -d "$updated" +%s 2>/dev/null)

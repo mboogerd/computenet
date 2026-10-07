@@ -71,6 +71,15 @@ out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "not-a-da
 { [ "$out" = STALE ] && [ "$rc" = 1 ]; } \
   && ok "an unparseable updated-at falls back to STALE" \
   || bad "unparseable updated-at — got '$out' rc=$rc, wanted 'STALE' rc=1"
+# computenet-q8ksa: an orchestrator writes its children, not the epic row. A stale
+# row plus a child stamped with the same holder and written just now reads LIVE.
+fb=$(mktemp -d)
+printf '#!/bin/sh\necho "[{\\"updated_at\\":\\"%s\\"}]"\n' "$recent" > "$fb/bd"; chmod +x "$fb/bd"
+out=$(PATH="$fb:$PATH" HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "2020-01-01T00:00:00Z" 2>&1); rc=$?
+{ [ "$out" = LIVE ] && [ "$rc" = 0 ]; } \
+  && ok "an old token with a recently written child bead reads LIVE" \
+  || bad "child-recency — got '$out' rc=$rc, wanted 'LIVE' rc=0"
+rm -f "$fb/bd"; rmdir "$fb"
 kill "$elder" 2>/dev/null; wait "$elder" 2>/dev/null
 
 # 8-9. Nothing established is UNKNOWN (exit 3), never an all-clear.

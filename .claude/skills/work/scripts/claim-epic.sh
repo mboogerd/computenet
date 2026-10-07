@@ -78,7 +78,7 @@
 #
 # A FOREIGN descendant holder cannot be pid-tested from here, so it blocks
 # only while its bead was written within HOLDER_MAX_AGE_S (session-holder.sh's
-# slot bound, default 21600s): older than any slot, it is residue.
+# slot bound, default 43200s): older than any slot, it is residue.
 set -uo pipefail
 
 : "${BEADS_ACTOR:?BEADS_ACTOR must be set, uniquely, per machine}"
@@ -126,7 +126,7 @@ live_descendants() {
         LIVE) echo "$d held by $h (LIVE)" ;;
         FOREIGN)
           ue=$(jq -rn --arg u "$u" '$u | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch empty')
-          if [ -z "$ue" ] || [ $(( $(date +%s) - ue )) -le "${HOLDER_MAX_AGE_S:-21600}" ]; then
+          if [ -z "$ue" ] || [ $(( $(date +%s) - ue )) -le "${HOLDER_MAX_AGE_S:-43200}" ]; then
             echo "$d held by $h (FOREIGN, written $u)"
           fi ;;
       esac
