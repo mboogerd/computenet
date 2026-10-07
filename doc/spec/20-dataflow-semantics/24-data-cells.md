@@ -1274,6 +1274,17 @@ cells and re-delivers nothing to a co-hosted volatile cell — recover each
 distinct journal once. `[24-DUR-03]` A journal SHALL only ever hold its own
 cells' records, such that replaying it restores exactly those cells and
 re-delivers nothing to a co-hosted volatile cell (Ubiquitous).
+
+"Rebuild the graph, then replay the frame tail" (`[24-DUR-02]`) has one
+decided refinement (computenet-q37rn): a frame tail's *staging* for delivery
+is itself deferred until the rebuilt graph's topology is complete, and a
+decoded frame targeting a cell still named by `TopologyFold.activeEvolutions`
+— an `Evolve`-tapped shadow a crashed process never finished judging, 53
+§Recovery provenance for an in-flight shadow — is excluded from staging
+rather than delivered, because graph rebuild's own recovery cleanup is about
+to despawn exactly that cell. Every other frame still stages as this section
+describes; the refinement narrows which frames reach the intake, not the
+rebuild-then-replay order itself.
 `checkpoint` is keyed the same way: it snapshots only the cells teeing to the
 passed journal and compacts that journal atomically; the compaction carries
 every frame accepted for that journal and not yet delivered, plus a pending

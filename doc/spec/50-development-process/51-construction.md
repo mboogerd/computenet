@@ -187,6 +187,18 @@ per-frame replay provenance prevents replayed frames and their same-journal
 derivations from being appended again. Replay-stable identity, idempotent
 merges, and catch-up dedup make that safe for the current vocabulary.
 
+Frame replay is additionally gated by one post-pass over the topology that
+has just been restored (decided computenet-q37rn): once every topology event
+has applied, a candidate still named by `TopologyFold.activeEvolutions` —
+`civictech.cell.evolve.Evolve`'s own write-ahead `TopoEvent.EvolutionTap`
+marker, never written by this DSL or by `GraphSpec.apply` — is a shadow left
+mid-judgement by the crashed process (see 53 §Recovery provenance for an
+in-flight shadow). Its journaled frames are excluded from staging rather
+than delivered, because `ApplyContext`'s own recovery cleanup is about to
+despawn that candidate once the journal has finished replaying; staging and
+then despawning would dead-letter them. Every other decoded frame still
+stages as this section describes.
+
 ## Code generation (direction fixed by ADR 3)
 
 KSP (already wired: `gen` module, `SerializerProcessor`,

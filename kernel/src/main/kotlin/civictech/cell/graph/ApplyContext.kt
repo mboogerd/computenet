@@ -76,6 +76,7 @@ class ApplyContext(
     private val cells = ConcurrentHashMap<CellRef, Cell>()
     private val familyInstances = mutableMapOf<String, KeyedCells<*>>()
     private var replayDepth = 0
+    private var checkpointRehandshakeDepth = 0
 
     init {
         topology?.let { journal ->
@@ -100,6 +101,8 @@ class ApplyContext(
     /** Immutable view of the successfully-applied live topology. */
     fun live(): TopologyFold = fold.snapshot()
 
+    override fun activeEvolutions(): Set<CellRef> = live().activeEvolutions
+
     /** Recover topology and frames together, preserving this context's services and handle table. */
     fun recover(journal: Journal): Recovery = host.recoverFrom(journal, this)
 
@@ -107,22 +110,63 @@ class ApplyContext(
      * Apply only topology records from [journal]. Checkpoints and frames remain untouched; this
      * is the offline topology seam used by consumers that need the fold but not a live replay.
      */
-    fun replayTopology(journal: Journal): TopologyFold = replaying {
-        journal.replay().forEach { record ->
-            val decoded = JournalRecords.decode(record)
-            if (decoded is DecodedJournalRecord.Topology) decoded.events.forEach(::apply)
+    fun replayTopology(journal: Journal): TopologyFold {
+        replaying {
+            journal.replay().forEach { record ->
+                val decoded = JournalRecords.decode(record)
+                if (decoded is DecodedJournalRecord.Topology) decoded.events.forEach(::apply)
+            }
         }
-        live()
+        return live()
     }
 
-    /** Suppress topology recording for the dynamic extent of a recovery replay. */
+    /**
+     * Suppress topology recording for the dynamic extent of a recovery replay, then abort any
+     * recovered evolution whose imperative judge/handle died with the prior process. Cleanup
+     * runs after the final replay record, while [ManagedHost]'s recovery record-loop gate is
+     * still held, so a later Promote record wins and data cannot race the abort.
+     */
     internal fun <T> replaying(action: () -> T): T {
+        val outermost = replayDepth == 0
         replayDepth++
+        var completed = false
         return try {
-            action()
+            action().also { completed = true }
         } finally {
             replayDepth--
+            if (outermost && completed) abortRecoveredEvolutions()
         }
+    }
+
+    /**
+     * A candidate still named by [TopologyFold.activeEvolutions] after the complete journal has
+     * replayed is an interrupted evolution (computenet-q37rn): [TopoEvent.EvolutionTap] is
+     * written only by this context's own `evolve` hooks, before the tap it precedes, and is
+     * retired by [applyPromote]/[TopoEvent.Promote] or by a [TopoEvent.Despawn] of the same
+     * candidate — never by link shape or declaration order. Write the whole reversal before
+     * applying any part of it so another crash deterministically finishes the same abort. Gate
+     * colour is deliberately untouched.
+     */
+    private fun abortRecoveredEvolutions() {
+        val recovered = live()
+        recovered.activeEvolutions
+            .mapNotNull { ref -> recovered.spawns[ref] }
+            .forEach { spawn ->
+                val candidate = spawn.ref
+                val taps = recovered.links.values.filter { edge ->
+                    edge.to == candidate && edge.options.staged && isEvolutionTap(edge)
+                }
+                val unlinks = taps.map { edge ->
+                    TopoEvent.Unlink(edge.from, edge.outlet, edge.to, edge.inlet)
+                }
+                journalTopology(unlinks + TopoEvent.Despawn(candidate))
+                unlinks.forEach(::applyUnlink)
+                applyDespawn(TopoEvent.Despawn(candidate))
+            }
+    }
+
+    private fun isEvolutionTap(edge: TopoEvent.Connect): Boolean {
+        return Evolve.isTrafficLightDataOutlet(cells[edge.from], edge.from, edge.outlet)
     }
 
     /** One write-ahead topology record for one GraphSpec delta or one builder operation. */
@@ -153,6 +197,7 @@ class ApplyContext(
                 host.recoverFamilyKey(event.namespace, event.key)
                 fold.record(event)
             }
+            is TopoEvent.EvolutionTap -> fold.record(event)
         }
     }
 
@@ -162,10 +207,15 @@ class ApplyContext(
      * state; an uncompacted frame tail needs no such nudge because its replay emits normally.
      */
     override fun checkpointRestored() {
-        live().links.values.forEach { event ->
-            val key = TopologyLinkKey.of(event)
-            synchronized(activeLinks) { activeLinks.remove(key) }?.unlink()
-            applyConnect(event)
+        checkpointRehandshakeDepth++
+        try {
+            live().links.values.forEach { event ->
+                val key = TopologyLinkKey.of(event)
+                synchronized(activeLinks) { activeLinks.remove(key) }?.unlink()
+                applyConnect(event)
+            }
+        } finally {
+            checkpointRehandshakeDepth--
         }
     }
 
@@ -353,12 +403,21 @@ class ApplyContext(
         }.orEmpty()
         val hooks = object : EvolutionHooks {
             private val taps = mutableMapOf<PortRef, TopoEvent.Connect>()
+            private val tappedCandidates = mutableSetOf<CellRef>()
 
             override val journal: PromotionJournal = prepared.journal
 
             override fun <T : Any> tapShadow(outlet: FanOutlet<T>, inlet: FanInlet<T>): PortRef {
                 val from = requireNotNull(outlet.identity()) { "evolution gate outlet has no registered identity" }
                 val to = requireNotNull(inlet.identity()) { "evolution candidate inlet has no registered identity" }
+                // Write-ahead evidence that THIS evolution owns the tap it is about to install,
+                // before installing it (computenet-q37rn). One per candidate: a shadow may have
+                // several matching inlets, so later calls for the same candidate are no-ops here.
+                if (tappedCandidates.add(to.owner)) {
+                    val begin = TopoEvent.EvolutionTap(to.owner)
+                    journalTopology(listOf(begin))
+                    apply(begin)
+                }
                 val event = TopoEvent.Connect(
                     from = from.owner,
                     outlet = from.name,

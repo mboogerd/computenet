@@ -557,6 +557,15 @@ internal class HostDurability(
         // around the handler call — surviving a suspension to a different
         // worker thread too.
         val scope: TagFrontier? = if (replayAsBaseline) TagFrontier(emptyMap()) else null
+        // computenet-q37rn: a decoded frame is staged here, not submitted. Submission is
+        // deferred to after the whole journal has applied (below, still inside this same
+        // ReplayScope dynamic extent), so a frame targeting a candidate that turns out to be an
+        // interrupted evolution — classified only once every TopoEvent.EvolutionTap/Promote/
+        // Despawn in the journal has folded — can be excluded before it ever reaches the intake,
+        // rather than delivered and dead-lettered once ApplyContext's recovery cleanup despawns
+        // that candidate. Every other record kind (Checkpoint, Topology, ...) is still applied
+        // eagerly in the single forward pass below; only frame submission moves.
+        val pendingFrames = mutableListOf<HostedPortInvocation>()
         ReplayScope.with(scope) {
             val records = journal.replay()
             fun submitFrame(payload: ByteArray) {
@@ -568,65 +577,83 @@ internal class HostDurability(
                     (if (scope == null) decoded else decoded.baselined(scope))
                         .copy(replayFrontier = scope, replayOf = journal)
                 }
-                submit(frame)
-                frame.invocation.context?.timestamp?.let { timestamp ->
-                    if (journalSelector(frame.cellRef, frame.portName) === journal) {
-                        positions.record(frame.cellRef, frame.portName, timestamp)
-                    }
-                }
-                frames++
+                pendingFrames += frame
             }
-            records.forEachIndexed { index, record ->
-                // T05 finding 4: a bare forEach with no per-record handling
-                // meant any decode/readObject throw (or the else -> error
-                // below) silently abandoned every remaining record —
-                // and the host resumed live traffic on truncated state with nothing
-                // to say so. Dead-letter the bad record, then rethrow so
-                // the caller cannot mistake a partial replay for a
-                // complete one.
-                try {
-                    when (val decoded = JournalRecords.decode(record)) {
-                        is DecodedJournalRecord.Frame -> {
-                            submitFrame(decoded.payload)
-                        }
-
-                        is DecodedJournalRecord.Checkpoint -> {
-                            restoreCheckpoint(decoded)
-                            checkpointCatchUpPendingAt = index
-                        }
-                        is DecodedJournalRecord.Frontier ->
-                            advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
-                        is DecodedJournalRecord.BaselineDischarge ->
-                            recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
-                        is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
-                        is DecodedJournalRecord.Topology -> {
-                            val topologyApplier = applier
-                                ?: error("topology record requires a TopologyApplier")
-                            decoded.events.forEach(topologyApplier::apply)
-                        }
-                        is DecodedJournalRecord.Input -> {
-                            cursors[decoded.cellRef to decoded.name] = decoded.cursor
-                            decoded.frames.forEach { carried ->
-                                val frame = JournalRecords.decode(carried)
-                                require(frame is DecodedJournalRecord.Frame) {
-                                    "durable input '${decoded.name}' for ${decoded.cellRef} carries a non-frame record"
-                                }
-                                submitFrame(frame.payload)
+            try {
+                records.forEachIndexed { index, record ->
+                    // T05 finding 4: a bare forEach with no per-record handling
+                    // meant any decode/readObject throw (or the else -> error
+                    // below) silently abandoned every remaining record —
+                    // and the host resumed live traffic on truncated state with nothing
+                    // to say so. Dead-letter the bad record, then rethrow so
+                    // the caller cannot mistake a partial replay for a
+                    // complete one.
+                    try {
+                        when (val decoded = JournalRecords.decode(record)) {
+                            is DecodedJournalRecord.Frame -> {
+                                submitFrame(decoded.payload)
                             }
+
+                            is DecodedJournalRecord.Checkpoint -> {
+                                restoreCheckpoint(decoded)
+                                checkpointCatchUpPendingAt = index
+                            }
+                            is DecodedJournalRecord.Frontier ->
+                                advanceFrontier(decoded.cellRef, decoded.portName, decoded.timestamp)
+                            is DecodedJournalRecord.BaselineDischarge ->
+                                recordBaselineDischarge(decoded.cellRef, decoded.portName, decoded.timestamp)
+                            is DecodedJournalRecord.OutletWave -> restoreOutletWave(decoded)
+                            is DecodedJournalRecord.Topology -> {
+                                val topologyApplier = applier
+                                    ?: error("topology record requires a TopologyApplier")
+                                decoded.events.forEach(topologyApplier::apply)
+                            }
+                            is DecodedJournalRecord.Input -> {
+                                cursors[decoded.cellRef to decoded.name] = decoded.cursor
+                                decoded.frames.forEach { carried ->
+                                    val frame = JournalRecords.decode(carried)
+                                    require(frame is DecodedJournalRecord.Frame) {
+                                        "durable input '${decoded.name}' for ${decoded.cellRef} carries a non-frame record"
+                                    }
+                                    submitFrame(frame.payload)
+                                }
+                            }
+                            is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
                         }
-                        is DecodedJournalRecord.Unknown -> error("unknown journal record type ${decoded.typeByte}")
+                    } catch (e: Exception) {
+                        deadLetter("journal replay: record $index of ${records.size} failed: $e")
+                        throw RecoveryIncomplete(index, records.size, e)
                     }
-                } catch (e: Exception) {
-                    deadLetter("journal replay: record $index of ${records.size} failed: $e")
-                    throw RecoveryIncomplete(index, records.size, e)
                 }
-            }
-            checkpointCatchUpPendingAt?.let { checkpointIndex ->
-                try {
-                    applier?.checkpointRestored()
-                } catch (e: Exception) {
-                    deadLetter("journal replay: record $checkpointIndex of ${records.size} failed: $e")
-                    throw RecoveryIncomplete(checkpointIndex, records.size, e)
+                checkpointCatchUpPendingAt?.let { checkpointIndex ->
+                    try {
+                        applier?.checkpointRestored()
+                    } catch (e: Exception) {
+                        deadLetter("journal replay: record $checkpointIndex of ${records.size} failed: $e")
+                        throw RecoveryIncomplete(checkpointIndex, records.size, e)
+                    }
+                }
+            } finally {
+                // Stage whatever decoded cleanly, whether or not the walk above completed.
+                // computenet-q37rn: by the time this runs, `applier` (ApplyContext) knows the
+                // final set of candidates left mid-evolution by the crashed process —
+                // ApplyContext.replaying despawns exactly that set once recoverFrom returns (on
+                // a *complete* replay only; an aborted replay never reaches that cleanup, so the
+                // exclusion set is empty and every decoded frame stages as before). Excluding a
+                // completed replay's interrupted-candidate frames here, rather than delivering
+                // them, is what avoids dead-lettering them once the candidate is despawned. A
+                // record that failed to decode was never staged in the first place (T05 finding
+                // 4's contract: everything before the failing index still applies/stages).
+                val excludedTargets = applier?.activeEvolutions().orEmpty()
+                pendingFrames.forEach { frame ->
+                    if (frame.cellRef in excludedTargets) return@forEach
+                    submit(frame)
+                    frame.invocation.context?.timestamp?.let { timestamp ->
+                        if (journalSelector(frame.cellRef, frame.portName) === journal) {
+                            positions.record(frame.cellRef, frame.portName, timestamp)
+                        }
+                    }
+                    frames++
                 }
             }
         }
