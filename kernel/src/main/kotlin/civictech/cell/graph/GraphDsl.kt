@@ -497,7 +497,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 is WriteStep -> {
                     val cells = step.cells.mapTo(linkedSetOf(), ::resolve)
                     val notHosted = cells.filterNot { ref ->
-                        ref in plannedSpawnRefs || context.host.lookup(ref, Cell::class.java) != null
+                        ref in plannedSpawnRefs || context.host.hosts(ref)
                     }
                     if (notHosted.isNotEmpty()) {
                         throw IllegalArgumentException(
