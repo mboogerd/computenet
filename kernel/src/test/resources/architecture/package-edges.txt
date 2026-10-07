@@ -133,6 +133,10 @@
 # that duplicate. No new cycle: nothing under civictech.cell.consistency
 # imports civictech.cell.observe (verified by grep), so the edge is one-way
 # and observe stays a sink package.
+# INT3 write authority: replication -> membrane ADDED — AuthorityState reuses
+# the existing SignatureVerifier seam implemented by :identity. Duplicating a
+# verifier in replication would create two meanings for the same signature
+# check and leave Ed25519SignatureVerifier implementing only one of them.
 cell -> link
 cell -> port
 cell -> proxy
@@ -232,6 +236,7 @@ replication -> control
 replication -> data
 replication -> host
 replication -> link
+replication -> membrane
 replication -> nature
 replication -> port
 replication -> proxy
