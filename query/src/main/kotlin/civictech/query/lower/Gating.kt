@@ -56,11 +56,17 @@ data class GateDecision(val emitOnFrontier: Boolean, val diagnostic: LoweringDia
  * equal-provenance two-`Filter` arm (computenet-cab.4.9): with the gate forced on, both hop
  * orders settle on the test's `SEEDS`, including an inner-filter drop, and agree with the batch
  * fold.
- * That is a measured over-refusal of the current depth rule, not a decision to relax it; the
- * follow-up is computenet-o8a0f. The equality check still claims no safety for unequal
- * provenance: per `WaveGate` G-13 a one-arm-only source's waves never reach the other inlet,
- * so neither an ack nor a later wave of that source can release them there. The multi-input
- * relay limit likewise remains the open computenet-t6vex question, not a decision made here.
+ * That is a measured over-refusal of the current depth rule. computenet-o8a0f considered
+ * relaxing it to admit only the query plan's `Select`/`Project` hops, which lower to
+ * relay-enabled classes (`FilterCell` and `FlatMapSetCell`) with exactly one open Consume input,
+ * but keeps the conservative rule: the relay predicate is evaluated from live links at
+ * acknowledgement time, and a `PlanNode` does not contain that runtime state (nor whether a
+ * frontier has become the terminal). The forced two-`Filter` evidence therefore cannot justify a
+ * broader static admission rule. The equality check still claims no safety for unequal provenance:
+ * per `WaveGate` G-13 a one-arm-only
+ * source's waves never reach the other inlet, so neither an ack nor a later wave of that source
+ * can release them there. The multi-input relay limit likewise remains the open
+ * computenet-t6vex question, not a decision made here.
  */
 object Gating {
 
