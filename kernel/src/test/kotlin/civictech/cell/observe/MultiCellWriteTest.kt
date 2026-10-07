@@ -185,6 +185,30 @@ class MultiCellWriteTest {
     }
 
     @Test
+    fun `a WriteStep for a non-hosted adopted cell refuses before spawning`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 97).scheduler())
+        val context = ApplyContext(host)
+        val foreignRef = CellRef(UUID.randomUUID())
+        context.adopt("foreign", foreignRef)
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("foreign")),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("foreign" to foreignRef)
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
     fun `WriteStep applies locally prechecks handles and is refused remotely`() {
         val sourceController = SimulationController(seed = 91)
         val source = ManagedHost(scheduler = sourceController.scheduler())

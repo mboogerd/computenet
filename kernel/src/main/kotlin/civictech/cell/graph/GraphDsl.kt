@@ -421,6 +421,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val displayKeys = mutableMapOf<Int, String>()
         val writes = mutableListOf<Pair<String, Set<CellRef>>>()
         val writeScopes = mutableMapOf<String, Set<CellRef>>()
+        val plannedSpawnRefs = mutableSetOf<CellRef>()
         fun resolve(handle: String): CellRef = active[handle]
             ?: throw IllegalStateException("unknown handle '$handle'")
         lowered.forEach { step ->
@@ -446,6 +447,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                             step.shadow,
                         )
                         active[step.handle] = ref
+                        plannedSpawnRefs += ref
                         events += event
                         if (step.replicated) {
                             val cell = step.factory.create(ref)
@@ -494,6 +496,14 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 
                 is WriteStep -> {
                     val cells = step.cells.mapTo(linkedSetOf(), ::resolve)
+                    val notHosted = cells.filterNot { ref ->
+                        ref in plannedSpawnRefs || context.host.lookup(ref, Cell::class.java) != null
+                    }
+                    if (notHosted.isNotEmpty()) {
+                        throw IllegalArgumentException(
+                            "declared write '${step.name}' contains refs not hosted by ${context.host.ref}: $notHosted",
+                        )
+                    }
                     val existingCells = writeScopes[step.name]
                         ?: context.host.managementInlet.call.declaredWrite(step.name)?.cells
                     if (existingCells != null && existingCells != cells) {
