@@ -12,6 +12,27 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink
 import java.lang.reflect.Method
+import java.nio.charset.StandardCharsets.UTF_8
+import java.util.UUID
+
+/**
+ * A routed ingress, identified without depending on `streamTo`'s
+ * attachment ref. The root is target-derived rather than the target port's own
+ * identity so observation cannot mistake this unmanaged ingress family for an
+ * admitted edge endpoint. The metadata is inert until a producer actually
+ * attaches the owning [RoutedPropagate].
+ */
+internal data class RoutedIngress(
+    val cellRef: CellRef,
+    val portName: String,
+) {
+    val root: PortRef = PortRef(
+        UUID.nameUUIDFromBytes(
+            "routed-inbound:${cellRef.id}:${cellRef.instanceId}:$portName".toByteArray(UTF_8),
+        ),
+        cellRef,
+    )
+}
 
 /**
  * A first-class, routed write-handle to a named [Propagate] inlet on a cell
@@ -48,6 +69,8 @@ class RoutedPropagate<D>(
     private val portName: String,
     private val sink: InvocationSink,
 ) : Propagate<D> {
+    /** Target metadata consulted only through an attached producer outlet. */
+    internal val ingress = RoutedIngress(cellRef, portName)
 
     /**
      * Steady-state send: one [HostedPortInvocation] built and handed to the

@@ -2308,12 +2308,21 @@ open class ManagedHost(
      * Add source-side-only Consume links to the ordinary target-side ancestry.
      *
      * `streamTo`'s routed/bypass branch deliberately has no [Link.toPort], so
-     * the ordinary inbound walk cannot encounter it. It does retain the link on
-     * the producer outlet, however. When its destination is the stable ref of a
-     * hosted port, preserve the producer ref as opaque ancestry: callers can
-     * account for the feed without treating it as admitted, traversable
-     * topology. Anonymous destinations remain unknowable here and must be
-     * declared by the observation that relies on them.
+     * the ordinary inbound walk cannot encounter it. Two identities recover
+     * enough structure without pretending the bypass was admitted topology:
+     *
+     * - a source-side link whose destination is the stable ref of a hosted port
+     *   contributes its producer ref;
+     * - a [RoutedPropagate] attached to an outlet hosted by this host contributes
+     *   a target-derived ingress-family ref, independent of `streamTo`'s
+     *   anonymous attachment ref.
+     *
+     * Both stay opaque. In particular, even a hosted producer is not traversed:
+     * the bypass has no target-side topology record on which to base that walk.
+     * This is conservative for a managed `S -> W` plus bypass `W -> U`
+     * diamond: `W.outlet` remains an extra root of `U`, so `S` and `U` form
+     * separate observation groups rather than risking the over-alignment
+     * `[22-LIVE-01]` forbids.
      */
     private fun upstreamConsumeAncestorsIncludingBypasses(ref: CellRef): UpstreamAncestry {
         val ancestry = civictech.cell.host.upstreamConsumeAncestors(cells, ref)
@@ -2325,11 +2334,23 @@ open class ManagedHost(
             val ports = PortRegistry.of(cell)
             ports.names().mapNotNull(ports::get)
         }.mapTo(linkedSetOf()) { it.ref }
+        val routedRoots = linkedSetOf<PortRef>()
         val bypassRoots = linkedSetOf<PortRef>()
         cells.values.forEach { cell ->
             val ports = PortRegistry.of(cell)
             ports.names().forEach { name ->
-                val linked = ports[name] as? Linked ?: return@forEach
+                val port = ports[name] ?: return@forEach
+                if (port is FanOutlet<*>) {
+                    port.attachedConsumerApis().forEach attachment@{ api ->
+                        val ingress = (api as? RoutedPropagate<*>)?.ingress ?: return@attachment
+                        if (ingress.cellRef !in reachable) return@attachment
+                        val target = cells[ingress.cellRef] ?: return@attachment
+                        if (PortRegistry.of(target)[ingress.portName] != null) {
+                            routedRoots += ingress.root
+                        }
+                    }
+                }
+                val linked = port as? Linked ?: return@forEach
                 linked.linking.links.forEach { link ->
                     if (link.role == LinkRole.Consume && link.toPort == null && link.to in reachablePorts) {
                         bypassRoots += link.from
@@ -2337,8 +2358,12 @@ open class ManagedHost(
                 }
             }
         }
-        if (bypassRoots.isEmpty()) return ancestry
-        return UpstreamAncestry(ancestry.self, ancestry.local, ancestry.opaque + bypassRoots)
+        if (bypassRoots.isEmpty() && routedRoots.isEmpty()) return ancestry
+        return UpstreamAncestry(
+            ancestry.self,
+            ancestry.local,
+            ancestry.opaque + bypassRoots + routedRoots,
+        )
     }
 
     /**

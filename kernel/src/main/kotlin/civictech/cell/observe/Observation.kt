@@ -130,9 +130,13 @@ class ObservationBuilder internal constructor() {
      * Declares the stable structural [root] of an unmanaged feed into [target].
      *
      * A live `streamTo` whose destination names a hosted port is discovered
-     * automatically. This declaration is for an anonymous routed feed, or one
-     * that may be linked only after this observation is built. Descendant views
-     * inherit the root through the ordinary managed ancestry walk.
+     * automatically. So is a `RoutedPropagate` attached to an outlet hosted by
+     * the observing host: its target cell and port identify a stable opaque
+     * ingress family even when `streamTo` generated an anonymous attachment ref.
+     * This declaration remains necessary for a bare anonymous endpoint, a feed
+     * produced outside the observing host, or a feed that may be linked only
+     * after this observation is built. Descendant views inherit the root through
+     * the ordinary managed ancestry walk.
      */
     fun unmanagedFeed(target: CellRef, root: PortRef) {
         declaredOpaqueRoots.getOrPut(target) { linkedSetOf() } += root
@@ -387,14 +391,29 @@ private class ObservationCoordinator(
  * each group a stable sink identity; its argument is the group's registered
  * view names, in order, joined by `+`.
  *
- * **Unmanaged-inbound decision (computenet-b7c8t).** A `streamTo`/routed feed
- * remains a supported kernel path, so observation does not reject a view merely
- * because the feed was not host-admitted. When the source-side link names a
- * hosted destination port, its producer [PortRef] is retained as an opaque root:
- * the feed affects grouping without being mistaken for traversable managed
- * topology. A feed that is anonymous or will be linked later must be represented
- * up front with [ObservationBuilder.unmanagedFeed]. This is deliberately a
- * structural declaration, not a claim that the host can traverse that feed.
+ * **Unmanaged-inbound decision (computenet-b7c8t, computenet-5rb3a).** A
+ * `streamTo`/routed feed remains a supported kernel path, so observation does
+ * not reject a view merely because the feed was not host-admitted. When the
+ * source-side link names a hosted destination port, its producer [PortRef] is
+ * retained as an opaque root. When `streamTo` instead uses its default anonymous
+ * attachment ref, an attached `RoutedPropagate` resolves the destination
+ * cell/port; observation derives a replay-stable opaque ingress-family root
+ * from that pair. Discovery scans only current Consume attachments on producer
+ * outlets hosted by the observing host. A never-linked or unlinked handle is
+ * therefore not topology, and an equal [CellRef] on another host cannot leak a
+ * root into this host's partition. A bare anonymous endpoint, a feed from a
+ * non-hosted producer, or a feed linked only after construction must still be
+ * represented up front with [ObservationBuilder.unmanagedFeed].
+ *
+ * **Hosted bypass producers stay opaque; they are not traversed.** A bypass has
+ * no target-side admitted topology record, so discovering that its producer is
+ * hosted is insufficient evidence to merge its managed ancestry into the
+ * target's structural roots. Consequently, in a managed `S -> W` plus bypass
+ * `W -> U` plus managed `S -> U` diamond, `U` has roots `{S, W.outlet}` while
+ * `S` has `{S}`: they form separate groups even when one carried wave reaches
+ * both. This intentional under-alignment can publish the groups at different
+ * frontiers, but cannot make an independent feed hold another view; traversing
+ * the bypass would risk the silent over-alignment `[22-LIVE-01]` forbids.
  *
  * Admission for every group completes before any group cell is spawned. The
  * topology read has [observeAligned]'s live-link caveat: later managed links and
