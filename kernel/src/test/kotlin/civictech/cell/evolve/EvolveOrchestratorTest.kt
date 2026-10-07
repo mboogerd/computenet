@@ -3,6 +3,12 @@ package civictech.cell.evolve
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.Propagate
+import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.host.LocationRegistry
+import civictech.cell.replication.Replication
 import civictech.cell.Stateful
 import civictech.cell.control.Magnitude
 import civictech.cell.durability.InMemoryJournal
@@ -989,6 +995,100 @@ class EvolveOrchestratorTest {
         }
     }
 
+    interface SetInletProxy {
+        val inlet: Use<SetOps<String>>
+    }
+
+    private inner class ReplicaRun(seed: Long, val gate: InvariantCell<SetDelta<String>, Unit>) {
+        val controller = SimulationController(seed)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val replication = Replication(registry)
+        val ref = CellRef(UUID.randomUUID(), instanceId = 0)
+        val incumbent = SetCell<String>(ref)
+        val candidate = SetCell<String>(ref)
+
+        init {
+            host.managementInlet.call.spawn(gate)
+            replication.replicate(incumbent, host)
+            controller.runToIdle()
+            @Suppress("UNCHECKED_CAST")
+            (candidate.outlet as FanOutlet<Propagate<SetDelta<String>>>)
+                .subscribe(gate.inlet as Use<Propagate<SetDelta<String>>>)
+        }
+
+        fun start(authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly): EvolutionHandle =
+            Evolve.runReplica(
+                host = host,
+                replication = replication,
+                incumbent = incumbent,
+                candidate = candidate,
+                policy = policy(gates = listOf(REPLICA_GATE)),
+                gates = listOf(gate),
+                authority = authority,
+            )
+
+        fun add(element: String) {
+            host.lookup<SetInletProxy>(ref)!!.inlet.call.add(element)
+            controller.runToIdle()
+        }
+
+    }
+
+    private fun noPoisonGate(): InvariantCell<SetDelta<String>, Unit> =
+        InvariantCell.observing(REPLICA_GATE) { delta ->
+            if (delta.adds.keys.any { it == "poison" }) "poison element observed" else null
+        }
+
+    @Test
+    fun `replicated arm accepts and swaps through promoteReplica under the incumbent's ref`() {
+        val run = ReplicaRun(seed = 11, gate = noPoisonGate())
+        val handle = run.start()
+
+        listOf("a", "b", "c").forEach(run::add)
+
+        // The shadow was fed from the incumbent's effective-delta outlet, not hosted.
+        run.candidate.membership() shouldBe setOf("a", "b", "c")
+        handle.advance() shouldBe EvolutionHandle.State.PROMOTED
+        run.controller.runToIdle()
+        run.candidate.ref shouldBe run.incumbent.ref
+        // production writes now land on the swapped-in candidate, not the retired incumbent
+        run.add("d")
+        run.candidate.membership() shouldBe setOf("a", "b", "c", "d")
+        run.incumbent.membership() shouldBe setOf("a", "b", "c")
+    }
+
+    @Test
+    fun `replicated arm rejects on a gate violation and leaves the incumbent live`() {
+        val run = ReplicaRun(seed = 12, gate = noPoisonGate())
+        val handle = run.start()
+
+        listOf("a", "poison", "c").forEach(run::add)
+
+        handle.advance() shouldBe EvolutionHandle.State.REJECTED
+        handle.reason!!.shouldContain("violated the promotion policy")
+        run.controller.runToIdle()
+        run.add("d")
+        run.incumbent.membership() shouldBe setOf("a", "poison", "c", "d")
+        // the tap is gone: the rejected shadow no longer sees production
+        run.candidate.membership() shouldBe setOf("a", "poison", "c")
+    }
+
+    @Test
+    fun `replicated arm keeps the evolution authority gate`() {
+        val run = ReplicaRun(seed = 13, gate = noPoisonGate())
+        val handle = run.start()
+        listOf("a", "b", "c").forEach(run::add)
+
+        CurrentPeer.with(PeerId("remote")) {
+            shouldThrow<Evolve.Refused> { handle.advance() }
+            shouldThrow<Evolve.Refused> { run.start() }
+        }
+        run.add("d")
+        run.incumbent.membership() shouldBe setOf("a", "b", "c", "d")
+        handle.advance() shouldBe EvolutionHandle.State.PROMOTED
+    }
+
     private inner class Run(
         seed: Long,
         incumbentFactory: (CellRef) -> SummingCell = ::SummerV1,
@@ -1122,5 +1222,6 @@ class EvolveOrchestratorTest {
 
     private companion object {
         const val GATE_NAME = "non-decreasing"
+        const val REPLICA_GATE = "no-poison"
     }
 }
