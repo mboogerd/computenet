@@ -8,6 +8,7 @@ import civictech.cell.data.SetOps
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.CellFactory
+import civictech.cell.graph.DespawnStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.HostLiveView
 import civictech.cell.graph.IdentityBinding
@@ -30,6 +31,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.proxy.InvocationSink
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -234,6 +236,49 @@ class MultiCellWriteTest {
 
         context.live().handles shouldBe mapOf("foreign" to foreignRef)
         host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep before a later despawn refuses before spawning`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 99).scheduler())
+        val context = ApplyContext(host)
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("spawned")),
+                DespawnStep("spawned"),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe emptyMap()
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep before a later despawn preserves an already-hosted cell`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 100).scheduler())
+        val existing = SetCell<String>()
+        host.managementInlet.call.spawn(existing)
+        val context = ApplyContext(host)
+        context.adopt("existing", existing.ref)
+        val spec = GraphSpec(
+            listOf(
+                WriteStep("update", listOf("existing")),
+                DespawnStep("existing"),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("existing" to existing.ref)
+        host.lookup(TypedRef<SetApi<String>>(existing.ref)).shouldNotBeNull()
     }
 
     @Test

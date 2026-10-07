@@ -422,9 +422,15 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val writes = mutableListOf<Pair<String, Set<CellRef>>>()
         val writeScopes = mutableMapOf<String, Set<CellRef>>()
         val plannedSpawnRefs = mutableSetOf<CellRef>()
+        val handlesDespawnedLater = MutableList(lowered.size) { emptySet<String>() }
+        val futureDespawns = mutableSetOf<String>()
+        lowered.indices.reversed().forEach { index ->
+            handlesDespawnedLater[index] = futureDespawns.toSet()
+            (lowered[index] as? DespawnStep)?.let { futureDespawns += it.handle }
+        }
         fun resolve(handle: String): CellRef = active[handle]
             ?: throw IllegalStateException("unknown handle '$handle'")
-        lowered.forEach { step ->
+        lowered.forEachIndexed { index, step ->
             when (step) {
                 is SpawnStep -> {
                     check(occupied.add(step.handle)) { "duplicate handle '${step.handle}'" }
@@ -496,6 +502,15 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 
                 is WriteStep -> {
                     val cells = step.cells.mapTo(linkedSetOf(), ::resolve)
+                    val despawnedLater = step.cells.filterTo(linkedSetOf()) {
+                        it in handlesDespawnedLater[index]
+                    }
+                    if (despawnedLater.isNotEmpty()) {
+                        throw IllegalArgumentException(
+                            "declared write '${step.name}' targets handles despawned later in the same GraphSpec: " +
+                                despawnedLater,
+                        )
+                    }
                     val notHosted = cells.filterNot { ref ->
                         ref in plannedSpawnRefs || context.host.hosts(ref)
                     }
