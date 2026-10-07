@@ -253,12 +253,17 @@ class GatingEvidenceTest {
      * shipped ungated control: on this shape the depth rule's refusal is a measured
      * over-refusal. Removing the relay from `FilterCell` turns the forced-gate branch red.
      *
-     * Limit: this measures one equal-provenance shape (a filter-over-filter arm) on seeds
-     * [SEEDS]; it shows the depth rule refuses at least one gate that would withhold, not that
-     * every wave on a two-deep arm withholds — [F15_HOP_CONTROL_QUERY]'s test is a two-deep arm
-     * whose outer-dropped wave does not (and whose inner-dropped wave does). The earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was
-     * replaced because its forced-gate withholding was already produced by `f`'s phantom
-     * expected edge before any F-15 wave (computenet-cab.4.8 task review).
+     * Limit and decision (computenet-o8a0f): this measures one equal-provenance shape (a
+     * filter-over-filter arm) on seeds [SEEDS]. It shows that the current depth rule refuses a
+     * gate whose forced execution settles after computenet-6ovpx; it does not show that every
+     * two-deep arm is safe to admit. [F15_HOP_CONTROL_QUERY]'s test likewise settles both its
+     * outer-dropped and inner-dropped waves. The depth rule therefore remains fail-closed: the
+     * lowering has only plan nodes, while the relay's exactly-one-open-Consume predicate is
+     * evaluated from live runtime links and stops once a frontier is installed on the hop's own
+     * inlet. The
+     * earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was replaced
+     * because its forced-gate withholding was already produced by `f`'s phantom expected edge
+     * before any F-15 wave (computenet-cab.4.8 task review).
      */
     @Test
     fun `F-15 relay - forcing the gate on a filter-over-filter arm settles the inner-dropped wave and retracts at rest`() {

@@ -301,6 +301,13 @@ open class ManagedHost(
     internal fun subtreeCellCount(): Int = cells.size + childHosts.sumOf { it.subtreeCellCount() }
 
     /**
+     * True when [ref] is hosted directly by this host — the exact membership test
+     * [HostManagementApi.declareWrite] applies. Unlike [lookup], a ref the
+     * [LocationRegistry] places on a remote peer answers false (computenet-4vxtr.1).
+     */
+    internal fun hosts(ref: CellRef): Boolean = cells.containsKey(ref)
+
+    /**
      * Charges [claim] once at every scope of this host's ancestor chain —
      * this host, then each [parentHost] upward, the same ascent as the G-28
      * quota walk — against each scope's own [budget] (`5o1rf-D5`). Scopes
