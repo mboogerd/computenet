@@ -18,6 +18,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.link.LinkResult
 import civictech.cell.link.PeerId
+import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
@@ -541,7 +542,7 @@ object Runtime {
                 candidate = handleRef(candidate),
                 outletName = outletName,
                 downstream = downstream.map { (handle, inlet) -> handleRef(handle) to inlet },
-                authority = authority,
+                authorityRefusal = { authority.refuse(currentPrincipal()) },
                 judge = judge,
             )
         }
@@ -575,7 +576,7 @@ object Runtime {
             applyContext.promoteReplica(
                 ref = handleRef(handle),
                 candidateFactory = candidate,
-                authority = authority,
+                authorityRefusal = { authority.refuse(currentPrincipal()) },
                 outletName = outletName,
                 judge = judge,
             )

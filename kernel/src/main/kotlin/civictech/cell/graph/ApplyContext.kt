@@ -5,7 +5,6 @@ import civictech.cell.Cell
 import civictech.cell.data.Replicable
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Evolve
-import civictech.cell.evolve.EvolutionAuthority
 import civictech.cell.evolve.EvolutionHandle
 import civictech.cell.evolve.EvolutionHooks
 import civictech.cell.evolve.Promotion
@@ -19,10 +18,10 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
+import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
-import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -259,7 +258,7 @@ class ApplyContext(
         candidate = candidate,
         outletName = outletName,
         downstream = downstream,
-        authority = EvolutionAuthority.LocalTrustedOnly,
+        authorityRefusal = ::defaultEvolutionAuthorityRefusal,
         judge = judge,
     )
 
@@ -274,10 +273,10 @@ class ApplyContext(
         candidate: CellRef,
         outletName: String,
         downstream: List<Pair<CellRef, String>>,
-        authority: EvolutionAuthority,
+        authorityRefusal: () -> String?,
         judge: PromotionJudge? = null,
     ) {
-        checkEvolutionAuthority(authority)
+        checkEvolutionAuthority(authorityRefusal)
         val prepared = prepareSinglePromotion(gate, incumbent, candidate, outletName, downstream)
 
         Promotion.promote(
@@ -524,7 +523,7 @@ class ApplyContext(
     ) = promoteReplica(
         ref = ref,
         candidateFactory = candidateFactory,
-        authority = EvolutionAuthority.LocalTrustedOnly,
+        authorityRefusal = ::defaultEvolutionAuthorityRefusal,
         outletName = outletName,
         judge = judge,
     )
@@ -533,11 +532,11 @@ class ApplyContext(
     fun promoteReplica(
         ref: CellRef,
         candidateFactory: CellFactory,
-        authority: EvolutionAuthority,
+        authorityRefusal: () -> String?,
         outletName: String = "outlet",
         judge: PromotionJudge? = null,
     ) {
-        checkEvolutionAuthority(authority)
+        checkEvolutionAuthority(authorityRefusal)
         val before = live()
         val service = replication
             ?: throw Promotion.PromotionAborted("PRECHECK", "replicated promotion requires a Replication service")
@@ -618,11 +617,15 @@ class ApplyContext(
         cells[ref] = candidateCell
     }
 
-    private fun checkEvolutionAuthority(authority: EvolutionAuthority) {
-        authority.refuse(currentPrincipal())?.let { reason ->
+    private fun checkEvolutionAuthority(authorityRefusal: () -> String?) {
+        authorityRefusal()?.let { reason ->
             throw Evolve.Refused("authority: $reason")
         }
     }
+
+    /** Mirrors [civictech.cell.evolve.EvolutionAuthority.LocalTrustedOnly] without crossing layers. */
+    private fun defaultEvolutionAuthorityRefusal(): String? =
+        CurrentPeer.stamp()?.let { "remote principal ${it.id} may not trigger evolution" }
 
     /**
      * Replay applies an uncompacted completed swap directly; a compacted fold already contains
