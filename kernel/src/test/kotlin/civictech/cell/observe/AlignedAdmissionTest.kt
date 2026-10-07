@@ -9,9 +9,11 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.IntersectSetCell
 import civictech.cell.data.op.MergeableGroupByCell
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
@@ -28,13 +30,18 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 class AlignedAdmissionTest {
 
-    private class Fixture {
+    private class Fixture(scheduler: HostScheduler? = null) {
         val controller = SimulationController()
         val registry = LocationRegistry()
-        val host = ManagedHost(registry = registry, scheduler = controller.scheduler())
+        val host = ManagedHost(registry = registry, scheduler = scheduler ?: controller.scheduler())
         val management = host.managementInlet.call
 
         fun spawn(vararg cells: Cell) {
@@ -306,5 +313,110 @@ class AlignedAdmissionTest {
         viaHost::class shouldBe viaManagement::class
         viaHost.shouldBeInstanceOf<AdmissionVerdict.Rejected.UngatedAncestor>().cell shouldBe intersection.ref
         viaManagement.shouldBeInstanceOf<AdmissionVerdict.Rejected.UngatedAncestor>().cell shouldBe intersection.ref
+    }
+
+    @Test
+    fun `admission is one host turn and cannot observe a transient concurrent link`() {
+        val scheduler = VirtualThreadScheduler("AlignedAdmissionTest-concurrent")
+        val fixture = Fixture(scheduler)
+        val root = SetCell<Int>()
+        val grouped = grouped()
+        val peer = grouped()
+        fixture.spawn(root, grouped, peer)
+        fixture.connect(root, "outlet", grouped, "inlet")
+
+        val mutationEntered = CountDownLatch(1)
+        val releaseMutation = CountDownLatch(1)
+        grouped.deltaInlet.linking.onLinked = { link ->
+            mutationEntered.countDown()
+            check(releaseMutation.await(4, TimeUnit.SECONDS)) { "test did not release transient link" }
+            link.unlink()
+        }
+
+        val builder = AlignedObserveBuilder().apply {
+            map("grouped", grouped.ref)
+            set("raw", root.ref)
+        }
+        val callers = Executors.newFixedThreadPool(2)
+        try {
+            val connect = callers.submit<LinkResult> {
+                fixture.management.connect(peer.ref, "outlet", grouped.ref, "deltaInlet")
+            }
+            check(mutationEntered.await(2, TimeUnit.SECONDS)) { "connect never installed its transient link" }
+
+            val admissionStarted = CountDownLatch(1)
+            val admission = callers.submit<AdmissionVerdict> {
+                admissionStarted.countDown()
+                admitAligned(fixture.management, builder.specs, builder.unchecked)
+            }
+            check(admissionStarted.await(2, TimeUnit.SECONDS)) { "admission caller never started" }
+
+            var premature: Any? = null
+            try {
+                premature = admission.get(1, TimeUnit.SECONDS)
+            } catch (_: TimeoutException) {
+                // Expected: admission is queued behind the in-flight topology mutation.
+            } catch (e: ExecutionException) {
+                premature = e.cause ?: e
+            } finally {
+                releaseMutation.countDown()
+            }
+
+            premature shouldBe null
+            connect.get(2, TimeUnit.SECONDS).shouldBeInstanceOf<LinkResult.Connected>()
+            admission.get(2, TimeUnit.SECONDS).shouldBeInstanceOf<AdmissionVerdict.Admitted>()
+        } finally {
+            releaseMutation.countDown()
+            callers.shutdownNow()
+            scheduler.shutdown()
+        }
+    }
+
+    /**
+     * Delegating scheduler that runs [afterFirstAwait] once, on the awaiting
+     * caller thread, immediately after the first management await completes
+     * once armed. A per-read admission would await more than once, letting
+     * the injected connect land between its reads.
+     */
+    private class InterleavingScheduler(private val delegate: VirtualThreadScheduler) : HostScheduler by delegate {
+        @Volatile var afterFirstAwait: (() -> Unit)? = null
+
+        override fun <T> await(future: java.util.concurrent.CompletableFuture<T>): T {
+            val result = delegate.await(future)
+            val hook = afterFirstAwait
+            if (hook != null) {
+                afterFirstAwait = null
+                hook()
+            }
+            return result
+        }
+    }
+
+    @Test
+    fun `admission reads all topology in one turn so a mutation between awaits cannot tear it`() {
+        val delegate = VirtualThreadScheduler("AlignedAdmissionTest-interleave")
+        val scheduler = InterleavingScheduler(delegate)
+        val fixture = Fixture(scheduler)
+        try {
+            val root = SetCell<Int>()
+            val grouped = grouped()
+            val peer = grouped()
+            fixture.spawn(root, grouped, peer)
+            fixture.connect(root, "outlet", grouped, "inlet")
+            val builder = AlignedObserveBuilder().apply {
+                map("grouped", grouped.ref)
+                set("raw", root.ref)
+            }
+
+            scheduler.afterFirstAwait = { fixture.connect(peer, "outlet", grouped, "deltaInlet") }
+            val verdict = admitAligned(fixture.management, builder.specs, builder.unchecked)
+
+            scheduler.afterFirstAwait shouldBe null
+            verdict.shouldBeInstanceOf<AdmissionVerdict.Admitted>()
+            admitAligned(fixture.management, builder.specs, builder.unchecked)
+                .shouldBeInstanceOf<AdmissionVerdict.Rejected.DivergentOrigination>()
+        } finally {
+            delegate.shutdown()
+        }
     }
 }

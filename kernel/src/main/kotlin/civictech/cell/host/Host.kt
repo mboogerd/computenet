@@ -11,6 +11,22 @@ import civictech.cell.proxy.Invocation
 import civictech.gen.wire.Contract
 
 /**
+ * One synchronous inspection of host-local topology.
+ *
+ * [HostManagementApi.inspectTopology] invokes this callback on the host's
+ * execution context. The callback must only inspect [topology]; it must not retain
+ * live cells returned by a topology read beyond the callback.
+ */
+fun interface HostTopologyInspection<T> {
+    fun inspect(topology: HostTopologyView): T
+}
+
+/** The read-only topology surface available inside one host inspection turn. */
+interface HostTopologyView {
+    fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry
+}
+
+/**
  * Interface for interacting with a [Host].
  *
  * A Host is a [Cell] that hosts other cells and manages their connections.
@@ -48,11 +64,22 @@ interface HostManagementApi {
 
     /**
      * Returns the upstream Consume ancestry of [ref] over this host's live,
-     * static link set. This is a synchronous, pure read: it performs no spawn,
-     * connect, or scheduler hop, and later link changes do not alter the
-     * returned collections.
+     * static link set. This is a synchronous, pure read: it performs no spawn
+     * or connect, and later link changes do not alter the returned collections.
+     * Calls through a host's management inlet execute on the host context.
      */
     fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry
+
+    /**
+     * Runs [inspection] as one awaited host-executor turn.
+     *
+     * Use this when one verdict depends on several topology reads: every read
+     * through the callback's [HostTopologyView] then observes the
+     * same serialized host turn rather than independently hopping through the
+     * queue. The callback is local-only, synchronous, and read-only by
+     * contract; host tasks must not call this awaited entry point re-entrantly.
+     */
+    fun <T> inspectTopology(inspection: HostTopologyInspection<T>): T
 
     /**
      * Declares one host-local multi-cell write boundary. Repeating [name] with
