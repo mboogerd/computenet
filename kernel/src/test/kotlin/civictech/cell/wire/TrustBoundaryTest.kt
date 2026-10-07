@@ -664,6 +664,60 @@ class TrustBoundaryTest {
     }
 
     /**
+     * computenet-zlm2, review arm: the publish guard alone is bypassed in two
+     * announcements — r retracts the incumbent (its own despawn of the
+     * impostor announces `unpublished`), then re-announces the now-fresh ref.
+     * Measured against 795abe6e before the retraction half existed: P resolved
+     * q's ref as `Remote(peer=third-party-r)` and r received `q-only-secret`;
+     * P's own victim ref resolved the same way and r received
+     * `p-internal-secret`. Each of the three refused announcements (publish,
+     * unpublish, re-publish) is one typed ADMISSION denial naming r.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot retract then re-claim a ref it does not own`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+
+        val impostors = listOf(rig.consumerOnQ.ref, rig.victimOnP.ref).flatMap { ref ->
+            val first = rig.announceImpostorFromR(ref)
+            rig.hostR.managementInlet.call.despawn(ref)
+            rig.controller.runToIdle()
+            listOf(first, rig.announceImpostorFromR(ref))
+        }
+
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).peer shouldBe
+            RedirectRig.REQUESTER_Q
+        rig.registryP.location(rig.victimOnP.ref) shouldBe LocationRegistry.Local(rig.hostP)
+        rig.requestFromR(PortAddress(rig.victimOnP.ref, "inlet"))
+        rig.emit("secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "secret")
+        rig.victimOnP.received.shouldBeEmpty()
+        impostors.forEach { it.received.shouldBeEmpty() }
+
+        val denials = rig.deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+        denials.map { it.denial!!.subject } shouldBe List(2) {
+            listOf("RegistryAnnounce.published", "RegistryAnnounce.unpublished", "RegistryAnnounce.published")
+        }.flatten()
+        denials.forEach {
+            it.denial!!.principal shouldBe RedirectRig.THIRD_R
+            it.cause shouldBe null
+        }
+        rig.bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
+        rig.bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
      * computenet-a4ha arm 1: q names one of **P's own** cells as the consumer.
      * Measured against the unfixed code as `PROBE victim.received =
      * [p-internal-secret]` — the link established and P streamed its own

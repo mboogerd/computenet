@@ -80,7 +80,10 @@ interface RegistryAnnounce {
  * [RegistryAnnounce.published] enters the registry through
  * [LocationRegistry.publishFromPeer], which keeps
  * the first live peer attribution (or an actively hosted local cell) and lets
- * only that same peer refresh its sink. A collision is reported through this
+ * only that same peer refresh its sink; [RegistryAnnounce.unpublished] enters
+ * through [LocationRegistry.unpublishFromPeer] under the same rule, so a peer
+ * cannot first retract the incumbent and then claim the fresh ref. A
+ * collision on either path is reported through this
  * cell's typed `"announcement-admission"` denial sink, naming [peer]; it never
  * throws and therefore never becomes a supervision fault.
  *
@@ -186,6 +189,7 @@ class RegistryMirrorCell(
     private fun refuseCollision(
         ref: CellRef,
         refusal: LocationRegistry.RemotePublishRefusal,
+        subject: String = "RegistryAnnounce.published",
     ) {
         val incumbent = when (val location = refusal.incumbent) {
             is LocationRegistry.Local -> "a cell actively hosted on this side"
@@ -195,8 +199,8 @@ class RegistryMirrorCell(
             seam = BoundarySeam.ADMISSION,
             reason = DenialReason.NOT_ADMITTED,
             principal = peer,
-            subject = "RegistryAnnounce.published",
-            detail = "announcement from ${peer ?: "<anonymous>"} for $ref refused: " +
+            subject = subject,
+            detail = "$subject from ${peer ?: "<anonymous>"} for $ref refused: " +
                 "the ref is already bound to $incumbent",
             deniedArgs = emptyList(),
         )
@@ -224,7 +228,14 @@ class RegistryMirrorCell(
             }
 
             override fun unpublished(ref: CellRef) = synchronized(gate) {
-                if (attached) registry.mirrorUnpublish(ref) else refuse()
+                if (attached) {
+                    registry.unpublishFromPeer(ref, peer)?.let {
+                        refuseCollision(ref, it, "RegistryAnnounce.unpublished")
+                    }
+                } else {
+                    refuse()
+                }
+                Unit
             }
 
             // `mirrorLeaderMark`, never `markLeader`: a mirrored mark is folded

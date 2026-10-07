@@ -72,7 +72,7 @@ class LocationRegistry {
     data class Remote(val sink: InvocationSink, val peer: PeerId? = null) : Location
 
     /**
-     * Why a peer-originated remote publication was refused. The incumbent is
+     * Why a peer-originated remote publication or retraction was refused. The incumbent is
      * captured under the same per-ref lock that guards installation, so the
      * caller can account the refusal without a racy second registry read.
      */
@@ -920,6 +920,41 @@ class LocationRegistry {
         descriptions.remove(ref)
         if (wasLocal) onLocalUnpublish.forEach { notify(it, ref) }
         onUnpublish.forEach { notify(it, ref) }
+    }
+
+    /**
+     * The retraction half of [publishFromPeer]'s admission rule
+     * (computenet-zlm2): a peer may retract only a binding it may also
+     * (re)publish — an absent ref, or a [Remote] attributed to the same
+     * [peer]. It may not drop another peer's attribution, nor a [Local] whose
+     * host still [ManagedHost.hosts] the ref. Without this half the publish
+     * guard is bypassed in two announcements: unpublish the incumbent, then
+     * publish the now-fresh ref.
+     *
+     * Returns the incumbent on refusal and changes nothing; otherwise removes
+     * the binding under the ref's queue lock and fires [onUnpublish] as
+     * [mirrorUnpublish] does.
+     */
+    internal fun unpublishFromPeer(ref: CellRef, peer: PeerId?): RemotePublishRefusal? {
+        val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+        val refusal = synchronized(queue) {
+            val incumbent = locations[ref]
+            val conflicts = when (incumbent) {
+                is Local -> incumbent.host.hosts(ref)
+                is Remote -> incumbent.peer != peer
+                null -> false
+            }
+            if (conflicts) {
+                RemotePublishRefusal(incumbent!!)
+            } else {
+                locations.remove(ref)
+                instances.remove(ref)
+                descriptions.remove(ref)
+                null
+            }
+        }
+        if (refusal == null) onUnpublish.forEach { notify(it, ref) }
+        return refusal
     }
 
     /** Announcement-fed remote unpublish; deliberately does not re-announce (mirrors [mirrorLink]). */
