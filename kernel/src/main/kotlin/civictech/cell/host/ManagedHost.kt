@@ -2313,8 +2313,9 @@ open class ManagedHost(
      *
      * - a source-side link whose destination is the stable ref of a hosted port
      *   contributes its producer ref;
-     * - a live [RoutedPropagate] contributes a target-derived ingress-family
-     *   ref, independent of `streamTo`'s anonymous attachment ref.
+     * - a [RoutedPropagate] attached to an outlet hosted by this host contributes
+     *   a target-derived ingress-family ref, independent of `streamTo`'s
+     *   anonymous attachment ref.
      *
      * Both stay opaque. In particular, even a hosted producer is not traversed:
      * the bypass has no target-side topology record on which to base that walk.
@@ -2333,17 +2334,23 @@ open class ManagedHost(
             val ports = PortRegistry.of(cell)
             ports.names().mapNotNull(ports::get)
         }.mapTo(linkedSetOf()) { it.ref }
-        val routedRoots = RoutedPropagate.liveIngresses().mapNotNullTo(linkedSetOf()) { ingress ->
-            if (ingress.cellRef !in reachable) return@mapNotNullTo null
-            val target = cells[ingress.cellRef] ?: return@mapNotNullTo null
-            val ports = PortRegistry.of(target)
-            if (ports[ingress.portName] == null) null else ingress.root
-        }
+        val routedRoots = linkedSetOf<PortRef>()
         val bypassRoots = linkedSetOf<PortRef>()
         cells.values.forEach { cell ->
             val ports = PortRegistry.of(cell)
             ports.names().forEach { name ->
-                val linked = ports[name] as? Linked ?: return@forEach
+                val port = ports[name] ?: return@forEach
+                if (port is FanOutlet<*>) {
+                    port.attachedConsumerApis().forEach attachment@{ api ->
+                        val ingress = (api as? RoutedPropagate<*>)?.ingress ?: return@attachment
+                        if (ingress.cellRef !in reachable) return@attachment
+                        val target = cells[ingress.cellRef] ?: return@attachment
+                        if (PortRegistry.of(target)[ingress.portName] != null) {
+                            routedRoots += ingress.root
+                        }
+                    }
+                }
+                val linked = port as? Linked ?: return@forEach
                 linked.linking.links.forEach { link ->
                     if (link.role == LinkRole.Consume && link.toPort == null && link.to in reachablePorts) {
                         bypassRoots += link.from

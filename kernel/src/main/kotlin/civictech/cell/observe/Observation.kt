@@ -130,12 +130,13 @@ class ObservationBuilder internal constructor() {
      * Declares the stable structural [root] of an unmanaged feed into [target].
      *
      * A live `streamTo` whose destination names a hosted port is discovered
-     * automatically. So is a live `RoutedPropagate`: its target cell and port
-     * identify a stable opaque ingress family even when `streamTo` generated an
-     * anonymous attachment ref. This declaration remains necessary for a bare
-     * anonymous endpoint, or for a feed that may be linked only after this
-     * observation is built. Descendant views inherit the root through the
-     * ordinary managed ancestry walk.
+     * automatically. So is a `RoutedPropagate` attached to an outlet hosted by
+     * the observing host: its target cell and port identify a stable opaque
+     * ingress family even when `streamTo` generated an anonymous attachment ref.
+     * This declaration remains necessary for a bare anonymous endpoint, a feed
+     * produced outside the observing host, or a feed that may be linked only
+     * after this observation is built. Descendant views inherit the root through
+     * the ordinary managed ancestry walk.
      */
     fun unmanagedFeed(target: CellRef, root: PortRef) {
         declaredOpaqueRoots.getOrPut(target) { linkedSetOf() } += root
@@ -395,11 +396,13 @@ private class ObservationCoordinator(
  * not reject a view merely because the feed was not host-admitted. When the
  * source-side link names a hosted destination port, its producer [PortRef] is
  * retained as an opaque root. When `streamTo` instead uses its default anonymous
- * attachment ref, a live `RoutedPropagate` resolves the destination cell/port;
- * observation derives a replay-stable opaque ingress-family root from that
- * pair. The source attachment keeps the routed handle live, so this does not
- * require caller cooperation or retain discarded handles indefinitely. A bare
- * anonymous endpoint, or a feed linked only after construction, must still be
+ * attachment ref, an attached `RoutedPropagate` resolves the destination
+ * cell/port; observation derives a replay-stable opaque ingress-family root
+ * from that pair. Discovery scans only current Consume attachments on producer
+ * outlets hosted by the observing host. A never-linked or unlinked handle is
+ * therefore not topology, and an equal [CellRef] on another host cannot leak a
+ * root into this host's partition. A bare anonymous endpoint, a feed from a
+ * non-hosted producer, or a feed linked only after construction must still be
  * represented up front with [ObservationBuilder.unmanagedFeed].
  *
  * **Hosted bypass producers stay opaque; they are not traversed.** A bypass has

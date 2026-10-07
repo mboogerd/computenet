@@ -26,6 +26,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
+import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.Random
 import java.util.UUID
@@ -79,6 +80,59 @@ class ObservationBuilderTest {
         val routed: Propagate<SetDelta<Int>> = host.inlet(target, portName)
         outlet.unsubscribe(inletRef)
         outlet.subscribe(Use.fixed(routed, inletRef))
+    }
+
+    private fun observedGroups(host: ManagedHost, union: CellRef, source: CellRef): Set<String> {
+        val observation = host.observation {
+            set("union", union)
+            set("source", source)
+        }
+        return try {
+            observation.groups
+        } finally {
+            observation.close()
+        }
+    }
+
+    /**
+     * Keeps the never-attached handle live while the first observation is
+     * built, then returns only a weak reference so the test can prove the
+     * post-collection partition is identical.
+     */
+    private fun groupsWithNeverLinkedHandleAlive(
+        host: ManagedHost,
+        union: CellRef,
+        source: CellRef,
+    ): Pair<Set<String>, WeakReference<Propagate<SetDelta<Int>>>> {
+        val routed: Propagate<SetDelta<Int>> = host.inlet(union, "inlet")
+        val weak = WeakReference(routed)
+        return observedGroups(host, union, source) to weak
+    }
+
+    /**
+     * Keeps the detached handle live while the first observation is built.
+     * The bypass link does not retain the routed target after unlink.
+     */
+    private fun groupsWithUnlinkedHandleAlive(
+        host: ManagedHost,
+        writer: SetCell<Int>,
+        union: CellRef,
+        source: CellRef,
+    ): Pair<Set<String>, WeakReference<Propagate<SetDelta<Int>>>> {
+        val routed: Propagate<SetDelta<Int>> = host.inlet(union, "inlet")
+        val weak = WeakReference(routed)
+        writer.outlet.streamTo(routed).unlink()
+        return observedGroups(host, union, source) to weak
+    }
+
+    /** Force enough collection to distinguish a weak index from live topology. */
+    private fun collectRoutedHandle() {
+        repeat(8) {
+            System.gc()
+            @Suppress("UNUSED_EXPRESSION")
+            ByteArray(1 shl 20)
+        }
+        System.gc()
     }
 
     @Test
@@ -145,6 +199,73 @@ class ObservationBuilderTest {
             "source" to "source",
         )
         observation.close()
+    }
+
+    @Test
+    fun `never-linked routed handle cannot change observation groups before collection`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val expected = setOf("union+source")
+        val (beforeCollection, handle) = groupsWithNeverLinkedHandleAlive(
+            host,
+            union.ref,
+            source.ref,
+        )
+        beforeCollection shouldContainExactly expected
+
+        collectRoutedHandle()
+        handle.get() shouldBe null
+        observedGroups(host, union.ref, source.ref) shouldContainExactly expected
+    }
+
+    @Test
+    fun `unlinked routed feed cannot change observation groups before collection`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val writer = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, writer, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val expected = setOf("union+source")
+        val (beforeCollection, handle) = groupsWithUnlinkedHandleAlive(
+            host,
+            writer,
+            union.ref,
+            source.ref,
+        )
+        beforeCollection shouldContainExactly expected
+
+        collectRoutedHandle()
+        handle.get() shouldBe null
+        observedGroups(host, union.ref, source.ref) shouldContainExactly expected
+    }
+
+    @Test
+    fun `routed feed attached on another host cannot change equal-ref observation groups`() {
+        val sharedUnionRef = CellRef(UUID.randomUUID())
+        val observedHost = ManagedHost()
+        val observedManagement = observedHost.managementInlet.call
+        val source = SetCell<Int>()
+        val union = UnionSetCell<Int>(sharedUnionRef)
+        listOf(source, union).forEach(observedManagement::spawn)
+        observedManagement.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val otherHost = ManagedHost()
+        val otherManagement = otherHost.managementInlet.call
+        val otherWriter = SetCell<Int>()
+        val otherUnion = UnionSetCell<Int>(sharedUnionRef)
+        listOf(otherWriter, otherUnion).forEach(otherManagement::spawn)
+        val otherRouted: Propagate<SetDelta<Int>> = otherHost.inlet(otherUnion.ref, "inlet")
+        otherWriter.outlet.streamTo(otherRouted)
+
+        observedGroups(observedHost, union.ref, source.ref) shouldContainExactly setOf("union+source")
     }
 
     @Test
