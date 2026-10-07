@@ -656,6 +656,16 @@ class LocationRegistry {
      * Returns the incumbent on refusal and makes **no** registry or publish-
      * hook change. The caller owns typed boundary accounting because it knows
      * the announcing connection's principal.
+     *
+     * Two limits of this rule. **Anonymous peers are one owner**: [peer] is
+     * compared by equality, so two connections that both announce with a null
+     * [PeerId] can still re-aim each other's refs (a named peer can neither
+     * capture an anonymous one's ref nor be captured by it). **A cross-peer
+     * handover is ordered**: a ref moving from peer q to peer r is admitted
+     * here only once q's retraction ([unpublishFromPeer]) or q's disconnect
+     * ([unpublishRemotes]) has removed q's binding; an announcement by r that
+     * arrives first is refused and not retried, so the ref stays unlocated
+     * here until r announces again.
      */
     internal fun publishFromPeer(
         ref: CellRef,
