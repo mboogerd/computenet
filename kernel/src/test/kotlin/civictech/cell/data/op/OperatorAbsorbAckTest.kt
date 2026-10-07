@@ -253,6 +253,81 @@ class OperatorAbsorbAckTest {
         observer.received.size shouldBe 3
     }
 
+    /**
+     * computenet-t6vex (council Reading 2): source provenance must COMPOSE
+     * across a chain of fan-in relay hops, not just resolve at one hop in
+     * isolation — the council's flagged risk was exactly that provenance
+     * "after an operator transformation" might not be established. `opArm1`
+     * fans in source1+source2; `opArm2` fans in `opArm1`'s outlet (so its
+     * resolved provenance must already be {source1, source2}, published by
+     * `opArm1`'s own relay, not re-derived) PLUS a third, structurally
+     * independent source3 edge straight into `opArm2`. Every edge is warmed
+     * up with one real (non-absorbed) delivery first — an edge this resolver
+     * has never observed stays conservatively "unknown" rather than excluded
+     * (see [SourceProvenance]), so resolving source3's edge as disjoint from
+     * opArm1's needs both to have actually spoken at least once. Only then
+     * does source3's threshold-neutral wave settle without waiting on
+     * opArm1's edge, which structurally can never carry source3 even though
+     * it is two hops removed from a genuine root.
+     */
+    @Test
+    fun `source provenance composes through a chain of fan-in relay hops`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val source1 = RawSetSource()
+        val source2 = RawSetSource()
+        val source3 = RawSetSource()
+        val opArm1 = QuorumSetCell.union<String>() // fans in source1 + source2
+        val opArm2 = QuorumSetCell.union<String>() // fans in opArm1's outlet + source3
+        val passArm = AlwaysEmitSet()
+        val gf = GlitchFreeCell(setApi)
+        val observer = Observer(setApi)
+        listOf(source1, source2, source3, opArm1, opArm2, passArm, gf, observer)
+            .forEach { host.managementInlet.call.spawn(it) }
+
+        source1.outlet.linkTo(opArm1.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        source2.outlet.linkTo(opArm1.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        opArm1.outlet.linkTo(opArm2.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        source3.outlet.linkTo(opArm2.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        // passArm mirrors every root so gf's own frontier never stalls on an
+        // edge this fix does not touch.
+        source1.outlet.linkTo(passArm.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        source2.outlet.linkTo(passArm.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        source3.outlet.linkTo(passArm.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        opArm2.outlet.linkTo(gf.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        passArm.outlet.linkTo(gf.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        gf.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+        controller.runToIdle()
+
+        // Warm-up: a distinct key per root, each a REAL (non-absorbed) add,
+        // so every edge this test cares about has delivered at least once
+        // before the real assertion below relies on exclusion.
+        source3.send(SetDelta(adds = mapOf("warm3" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
+        source1.send(SetDelta(adds = mapOf("warm1" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
+        source2.send(SetDelta(adds = mapOf("warm2" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
+        val warmedUp = observer.received.size
+
+        // source2 asserts "warm1" too — threshold-neutral at opArm1 (already
+        // present via source1), so opArm1 absorbs and must relay through
+        // opArm2 without opArm2 waiting on its OWN source3 edge, which can
+        // never carry source2.
+        source2.send(SetDelta(adds = mapOf("warm1" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
+        observer.received.size shouldBe warmedUp + 1 // passArm's marker; opArm2 itself absorbs too
+
+        // source3 asserts "warm1" directly into opArm2: threshold-neutral
+        // there (already present via the opArm1 relay chain), so opArm2
+        // absorbs. Pre-fix (Reading 1) this would wait forever on opArm1's
+        // edge, which structurally never carries source3.
+        source3.send(SetDelta(adds = mapOf("warm1" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
+        observer.received.size shouldBe warmedUp + 2
+    }
+
     // ---------------------------------------------------------------- E2-GATE
     // The two value-equal-swallow cells (96 §E2.2's residual). `combine`
     // saturates at [SATURATE], so a genuinely different input wave recomputes

@@ -107,8 +107,11 @@ internal fun interface GatedFold<T> {
  *    relay terminal. `FilterCell` and `FlatMapSetCell` use the bounded unary
  *    relay. `GroupByCell` and `QuorumSetCell` use the fan-in overload: one
  *    per-edge watermark fold spanning all their inlets, advancing on data or
- *    `Progress`, and relaying once every currently open `Consume` edge has
- *    settled. The slotfinder `common -> filtered -> byDay` pipeline exercises
+ *    `Progress`, and relaying once every currently open `Consume` edge that
+ *    can carry the wave's source has settled
+ *    ([civictech.cell.control.SourceProvenance], computenet-t6vex's Reading
+ *    2) — an edge whose reachability is unresolved still counts, exactly as
+ *    before. The slotfinder `common -> filtered -> byDay` pipeline exercises
  *    both forms, including `byDay`'s data+waterline fan-in.
  *
  * A transparent operator that has not installed the relay retains F-15's old

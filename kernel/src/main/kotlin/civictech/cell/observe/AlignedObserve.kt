@@ -129,8 +129,11 @@ class AlignedDrainBarrier internal constructor(
  * preserves source/counter identity and stops when an intermediate frontier
  * consumes the acknowledgement. `FilterCell`/`FlatMapSetCell` use its bounded
  * unary form. `QuorumSetCell` and `GroupByCell` use its fan-in form, which
- * mirrors this per-edge watermark condition across their open input edges and
- * relays only after all of them settle the wave by data or `Progress`.
+ * mirrors this per-edge watermark condition across their open input edges —
+ * narrowed, where the edge's source is resolvable
+ * ([civictech.cell.control.SourceProvenance]), to the edges that can actually
+ * carry the wave's source — and relays only after all of those settle the
+ * wave by data or `Progress`.
  *
  * The condition is [civictech.cell.consistency.WaveFrontier]'s, *mirrored at
  * cell scope* rather than installed as an inlet policy — the same structural

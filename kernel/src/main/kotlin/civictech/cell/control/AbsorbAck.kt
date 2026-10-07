@@ -94,10 +94,11 @@ internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
  * Every real delta and [Progress] advances only the edge it arrived on. A
  * later counter monotonically settles earlier counters on that edge. The
  * exact `Progress(sourceId, thru)` is forwarded once every currently open
- * [LinkRole.Consume] edge has settled it, except on an output that emitted a
- * real delta for that wave. An `EdgeClose` immediately shrinks the condition;
- * an `EdgeOpen` joins it with a floor at the already-flushed high-water, so it
- * cannot resurrect an old wave but does participate in later arrivals.
+ * [LinkRole.Consume] edge **that can actually carry this wave's source**
+ * has settled it, except on an output that emitted a real delta for that
+ * wave. An `EdgeClose` immediately shrinks the condition; an `EdgeOpen`
+ * joins it with a floor at the already-flushed high-water, so it cannot
+ * resurrect an old wave but does participate in later arrivals.
  *
  * Data arrivals are observed by a transparent ADMIT policy. While its handler
  * runs, [absorbAck] calls on [outputs] are captured instead of sent early. For
@@ -110,11 +111,21 @@ internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
  * owns settlement and this relay becomes a pass-through. Unmatched, unwaved,
  * baseline, and already-flushed data likewise bypass the fold.
  *
- * Like the shipped static frontiers, this fold has no source-to-edge
- * reachability discovery: for a source that structurally reaches only one edge
- * of an independent-source fan-in, the other open edges remain expected. That
- * is the existing G-13 boundary; this overload relaxes the old fan-in terminal
- * only when all open edges actually settle the source wave.
+ * **Reading 2** (computenet-t6vex, `[22-LIVE-01]`'s floor-qualified
+ * completeness: "every OPEN inlink with floor(s) < t"): an edge only
+ * withholds settlement of a source's wave while it can actually carry that
+ * source ([SourceProvenance]). This is a best-effort, in-process-only,
+ * synchronous resolution — not the general upstream-traversal protocol the
+ * spec names as undesigned (G-13's declined multiplex-port traversal form,
+ * G-39's hop-by-hop source-set propagation gap) — so it is precise only
+ * through two decided shapes: a genuinely mint-only root outlet, and a chain
+ * of [relayAbsorbAcks] fan-in hops that each republish their own resolved
+ * input provenance. Everywhere else it falls back to "unknown", which this
+ * fold treats exactly as Reading 1 did: the edge remains expected. That
+ * fallback is what keeps the computenet-6ovpx first-edge-relay safety fix
+ * intact — this overload never excludes an edge it has not positively
+ * resolved as source-disjoint, so it can only narrow Reading 1's expected
+ * set, never miss a genuinely contributing edge.
  */
 internal fun FanInlet<*>.relayAbsorbAcks(
     outputs: List<FanOutlet<*>>,
@@ -210,6 +221,27 @@ private class SettledAbsorbAckRelay(
             }
             inlet.install(RelayPolicy(inlet, this))
         }
+        // [22-LIVE-01]'s floor-qualified completeness ("every OPEN inlink with
+        // floor(s) < t"), not the source-blind "every open edge" this fold
+        // used before: a sibling input edge only withholds settlement of wave
+        // (s,t) when it can actually carry source s. Publish each output's own
+        // resolved provenance — the union of this hop's currently open input
+        // edges' resolved source sets — so a chain of relay hops composes
+        // (civictech.cell.control.SourceProvenance).
+        this.outputs.forEach { output ->
+            SourceProvenance.publish(output) { resolvedInputSources() }
+        }
+    }
+
+    /** The union of this hop's currently open Consume input edges' resolved source sets. */
+    private fun resolvedInputSources(): Set<UUID>? {
+        val openEdges = synchronized(lock) { edges.values.filter { it.open && it.link.role == LinkRole.Consume }.map { it.link } }
+        val result = mutableSetOf<UUID>()
+        for (link in openEdges) {
+            val sources = SourceProvenance.resolve(link) ?: return null
+            result += sources
+        }
+        return result
     }
 
     fun owns(outlet: FanOutlet<*>): Boolean = outputs.any { it === outlet }
@@ -285,8 +317,25 @@ private class SettledAbsorbAckRelay(
         .asSequence()
         .filter { it.open && it.link.role == LinkRole.Consume }
         .filter { (it.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter }
+        .filter { edge -> sourceMayReach(edge, timestamp.sourceId) }
         .map { it.link.id }
         .toSet()
+
+    /**
+     * Reading 2 ([22-LIVE-01], computenet-t6vex): an edge withholds settlement
+     * of wave (s,t) only while it can actually carry source s. A `null`
+     * (unknown) resolution keeps the old, safe, source-blind behavior for that
+     * edge — this only ever narrows the expected set, never widens it, so a
+     * structurally single-source sibling can no longer block an independent
+     * source's wave forever (the OperatorAbsorbAckTest regression this reading
+     * fixes), while an edge whose reachability is genuinely unresolved still
+     * withholds exactly as Reading 1 did (the computenet-6ovpx first-edge-relay
+     * hazard stays fixed).
+     */
+    private fun sourceMayReach(edge: EdgeState, sourceId: UUID): Boolean {
+        val sources = SourceProvenance.resolve(edge.link) ?: return true
+        return sourceId in sources
+    }
 
     private fun settled(edgeId: UUID, timestamp: Timestamp): Boolean =
         (watermark[edgeId]?.get(timestamp.sourceId) ?: Long.MIN_VALUE) >= timestamp.counter

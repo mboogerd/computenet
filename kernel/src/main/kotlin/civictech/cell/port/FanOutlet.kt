@@ -219,6 +219,29 @@ class FanOutlet<Api : Any>(
     private var sourceId: UUID = UUID.randomUUID()
 
     /**
+     * Source provenance learned purely from this outlet's own emission history
+     * — no opt-in, no graph traversal (spec 20/22 G-13/G-39's undesigned
+     * upstream-traversal residual; see [civictech.cell.control.SourceProvenance]
+     * for the relay-hop consumer of this). [mintedAsRoot] accumulates every
+     * `sourceId` this outlet has ever minted for a **spontaneous** emission
+     * (`CurrentContext` was null — a true wave origination under this outlet's
+     * own epoch, [originate] or an external call); [mintFreshEpoch]/
+     * [adoptWaveState] can rotate more than one epoch into the set over the
+     * outlet's life, so it is a set, not a single id. [observedAsRelay] flips
+     * true the first time this outlet **reactively** forwards an existing wave
+     * (`CurrentContext` non-null): once true, this outlet is not a pure
+     * mint-only root, and [mintedAsRoot] alone is no longer a safe account of
+     * every source this outlet's edge can carry — a relay-aware cell must
+     * publish its own resolved provenance instead
+     * ([civictech.cell.control.SourceProvenance.publish]).
+     */
+    internal val mintedAsRoot: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
+
+    @Volatile
+    internal var observedAsRelay: Boolean = false
+        private set
+
+    /**
      * SPSC rule (spec 23, G-21 phase 2): a contract carrying `Owned`/`Leased`
      * payloads gets exactly one subscriber. Read from generated metadata —
      * no runtime reflection; un-annotated contracts are never exclusive.
@@ -232,8 +255,14 @@ class FanOutlet<Api : Any>(
         // inherits the baseline the replayed frame already carries (the copy
         // below); a *spontaneous* emission (a cell that originates mid-replay)
         // reads it from [ReplayScope], the exact analogue of [PendingReBaseline].
-        val ctx = CurrentContext.get()?.let { it.copy(sourcePort = ref, hop = it.hop + 1, baseline = it.baseline ?: ReplayScope.get()) }
+        val reactive = CurrentContext.get()
+        val ctx = reactive?.let { it.copy(sourcePort = ref, hop = it.hop + 1, baseline = it.baseline ?: ReplayScope.get()) }
             ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get(), baseline = ReplayScope.get())
+        // Source-provenance learning (undocumented opt-in, see field KDoc
+        // above): ground truth, read off the exact branch just taken — a
+        // spontaneous mint records its sourceId as a known root; a reactive
+        // forward marks this outlet as not pure-root.
+        if (reactive == null) mintedAsRoot += ctx.timestamp.sourceId else observedAsRelay = true
         CurrentContext.with(ctx) {
             // snapshot: link/unlink during a wave must not fail the broadcast
             // Taps fire first, in emission order (spec 20/23 "taps-fire-first"),
