@@ -181,9 +181,6 @@ class DialogueRuntime(
     }
 
     private val relationProvenanceObservation: Observation = host.observation(groupRef = ::sinkRef) {
-        // relationProvenance has an ungated SemiJoinCell upstream. Admission
-        // must therefore be explicit at this app edge (computenet-axcyk.5).
-        unchecked("relationProvenance")
         map("relationProvenance", refs.relationProvenance.ref)
     }
 
