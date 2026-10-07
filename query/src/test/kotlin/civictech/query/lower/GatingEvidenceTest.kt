@@ -259,7 +259,8 @@ class GatingEvidenceTest {
      * two-deep arm is safe to admit. [F15_HOP_CONTROL_QUERY]'s test likewise settles both its
      * outer-dropped and inner-dropped waves. The depth rule therefore remains fail-closed: the
      * lowering has only plan nodes, while the relay's exactly-one-open-Consume predicate is
-     * evaluated from live runtime links and can be disabled by a downstream frontier. The
+     * evaluated from live runtime links and stops once a frontier is installed on the hop's own
+     * inlet. The
      * earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was replaced
      * because its forced-gate withholding was already produced by `f`'s phantom expected edge
      * before any F-15 wave (computenet-cab.4.8 task review).
