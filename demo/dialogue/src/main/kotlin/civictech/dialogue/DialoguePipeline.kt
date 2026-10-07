@@ -399,10 +399,13 @@ object DialoguePipeline {
             // single-input relay carries a structurally silent arm's absorb-ack
             // through extractedClaims/extractedRelations and their unary hops.
             // The pre-relay measurement at 915d574a9 therefore no longer
-            // describes this graph: at d1bb2291 the complete dialogue suite
-            // passes with both gates on and with either gate on alone; no
-            // canonical relation is withheld at quiescence. RelationMintTest
-            // also pins the reason to keep them on: an ungated same-wave
+            // describes this graph: at d1bb2291 the 170 dialogue tests that
+            // predated the flicker regression pass with both gates on and with
+            // either gate on alone; no canonical relation is withheld at
+            // quiescence. The later RelationMintTest flicker case independently
+            // discriminates only the source-endpoint gate (5d), because its
+            // missing endpoint is the relation source. It still pins the reason
+            // to keep frontier gating on: an ungated same-wave
             // endpoint-add/relation-remove reaches the canonical fold as an add
             // then a remove, whereas the gated graph coalesces that net-neutral
             // transition before emission.
