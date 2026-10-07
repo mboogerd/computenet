@@ -489,7 +489,7 @@ with `emitOnFrontier = true` on both semijoins, 4 of `RelationMintTest`'s 5
 cases fail at quiescence with an **empty** canonical relation set. (The fifth,
 `REL-04`, asserts that a self-canonicalizing relation mints *nothing*, so a
 wedged pipeline satisfies it vacuously — it is not evidence the gate works.)
-All five pass at the shipped ungated default.
+All five passed at the then-shipped ungated default.
 
 **Mechanism**: a shared root makes the diamond possible; it does not make it
 sufficient. The gate's completeness condition is a **static link set** with no
@@ -583,20 +583,20 @@ candidate remains open.
    `WaveFrontier`, `CoalescingCombineCell` and `AlignedCompositeCell`. This
    remains the wider unimplemented fix and is out of proportion to one demo.
 
-**What ships instead, and what it costs**: `DialoguePipeline` stages 5d/5e
-stay at the ungated default, with the rationale in the code. The open cost is
-the transient the gate exists for — admitting the utterance that mints a
-relation's last endpoint can flicker the relation into and out of the
-canonical fold **within one wave**. F4's applier
-(`computenet-2aw.4.2`, `[AGO1-APPLY-04]`) is the sole writer into the agora
-graph and sits downstream of exactly that, so the flicker must be tolerated
-rather than merely transient. It is: the applier is **pull-based** — it reads
-`ObservationSink.current()` snapshots of the canonical folds after quiescence,
-on an explicit `reconcile()`, and registers no `onChange` listener that writes
-to agora. A within-wave admit-then-retract is therefore two folds into a View
-and **zero** agora operations. That tolerance is structural, not incidental,
-so it is a constraint on F4: an applier that ever becomes push-driven off the
-canonical relation fold re-opens this finding.
+**What ships now, and why** (computenet-13dby): `DialoguePipeline` stages 5d/5e
+set `emitOnFrontier = true`. The pre-computenet-6ovpx withholding measurement
+no longer describes the graph: on Darwin arm64 at `d1bb2291`, all 170
+`:demo:dialogue` tests pass with both gates enabled, with only 5d enabled, and
+with only 5e enabled. The single-input absorb-ack relay carries silent-arm
+settlement through this pipeline's unary hops, so none of those variants loses
+the canonical relation at quiescence. The gate is observably useful rather than
+merely precautionary: `RelationMintTest` applies one transcript delta that adds
+the missing endpoint claim while retracting its pending relation. The ungated
+control publishes a canonical-relation add and then a remove under that one
+wave timestamp; the shipped gates publish neither, coalescing the net-neutral
+transition before it reaches the canonical fold. F4's pull-at-quiescence
+applier remains a valid boundary, but it is no longer compensating for this
+5d/5e transient.
 
 **Honest limit of this entry**: the historical reproduction covers
 `SemiJoinCell`'s gate, and `GatingEvidenceTest` now measures the unary relay
