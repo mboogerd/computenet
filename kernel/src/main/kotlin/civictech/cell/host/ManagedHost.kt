@@ -999,7 +999,7 @@ open class ManagedHost(
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
         synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
-            if (consumeStagedLinkCloseMarker(parked)) return@forEach
+            if (isTeardownBookkeepingMarker(parked)) return@forEach
             synchronized(dataLock) { checkpointSequences.remove(parked) }
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
@@ -1255,6 +1255,16 @@ open class ManagedHost(
 
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
         synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
+
+    /**
+     * Terminal protocol bookkeeping has no payload fate to account for when a
+     * cell leaves the host. In-process EdgeClose markers are tracked by
+     * [stagedLinkCloseMarkers]; bridged frontier markers arrive independently
+     * over a [civictech.cell.wire.WireEdgeLink] and are identified by their
+     * protocol/link shape instead. Both follow the same teardown rule.
+     */
+    private fun isTeardownBookkeepingMarker(hostedInvocation: HostedPortInvocation): Boolean =
+        consumeStagedLinkCloseMarker(hostedInvocation) || isBridgedFrontierMarker(hostedInvocation)
 
     /**
      * True only for the bridged frontier markers that spec 20/22 requires to
