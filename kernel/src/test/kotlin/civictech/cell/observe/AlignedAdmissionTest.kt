@@ -371,4 +371,52 @@ class AlignedAdmissionTest {
             scheduler.shutdown()
         }
     }
+
+    /**
+     * Delegating scheduler that runs [afterFirstAwait] once, on the awaiting
+     * caller thread, immediately after the first management await completes
+     * once armed. A per-read admission would await more than once, letting
+     * the injected connect land between its reads.
+     */
+    private class InterleavingScheduler(private val delegate: VirtualThreadScheduler) : HostScheduler by delegate {
+        @Volatile var afterFirstAwait: (() -> Unit)? = null
+
+        override fun <T> await(future: java.util.concurrent.CompletableFuture<T>): T {
+            val result = delegate.await(future)
+            val hook = afterFirstAwait
+            if (hook != null) {
+                afterFirstAwait = null
+                hook()
+            }
+            return result
+        }
+    }
+
+    @Test
+    fun `admission reads all topology in one turn so a mutation between awaits cannot tear it`() {
+        val delegate = VirtualThreadScheduler("AlignedAdmissionTest-interleave")
+        val scheduler = InterleavingScheduler(delegate)
+        val fixture = Fixture(scheduler)
+        try {
+            val root = SetCell<Int>()
+            val grouped = grouped()
+            val peer = grouped()
+            fixture.spawn(root, grouped, peer)
+            fixture.connect(root, "outlet", grouped, "inlet")
+            val builder = AlignedObserveBuilder().apply {
+                map("grouped", grouped.ref)
+                set("raw", root.ref)
+            }
+
+            scheduler.afterFirstAwait = { fixture.connect(peer, "outlet", grouped, "deltaInlet") }
+            val verdict = admitAligned(fixture.management, builder.specs, builder.unchecked)
+
+            scheduler.afterFirstAwait shouldBe null
+            verdict.shouldBeInstanceOf<AdmissionVerdict.Admitted>()
+            admitAligned(fixture.management, builder.specs, builder.unchecked)
+                .shouldBeInstanceOf<AdmissionVerdict.Rejected.DivergentOrigination>()
+        } finally {
+            delegate.shutdown()
+        }
+    }
 }
