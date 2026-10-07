@@ -161,6 +161,16 @@ class NodeEvolveTest {
             assertTrue(second.recovered)
             assertTrue("incumbent" in second.refs, "recovery removed the serving incumbent")
             assertFalse("candidate" in second.refs, "recovery retained an unjudged shadow")
+            // computenet-q37rn: before deferred frame staging, the candidate's own journaled
+            // frames were submitted to the intake while the journal walk was still running, and
+            // only despawned afterwards once recovery classified the evolution as interrupted —
+            // so a staged frame targeting the now-despawned candidate was dead-lettered as
+            // "unknown cell" once the scheduler delivered it.
+            assertEquals(
+                0L,
+                second.mainHost.supervisionAccounting().deadLetters,
+                "interrupted evolution recovery dead-lettered a replayed candidate frame",
+            )
 
             val cleanup = topologyEvents(second)
             assertTrue(

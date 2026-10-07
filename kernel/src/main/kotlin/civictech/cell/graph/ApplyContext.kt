@@ -74,7 +74,6 @@ class ApplyContext(
     private val activeLinks = mutableMapOf<TopologyLinkKey, Link>()
     private val cells = ConcurrentHashMap<CellRef, Cell>()
     private val familyInstances = mutableMapOf<String, KeyedCells<*>>()
-    private val recoveredEvolutionCandidates = linkedSetOf<CellRef>()
     private var replayDepth = 0
     private var checkpointRehandshakeDepth = 0
 
@@ -101,6 +100,8 @@ class ApplyContext(
     /** Immutable view of the successfully-applied live topology. */
     fun live(): TopologyFold = fold.snapshot()
 
+    override fun activeEvolutions(): Set<CellRef> = live().activeEvolutions
+
     /** Recover topology and frames together, preserving this context's services and handle table. */
     fun recover(journal: Journal): Recovery = host.recoverFrom(journal, this)
 
@@ -126,41 +127,34 @@ class ApplyContext(
      */
     internal fun <T> replaying(action: () -> T): T {
         val outermost = replayDepth == 0
-        if (outermost) recoveredEvolutionCandidates.clear()
         replayDepth++
         var completed = false
         return try {
             action().also { completed = true }
         } finally {
             replayDepth--
-            if (outermost) {
-                try {
-                    if (completed) abortRecoveredEvolutions()
-                } finally {
-                    recoveredEvolutionCandidates.clear()
-                }
-            }
+            if (outermost && completed) abortRecoveredEvolutions()
         }
     }
 
     /**
-     * A candidate recorded by [markRecoveredEvolutionTap] but left shadowed after the complete
-     * journal has replayed is an interrupted evolution. A completed promotion has already folded
-     * its candidate to `shadow = false`. Write the whole reversal before applying any part of it
-     * so another crash deterministically finishes the same abort. Gate colour is deliberately
-     * untouched.
+     * A candidate still named by [TopologyFold.activeEvolutions] after the complete journal has
+     * replayed is an interrupted evolution (computenet-q37rn): [TopoEvent.EvolutionTap] is
+     * written only by this context's own `evolve` hooks, before the tap it precedes, and is
+     * retired by [applyPromote]/[TopoEvent.Promote] or by a [TopoEvent.Despawn] of the same
+     * candidate — never by link shape or declaration order. Write the whole reversal before
+     * applying any part of it so another crash deterministically finishes the same abort. Gate
+     * colour is deliberately untouched.
      */
     private fun abortRecoveredEvolutions() {
         val recovered = live()
-        recovered.spawns.values
-            .filter { it.shadow && it.ref in recoveredEvolutionCandidates }
-            .mapNotNull { spawn ->
+        recovered.activeEvolutions
+            .mapNotNull { ref -> recovered.spawns[ref] }
+            .forEach { spawn ->
+                val candidate = spawn.ref
                 val taps = recovered.links.values.filter { edge ->
-                    edge.to == spawn.ref && edge.options.staged && isEvolutionTap(edge)
+                    edge.to == candidate && edge.options.staged && isEvolutionTap(edge)
                 }
-                taps.takeIf { it.isNotEmpty() }?.let { spawn.ref to it }
-            }
-            .forEach { (candidate, taps) ->
                 val unlinks = taps.map { edge ->
                     TopoEvent.Unlink(edge.from, edge.outlet, edge.to, edge.inlet)
                 }
@@ -172,23 +166,6 @@ class ApplyContext(
 
     private fun isEvolutionTap(edge: TopoEvent.Connect): Boolean {
         return Evolve.isTrafficLightDataOutlet(cells[edge.from], edge.from, edge.outlet)
-    }
-
-    /**
-     * Evolve installs its write-ahead tap only after the declarative candidate/gate graph has
-     * applied, so the shadow's invariant edge is already in the fold when this record replays.
-     * An ordinary reusable promotion shadow is constructed in graph order (inbound link first)
-     * and is not an interrupted EvolutionHandle. Re-handshaking a checkpoint sees the complete
-     * fold too, so it is explicitly excluded rather than mistaken for a new tap record.
-     */
-    private fun markRecoveredEvolutionTap(event: TopoEvent.Connect) {
-        if (replayDepth == 0 || checkpointRehandshakeDepth > 0 || !isEvolutionTap(event)) return
-        val before = live()
-        if (before.spawns[event.to]?.shadow != true) return
-        val feedsInvariant = before.links.values.any { edge ->
-            edge.from == event.to && Evolve.isInvariant(cells[edge.to])
-        }
-        if (feedsInvariant) recoveredEvolutionCandidates += event.to
     }
 
     /** One write-ahead topology record for one GraphSpec delta or one builder operation. */
@@ -219,6 +196,7 @@ class ApplyContext(
                 host.recoverFamilyKey(event.namespace, event.key)
                 fold.record(event)
             }
+            is TopoEvent.EvolutionTap -> fold.record(event)
         }
     }
 
@@ -274,7 +252,6 @@ class ApplyContext(
     }
 
     internal fun applyConnect(event: TopoEvent.Connect): Link? {
-        markRecoveredEvolutionTap(event)
         val key = TopologyLinkKey.of(event)
         val link = when (
             val result = host.managementInlet.call.connectStep(
@@ -388,12 +365,21 @@ class ApplyContext(
         }.orEmpty()
         val hooks = object : EvolutionHooks {
             private val taps = mutableMapOf<PortRef, TopoEvent.Connect>()
+            private val tappedCandidates = mutableSetOf<CellRef>()
 
             override val journal: PromotionJournal = prepared.journal
 
             override fun <T : Any> tapShadow(outlet: FanOutlet<T>, inlet: FanInlet<T>): PortRef {
                 val from = requireNotNull(outlet.identity()) { "evolution gate outlet has no registered identity" }
                 val to = requireNotNull(inlet.identity()) { "evolution candidate inlet has no registered identity" }
+                // Write-ahead evidence that THIS evolution owns the tap it is about to install,
+                // before installing it (computenet-q37rn). One per candidate: a shadow may have
+                // several matching inlets, so later calls for the same candidate are no-ops here.
+                if (tappedCandidates.add(to.owner)) {
+                    val begin = TopoEvent.EvolutionTap(to.owner)
+                    journalTopology(listOf(begin))
+                    apply(begin)
+                }
                 val event = TopoEvent.Connect(
                     from = from.owner,
                     outlet = from.name,

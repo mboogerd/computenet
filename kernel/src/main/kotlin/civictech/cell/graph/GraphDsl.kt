@@ -540,6 +540,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 }
                 is TopoEvent.FamilyKey -> error("GraphSpec does not emit FamilyKey directly")
                 is TopoEvent.Promote -> error("GraphSpec does not emit Promote directly")
+                is TopoEvent.EvolutionTap -> error("GraphSpec does not emit EvolutionTap directly")
             }
         }
         val links = deltaLinks.mapNotNull { (key, topologyKey) ->
