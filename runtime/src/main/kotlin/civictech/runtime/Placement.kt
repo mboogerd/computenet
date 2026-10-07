@@ -254,6 +254,11 @@ class PlacementPlan private constructor(
 
                     is WriteStep -> {
                         step.cells.forEach { requireActive(active, it) }
+                        if (step.cells.map { assignedNodes.getValue(it) }.distinct().size > 1) {
+                            throw IllegalStateException(
+                                "write '${step.name}': cross-node write is not supported",
+                            )
+                        }
                         if (step.cells.isEmpty() || local(step.cells.first())) {
                             localSteps += step
                         }
