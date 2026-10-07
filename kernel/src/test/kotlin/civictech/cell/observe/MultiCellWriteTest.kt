@@ -41,6 +41,7 @@ import org.junit.jupiter.api.assertThrows
 import java.nio.charset.StandardCharsets.UTF_8
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Exit criterion for the declared multi-cell write boundary (axcyk-D11). */
 class MultiCellWriteTest {
@@ -243,11 +244,12 @@ class MultiCellWriteTest {
         val host = ManagedHost(scheduler = SimulationController(seed = 99).scheduler())
         val context = ApplyContext(host)
         val spawnedRef = CellRef(UUID.randomUUID())
+        val built = AtomicInteger()
         val spec = GraphSpec(
             listOf(
                 SpawnStep(
                     handle = "spawned",
-                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    factory = CellFactory { ref -> built.incrementAndGet(); SetCell<String>(ref) },
                     identity = IdentityBinding.Exact(spawnedRef),
                 ),
                 WriteStep("update", listOf("spawned")),
@@ -257,8 +259,32 @@ class MultiCellWriteTest {
 
         assertThrows<IllegalArgumentException> { spec.apply(context) }
 
+        // The spawn+despawn pair leaves nothing live either way; the factory count is
+        // what shows the refusal came before the first host operation.
+        built.get() shouldBe 0
         context.live().handles shouldBe emptyMap()
         host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep before a later despawn through an aliased handle preserves the cell`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 101).scheduler())
+        val existing = SetCell<String>()
+        host.managementInlet.call.spawn(existing)
+        val context = ApplyContext(host)
+        context.adopt("x", existing.ref)
+        context.adopt("y", existing.ref)
+        val spec = GraphSpec(
+            listOf(
+                WriteStep("update", listOf("x")),
+                DespawnStep("y"),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("x" to existing.ref, "y" to existing.ref)
+        host.lookup(TypedRef<SetApi<String>>(existing.ref)).shouldNotBeNull()
     }
 
     @Test
