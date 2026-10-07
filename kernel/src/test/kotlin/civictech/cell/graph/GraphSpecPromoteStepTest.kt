@@ -6,6 +6,7 @@ import civictech.cell.Consumer
 import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.data.SetCell
+import civictech.cell.data.delta.SetDelta
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.EvolutionHandle
@@ -39,10 +40,12 @@ class GraphSpecPromoteStepTest {
 
     private companion object {
         const val INVARIANT_NAME = "candidate sum never regresses"
+        const val REPLICA_INVARIANT_NAME = "replicated candidate excludes poison"
 
         @Suppress("UNCHECKED_CAST")
         val consumerInt = Consumer::class.java as Class<Consumer<Int>>
         val cells = ConcurrentHashMap<CellRef, Cell>()
+        val replicaCandidates = ConcurrentHashMap<CellRef, SetCell<String>>()
 
         fun <C : Cell> remember(cell: C): C = cell.also { cells[it.ref] = it }
     }
@@ -170,6 +173,25 @@ class GraphSpecPromoteStepTest {
         override fun create(ref: CellRef): SetCell<String> = remember(SetCell(ref))
     }
 
+    private object ReplicatedCandidateFactory : TypedCellFactory<SetCell<String>> {
+        override fun create(ref: CellRef): SetCell<String> =
+            SetCell<String>(ref).also { replicaCandidates[ref] = it }
+    }
+
+    private object ReplicaInvariantFactory : TypedCellFactory<InvariantCell<SetDelta<String>, Unit>> {
+        override fun create(ref: CellRef): InvariantCell<SetDelta<String>, Unit> = remember(
+            InvariantCell(
+                name = REPLICA_INVARIANT_NAME,
+                initial = Unit,
+                fold = { _, _ -> },
+                check = { _, delta ->
+                    if (delta.adds.keys.any { it == "poison" }) "poison element observed" else null
+                },
+                ref = ref,
+            ),
+        )
+    }
+
     private data class DeclaredRefs(
         val relay: CellRef,
         val gate: CellRef,
@@ -195,6 +217,54 @@ class GraphSpecPromoteStepTest {
         )
         context = ApplyContext(host, journals = mapOf("j" to journal), topology = journal)
         return World(controller, host, context, journal)
+    }
+
+    private fun replicatedWorld(seed: Long, journal: Journal = InMemoryJournal()): World {
+        val controller = SimulationController(seed)
+        val registry = LocationRegistry()
+        lateinit var context: ApplyContext
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journalFor = { ref -> context.journalFor(ref) },
+        )
+        context = ApplyContext(
+            host = host,
+            replication = Replication(registry),
+            journals = mapOf("j" to journal),
+            topology = journal,
+        )
+        return World(controller, host, context, journal)
+    }
+
+    private data class ReplicatedEvolution(
+        val ref: CellRef,
+        val incumbent: SetCell<String>,
+        val handle: EvolutionHandle,
+    )
+
+    private fun replicatedEvolution(world: World): ReplicatedEvolution {
+        val ref = CellRef(UUID.randomUUID(), 0)
+        val (evolution, _) = graphOf(world.context) {
+            val incumbent = spawn(
+                "incumbent",
+                IdentityBinding.Exact(ref),
+                replicated = true,
+                journalId = "j",
+                factory = ReplicatedFactory,
+            )
+            val invariant = spawn("invariant", factory = ReplicaInvariantFactory)
+            val handle = promoteReplica(
+                handle = "rollout",
+                incumbent = incumbent,
+                candidateFactory = ReplicatedCandidateFactory,
+                policy = policy(listOf(REPLICA_INVARIANT_NAME)),
+                gates = listOf(invariant),
+            )
+            ReplicatedEvolution(ref, incumbent.cell, handle)
+        }
+        world.controller.runToIdle()
+        return evolution
     }
 
     private fun refs(): DeclaredRefs {
@@ -387,11 +457,8 @@ class GraphSpecPromoteStepTest {
     }
 
     @Test
-    fun `a replicated incumbent is refused by the single-instance path`() {
-        val controller = SimulationController(4)
-        val registry = LocationRegistry()
-        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
-        val context = ApplyContext(host, Replication(registry))
+    fun `a replicated incumbent with a handle candidate is refused at precheck`() {
+        val world = replicatedWorld(4)
         val logicalId = UUID.randomUUID()
         val spec = GraphSpec(
             listOf(
@@ -410,8 +477,70 @@ class GraphSpecPromoteStepTest {
             ),
         )
 
-        shouldThrow<Promotion.PromotionAborted> { spec.apply(context) }
-            .message!!.shouldContain("single-instance path")
+        shouldThrow<Promotion.PromotionAborted> { spec.apply(world.context) }
+            .message!!.shouldContain("replicated candidate factory")
+    }
+
+    @Test
+    fun `a declarative replicated candidate accepts and records one same-ref promotion`() {
+        val world = replicatedWorld(6)
+        val run = replicatedEvolution(world)
+
+        listOf("a", "b", "c").forEach { element ->
+            run.incumbent.inlet.call.add(element)
+            world.controller.runToIdle()
+        }
+
+        run.handle.advance() shouldBe EvolutionHandle.State.PROMOTED
+        world.controller.runToIdle()
+        replicaCandidates.getValue(run.ref).membership() shouldBe setOf("a", "b", "c")
+        val event = topologyEvents(world.journal).filterIsInstance<TopoEvent.Promote>().single()
+        event.incumbent shouldBe run.ref
+        event.candidate shouldBe run.ref
+        event.replicated shouldBe true
+        world.context.live().spawns.getValue(run.ref).factory.javaClass shouldBe
+            ReplicatedCandidateFactory.javaClass
+    }
+
+    @Test
+    fun `a declarative replicated candidate rejected by its gate leaves the incumbent live`() {
+        val world = replicatedWorld(7)
+        val run = replicatedEvolution(world)
+
+        listOf("a", "poison", "c").forEach { element ->
+            run.incumbent.inlet.call.add(element)
+            world.controller.runToIdle()
+        }
+
+        run.handle.advance() shouldBe EvolutionHandle.State.REJECTED
+        run.incumbent.inlet.call.add("d")
+        world.controller.runToIdle()
+        run.incumbent.membership() shouldBe setOf("a", "poison", "c", "d")
+        replicaCandidates.getValue(run.ref).membership() shouldBe setOf("a", "poison", "c")
+        topologyEvents(world.journal).filterIsInstance<TopoEvent.Promote>().size shouldBe 0
+        world.context.live().spawns.getValue(run.ref).factory.javaClass shouldBe ReplicatedFactory.javaClass
+    }
+
+    @Test
+    fun `a restart after declarative replicated acceptance restores the candidate`() {
+        val journal = InMemoryJournal()
+        val before = replicatedWorld(8, journal)
+        val run = replicatedEvolution(before)
+        listOf("a", "b", "c").forEach { element ->
+            run.incumbent.inlet.call.add(element)
+            before.controller.runToIdle()
+        }
+        run.handle.advance() shouldBe EvolutionHandle.State.PROMOTED
+        before.controller.runToIdle()
+
+        val recovered = replicatedWorld(9, journal)
+        val recovery = recovered.context.recover(journal)
+        recovered.controller.runToIdle()
+        recovery.awaitApplied(30_000)
+
+        replicaCandidates.getValue(run.ref).membership() shouldBe setOf("a", "b", "c")
+        recovered.context.live().spawns.getValue(run.ref).factory.javaClass shouldBe
+            ReplicatedCandidateFactory.javaClass
     }
 
     @Test
