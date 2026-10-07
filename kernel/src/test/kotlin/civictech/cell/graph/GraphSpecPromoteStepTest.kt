@@ -9,6 +9,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.Evolve
 import civictech.cell.evolve.EvolutionHandle
 import civictech.cell.evolve.ObservationWindow
 import civictech.cell.evolve.Promotion
@@ -19,7 +20,9 @@ import civictech.cell.host.JournalRecords
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkOptions
+import civictech.cell.link.PeerId
 import civictech.cell.membrane.TrafficLightCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -267,6 +270,47 @@ class GraphSpecPromoteStepTest {
         world.controller.runToIdle()
         return evolution
     }
+
+    private fun replicatedPromoteSpec(
+        ref: CellRef,
+        gate: String = "",
+        downstream: List<Pair<String, String>> = emptyList(),
+        promotionPolicy: PromotionPolicy = policy(emptyList()),
+        baseline: String? = null,
+        baselineGates: List<String> = emptyList(),
+    ) = GraphSpec(
+        buildList {
+            add(
+                SpawnStep(
+                    "incumbent",
+                    ReplicatedFactory,
+                    IdentityBinding.Exact(ref),
+                    replicated = true,
+                ),
+            )
+            buildSet {
+                gate.takeIf(String::isNotBlank)?.let(::add)
+                downstream.mapTo(this) { it.first }
+                baseline?.let(::add)
+                addAll(baselineGates)
+            }.forEach { handle -> add(SpawnStep(handle, EmptyFactory)) }
+            add(
+                PromoteStep(
+                    handle = "rollout",
+                    incumbent = "incumbent",
+                    candidate = "",
+                    gate = gate,
+                    outletName = "outlet",
+                    downstream = downstream,
+                    policy = promotionPolicy,
+                    gates = emptyList(),
+                    baseline = baseline,
+                    baselineGates = baselineGates,
+                    replicatedCandidateFactory = ReplicatedCandidateFactory,
+                ),
+            )
+        },
+    )
 
     private fun refs(): DeclaredRefs {
         val logicalId = UUID.randomUUID()
@@ -526,6 +570,90 @@ class GraphSpecPromoteStepTest {
 
         shouldThrow<Promotion.PromotionAborted> { spec.apply(world.context) }
             .message!!.shouldContain("no replicated candidate factory")
+    }
+
+    @Test
+    fun `a replicated promotion naming a single-instance gate is refused before candidate construction`() {
+        val world = replicatedWorld(12)
+        val ref = CellRef(UUID.randomUUID(), 0)
+
+        val refused = shouldThrow<Promotion.PromotionAborted> {
+            replicatedPromoteSpec(ref, gate = "single-instance-gate").apply(world.context)
+        }
+
+        refused.message!!.let {
+            it.shouldContain("PRECHECK")
+            it.shouldContain("'gate'")
+        }
+        replicaCandidates[ref] shouldBe null
+    }
+
+    @Test
+    fun `a replicated promotion naming single-instance downstream is refused before candidate construction`() {
+        val world = replicatedWorld(13)
+        val ref = CellRef(UUID.randomUUID(), 0)
+
+        val refused = shouldThrow<Promotion.PromotionAborted> {
+            replicatedPromoteSpec(ref, downstream = listOf("collector" to "inlet")).apply(world.context)
+        }
+
+        refused.message!!.let {
+            it.shouldContain("PRECHECK")
+            it.shouldContain("'downstream'")
+        }
+        replicaCandidates[ref] shouldBe null
+    }
+
+    @Test
+    fun `a replicated promotion naming a single-instance baseline is refused before candidate construction`() {
+        val world = replicatedWorld(14)
+        val ref = CellRef(UUID.randomUUID(), 0)
+
+        val refused = shouldThrow<Promotion.PromotionAborted> {
+            replicatedPromoteSpec(
+                ref,
+                promotionPolicy = policy(emptyList()).copy(baseline = true),
+                baseline = "single-instance-baseline",
+            ).apply(world.context)
+        }
+
+        refused.message!!.let {
+            it.shouldContain("PRECHECK")
+            it.shouldContain("'baseline'")
+        }
+        replicaCandidates[ref] shouldBe null
+    }
+
+    @Test
+    fun `a replicated promotion naming single-instance baseline gates is refused before candidate construction`() {
+        val world = replicatedWorld(15)
+        val ref = CellRef(UUID.randomUUID(), 0)
+
+        val refused = shouldThrow<Promotion.PromotionAborted> {
+            replicatedPromoteSpec(ref, baselineGates = listOf("baseline-gate")).apply(world.context)
+        }
+
+        refused.message!!.let {
+            it.shouldContain("PRECHECK")
+            it.shouldContain("'baselineGates'")
+        }
+        replicaCandidates[ref] shouldBe null
+    }
+
+    @Test
+    fun `a remote principal cannot construct a declarative replicated candidate`() {
+        val world = replicatedWorld(16)
+        val ref = CellRef(UUID.randomUUID(), 0)
+
+        val refused = CurrentPeer.with(PeerId("remote-declarative-promoter")) {
+            shouldThrow<Evolve.Refused> {
+                replicatedPromoteSpec(ref).apply(world.context)
+            }
+        }
+
+        refused.message!!.shouldContain("authority")
+        refused.message!!.shouldContain("remote principal")
+        replicaCandidates[ref] shouldBe null
     }
 
     @Test

@@ -481,6 +481,31 @@ class ApplyContext(
                 "replicated promotion requires one replicated candidate factory and no candidate handle",
             )
         }
+        if (step.gate.isNotBlank()) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'gate'",
+            )
+        }
+        if (step.downstream.isNotEmpty()) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'downstream'",
+            )
+        }
+        if (step.baseline != null) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'baseline'",
+            )
+        }
+        if (step.baselineGates.isNotEmpty()) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'baselineGates'",
+            )
+        }
+        checkEvolutionAuthority(::defaultEvolutionAuthorityRefusal)
         val gates = step.gates.map { handle ->
             handle to cells.getValue(evolutionRef(handle, "gate"))
         }
