@@ -772,6 +772,22 @@ open class ManagedHost(
     /** External fences/drains claimed atomically against [recoveryRecordLoops]. Guarded by [dataLock]. */
     private var externalBarriersInFlight = 0
 
+    /**
+     * Internal queue-drain observers deferred until recovery has restored every record and
+     * re-armed delivery of the frames staged behind its gate. Unlike [externalBarriersInFlight],
+     * these do not exclude recovery: their scheduler tasks re-check [recoveryRecordLoops] and
+     * return here instead of claiming that a gated frame has drained. Guarded by [dataLock].
+     */
+    private val recoveryAwareFences = ArrayDeque<CompletableFuture<Unit>>()
+
+    /**
+     * Times the recovery gate has been lowered to zero. A recovery-aware fence records it
+     * at submission and re-submits instead of completing when it changed: a fence task the
+     * scheduler dequeued under the gate may reach its check only after the lift, while the
+     * re-armed data tasks submitted under that same lock are still queued. Guarded by [dataLock].
+     */
+    private var recoveryGateLifts = 0L
+
     private fun requireRecoveryIdleLocked(operation: String) {
         check(recoveryRecordLoops == 0) {
             "$operation is unavailable while journal recovery is restoring records; " +
@@ -1640,22 +1656,37 @@ open class ManagedHost(
             enqueueAwaiting(0) { }
             return action()
         } finally {
-            val pending = synchronized(dataLock) {
+            var deferredFences = emptyList<CompletableFuture<Unit>>()
+            var rearmFailure: Throwable? = null
+            synchronized(dataLock) {
                 check(recoveryRecordLoops > 0) { "recovery record-loop gate underflow" }
                 recoveryRecordLoops--
                 if (recoveryRecordLoops == 0) {
-                    attentionScheduler.dataQueues.values.sumOf { it.size }
-                } else {
-                    0
+                    recoveryGateLifts++
+                    val pending = attentionScheduler.dataQueues.values.sumOf { it.size }
+                    deferredFences = recoveryAwareFences.toList()
+                    recoveryAwareFences.clear()
+                    try {
+                        // Submit reactivated data work before publishing the lifted gate.
+                        // A recovery-aware fence cannot then overtake a staged frame in the
+                        // caller/scheduler hand-off: data is priority 20, the fence MAX_VALUE.
+                        if (pending > 0) {
+                            if (dispatchBatch == 1) {
+                                repeat(pending) { enqueue(20) { dispatchOneWhenRecoveryReady() } }
+                            } else {
+                                armBatchDispatch()
+                            }
+                        }
+                    } catch (failure: Throwable) {
+                        rearmFailure = failure
+                    }
                 }
             }
-            if (pending > 0) {
-                if (dispatchBatch == 1) {
-                    repeat(pending) { enqueue(20) { dispatchOneWhenRecoveryReady() } }
-                } else {
-                    armBatchDispatch()
-                }
+            rearmFailure?.let { failure ->
+                deferredFences.forEach { it.completeExceptionally(failure) }
+                throw failure
             }
+            deferredFences.forEach { submitRecoveryAwareFence(it, throwOnFailure = false, liftsAtSubmit = null) }
         }
     }
 
@@ -1731,6 +1762,65 @@ open class ManagedHost(
             throw t
         }
         return Quiescence(future)
+    }
+
+    /**
+     * Kernel-internal queue fence for observation settlement that coexists with journal
+     * recovery. It never completes while a recovery record loop is active. A request made
+     * during recovery, or a previously submitted fence that reaches the scheduler after
+     * recovery raised its gate, is deferred and re-submitted after the last loop lowers the
+     * gate and re-arms every staged data frame.
+     *
+     * This is deliberately not the public [quiescence] contract: callers that drain, move,
+     * checkpoint around, or otherwise act on a host-wide empty-queue claim still need the
+     * two-sided external-barrier exclusion. The seam exists only for passive kernel
+     * observers whose one pending fence may safely wait across recovery.
+     */
+    internal fun recoveryAwareQuiescence(): Quiescence {
+        val future = CompletableFuture<Unit>()
+        val liftsAtSubmit = synchronized(dataLock) {
+            if (recoveryRecordLoops > 0) {
+                recoveryAwareFences.addLast(future)
+                null
+            } else {
+                recoveryGateLifts
+            }
+        }
+        if (liftsAtSubmit != null) submitRecoveryAwareFence(future, throwOnFailure = true, liftsAtSubmit)
+        return Quiescence(future)
+    }
+
+    /**
+     * Submit or re-submit one internal fence; its task must re-check the recovery gate.
+     * [liftsAtSubmit] is [recoveryGateLifts] as read under [dataLock] when the gate was
+     * known lowered, or null to read it now (a re-submission after the lift).
+     */
+    private fun submitRecoveryAwareFence(
+        future: CompletableFuture<Unit>,
+        throwOnFailure: Boolean,
+        liftsAtSubmit: Long?,
+    ) {
+        val lifts = liftsAtSubmit ?: synchronized(dataLock) { recoveryGateLifts }
+        try {
+            scheduler.submit(Int.MAX_VALUE) {
+                // Defer while the gate is raised; re-submit behind the re-armed data tasks
+                // when a lift happened since submission; complete only when neither did.
+                val outcome = synchronized(dataLock) {
+                    when {
+                        recoveryRecordLoops > 0 -> recoveryAwareFences.addLast(future).let { 0 }
+                        recoveryGateLifts != lifts -> 1
+                        else -> 2
+                    }
+                }
+                when (outcome) {
+                    1 -> submitRecoveryAwareFence(future, throwOnFailure = false, liftsAtSubmit = null)
+                    2 -> future.complete(Unit)
+                }
+            }
+        } catch (failure: Throwable) {
+            future.completeExceptionally(failure)
+            if (throwOnFailure) throw failure
+        }
     }
 
     /**
