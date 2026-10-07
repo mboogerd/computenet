@@ -12,6 +12,7 @@ import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.link
 import civictech.cell.observe.Observation
+import civictech.cell.observe.ObservationFrame
 import civictech.cell.observe.observation
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
@@ -271,7 +272,7 @@ class DemoApp(
             set("wanted", wantedCell.ref)
             if (sharedCell != null) set("shared", sharedCell.ref)
         }
-        observation.onChange { broadcast() }
+        observation.onChange { frame -> broadcast(frame) }
 
         // Per-user writer streams are opaque to the host topology walk. Keep
         // the replicated source's direct observation in its own root group by
@@ -407,14 +408,16 @@ class DemoApp(
     }
 
     // The observation's `{items+produce}`, `{votes}`, `{wanted}` (and optional
-    // `{shared}`) groups are each internally aligned. Its frame assembles the
-    // latest group publications and serializes `crossRoot`, making the F-27
-    // boundary visible instead of silently traversing it. `[22-LIVE-01]` is
-    // therefore preserved: independent groups never wait on one another.
-    private fun broadcast() = shell.broadcast { stateJson() }
+    // `{shared}`) groups are each internally aligned. Its delivered frame
+    // assembles the group publication that triggered this callback and
+    // serializes `crossRoot`, making the F-27 boundary visible instead of
+    // silently traversing it. `[22-LIVE-01]` is therefore preserved:
+    // independent groups never wait on one another.
+    private fun broadcast(frame: ObservationFrame) = shell.broadcast { stateJson(frame) }
 
-    private fun stateJson(): String {
-        val frame = observation.current()
+    private fun stateJson(): String = stateJson(observation.current())
+
+    private fun stateJson(frame: ObservationFrame): String {
 
         @Suppress("UNCHECKED_CAST")
         fun setOf(name: String): Set<String> = frame.views.getValue(name) as Set<String>
