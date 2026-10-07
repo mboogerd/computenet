@@ -36,17 +36,17 @@ import java.util.concurrent.CompletableFuture
  *   bounded [Interest.Ranges] admitted by this host's registry asynchronously
  *   materializes its keys. This path records membership after the budgeted
  *   spawn succeeds, inside that same management task. A host-admitted cell
- *   whose membership append then fails is retained as a volatile live member
- *   while the admission future reports the append failure: it is not
- *   recoverable after restart, but retries join it instead of spawning its
- *   deterministic ref twice. The adopted key rejoins the selected journal's
- *   topology fold, so its next checkpoint writes `FamilyKey` ahead of the
- *   member's checkpoint state; recovery from that checkpoint restores both
- *   membership and state. The remaining loss window is a crash before that
- *   checkpoint: frames journaled after the failed append still have no earlier
- *   `FamilyKey`, so recovery dead-letters them as targeting an unknown cell and
- *   cannot restore the adopted membership or their effects. A spawn refusal
- *   still owns neither an in-memory key nor a durable key record;
+ *   whose membership append then fails is retained as a live member while the
+ *   admission future reports the append failure, so retries join it instead of
+ *   spawning its deterministic ref twice. The failure path rejoins the adopted
+ *   key to the selected journal's topology fold and compacts that journal inside
+ *   the same management task. The compacted `FamilyKey` precedes checkpoint
+ *   state, so later journaled frames recover the member and their effects without
+ *   an explicit checkpoint. If that recovery compaction also fails (or the
+ *   process terminates during it), the member remains reachable in-process but
+ *   is not durable until a later checkpoint succeeds; a compaction failure is
+ *   attached to the reported append failure. A spawn refusal still owns neither
+ *   an in-memory key nor a durable key record;
  * - **checkpoint-safe membership** — the family contributes its recorded keys
  *   to each journal's topology fold, so compaction preserves membership.
  *
@@ -179,6 +179,18 @@ class KeyedCells<K : Any>(
                                     ) { journal -> rememberForCheckpoint(journal, key) } != null
                                 } catch (failure: Throwable) {
                                     forgetUnrecorded(key)
+                                    known.add(key)
+                                    host.topologyJournal(prepared.ref, prepared)?.let { journal ->
+                                        rememberForCheckpoint(journal, key)
+                                        try {
+                                            // afterSpawn already runs on the management band;
+                                            // the public checkpoint would self-submit and deadlock.
+                                            host.checkpointInManagementTask(journal)
+                                            recorded = true
+                                        } catch (checkpointFailure: Throwable) {
+                                            failure.addSuppressed(checkpointFailure)
+                                        }
+                                    }
                                     throw failure
                                 }
                             }
@@ -214,11 +226,10 @@ class KeyedCells<K : Any>(
                 if (failure == null) {
                     live[key] = prepared
                 } else if (recordAfterSpawn && hostAdmitted) {
-                    // Host admission cannot be rolled back here. Keep the cell as a
-                    // volatile family member so its deterministic ref stays reachable;
-                    // the append failure still completes the admission exceptionally.
-                    // Keep its key in the fold so the next checkpoint can put topology
-                    // ahead of the adopted cell's state and close this loss window.
+                    // Host admission cannot be rolled back here. The management callback
+                    // already attempted an in-band recovery checkpoint; keep the adopted
+                    // cell and its fold entry even when that compaction also failed, so a
+                    // later checkpoint can still make it durable.
                     known.add(key)
                     live[key] = prepared
                     host.topologyJournal(prepared.ref, prepared)?.let { rememberForCheckpoint(it, key) }
