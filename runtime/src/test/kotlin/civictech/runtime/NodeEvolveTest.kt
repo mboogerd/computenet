@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Propagate
 import civictech.cell.Stateful
+import civictech.cell.evolve.EvolutionAuthority
 import civictech.cell.evolve.EvolutionHandle
 import civictech.cell.evolve.Evolve
 import civictech.cell.evolve.ObservationWindow
@@ -198,6 +199,65 @@ class NodeEvolveTest {
         }
     }
 
+    @Test
+    @Timeout(60)
+    fun `remote authority refuses privileged node promotion before the swap`() {
+        singleCaptured.clear()
+        val logicalId = UUID.randomUUID()
+        val manifest = manifest("direct-authority")
+        Runtime.boot(manifest, "solo", baseSpec(logicalId)).use { node ->
+            gate(node).controlInlet.call.setGreen()
+            node.apply(directCandidateDelta(logicalId))
+            feed(node, 1)
+            node.mainHost.quiescence().await(10_000, "pre-refusal input")
+
+            val refusal = CurrentPeer.with(PeerId("mallory")) {
+                assertThrows(Evolve.Refused::class.java) {
+                    node.promote(
+                        gate = "gate",
+                        incumbent = "incumbent",
+                        candidate = "candidate",
+                        outletName = "outlet",
+                        downstream = listOf("collector" to "inlet"),
+                    )
+                }
+            }
+
+            assertTrue(refusal.message!!.contains("authority"), refusal.message)
+            assertTrue("incumbent" in node.refs, "the authority refusal retired the incumbent")
+            assertTrue("candidate" in node.refs, "the authority refusal removed the candidate")
+            feed(node, 2)
+            node.mainHost.quiescence().await(10_000, "incumbent after direct refusal")
+            assertEquals(listOf(1L, 3L), collector(node).received.toList())
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `node promotion consults an explicit runtime authority`() {
+        singleCaptured.clear()
+        val logicalId = UUID.randomUUID()
+        val manifest = manifest("custom-authority")
+        Runtime.boot(manifest, "solo", baseSpec(logicalId)).use { node ->
+            gate(node).controlInlet.call.setGreen()
+            node.apply(directCandidateDelta(logicalId))
+
+            val refusal = assertThrows(Evolve.Refused::class.java) {
+                node.promote(
+                    gate = "gate",
+                    incumbent = "incumbent",
+                    candidate = "candidate",
+                    outletName = "outlet",
+                    downstream = listOf("collector" to "inlet"),
+                    authority = EvolutionAuthority { "runtime policy refused the swap" },
+                )
+            }
+
+            assertTrue(refusal.message!!.contains("runtime policy refused the swap"), refusal.message)
+            assertTrue("incumbent" in node.refs, "the custom authority refusal retired the incumbent")
+        }
+    }
+
     private fun manifest(name: String): Manifest = Manifest(
         mapOf(
             "solo" to NodeSpec(
@@ -236,6 +296,19 @@ class NodeEvolveTest {
             SpawnStep("gate-inv", InvariantFactory),
             ConnectStep("candidate", "outlet", "gate-inv", "inlet", staged),
             promoteStep(),
+        ),
+    )
+
+    private fun directCandidateDelta(logicalId: UUID): GraphSpec = GraphSpec(
+        listOf(
+            SpawnStep(
+                "candidate",
+                SingleFactory("candidate"),
+                identity = IdentityBinding.NewInstanceOf(logicalId),
+                journalId = "main",
+                shadow = true,
+            ),
+            ConnectStep("gate", "dataOutlet", "candidate", "inlet", staged),
         ),
     )
 

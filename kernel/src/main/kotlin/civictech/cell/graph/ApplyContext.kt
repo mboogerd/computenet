@@ -5,6 +5,7 @@ import civictech.cell.Cell
 import civictech.cell.data.Replicable
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Evolve
+import civictech.cell.evolve.EvolutionAuthority
 import civictech.cell.evolve.EvolutionHandle
 import civictech.cell.evolve.EvolutionHooks
 import civictech.cell.evolve.Promotion
@@ -21,6 +22,7 @@ import civictech.cell.host.JournalRecords
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -251,7 +253,31 @@ class ApplyContext(
         outletName: String,
         downstream: List<Pair<CellRef, String>>,
         judge: PromotionJudge? = null,
+    ) = promote(
+        gate = gate,
+        incumbent = incumbent,
+        candidate = candidate,
+        outletName = outletName,
+        downstream = downstream,
+        authority = EvolutionAuthority.LocalTrustedOnly,
+        judge = judge,
+    )
+
+    /**
+     * Privileged direct promotion with an explicit per-runtime authority policy. This path keeps
+     * the synchronous, already-live-cell contract used by journal recovery; normal declarative
+     * shadow/judge orchestration enters through [evolve].
+     */
+    fun promote(
+        gate: CellRef,
+        incumbent: CellRef,
+        candidate: CellRef,
+        outletName: String,
+        downstream: List<Pair<CellRef, String>>,
+        authority: EvolutionAuthority,
+        judge: PromotionJudge? = null,
     ) {
+        checkEvolutionAuthority(authority)
         val prepared = prepareSinglePromotion(gate, incumbent, candidate, outletName, downstream)
 
         Promotion.promote(
@@ -495,7 +521,23 @@ class ApplyContext(
         candidateFactory: CellFactory,
         outletName: String = "outlet",
         judge: PromotionJudge? = null,
+    ) = promoteReplica(
+        ref = ref,
+        candidateFactory = candidateFactory,
+        authority = EvolutionAuthority.LocalTrustedOnly,
+        outletName = outletName,
+        judge = judge,
+    )
+
+    /** Rolling-replica counterpart to the privileged direct [promote] path. */
+    fun promoteReplica(
+        ref: CellRef,
+        candidateFactory: CellFactory,
+        authority: EvolutionAuthority,
+        outletName: String = "outlet",
+        judge: PromotionJudge? = null,
     ) {
+        checkEvolutionAuthority(authority)
         val before = live()
         val service = replication
             ?: throw Promotion.PromotionAborted("PRECHECK", "replicated promotion requires a Replication service")
@@ -574,6 +616,12 @@ class ApplyContext(
             journal = promotionJournal,
         )
         cells[ref] = candidateCell
+    }
+
+    private fun checkEvolutionAuthority(authority: EvolutionAuthority) {
+        authority.refuse(currentPrincipal())?.let { reason ->
+            throw Evolve.Refused("authority: $reason")
+        }
     }
 
     /**

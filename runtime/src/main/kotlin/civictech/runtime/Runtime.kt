@@ -3,6 +3,7 @@ package civictech.runtime
 import civictech.cell.BudgetLedger
 import civictech.cell.CellRef
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.EvolutionAuthority
 import civictech.cell.evolve.PromotionJudge
 import civictech.cell.graph.AppliedGraph
 import civictech.cell.graph.ApplyContext
@@ -514,6 +515,25 @@ object Runtime {
             outletName: String,
             downstream: List<Pair<String, String>>,
             judge: PromotionJudge? = null,
+        ) = promote(
+            gate = gate,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            downstream = downstream,
+            authority = EvolutionAuthority.LocalTrustedOnly,
+            judge = judge,
+        )
+
+        /** Direct promotion under an explicit per-runtime authority policy. */
+        fun promote(
+            gate: String,
+            incumbent: String,
+            candidate: String,
+            outletName: String,
+            downstream: List<Pair<String, String>>,
+            authority: EvolutionAuthority,
+            judge: PromotionJudge? = null,
         ) {
             applyContext.promote(
                 gate = handleRef(gate),
@@ -521,6 +541,7 @@ object Runtime {
                 candidate = handleRef(candidate),
                 outletName = outletName,
                 downstream = downstream.map { (handle, inlet) -> handleRef(handle) to inlet },
+                authority = authority,
                 judge = judge,
             )
         }
@@ -535,8 +556,29 @@ object Runtime {
             candidate: CellFactory,
             outletName: String = "outlet",
             judge: PromotionJudge? = null,
+        ) = promoteReplica(
+            handle = handle,
+            candidate = candidate,
+            authority = EvolutionAuthority.LocalTrustedOnly,
+            outletName = outletName,
+            judge = judge,
+        )
+
+        /** Direct rolling promotion under an explicit per-runtime authority policy. */
+        fun promoteReplica(
+            handle: String,
+            candidate: CellFactory,
+            authority: EvolutionAuthority,
+            outletName: String = "outlet",
+            judge: PromotionJudge? = null,
         ) {
-            applyContext.promoteReplica(handleRef(handle), candidate, outletName, judge)
+            applyContext.promoteReplica(
+                ref = handleRef(handle),
+                candidateFactory = candidate,
+                authority = authority,
+                outletName = outletName,
+                judge = judge,
+            )
         }
 
         private fun handleRef(handle: String): CellRef =
