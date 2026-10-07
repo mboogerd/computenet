@@ -7,8 +7,6 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.membrane.Principal
 import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.membrane.currentPrincipal
-import civictech.cell.data.Replicable
-import civictech.cell.replication.Replication
 import civictech.cell.port.CycleHead
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -262,15 +260,22 @@ object Evolve {
      * rebind (state handoff, hosting, gossip re-link). The shadow starts empty and judges the
      * deltas observed from the tap onward; COMMIT restores it from the incumbent's snapshot.
      *
+     * **Limit of this judgment.** Because the shadow is fed the incumbent's *effective deltas*
+     * on its [Replicable.deltaInlet], it exercises only the candidate's merge/re-emit path:
+     * local write ops (the cell's own op inlet) are never delivered to it, so a candidate
+     * that changes how local ops are interpreted is not judged on that change. The swap also
+     * passes only [EvolutionHooks.journal]; the shadow tap bypasses [EvolutionHooks.tapShadow],
+     * and no declarative `PromoteStep` lowers onto this arm yet.
+     *
      * A differential baseline is not offered here: a twin would need a third distinct
      * replica object and tap with no spec-settled meaning. The authority gate is checked at
      * start and before every [EvolutionHandle.advance], as for [run].
      */
     fun runReplica(
         host: ManagedHost,
-        replication: Replication,
-        incumbent: Replicable<*>,
-        candidate: Replicable<*>,
+        replication: civictech.cell.replication.Replication,
+        incumbent: civictech.cell.data.Replicable<*>,
+        candidate: civictech.cell.data.Replicable<*>,
         policy: PromotionPolicy,
         gates: List<InvariantCell<*, *>>,
         outletName: String = "outlet",
