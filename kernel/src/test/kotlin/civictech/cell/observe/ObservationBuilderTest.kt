@@ -145,6 +145,27 @@ class ObservationBuilderTest {
     }
 
     @Test
+    fun `unmanaged feed declared on a cell outside every view's ancestry rejects before spawning`() {
+        val registry = LocationRegistry()
+        val host = ManagedHost(registry = registry)
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val stray = UnionSetCell<Int>()
+        listOf(source, stray).forEach(management::spawn)
+
+        val refsBefore = registry.localRefs().size
+        val error = assertThrows<IllegalArgumentException> {
+            host.observation {
+                unmanagedFeed(stray.ref, PortRef.generate())
+                set("source", source.ref)
+            }
+        }
+        error.message shouldBe
+            "observation: unmanaged feed targets must be a registered view or its managed ancestor: [${stray.ref}]"
+        registry.localRefs().size shouldBe refsBefore
+    }
+
+    @Test
     fun `equal root views share one aligned group across seeded schedules`() {
         val waves = 20
         for (seed in 0L until 50L) {
