@@ -33,18 +33,24 @@ import civictech.dialogue.mint.StanceAggregate
  * quiesced; between reconciles the applier is inert no matter what the
  * pipeline emits.
  *
- * That is a correctness property, not an ergonomic one. `computenet-23bf`
- * measured that the relation leg's semijoins (stages 5d/5e) ship at the
- * ungated `emitOnFrontier` default because gating wedges this graph, so
- * admitting the utterance that mints a relation's last endpoint can flicker
- * that relation into and *out of* the canonical fold **within one wave**.
- * Reacting to the delta stream would turn that transient into a real
+ * That is a correctness property, not an ergonomic one. Reacting to the
+ * delta stream would turn any within-wave transient upstream into a real
  * create-then-retract against the agora graph — and since this applier is the
  * sole writer, there is nobody to correct it. Pulling a settled snapshot
- * instead makes the flicker two folds into a `MapView` and zero agora ops:
+ * instead makes such a transient mere folds into a `MapView` and zero agora ops:
  * unobservable by construction. **Do not add an `onChange` subscription to
  * the write path**; it would silently reintroduce the defect the design
  * exists to exclude.
+ *
+ * The measured instance was the relation leg's semijoins (stages 5d/5e):
+ * ungated, admitting the utterance that mints a relation's last endpoint
+ * could flicker that relation into and *out of* the canonical fold **within
+ * one wave**. computenet-13dby gated both (`emitOnFrontier = true`), and
+ * `RelationMintTest` asserts the gated fold publishes no such transition, so
+ * this boundary no longer compensates for 5d/5e. It still guards every other
+ * fold: `projectedStances` has an ungated `JoinSetCell` upstream, and the
+ * write path must not depend on every upstream operator being gated
+ * (doc/demo-findings.md F-15).
  *
  * ### Never spawning ClaimCell/EdgeCell ([AGO1-APPLY-03], DESIGN D3)
  *
