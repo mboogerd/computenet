@@ -66,6 +66,7 @@ class NodeEvolveTest {
             awaitUntil("the collector sees the evolution window", 10_000) {
                 collector(node).received.size >= 3
             }
+            node.mainHost.quiescence().await(10_000, "settle the evolution window")
             assertEquals(EvolutionHandle.State.PROMOTED, handle.advance())
             assertFalse("incumbent" in node.refs, "the incumbent handle survived promotion")
             assertEquals(applied.refs.getValue("candidate"), node.refs.getValue("candidate"))
@@ -96,6 +97,7 @@ class NodeEvolveTest {
             awaitUntil("the collector sees the pre-close evolution window", 10_000) {
                 collector(first!!).received.size >= 3
             }
+            first.mainHost.quiescence().await(10_000, "settle the pre-close evolution window")
             assertEquals(EvolutionHandle.State.PROMOTED, handle.advance())
             feed(first, 4)
             first.mainHost.quiescence().await(10_000, "pre-close input")

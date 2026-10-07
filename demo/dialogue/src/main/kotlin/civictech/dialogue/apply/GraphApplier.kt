@@ -162,9 +162,6 @@ class GraphApplier(
     }
 
     private val relationsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
-        // canonicalRelations has an ungated SemiJoinCell upstream. Admission
-        // must therefore be explicit at this app edge (computenet-axcyk.5).
-        unchecked("relations")
         map("relations", refs.canonicalRelations.ref)
     }
 
