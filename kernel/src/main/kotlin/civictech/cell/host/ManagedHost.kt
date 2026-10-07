@@ -2305,6 +2305,43 @@ open class ManagedHost(
     private lateinit var internalApi: HostManagementApi
 
     /**
+     * Add source-side-only Consume links to the ordinary target-side ancestry.
+     *
+     * `streamTo`'s routed/bypass branch deliberately has no [Link.toPort], so
+     * the ordinary inbound walk cannot encounter it. It does retain the link on
+     * the producer outlet, however. When its destination is the stable ref of a
+     * hosted port, preserve the producer ref as opaque ancestry: callers can
+     * account for the feed without treating it as admitted, traversable
+     * topology. Anonymous destinations remain unknowable here and must be
+     * declared by the observation that relies on them.
+     */
+    private fun upstreamConsumeAncestorsIncludingBypasses(ref: CellRef): UpstreamAncestry {
+        val ancestry = civictech.cell.host.upstreamConsumeAncestors(cells, ref)
+        if (ancestry.self == null) return ancestry
+
+        val reachable = linkedSetOf(ref).apply { addAll(ancestry.local.keys) }
+        val reachablePorts = reachable.flatMapTo(linkedSetOf()) { cellRef ->
+            val cell = cells[cellRef] ?: return@flatMapTo emptyList()
+            val ports = PortRegistry.of(cell)
+            ports.names().mapNotNull(ports::get)
+        }.mapTo(linkedSetOf()) { it.ref }
+        val bypassRoots = linkedSetOf<PortRef>()
+        cells.values.forEach { cell ->
+            val ports = PortRegistry.of(cell)
+            ports.names().forEach { name ->
+                val linked = ports[name] as? Linked ?: return@forEach
+                linked.linking.links.forEach { link ->
+                    if (link.role == LinkRole.Consume && link.toPort == null && link.to in reachablePorts) {
+                        bypassRoots += link.from
+                    }
+                }
+            }
+        }
+        if (bypassRoots.isEmpty()) return ancestry
+        return UpstreamAncestry(ancestry.self, ancestry.local, ancestry.opaque + bypassRoots)
+    }
+
+    /**
      * Spec 33's drain protocol (`33 §The drain protocol` steps 1–3) applied at
      * **cell** granularity, then despawn — which is what spec 42 defines an
      * eviction to be: *"intake closes (spec 33's drain, applied at cell instead
@@ -2563,7 +2600,7 @@ open class ManagedHost(
             }
 
             override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
-                civictech.cell.host.upstreamConsumeAncestors(cells, ref)
+                upstreamConsumeAncestorsIncludingBypasses(ref)
 
             override fun declareWrite(name: String, cells: Set<CellRef>): DeclaredWrite {
                 val declaredCells = cells.toSet()
