@@ -209,19 +209,34 @@ sealed interface Admission {
  * Retained-pair and principal-transfer state for one logical replica.
  *
  * [admit] is a pure predicate: it never records a counter and never changes
- * the transfer chain. The caller must invoke [apply] only after it has
- * delivered the admitted payload. Replay means exact retained
- * `(author, counter)` membership, not a high-water comparison; gossip may
- * legitimately deliver counter 7 before counter 6.
+ * the transfer chain. The caller must invoke [apply] only for an admitted
+ * payload. Replay means exact retained `(author, counter)` membership, not a
+ * high-water comparison; gossip may legitimately deliver counter 7 before
+ * counter 6.
+ *
+ * Ownership cannot be transferred back to a former principal. Per-author
+ * counters can order that author's writes around its transfer-out, but after
+ * re-acquisition they cannot distinguish writes made during the intervening
+ * owner's tenure from writes made after ownership returned. Supporting that
+ * shape therefore needs an authority epoch in the signed envelope; without
+ * one it would make admission order-dependent. Competing transfers by one
+ * author are instead resolved by their counter, so a lower-counter transfer
+ * delivered late deterministically supersedes a higher-counter one.
+ *
+ * Retention is deliberately unbounded and in-memory. Compaction requires an
+ * author-signed folded checkpoint (a relay cannot mint one), and restart does
+ * not snapshot this state; a restarted adapter rebuilds it from peer catch-up.
  */
 class AuthorityState(private val authority: WriteAuthority) {
     private data class Retained(val author: PeerId, val counter: Long)
     private data class Transfer(val from: PeerId, val atCounter: Long, val to: PeerId)
 
-    private val retained = mutableSetOf<Retained>()
+    private val retained = linkedMapOf<Retained, SignedWrite>()
     private val transfers = mutableListOf<Transfer>()
-    private var currentPrincipal: PeerId? = (authority as? WriteAuthority.Principal)?.id
+    private val initialPrincipal: PeerId? = (authority as? WriteAuthority.Principal)?.id
+    private var currentPrincipal: PeerId? = initialPrincipal
 
+    @Synchronized
     fun admit(write: SignedWrite, verifier: SignatureVerifier): Admission {
         val retainedKey = Retained(write.author, write.counter)
         if (retainedKey in retained) {
@@ -262,19 +277,41 @@ class AuthorityState(private val authority: WriteAuthority) {
         }
     }
 
-    /** Record a delivered admission and extend a principal transfer chain. */
+    /** Record an admission and recompute the order-independent principal chain. */
+    @Synchronized
     fun apply(write: SignedWrite, payload: Any?) {
-        if (!retained.add(Retained(write.author, write.counter))) return
+        val key = Retained(write.author, write.counter)
+        if (retained.putIfAbsent(key, write) != null) return
         if (authority is WriteAuthority.Principal && payload is TransferAuthority) {
             transfers += Transfer(write.author, write.counter, payload.newPrincipal)
-            currentPrincipal = payload.newPrincipal
+            currentPrincipal = canonicalTransfers().lastOrNull()?.to ?: initialPrincipal
+        }
+    }
+
+    /** The author-signed log carried in a late-join catch-up batch. */
+    @Synchronized
+    fun retained(): List<SignedWrite> = retained.values.toList()
+
+    /** Pure local-author check used before a cell mutates and again before signing. */
+    @Synchronized
+    fun authorizesLocal(peerId: PeerId, payloadOrElement: Any?): Boolean = when (authority) {
+        WriteAuthority.Open -> true
+        is WriteAuthority.Principal ->
+            peerId == currentPrincipal &&
+                (payloadOrElement !is TransferAuthority || transferTargetAllowed(peerId, Long.MAX_VALUE, payloadOrElement))
+        is WriteAuthority.PerElementOwner -> {
+            if (payloadOrElement is TransferAuthority) false
+            else touchedElements(payloadOrElement)?.all { authority.ownerOf.ownerOf(it) == peerId }
+                ?: (authority.ownerOf.ownerOf(payloadOrElement) == peerId)
         }
     }
 
     private fun admitPrincipal(write: SignedWrite, payload: Any?): Admission {
         val current = currentPrincipal
-        val retiredAt = transfers.lastOrNull { it.from == write.author }?.atCounter
-        val authorized = write.author == current || (retiredAt != null && write.counter < retiredAt)
+        val retiredAt = canonicalTransfers().firstOrNull { it.from == write.author }?.atCounter
+        val authorAuthorized = write.author == current || (retiredAt != null && write.counter < retiredAt)
+        val authorized = authorAuthorized &&
+            (payload !is TransferAuthority || transferTargetAllowed(write.author, write.counter, payload))
         return if (authorized) {
             Admission.Admitted(payload)
         } else {
@@ -295,15 +332,12 @@ class AuthorityState(private val authority: WriteAuthority) {
             )
         }
 
-        val touched: Set<Any?> = when (payload) {
-            is SetDelta<*> -> LinkedHashSet<Any?>(payload.adds.keys).also { it.addAll(payload.dels.keys) }
-            is TaggedMapDelta<*, *> -> LinkedHashSet<Any?>(payload.puts.keys).also { it.addAll(payload.dels.keys) }
-            else -> return Admission.Denied(
+        val touched = touchedElements(payload)
+            ?: return Admission.Denied(
                 DenialReason.UNSIGNED,
                 write.author,
                 "per-element authority cannot inspect payload type ${payload?.javaClass?.name ?: "null"}",
             )
-        }
 
         touched.forEach { element ->
             if (ownerOf.ownerOf(element) != write.author) {
@@ -315,5 +349,45 @@ class AuthorityState(private val authority: WriteAuthority) {
             }
         }
         return Admission.Admitted(payload)
+    }
+
+    private fun touchedElements(payload: Any?): Set<Any?>? = when (payload) {
+        is SetDelta<*> -> LinkedHashSet<Any?>(payload.adds.keys).also { it.addAll(payload.dels.keys) }
+        is TaggedMapDelta<*, *> -> LinkedHashSet<Any?>(payload.puts.keys).also { it.addAll(payload.dels.keys) }
+        else -> null
+    }
+
+    /** The canonical chain chooses each principal's lowest not-yet-used transfer counter. */
+    private fun canonicalTransfers(): List<Transfer> {
+        var principal = initialPrincipal ?: return emptyList()
+        val counterFloor = mutableMapOf<PeerId, Long>()
+        val selected = mutableListOf<Transfer>()
+        val used = mutableSetOf<Transfer>()
+        while (true) {
+            val floor = counterFloor[principal] ?: Long.MIN_VALUE
+            val next = transfers.asSequence()
+                .filter { it !in used && it.from == principal && it.atCounter > floor }
+                .minWithOrNull(compareBy<Transfer>({ it.atCounter }, { it.to.name }))
+                ?: break
+            used += next
+            selected += next
+            counterFloor[principal] = next.atCounter
+            principal = next.to
+        }
+        return selected
+    }
+
+    private fun transferTargetAllowed(author: PeerId, counter: Long, transfer: TransferAuthority): Boolean {
+        val chain = canonicalTransfers()
+        val principals = buildSet {
+            initialPrincipal?.let(::add)
+            chain.forEach { add(it.to) }
+        }
+        if (transfer.newPrincipal !in principals) return true
+
+        // A late, lower-counter copy of the same edge corrects the canonical
+        // transfer point; it is not ownership re-acquisition.
+        val existing = chain.firstOrNull { it.from == author }
+        return existing != null && existing.to == transfer.newPrincipal && counter < existing.atCounter
     }
 }
