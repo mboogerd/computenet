@@ -3813,7 +3813,7 @@ Filed 2026-09-27 by `computenet-t4od7.9` (feature `computenet-t4od7` = KE4.7,
 epic `computenet-lxo` = KE4), over `feature/computenet-t4od7` at `15fd3e46`.
 Every other `[24-WL-nn]` id reads `covered` in `doc/spec/CONCORDANCE.md`
 (the `24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
-`[24-WL-11]`). `24-WL-04` now reads covered (only its structural residual stays disputed below); the other ids below stay `gap` rows, and the fifth entry
+`[24-WL-11]`). `24-WL-04` now reads covered (only its structural residual stays disputed below), and so does `24-WL-09` (covered by the narrower implemented rule; its general `[KE4-30]` residual is disputed below); the other ids below stay `gap` rows, and the last entry
 records a scenario that was designed and deliberately not authored. Kernel
 test names below were checked with `git grep -n` at that commit.
 
@@ -3842,6 +3842,35 @@ test names below were checked with `git grep -n` at that commit.
   absorb-acked so a downstream glitch-free join settles it`.
 - **Revisit trigger**: a check that can read frontier or completeness-set
   membership.
+
+## `24-WL-09` (residual) — `[KE4-30]`'s general safety condition has no clean formulation; the implemented rule is narrower (`proof-gap`)
+
+- **Requirement**: `[24-WL-09]` (`20-dataflow-semantics/24-data-cells.md`
+  §Lateness and waterlines): IF evicting a piece of state would leave a
+  subsequently admissible del unable to retract it, THEN the cell SHALL NOT
+  evict that state; the eviction units of `[24-WL-06]` together with the
+  liveness del guard `[24-WL-08]` SHALL be the implemented form of this
+  condition. The general condition it narrows is `[KE4-30]` of epic
+  `computenet-lxo`: evict only what no admissible del can reference. The
+  epic's acceptance allows closing with a narrower implemented rule only
+  alongside this entry.
+- **Covered half.** The implemented rule: `24-WL-DEL-01` (group-by: a del for an
+  evicted window's element is a no-op) and `24-WL-JOIN-01` (join family: a del
+  for an evicted row is a no-op and no pair exits twice), both `covered` for
+  `24-WL-09` in `doc/spec/CONCORDANCE.md`. Kernel pins: `GroupByEvictionTest`
+  `B4 - a del in flight for an evicted element is a no-op, never a negative
+  count`, and the `B5 - ...` tests of `JoinFamilyEvictionTest`,
+  `SemiJoinEvictionTest` and `IntersectEvictionTest`.
+- **Missing capability (the half that stays disputed)**: the general condition,
+  that no admissible del can reference any evicted state, has no clean
+  formulation for arbitrary state — the join family's minted pairs in
+  particular, which `[24-WL-09]` itself says are never an eviction unit.
+  No scenario or check can state "for every state shape" the way it can for the
+  two eviction units, so the property is checked per unit, not in general. Any
+  state shape outside the `[24-WL-06]` eviction units is not evicted rather
+  than evicted under a broadened rule.
+- **Revisit trigger**: a new state shape that wants eviction and does not fit
+  the `[24-WL-06]` units.
 
 ## `24-WL-15` — `retire(sourceId)` is a management verb with no script step (`schema-gap`)
 
