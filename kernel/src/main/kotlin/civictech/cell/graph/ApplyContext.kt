@@ -18,6 +18,7 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.Recovery
 import civictech.cell.host.JournalRecords
+import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
@@ -251,7 +252,31 @@ class ApplyContext(
         outletName: String,
         downstream: List<Pair<CellRef, String>>,
         judge: PromotionJudge? = null,
+    ) = promote(
+        gate = gate,
+        incumbent = incumbent,
+        candidate = candidate,
+        outletName = outletName,
+        downstream = downstream,
+        authorityRefusal = ::defaultEvolutionAuthorityRefusal,
+        judge = judge,
+    )
+
+    /**
+     * Privileged direct promotion with an explicit per-runtime authority policy. This path keeps
+     * the synchronous, already-live-cell contract used by journal recovery; normal declarative
+     * shadow/judge orchestration enters through [evolve].
+     */
+    fun promote(
+        gate: CellRef,
+        incumbent: CellRef,
+        candidate: CellRef,
+        outletName: String,
+        downstream: List<Pair<CellRef, String>>,
+        authorityRefusal: () -> String?,
+        judge: PromotionJudge? = null,
     ) {
+        checkEvolutionAuthority(authorityRefusal)
         val prepared = prepareSinglePromotion(gate, incumbent, candidate, outletName, downstream)
 
         Promotion.promote(
@@ -495,7 +520,23 @@ class ApplyContext(
         candidateFactory: CellFactory,
         outletName: String = "outlet",
         judge: PromotionJudge? = null,
+    ) = promoteReplica(
+        ref = ref,
+        candidateFactory = candidateFactory,
+        authorityRefusal = ::defaultEvolutionAuthorityRefusal,
+        outletName = outletName,
+        judge = judge,
+    )
+
+    /** Rolling-replica counterpart to the privileged direct [promote] path. */
+    fun promoteReplica(
+        ref: CellRef,
+        candidateFactory: CellFactory,
+        authorityRefusal: () -> String?,
+        outletName: String = "outlet",
+        judge: PromotionJudge? = null,
     ) {
+        checkEvolutionAuthority(authorityRefusal)
         val before = live()
         val service = replication
             ?: throw Promotion.PromotionAborted("PRECHECK", "replicated promotion requires a Replication service")
@@ -575,6 +616,16 @@ class ApplyContext(
         )
         cells[ref] = candidateCell
     }
+
+    private fun checkEvolutionAuthority(authorityRefusal: () -> String?) {
+        authorityRefusal()?.let { reason ->
+            throw Evolve.Refused("authority: $reason")
+        }
+    }
+
+    /** Mirrors [civictech.cell.evolve.EvolutionAuthority.LocalTrustedOnly] without crossing layers. */
+    private fun defaultEvolutionAuthorityRefusal(): String? =
+        CurrentPeer.stamp()?.let { "remote principal ${it.id} may not trigger evolution" }
 
     /**
      * Replay applies an uncompacted completed swap directly; a compacted fold already contains
