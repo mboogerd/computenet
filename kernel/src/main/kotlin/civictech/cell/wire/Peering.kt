@@ -1,7 +1,11 @@
 package civictech.cell.wire
 
+import civictech.cell.BoundaryDenialAccounting
+import civictech.cell.BoundaryDenials
+import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -72,6 +76,14 @@ interface RegistryAnnounce {
  * rather than race them. That gate costs one uncontended monitor per
  * announcement — again on the announcement path only, never on the data path.
  *
+ * It is also the ownership admission boundary (computenet-zlm2).
+ * [RegistryAnnounce.published] enters the registry through
+ * [LocationRegistry.publishFromPeer], which keeps
+ * the first live peer attribution (or an actively hosted local cell) and lets
+ * only that same peer refresh its sink. A collision is reported through this
+ * cell's typed `"announcement-admission"` denial sink, naming [peer]; it never
+ * throws and therefore never becomes a supervision fault.
+ *
  * "Per connection" means per connection *instance*, on every path: a socket
  * transport mints a mirror per socket open rather than per session object
  * (computenet-dqy.14), and [Peering.Loopback.heal] mints a fresh pair rather
@@ -87,7 +99,15 @@ class RegistryMirrorCell(
     private val toPeer: InvocationSink,
     initialPeer: PeerId? = null,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
+) : Cell, BoundaryDenialAccounting {
+
+    /**
+     * Ownership collisions are announcement-admission refusals, distinct from
+     * signature/replay verification at bridge ingress but exposed under the
+     * same boundary name for operators (computenet-zlm2).
+     */
+    override val boundaryDenials: BoundaryDenials = BoundaryDenials()
+    private val announcementSink = boundaryDenials.sinkFor("announcement-admission")
 
     /**
      * The peer whose announcements this mirror serves; null = anonymous
@@ -162,12 +182,37 @@ class RegistryMirrorCell(
         refused.incrementAndGet()
     }
 
+    /** Account a peer's attempt to claim a ref this registry already binds elsewhere. */
+    private fun refuseCollision(
+        ref: CellRef,
+        refusal: LocationRegistry.RemotePublishRefusal,
+    ) {
+        val incumbent = when (val location = refusal.incumbent) {
+            is LocationRegistry.Local -> "a cell actively hosted on this side"
+            is LocationRegistry.Remote -> "peer ${location.peer ?: "<anonymous>"}"
+        }
+        announcementSink.deny(
+            seam = BoundarySeam.ADMISSION,
+            reason = DenialReason.NOT_ADMITTED,
+            principal = peer,
+            subject = "RegistryAnnounce.published",
+            detail = "announcement from ${peer ?: "<anonymous>"} for $ref refused: " +
+                "the ref is already bound to $incumbent",
+            deniedArgs = emptyList(),
+        )
+    }
+
     val inlet = registerPort("inlet", FanInlet.create<RegistryAnnounce>())
 
     init {
         inlet.serve(object : RegistryAnnounce {
             override fun published(ref: CellRef) = synchronized(gate) {
-                if (attached) registry.publish(ref, toPeer, peer) else refuse()
+                if (attached) {
+                    registry.publishFromPeer(ref, toPeer, peer)?.let { refuseCollision(ref, it) }
+                } else {
+                    refuse()
+                }
+                Unit
             }
 
             override fun linked(link: civictech.cell.host.TopologyLink) = synchronized(gate) {

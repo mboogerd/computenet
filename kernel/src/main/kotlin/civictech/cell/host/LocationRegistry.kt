@@ -71,6 +71,13 @@ class LocationRegistry {
      */
     data class Remote(val sink: InvocationSink, val peer: PeerId? = null) : Location
 
+    /**
+     * Why a peer-originated remote publication was refused. The incumbent is
+     * captured under the same per-ref lock that guards installation, so the
+     * caller can account the refusal without a racy second registry read.
+     */
+    internal data class RemotePublishRefusal(val incumbent: Location)
+
     private val locations = ConcurrentHashMap<CellRef, Location>()
     private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
 
@@ -103,12 +110,12 @@ class LocationRegistry {
     fun retiredRefs(): Set<CellRef> = tombstones.toSet()
 
     /**
-     * How many times [install] has replaced this registry's own [Local]
-     * binding for a ref with a peer-announced [Remote] one (computenet-rfbt),
+     * How many times the low-level [install] path has replaced this registry's
+     * own [Local] binding for a ref with a [Remote] one (computenet-rfbt),
      * following the `RegistryMirrorCell.refusedAnnouncements` precedent
      * (computenet-dqy.40) — a counter plus one diagnostic line, nothing reads
-     * it to decide anything, and the overwrite itself is unchanged
-     * (computenet-mx6p, [install]'s KDoc). Checked before copying: that
+     * it to decide anything, and trusted low-level overwrite semantics remain
+     * unchanged (computenet-mx6p, [install]'s KDoc). Checked before copying: that
      * precedent's own `refuse()` turned out to be counter-only, with no
      * `System.err` line anywhere near it — the `System.err` half of the
      * shape belongs to *other* silent-drop sites on that same path
@@ -122,7 +129,9 @@ class LocationRegistry {
      * *expected*, non-colliding transitions [install]'s KDoc documents as
      * depended upon, not identity collisions. Only `Local -> Remote` is a
      * `CellRef` uniqueness violation (G-8, gap G-57) with no legitimate
-     * in-tree producer, which is what makes it a clean diagnostic.
+     * in-tree producer, which is what makes it a clean diagnostic. A live
+     * peer announcement for an actively hosted ref is now refused by
+     * [publishFromPeer] before this counter can move (computenet-zlm2).
      */
     val localOverwrittenByRemote: Long get() = localOverwrittenByRemoteCount.get()
 
@@ -621,13 +630,56 @@ class LocationRegistry {
      * `Peering.Side` still gets. It is recorded, never consulted by routing:
      * [deliver] resolves through [Remote.sink] alone, as before.
      *
-     * **This overrides an existing [Local] binding for the same ref**,
-     * by design — see [install]'s location-precedence note (computenet-mx6p)
-     * for why.
+     * This low-level, unattributed publication keeps [install]'s last-writer-
+     * wins contract for mobility/recovery callers and compatibility tests.
+     * A live peer announcement does not use this overload: the per-connection
+     * mirror calls [publishFromPeer], which refuses an active local binding or
+     * a binding already held by another peer (computenet-zlm2).
      */
     fun publish(ref: CellRef, sink: InvocationSink, peer: PeerId? = null) {
         install(ref, Remote(sink, peer))
         onPublish.forEach { notify(it, ref) }
+    }
+
+    /**
+     * Admit one peer's mirrored location announcement atomically with its
+     * installation (computenet-zlm2, spec 40/43 admission boundary).
+     *
+     * A peer may install a fresh ref and may refresh a ref already attributed
+     * to that same [peer] (a reconnect supplies a fresh [sink]). It may not
+     * replace another peer's live attribution, nor a [Local] whose host still
+     * actually [ManagedHost.hosts] the ref. The latter check deliberately
+     * distinguishes an active local cell from a stale local registry entry:
+     * recovery remains able to replace stale placement state, while a peer
+     * cannot shadow a cell this process is currently serving.
+     *
+     * Returns the incumbent on refusal and makes **no** registry or publish-
+     * hook change. The caller owns typed boundary accounting because it knows
+     * the announcing connection's principal.
+     */
+    internal fun publishFromPeer(
+        ref: CellRef,
+        sink: InvocationSink,
+        peer: PeerId?,
+    ): RemotePublishRefusal? {
+        val incoming = Remote(sink, peer)
+        val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+        val refusal = synchronized(queue) {
+            val incumbent = locations[ref]
+            val conflicts = when (incumbent) {
+                is Local -> incumbent.host.hosts(ref)
+                is Remote -> incumbent.peer != peer
+                null -> false
+            }
+            if (conflicts) {
+                RemotePublishRefusal(incumbent!!)
+            } else {
+                installLocked(ref, incoming, queue)
+                null
+            }
+        }
+        if (refusal == null) onPublish.forEach { notify(it, ref) }
+        return refusal
     }
 
     /**
@@ -733,78 +785,62 @@ class LocationRegistry {
      * is assigned, so the immediate and the deferred wake-up alike find
      * [replay]'s `locations[ref] == expected` guard satisfied.
      *
-     * **Location precedence: last writer wins, unconditionally, in every
-     * direction** — a peer-announced [Remote] replaces this host's own [Local]
-     * binding for the same ref, after which sends for a cell this host is
-     * itself serving leave for the wire and the local instance never hears
-     * from its own process again. That is *deliberate* (computenet-mx6p),
-     * decided after two peered `demo/tiering` nodes lost every routed write;
-     * `LocationRegistryLocationPrecedenceTest` pins each transition and this
-     * paragraph is the answer to the question it re-opens.
+     * **Low-level location precedence is last writer wins, unconditionally, in
+     * every direction.** That remains the contract of [install] and the public
+     * [publish] overloads for trusted in-process mobility/recovery callers.
+     * Peer-originated announcements are the deliberate exception: they enter
+     * through [publishFromPeer], which performs its ownership check under this
+     * same queue lock before calling [installLocked] (computenet-zlm2).
      *
-     * Two transitions actually depend on the overwrite, both pinned by that
-     * test: **Remote → Local**, inbound mobility — a ref mirrored here becomes
-     * local the moment [ManagedHost] spawns it here, with no intervening
-     * [unpublish] on *this* registry (the retraction is the departing host's
-     * own announcement, a separate message); and **Remote → Remote**, the
-     * reconnect/heal catch-up — every re-announcement is a full [localRefs]
-     * sweep through a *fresh* mirror, so landing on a ref this registry already
-     * has a location for is the normal case, not the exception.
+     * Two trusted transitions still depend on overwrite. **Remote → Local** is
+     * inbound mobility: a ref mirrored here becomes local when [ManagedHost]
+     * spawns it. **Remote → Remote** is reconnect/heal catch-up: a fresh sink
+     * must replace the stale connection. [publishFromPeer] preserves the latter
+     * when both locations carry the same [PeerId], and [install] preserves both
+     * for trusted low-level callers.
      *
-     * **Neither of those is what a "local wins" guard would block, and the
-     * measurement says so**: inserting `if (locations[ref] is Local && location
-     * is Remote) return` here leaves `:kernel:test` (1281 tests on this branch) and
-     * `:wire:test` (91) entirely green except the one test that pins this
-     * behaviour. So the case for the current shape is *not* "a guard would
-     * break repartition or mobility" — nothing in either suite exercises
-     * Remote-replacing-Local at all.
+     * The peer guard is deliberately narrower than "local always wins". It
+     * asks [ManagedHost.hosts] whether the incumbent local host still serves
+     * the ref, so a stale [Local] does not fence recovery forever. It likewise
+     * records no permanent owner after unpublish. This is an admission rule for
+     * a live collision, not a solution to G-57's collision-free identity-
+     * minting gap: two cells that mint the same [CellRef] remain a cluster-level
+     * identity defect even though one can no longer capture the other's traffic.
      *
-     * The case is that the state a guard would arbitrate cannot legitimately
-     * exist. [CellRef] is a globally unique identity — "instance ids must be
-     * minted collision-free without coordination" (G-8/M7.1), and replicas of
-     * one logical cell are distinct instances (spec 42) — so two `Local`
-     * bindings for one ref on two peers is a violated precondition, and its
-     * *unenforcedness* is already filed as spec gap **G-57**
-     * (`doc/spec/40-distribution/41-location-transparency.md`: "instanceId
-     * minting has no stated collision discipline across hosts"), not as
-     * registry behaviour. A guard would not repair that collision — two
-     * distinct cells still share one identity, and links, replication
-     * membership and quorum are wrong regardless; it would only mask G-57.
-     *
-     * And it would cost one recovery, by *argument, not measurement* (nothing
-     * in-tree exercises it): announcements are the only channel by which a host
-     * learns where a ref lives, so a host holding a stale `Local` for a ref the
-     * cluster has since placed elsewhere would refuse every catch-up that could
-     * tell it otherwise — a permanent, silent split with no repair path.
-     * Spec 42 models registry state as an "eventually-consistent local fold of
-     * announcements"; last-writer-wins is what makes that fold converge.
-     *
-     * What the incident did expose is now fixed by computenet-rfbt: a
-     * `Local -> Remote` replacement is counted
+     * What the earlier incident did expose was fixed by computenet-rfbt: a
+     * low-level `Local -> Remote` replacement is counted
      * ([localOverwrittenByRemote]) and printed to `System.err`, naming the
-     * ref, so "never arrived, and stderr was silent" can no longer hide which
-     * ref lost its local binding. The overwrite itself — including the
-     * `Remote -> Local` and `Remote -> Remote` transitions above, neither of
-     * which is counted (see [localOverwrittenByRemote]'s KDoc) — is
-     * unchanged.
+     * ref. A refused peer announcement never reaches that diagnostic because
+     * it does not overwrite anything; its caller emits a typed boundary denial
+     * instead. The trusted low-level overwrite itself — including the
+     * `Remote -> Local` and `Remote -> Remote` transitions above — is unchanged.
      */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         synchronized(queue) {
-            val previous = locations[ref]
-            if (previous is Local && location is Remote) {
-                localOverwrittenByRemoteCount.incrementAndGet()
-                System.err.println("[LocationRegistry] peer announcement overwrote local binding for $ref")
-            }
-            // Deliberately does NOT consult [holds]: unlike deliver/replay, a
-            // publish during an active flip window drains the parked queue into
-            // the new location anyway. Pinned by RepartitionHoldTest's "BS-10
-            // install drains despite an active hold", filed as OQ-3 — not fixed.
-            queue.drainWhile { send(location, it) }
-            locations[ref] = location
-            instances.add(ref)
-            if (!queue.isEmpty()) (location as? Local)?.host?.onIntakeAvailable { replay(ref, location) }
+            installLocked(ref, location, queue)
         }
+    }
+
+    /** [install]'s body once the caller holds [queue]'s monitor. */
+    private fun installLocked(
+        ref: CellRef,
+        location: Location,
+        queue: ParkQueue<HostedPortInvocation>,
+    ) {
+        val previous = locations[ref]
+        if (previous is Local && location is Remote) {
+            localOverwrittenByRemoteCount.incrementAndGet()
+            System.err.println("[LocationRegistry] remote publication overwrote local binding for $ref")
+        }
+        // Deliberately does NOT consult [holds]: unlike deliver/replay, a
+        // publish during an active flip window drains the parked queue into
+        // the new location anyway. Pinned by RepartitionHoldTest's "BS-10
+        // install drains despite an active hold", filed as OQ-3 — not fixed.
+        queue.drainWhile { send(location, it) }
+        locations[ref] = location
+        instances.add(ref)
+        if (!queue.isEmpty()) (location as? Local)?.host?.onIntakeAvailable { replay(ref, location) }
     }
 
     /**

@@ -487,6 +487,12 @@ class TrustBoundaryTest {
         /** P's ingress for q's frames — where a refusal of q's request is accounted. */
         val ingressFromQ: BridgeIngressCell get() = pq.ingressOnA!!
 
+        /** P's ingress for r's frames — the link-request half of the local-shadowing arm. */
+        val ingressFromR: BridgeIngressCell get() = pr.ingressOnA!!
+
+        /** P's per-connection mirror that applies r's announcements. */
+        val mirrorFromR: CellRef get() = pr.mirrorRefOnA
+
         /**
          * q asks P's [source] outlet to link to [consumer], as a real frame:
          * encoded by the peering's q→P [BridgeEgressCell], decoded and
@@ -499,6 +505,23 @@ class TrustBoundaryTest {
                 consumer = consumer,
                 api = Consumer::class.java,
             )
+            controller.runToIdle()
+        }
+
+        /** The same real-frame request as [requestFromQ], sent by r. */
+        fun requestFromR(consumer: PortAddress) {
+            RemoteLinkRequests.requestLinkTo(
+                sink = pr.bToA,
+                target = PortAddress(source.ref, "outlet"),
+                consumer = consumer,
+                api = Consumer::class.java,
+            )
+            controller.runToIdle()
+        }
+
+        /** Host a cell on r under an already-used ref, causing r to announce that ref to P. */
+        fun announceImpostorFromR(ref: CellRef): CollectingCell = CollectingCell(ref).also {
+            hostR.managementInlet.call.spawn(it)
             controller.runToIdle()
         }
 
@@ -535,6 +558,109 @@ class TrustBoundaryTest {
         letter.description shouldContain "requester-q"
 
         bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
+     * The announcement-collision refusal shared by computenet-zlm2's three
+     * arms: one typed ADMISSION denial names r, and the mirror's RESTART policy
+     * never fires because a boundary refusal is not a cell fault.
+     */
+    private fun RedirectRig.assertImpostorAnnouncementRefused(
+        lettersBefore: Int,
+        faultLettersBefore: Long,
+    ) {
+        val letters = deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+        letters.size shouldBe 1
+        val letter = letters.single()
+        val denial = letter.denial!!
+        denial.seam shouldBe BoundarySeam.ADMISSION
+        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.principal shouldBe RedirectRig.THIRD_R
+        letter.cause shouldBe null
+        letter.description shouldContain "third-party-r"
+
+        bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
+        bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
+     * computenet-zlm2 arm 1: q first establishes a legitimate RemoteLink to
+     * its own consumer. A later announcement by r for the same full ref must
+     * not re-aim that already-live link at r.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot re-aim an established RemoteLink`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        rig.requestFromQ(PortAddress(rig.consumerOnQ.ref, "inlet"))
+        rig.emit("first")
+        rig.consumerOnQ.received shouldBe listOf("first")
+
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+        val impostorOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).peer shouldBe
+            RedirectRig.REQUESTER_Q
+        rig.emit("q-only-secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret")
+        impostorOnR.received.shouldBeEmpty()
+        rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
+    }
+
+    /**
+     * computenet-zlm2 arm 2, the control: no RemoteLink request participates.
+     * P links its own outlet to q through the ordinary registry-resolving
+     * HostedCellProxy; r still cannot capture the proxy's later deliveries by
+     * announcing q's ref.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot capture an ordinary HostedCellProxy link`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        rig.consumerOnQ.received shouldBe listOf("first")
+
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+        val impostorOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("q-only-secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret")
+        impostorOnR.received.shouldBeEmpty()
+        rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
+    }
+
+    /**
+     * computenet-zlm2 arm 3: r cannot shadow a ref P hosts locally. Retaining
+     * P's Local binding also means r's subsequent real-frame RemoteLink request
+     * names an address it does not own and is refused by the existing gate.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot shadow a locally hosted ref`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        rig.bridgeP.managementInlet.call.supervise(rig.ingressFromR.ref, SupervisionPolicy.RESTART)
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+        val impostorOnR = rig.announceImpostorFromR(rig.victimOnP.ref)
+
+        rig.registryP.location(rig.victimOnP.ref) shouldBe LocationRegistry.Local(rig.hostP)
+        rig.requestFromR(PortAddress(rig.victimOnP.ref, "inlet"))
+        rig.emit("p-internal-secret")
+
+        rig.victimOnP.received.shouldBeEmpty()
+        impostorOnR.received.shouldBeEmpty()
+        rig.source.outlet.linking.links.shouldBeEmpty()
+        rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
     }
 
     /**
