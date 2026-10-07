@@ -11,6 +11,7 @@ import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.DurableInput
+import civictech.cell.host.DeclaredWrite
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
@@ -48,6 +49,11 @@ class KeyCodec(
     val parse: (String) -> Any,
 ) : Serializable {
     companion object {
+        // TopoEvent.Family records embed this codec inside KeyedFamily. Pin the
+        // JVM-computed UID of the unpinned class so journals written before the
+        // pin keep decoding (vb7aq-D12).
+        private const val serialVersionUID: Long = 3426917053904368972L
+
         /** The default codec for string keys. */
         val Strings = KeyCodec(@JvmSerializableLambda { it as String }, @JvmSerializableLambda { it })
 
@@ -56,12 +62,24 @@ class KeyCodec(
     }
 }
 
-/** The declarative parameters for a lazily-spawned keyed cell family. */
+/**
+ * The declarative parameters for a lazily-spawned keyed cell family.
+ *
+ * [spawnOnInterest] makes bounded interests admitted by the host registry
+ * materialize their named keys. It defaults off so existing graphs remain
+ * touch-driven. The explicit serial version preserves topology records written
+ * before that additive field existed; a missing field decodes as `false`.
+ */
 data class KeyedFamily(
     val namespace: String,
     val keys: KeyCodec = KeyCodec.Strings,
     val journalId: String? = null,
-) : Serializable
+    val spawnOnInterest: Boolean = false,
+) : Serializable {
+    companion object {
+        private const val serialVersionUID: Long = 2592408546637474475L
+    }
+}
 
 /** A cell factory whose construction also receives the family key. */
 fun interface KeyedCellFactory : CellFactory {
@@ -166,11 +184,19 @@ data class UnlinkStep(val from: String, val outlet: String, val to: String, val 
 /** Unlinks every live edge touching [handle], then removes that cell and frees its handle. */
 data class DespawnStep(val handle: String) : GraphStep
 
+/** Declares one host-local write lane over the cells named by [cells]. */
+data class WriteStep(val name: String, val cells: List<String>) : GraphStep
+
 /**
  * Declarative request to run the live evolution pipeline over cells already
  * named by this graph. Unlike topology steps, this emits no [TopoEvent] while
  * applying the spec: the eventual accept/reject hooks record the committed
  * promotion or rejected shadow despawn at the point the decision is made.
+ *
+ * The single-instance arm names an already-spawned [candidate] and [gate]. The
+ * replicated arm leaves those strings empty and supplies [replicatedCandidateFactory];
+ * [ApplyContext] selects the arm from the incumbent's recorded replicated flag and
+ * refuses any mixed or missing candidate binding during PRECHECK.
  */
 data class PromoteStep(
     val handle: String,
@@ -183,15 +209,20 @@ data class PromoteStep(
     val gates: List<String>,
     val baseline: String? = null,
     val baselineGates: List<String> = emptyList(),
+    /** Same-ref, unhosted candidate construction for the replicated arm. */
+    val replicatedCandidateFactory: CellFactory? = null,
 ) : GraphStep {
     init {
         require(handle.isNotBlank()) { "promote step handle must not be blank" }
         require(incumbent.isNotBlank()) { "promote step '$handle': incumbent must not be blank" }
-        require(candidate.isNotBlank()) { "promote step '$handle': candidate must not be blank" }
-        require(gate.isNotBlank()) { "promote step '$handle': gate must not be blank" }
         require((baseline != null) == policy.baseline) {
             "promote step '$handle': baseline must be supplied exactly when policy.baseline is true"
         }
+    }
+
+    companion object {
+        // Preserve GraphSpecs serialized before replicatedCandidateFactory was added.
+        private const val serialVersionUID: Long = -1909086562882852722L
     }
 }
 
@@ -398,6 +429,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         val eventSteps = ArrayList<GraphStep>(lowered.size)
         val preparedReplicas = mutableMapOf<String, Cell>()
         val displayKeys = mutableMapOf<Int, String>()
+        val writes = mutableListOf<Pair<String, Set<CellRef>>>()
+        val writeScopes = mutableMapOf<String, Set<CellRef>>()
+        val plannedSpawnRefs = mutableSetOf<CellRef>()
         fun resolve(handle: String): CellRef = active[handle]
             ?: throw IllegalStateException("unknown handle '$handle'")
         lowered.forEach { step ->
@@ -423,6 +457,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                             step.shadow,
                         )
                         active[step.handle] = ref
+                        plannedSpawnRefs += ref
                         events += event
                         if (step.replicated) {
                             val cell = step.factory.create(ref)
@@ -464,17 +499,48 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 is DespawnStep -> {
                     val ref = active.remove(step.handle)
                         ?: throw IllegalStateException("unknown handle '${step.handle}'")
+                    // declareWrite runs after every topology event, so a write over a cell this
+                    // spec later despawns would fail post-journal. Matched by ref, not handle:
+                    // two adopted handles may alias one cell.
+                    writes.firstOrNull { (_, cells) -> ref in cells }?.let { (name, _) ->
+                        throw IllegalArgumentException(
+                            "declared write '$name' targets $ref, despawned later in the same GraphSpec " +
+                                "(handle '${step.handle}')",
+                        )
+                    }
                     occupied.remove(step.handle)
                     events += TopoEvent.Despawn(ref)
                     eventSteps += step
+                }
+
+                is WriteStep -> {
+                    val cells = step.cells.mapTo(linkedSetOf(), ::resolve)
+                    val notHosted = cells.filterNot { ref ->
+                        ref in plannedSpawnRefs || context.host.hosts(ref)
+                    }
+                    if (notHosted.isNotEmpty()) {
+                        throw IllegalArgumentException(
+                            "declared write '${step.name}' contains refs not hosted by ${context.host.ref}: $notHosted",
+                        )
+                    }
+                    val existingCells = writeScopes[step.name]
+                        ?: context.host.managementInlet.call.declaredWrite(step.name)?.cells
+                    if (existingCells != null && existingCells != cells) {
+                        throw IllegalStateException(
+                            "declared write '${step.name}' already exists with cells $existingCells, " +
+                                "cannot redeclare it with $cells",
+                        )
+                    }
+                    writeScopes.putIfAbsent(step.name, cells)
+                    writes += step.name to cells
                 }
 
                 is PromoteStep -> {
                     check(occupied.add(step.handle)) { "duplicate handle '${step.handle}'" }
                     buildList {
                         add(step.incumbent)
-                        add(step.candidate)
-                        add(step.gate)
+                        step.candidate.takeIf(String::isNotBlank)?.let(::add)
+                        step.gate.takeIf(String::isNotBlank)?.let(::add)
                         addAll(step.downstream.map { it.first })
                         addAll(step.gates)
                         step.baseline?.let(::add)
@@ -523,11 +589,15 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                 }
                 is TopoEvent.FamilyKey -> error("GraphSpec does not emit FamilyKey directly")
                 is TopoEvent.Promote -> error("GraphSpec does not emit Promote directly")
+                is TopoEvent.EvolutionTap -> error("GraphSpec does not emit EvolutionTap directly")
             }
         }
         val links = deltaLinks.mapNotNull { (key, topologyKey) ->
             context.linkFor(topologyKey)?.let { key to it }
         }.toMap()
+        writes.forEach { (name, cells) ->
+            context.host.managementInlet.call.declareWrite(name, cells)
+        }
         val evolutions = lowered.filterIsInstance<PromoteStep>().associate { step ->
             step.handle to context.evolve(step)
         }
@@ -606,6 +676,10 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         endpoints.remove(key)
                     }
                     host.call.despawn(ref)
+                }
+
+                is WriteStep -> {
+                    host.call.declareWrite(step.name, step.cells.mapTo(linkedSetOf(), refs::getValue))
                 }
 
                 is PromoteStep -> error("PromoteStep must be refused before applyTo")
@@ -728,6 +802,13 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         "despawn step '${step.handle}' is not supported by applyRemote",
                     )
                     progress.onStep(StepEvent(index, key, results.getValue(key)))
+                }
+
+                is WriteStep -> {
+                    results[step.name] = StepResult.Rejected(
+                        "write step '${step.name}' is not supported by applyRemote",
+                    )
+                    progress.onStep(StepEvent(index, step.name, results.getValue(step.name)))
                 }
 
                 is PromoteStep -> {
@@ -925,6 +1006,7 @@ class GraphBuilder private constructor(
         namespace: String,
         keys: KeyCodec = KeyCodec.Strings,
         journalId: String? = null,
+        spawnOnInterest: Boolean = false,
         factory: KeyedCellFactory,
     ): KeyedCells<Any> {
         val applyContext = context
@@ -937,7 +1019,7 @@ class GraphBuilder private constructor(
         val step = SpawnStep(
             handle = name,
             factory = factory,
-            family = KeyedFamily(namespace, keys, journalId),
+            family = KeyedFamily(namespace, keys, journalId, spawnOnInterest),
         )
         val event = TopoEvent.Family(name, step.family!!, factory)
         applyContext.journalTopology(listOf(event))
@@ -1048,6 +1130,20 @@ class GraphBuilder private constructor(
     }
 
     /**
+     * Declares and records one host-local multi-cell write. The returned
+     * boundary can be invoked immediately; replay resolves the recorded cell
+     * handles to the target host's refs before declaring the same write.
+     */
+    fun write(name: String, cells: List<CellHandle>): DeclaredWrite {
+        require(names.add(name)) { "duplicate handle '$name'" }
+        require(context?.hasHandle(name) != true) { "duplicate handle '$name'" }
+        val step = WriteStep(name, cells.map(CellHandle::name))
+        val write = host.call.declareWrite(name, cells.mapTo(linkedSetOf(), CellHandle::ref))
+        steps += step
+        return write
+    }
+
+    /**
      * Declare and start one live evolution over cells already spawned through
      * this builder. The graph records only the declarative request; the
      * returned handle drives the existing shadow/judge/swap pipeline.
@@ -1076,6 +1172,39 @@ class GraphBuilder private constructor(
             gates = gates.map(CellHandle::name),
             baseline = baseline?.name,
             baselineGates = baselineGates.map(CellHandle::name),
+        )
+        val applyContext = context
+            ?: throw unsupportedPromote(handle, "graph(Use<HostManagementApi>)")
+        val evolution = applyContext.evolve(step)
+        steps += step
+        return evolution
+    }
+
+    /**
+     * Declare and start the rolling replicated arm of live evolution. The candidate is
+     * constructed outside hosting under the incumbent's exact ref;
+     * [civictech.cell.evolve.Evolve.runReplica] installs the temporary shadow tap and
+     * performs the authoritative same-ref rebind.
+     */
+    fun promoteReplica(
+        handle: String,
+        incumbent: CellHandle,
+        candidateFactory: CellFactory,
+        policy: PromotionPolicy,
+        gates: List<CellHandle>,
+        outletName: String = "outlet",
+    ): EvolutionHandle {
+        require(names.add(handle)) { "duplicate handle '$handle'" }
+        val step = PromoteStep(
+            handle = handle,
+            incumbent = incumbent.name,
+            candidate = "",
+            gate = "",
+            outletName = outletName,
+            downstream = emptyList(),
+            policy = policy,
+            gates = gates.map(CellHandle::name),
+            replicatedCandidateFactory = candidateFactory,
         )
         val applyContext = context
             ?: throw unsupportedPromote(handle, "graph(Use<HostManagementApi>)")

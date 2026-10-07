@@ -22,6 +22,11 @@ no ops (they react to their inlets).
 | `ormap-source` | `put`, `remove` | An **observed-remove per-key map** (kernel `OrMapCell`): `put(key, value)` mints a fresh dot for the key and covers every dot the writer currently observes live there (reset-remove), `remove(key)` covers exactly the dots observed live here and now, so a concurrent `put`'s dot survives. Presence is add-wins; a key holding several surviving dots exposes one by dot order, which within a single stream is last-writer-wins. Observed through a `tagged-map-view`. |
 | `keyed-set` | `put`, `remove` | A **keyed upsert** to a set (kernel `KeyedSetCell`): `put(key, element)` sets the element under a key (last-writer-wins per key), `remove(key)` drops it; the output is the flat set of currently-held elements, observed through a `set-view`. (W3-0 refinement — this is NOT an add/remove-by-value partitioned set; see note 6.) |
 
+`set-source` may also be declared as the member type of a `family:` descriptor
+(computenet-vb7aq, `42-INTEREST-SPAWN-01`); each long key materializes one
+ordinary `set-source` member, while the family handle itself has no ports or
+view.
+
 `counter-source`/`pn-counter`: `increment`/`decrement` take an optional `value:` amount
 (default a unit step), or repeat a unit step with `times:` — both fold to the same total.
 

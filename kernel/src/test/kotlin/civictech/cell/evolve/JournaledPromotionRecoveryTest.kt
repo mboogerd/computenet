@@ -264,6 +264,7 @@ class JournaledPromotionRecoveryTest {
         refs: Refs,
         failingCandidate: Boolean = false,
         candidateJournalId: String? = "j",
+        candidateInvariantEdgeFirst: Boolean = false,
     ) {
         graph(world.context) {
             val relay = spawn("relay", IdentityBinding.Exact(refs.relay), journalId = "j", factory = RelayFactory)
@@ -289,9 +290,18 @@ class JournaledPromotionRecoveryTest {
             val staged = LinkOptions(staged = true)
             connect(relay, "outlet", gate, "dataInlet", staged)
             connect(gate, "dataOutlet", incumbent, "inlet", staged)
-            connect(gate, "dataOutlet", candidate, "inlet", staged)
             connect(incumbent, "outlet", collector, "inlet", staged)
-            connect(candidate, "outlet", invariant, "inlet", staged)
+            if (candidateInvariantEdgeFirst) {
+                // computenet-q37rn: the declared candidate's invariant edge precedes its
+                // gate tap. No evolution ever runs in this test (no PromoteStep lowers an
+                // Evolve.run), so this is purely a declaration-order probe: recovery must not
+                // mistake this shape for an interrupted evolution.
+                connect(candidate, "outlet", invariant, "inlet", staged)
+                connect(gate, "dataOutlet", candidate, "inlet", staged)
+            } else {
+                connect(gate, "dataOutlet", candidate, "inlet", staged)
+                connect(candidate, "outlet", invariant, "inlet", staged)
+            }
         }
         gate(world, refs).controlInlet.call.setGreen()
         world.controller.runToIdle()
@@ -884,6 +894,39 @@ class JournaledPromotionRecoveryTest {
         recovered.controller.runToIdle()
         collector(refs).received.size shouldBe recoveredCount + 1
         collector(refs).received.last() shouldBe 3L
+        recovered.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a declared shadow whose invariant edge precedes its gate tap recovers still spawned`() {
+        // computenet-q37rn: before the EvolutionTap record, recovery classified "interrupted
+        // evolution" from link shape (a staged TrafficLight-data-outlet edge into an already-
+        // shadowed candidate that also feeds an InvariantCell). A GraphSpec-declared shadow with
+        // no PromoteStep and no Evolve.run can satisfy that same shape whenever its invariant
+        // edge happens to be declared before its gate tap, and used to be permanently despawned
+        // on recovery for it. This build never calls context.evolve, so no TopoEvent.EvolutionTap
+        // is ever journaled for the candidate; recovery must therefore leave it exactly as
+        // declared, in either declaration order.
+        val journal = InMemoryJournal()
+        val refs = refs()
+        val before = world(501, journal)
+        build(before, refs, candidateInvariantEdgeFirst = true)
+        drive(before, refs, 1..5, Random(501))
+        val preCrash = collector(refs).received.toList()
+        val topologyBefore = topologyShape(before.context.live())
+
+        val recovered = world(501, journal)
+        val recovery = recovered.context.recover(journal)
+        recovered.controller.runToIdle()
+        recovery.awaitApplied(30_000)
+        recovered.controller.runToIdle()
+
+        topologyShape(recovered.context.live()) shouldBe topologyBefore
+        recovered.context.live().spawns.getValue(refs.candidate).shadow shouldBe true
+        val cleanup = decoded(journal).filterIsInstance<DecodedJournalRecord.Topology>().flatMap { it.events }
+        cleanup.filterIsInstance<TopoEvent.Despawn>().any { it.ref == refs.candidate } shouldBe false
+        cleanup.filterIsInstance<TopoEvent.Unlink>().any { it.to == refs.candidate } shouldBe false
+        collector(refs).received shouldBe preCrash
         recovered.deadLetters.shouldBeEmpty()
     }
 

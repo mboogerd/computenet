@@ -17,6 +17,7 @@ import civictech.concord.schema.CellSpec
 import civictech.concord.schema.Check
 import civictech.concord.schema.CompositeWholeWaves
 import civictech.concord.schema.ConnectStep
+import civictech.concord.schema.DeclareInterestStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.EffectCount
@@ -24,7 +25,10 @@ import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.Expect
 import civictech.concord.schema.ExpectFailure
 import civictech.concord.schema.FinalView
+import civictech.concord.schema.FamilyHolds
+import civictech.concord.schema.FamilySpec
 import civictech.concord.schema.IncrementalEqualsBatch
+import civictech.concord.schema.InterestRefusals
 import civictech.concord.schema.Kind
 import civictech.concord.schema.LateJoinEqualsEarly
 import civictech.concord.schema.NoDeadLetters
@@ -427,6 +431,8 @@ class CorpusRunner {
         is ObservationsWholeWaves -> "observations-whole-waves"
         is CompositeWholeWaves -> "composite-whole-waves"
         is ReplicasConverge -> "replicas-converge"
+        is FamilyHolds -> "family-holds"
+        is InterestRefusals -> "interest-refusals"
         NoDeadLetters -> "no-dead-letters"
         is EffectCount -> "effect-count"
         is WavePlaneUnchanged -> "wave-plane-unchanged"
@@ -653,6 +659,7 @@ class CorpusRunner {
             driver.spawn(cell.host ?: "", cell.id, cell.type, params(cell))
         }
         graph.links.forEach { link ->
+            rejectFamilyLink(scenario, link.from, link.to, link.inlet, link.outlet)
             driver.connect(link.from, link.to, link.inlet, link.outlet, link.role)
         }
     }
@@ -694,7 +701,9 @@ class CorpusRunner {
                 is ReadStateStep -> reads += walk(driver, step)
                 is ApplyStep -> repeat(step.times ?: 1) { driver.apply(step.on, step.op, step.value) }
                 is QuiesceStep -> driver.quiesce(step.budget ?: QUIESCE_BUDGET)
+                is DeclareInterestStep -> driver.declareInterest(step.on, interestValue(step.interest))
                 is ConnectStep -> {
+                    rejectFamilyLink(scenario, step.from, step.to, step.inlet, step.outlet)
                     val result = driver.connect(step.from, step.to, step.inlet, step.outlet, step.role)
                     assertExpect(step.expect, result, "connect ${step.from}->${step.to}")
                 }
@@ -790,6 +799,7 @@ class CorpusRunner {
         cell.inletMode?.let { put("inlet-mode", Value.StrVal(it)) }
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }
         cell.interest?.let { put("interest", interestValue(it)) }
+        cell.family?.let { put("family", familyValue(it)) }
         cell.window?.let { put("window", windowValue(it)) }
         cell.views?.let { put("views", Value.MapVal(it.mapValues { (_, id) -> Value.StrVal(id) })) }
         cell.lateness?.let { put("lateness", Value.IntVal(it)) }
@@ -814,4 +824,32 @@ class CorpusRunner {
             spec.ranges?.let { put("ranges", it) }
         },
     )
+
+    /** Lower the deliberate keyed-family schema extension to the neutral value model. */
+    private fun familyValue(spec: FamilySpec): Value = Value.MapVal(
+        mapOf(
+            "keys" to Value.StrVal(spec.keys),
+            "spawn-on-interest" to Value.BoolVal(spec.spawnOnInterest),
+        ),
+    )
+
+    /** Family handles have membership only; use the kernel GraphSpec refusal wording. */
+    private fun rejectFamilyLink(
+        scenario: Scenario,
+        from: String,
+        to: String,
+        inlet: String?,
+        outlet: String?,
+    ) {
+        val handles = scenario.graph?.cells.orEmpty().filter { it.family != null }.mapTo(mutableSetOf()) { it.id }
+        val handle = when {
+            from in handles -> from
+            to in handles -> to
+            else -> return
+        }
+        val key = "$from.${outlet ?: "outlet"}->$to.${inlet ?: "inlet"}"
+        throw IllegalStateException(
+            "link '$key' names family handle '$handle' (parameter 'family' has no single port)",
+        )
+    }
 }

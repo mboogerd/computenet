@@ -15,6 +15,17 @@ class SkillMatchAlignedFrameTest {
     fun `checked aligned views publish one consistent candidate-wave frame`() {
         val app = SkillMatchApp(port = 0).start()
         try {
+            assertEquals(
+                mapOf(
+                    "candSkills" to "candSkills",
+                    "jobSkills" to "jobSkills",
+                    "matches" to "matches+gap+qualification+market",
+                    "gap" to "matches+gap+qualification+market",
+                    "qualification" to "matches+gap+qualification+market",
+                    "market" to "matches+gap+qualification+market",
+                ),
+                app.observationGroups,
+            )
             val base = "http://localhost:${app.boundPort}"
             val probe = HttpProbe(base)
 

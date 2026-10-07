@@ -13,6 +13,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
+import civictech.cell.port.identity
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import java.util.concurrent.TimeUnit
@@ -56,7 +57,25 @@ interface EvolutionHooks {
         outlet.unsubscribe(inlet)
     }
 
+    /**
+     * Attach the same-ref, unhosted candidate used by rolling replicated evolution.
+     * Kept separate from [tapShadow] because the candidate has no topology address of
+     * its own until COMMIT; graph owners may still journal this ephemeral observation.
+     */
+    fun <T : Any> tapReplicatedShadow(outlet: FanOutlet<T>, inlet: FanInlet<T>): PortRef {
+        outlet.subscribe(inlet)
+        return inlet.ref
+    }
+
+    /** Remove a tap previously installed by [tapReplicatedShadow]. */
+    fun <T : Any> untapReplicatedShadow(outlet: FanOutlet<T>, inlet: PortRef) {
+        outlet.unsubscribe(inlet)
+    }
+
     fun promoted(incumbent: CellRef) {}
+
+    /** Same-ref counterpart to [promoted], where no incumbent ref is retired. */
+    fun promotedReplica(ref: CellRef) {}
 }
 
 /** A running shadow/judge/promotion orchestration. */
@@ -104,6 +123,17 @@ interface EvolutionHandle {
  */
 object Evolve {
     class Refused(reason: String) : RuntimeException(reason)
+
+    /** Keep graph/runtime callers behind the evolution package's invariant-type boundary. */
+    internal fun isInvariant(cell: Cell?): Boolean = cell is InvariantCell<*, *>
+
+    /** Keep graph/runtime callers behind the evolution package's membrane-type boundary. */
+    internal fun isTrafficLightDataOutlet(cell: Cell?, owner: CellRef, outletName: String): Boolean {
+        val gate = cell as? TrafficLightApi<*> ?: return false
+        val outlet = gate.dataOutlet as? FanOutlet<*> ?: return false
+        val identity = outlet.identity() ?: return false
+        return identity.owner == owner && identity.name == outletName
+    }
 
     /** Incumbent-side differential shadow and the gates that judge it. */
     data class Baseline(
@@ -156,6 +186,17 @@ object Evolve {
         )
     }
 
+    /**
+     * Start one live evolution and publish candidate observations only after this host's
+     * scheduler has drained. At most one settlement fence is pending for this evolution;
+     * waves observed before it runs share that fence and settle as one prefix.
+     *
+     * Settlement uses a kernel-internal recovery-aware host fence. The fence neither blocks
+     * [ManagedHost.recoverFrom] nor completes while recovery has data delivery gated; it
+     * re-arms after the gate lifts so already-observed waves settle without another wave.
+     * A terminated scheduler's refusal is contained here: the candidate emission still
+     * succeeds, but that wave does not advance the settled prefix.
+     */
     fun <T : Any> run(
         host: ManagedHost,
         gate: TrafficLightApi<T>,
@@ -194,33 +235,167 @@ object Evolve {
 
         val candidateOutlet = outlet(candidate, outletName)
         val observerRef = PortRef.generate()
-        candidateOutlet.observe(observerRef) {
-            judge.observeCandidateWave()
-            // Observe taps fire before consumers. Taking the lowest-priority fence here means
-            // every delivery that this emission enqueues afterwards still runs before the
-            // settlement callback. The callback itself runs synchronously on the thread that
-            // completes the fence future: the host's single scheduler thread.
-            host.quiescence().asFuture().thenRun { judge.settleObservation() }
-        }
+        val settlement = ObservationSettlement(host, judge)
+        candidateOutlet.observe(observerRef) { settlement.observeCandidateWave() }
 
         return Handle(
-            host = host,
-            gate = gate,
-            gateOutlet = gateOutlet,
-            incumbent = incumbent,
-            candidate = candidate,
-            candidateInputs = candidateInputs,
+            candidateRef = candidate.ref,
+            baselineRef = baseline?.twin?.ref,
             candidateOutlet = candidateOutlet,
-            outletName = outletName,
-            downstream = downstream,
             judge = judge,
             observerRef = observerRef,
             violationSubscriptions = violationSubscriptions,
-            baseline = baseline,
-            baselineInputs = baselineInputs,
             authority = authority,
-            hooks = activeHooks,
+            detachCandidateInputs = { candidateInputs.forEach { activeHooks.untapShadow(gateOutlet, it) } },
+            discardCandidate = { activeHooks.despawnShadow(host, candidate.ref) },
+            detachBaseline = baseline?.let { differential ->
+                {
+                    baselineInputs.forEach { activeHooks.untapShadow(gateOutlet, it) }
+                    activeHooks.despawnShadow(host, differential.twin.ref)
+                }
+            },
+            swap = {
+                Promotion.promote(
+                    host = host,
+                    gate = gate,
+                    incumbent = incumbent,
+                    candidate = candidate,
+                    outletName = outletName,
+                    downstream = downstream,
+                    // advance() already consumed a host-drained verdict. Re-reading the raw
+                    // counters in Promotion PRECHECK would reopen the same tap-before-gate
+                    // race if a newer wave emitted between that verdict and this call.
+                    judge = null,
+                    journal = activeHooks.journal,
+                )
+            },
+            onPromoted = { activeHooks.promoted(incumbent.ref) },
         )
+    }
+
+    /**
+     * The replicated arm of [run] (spec 52 [52-CONV-01], spec 53 `[53-REPL-01..03]`): judge
+     * a [Replicable] [candidate] against a [Replicable] [incumbent] and, only on `Accept`,
+     * swap through [Promotion.promoteReplica] (the same-ref rolling rebind).
+     *
+     * **What the shadow taps.** A replicable's inputs are local writes and peer gossip, so
+     * there is no single upstream gate. Both arrive as one stream: the incumbent's
+     * effective-delta [Replicable.outlet] re-emits every effective mutation, merged remote
+     * deltas included ([52-CONV-01]). That outlet is tapped into the candidate's
+     * [Replicable.deltaInlet]. The candidate is deliberately **not** hosted and not a
+     * replication member while shadowing: it shares the incumbent's [CellRef], and two live
+     * objects under one ref would break the crash-recovery mechanism that [replication]'s
+     * rebind relies on. The tap is removed before COMMIT, which performs the authoritative
+     * rebind (state handoff, hosting, gossip re-link). The shadow starts empty and judges the
+     * deltas observed from the tap onward; COMMIT restores it from the incumbent's snapshot.
+     *
+     * **Limit of this judgment.** Because the shadow is fed the incumbent's *effective deltas*
+     * on its [Replicable.deltaInlet], it exercises only the candidate's merge/re-emit path:
+     * local write ops (the cell's own op inlet) are never delivered to it, so a candidate
+     * that changes how local ops are interpreted is not judged on that change. The same-ref
+     * shadow tap is installed through [EvolutionHooks.tapReplicatedShadow], allowing a graph
+     * owner to account for its ephemeral observation separately from hosted topology.
+     *
+     * A differential baseline is not offered here: a twin would need a third distinct
+     * replica object and tap with no spec-settled meaning. The authority gate is checked at
+     * start and before every [EvolutionHandle.advance], as for [run].
+     */
+    fun runReplica(
+        host: ManagedHost,
+        replication: civictech.cell.replication.Replication,
+        incumbent: civictech.cell.data.Replicable<*>,
+        candidate: civictech.cell.data.Replicable<*>,
+        policy: PromotionPolicy,
+        gates: List<InvariantCell<*, *>>,
+        outletName: String = "outlet",
+        authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly,
+        hooks: EvolutionHooks? = null,
+    ): EvolutionHandle {
+        checkAuthority(authority)
+        validateGates(policy, gates, null)
+        if (candidate.ref != incumbent.ref) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated evolution must reuse the incumbent's CellRef; candidate " +
+                    "${candidate.ref} != incumbent ${incumbent.ref} (spec 53 §Replicated promotion)",
+            )
+        }
+        val activeHooks = hooks ?: object : EvolutionHooks {}
+        val judge = PromotionJudge(policy, cycleHead = incumbent as? CycleHead<*>)
+
+        @Suppress("UNCHECKED_CAST")
+        val incumbentOutlet = incumbent.outlet as? FanOutlet<Propagate<Any?>>
+            ?: throw Refused("gates: replicated incumbent outlet must be a FanOutlet")
+        @Suppress("UNCHECKED_CAST")
+        val shadowInlet = candidate.deltaInlet as? FanInlet<Propagate<Any?>>
+            ?: throw Refused("gates: replicated candidate delta inlet must be a FanInlet")
+        val candidateOutlet = outlet(candidate, outletName)
+        attachReplicaGates(candidateOutlet, gates)
+
+        val violationSubscriptions = mutableListOf<ViolationSubscription>()
+        gates.forEach { invariant ->
+            violationSubscriptions += subscribeViolations(invariant, judge::observeCandidateViolation)
+        }
+        val observerRef = PortRef.generate()
+        val settlement = ObservationSettlement(host, judge)
+        candidateOutlet.observe(observerRef) { settlement.observeCandidateWave() }
+        var tapRef = activeHooks.tapReplicatedShadow(incumbentOutlet, shadowInlet)
+
+        return Handle(
+            candidateRef = candidate.ref,
+            baselineRef = null,
+            candidateOutlet = candidateOutlet,
+            judge = judge,
+            observerRef = observerRef,
+            violationSubscriptions = violationSubscriptions,
+            authority = authority,
+            detachCandidateInputs = { activeHooks.untapReplicatedShadow(incumbentOutlet, tapRef) },
+            // The candidate was never hosted and shares the incumbent's ref: despawning it
+            // would despawn the live incumbent.
+            discardCandidate = {},
+            detachBaseline = null,
+            swap = {
+                // COMMIT rebinds the candidate under the incumbent's ref, so the tap must be
+                // gone first; the shadow then re-syncs by snapshot handoff plus anti-entropy.
+                activeHooks.untapReplicatedShadow(incumbentOutlet, tapRef)
+                try {
+                    Promotion.promoteReplica(
+                        host = host,
+                        replication = replication,
+                        incumbent = incumbent,
+                        candidate = candidate,
+                        outletName = outletName,
+                        judge = null,
+                        journal = activeHooks.journal,
+                    )
+                } catch (aborted: Promotion.PromotionAborted) {
+                    // A PRECHECK refusal leaves the evolution retryable, so the shadow keeps
+                    // being fed; a COMMIT abort is terminal and the handle detaches it.
+                    if (aborted.message?.startsWith("promotion aborted at COMMIT:") != true) {
+                        tapRef = activeHooks.tapReplicatedShadow(incumbentOutlet, shadowInlet)
+                    }
+                    throw aborted
+                }
+            },
+            onPromoted = { activeHooks.promotedReplica(incumbent.ref) },
+        )
+    }
+
+    private fun attachReplicaGates(
+        candidateOutlet: FanOutlet<*>,
+        gates: List<InvariantCell<*, *>>,
+    ) {
+        gates.forEach { invariant ->
+            val inlet = invariant.inlet
+            if (candidateOutlet.clazz != inlet.clazz) {
+                throw Refused(
+                    "gates: replicated candidate outlet ${candidateOutlet.clazz.name} is incompatible " +
+                        "with invariant '${invariant.name}' inlet ${inlet.clazz.name}",
+                )
+            }
+            @Suppress("UNCHECKED_CAST")
+            (candidateOutlet as FanOutlet<Any>).subscribe(inlet as FanInlet<Any>)
+        }
     }
 
     private fun checkAuthority(authority: EvolutionAuthority) {
@@ -301,23 +476,51 @@ object Evolve {
         val ref: PortRef,
     )
 
-    private class Handle<T : Any>(
+    /** Coalesces every candidate wave covered by the same not-yet-run host drain fence. */
+    private class ObservationSettlement(
         private val host: ManagedHost,
-        private val gate: TrafficLightApi<T>,
-        private val gateOutlet: FanOutlet<T>,
-        private val incumbent: Cell,
-        private val candidate: Cell,
-        private val candidateInputs: List<PortRef>,
+        private val judge: PromotionJudge,
+    ) {
+        private val lock = Any()
+        private var fencePending = false
+
+        fun observeCandidateWave() {
+            judge.observeCandidateWave()
+            synchronized(lock) {
+                if (fencePending) return
+                fencePending = true
+                try {
+                    // Observe taps fire before consumers. The lowest-priority fence runs after
+                    // this emission's later data-band deliveries. Later waves queued before it
+                    // runs are covered too, so they need no fence of their own.
+                    host.recoveryAwareQuiescence().asFuture().whenComplete { _, failure ->
+                        synchronized(lock) {
+                            if (failure == null) judge.settleObservation()
+                            fencePending = false
+                        }
+                    }
+                } catch (_: RuntimeException) {
+                    // A terminated scheduler can refuse the initial submission. FanOutlet.observe
+                    // propagates callback failures to the emitter, so containment belongs here.
+                    fencePending = false
+                }
+            }
+        }
+    }
+
+    private class Handle(
+        override val candidateRef: CellRef,
+        override val baselineRef: CellRef?,
         private val candidateOutlet: FanOutlet<*>,
-        private val outletName: String,
-        private val downstream: List<Use<*>>,
         private val judge: PromotionJudge,
         private val observerRef: PortRef,
         private val violationSubscriptions: List<ViolationSubscription>,
-        private val baseline: Baseline?,
-        private val baselineInputs: List<PortRef>,
         private val authority: EvolutionAuthority,
-        private val hooks: EvolutionHooks,
+        private val detachCandidateInputs: () -> Unit,
+        private val discardCandidate: () -> Unit,
+        private val detachBaseline: (() -> Unit)?,
+        private val swap: () -> Unit,
+        private val onPromoted: () -> Unit,
     ) : EvolutionHandle {
         @Volatile
         override var state: EvolutionHandle.State = EvolutionHandle.State.SHADOWING
@@ -328,9 +531,6 @@ object Evolve {
 
         override val reason: String?
             get() = terminalReason
-
-        override val candidateRef: CellRef = candidate.ref
-        override val baselineRef: CellRef? = baseline?.twin?.ref
 
         override fun verdict(): PromotionVerdict = judge.settledVerdict()
 
@@ -372,12 +572,9 @@ object Evolve {
 
         private fun reject(reason: String): EvolutionHandle.State {
             detachJudgment()
-            detachInputs(candidateInputs)
-            hooks.despawnShadow(host, candidate.ref)
-            baseline?.let { differential ->
-                detachInputs(baselineInputs)
-                hooks.despawnShadow(host, differential.twin.ref)
-            }
+            detachCandidateInputs()
+            discardCandidate()
+            detachBaseline?.invoke()
             terminalReason = reason
             state = EvolutionHandle.State.REJECTED
             return state
@@ -387,40 +584,22 @@ object Evolve {
             state = EvolutionHandle.State.JUDGED_ACCEPT
             state = EvolutionHandle.State.PROMOTING
             try {
-                Promotion.promote(
-                    host = host,
-                    gate = gate,
-                    incumbent = incumbent,
-                    candidate = candidate,
-                    outletName = outletName,
-                    downstream = downstream,
-                    // advance() already consumed a host-drained verdict. Re-reading the raw
-                    // counters in Promotion PRECHECK would reopen the same tap-before-gate
-                    // race if a newer wave emitted between that verdict and this call.
-                    judge = null,
-                    journal = hooks.journal,
-                )
+                swap()
             } catch (aborted: Promotion.PromotionAborted) {
                 if (!aborted.isCommitAbort()) {
                     state = EvolutionHandle.State.JUDGED_ACCEPT
                     throw aborted
                 }
                 detachJudgment()
-                baseline?.let { differential ->
-                    detachInputs(baselineInputs)
-                    hooks.despawnShadow(host, differential.twin.ref)
-                }
+                detachBaseline?.invoke()
                 terminalReason = aborted.message
                 state = EvolutionHandle.State.ROLLED_BACK
                 return state
             }
 
             detachJudgment()
-            baseline?.let { differential ->
-                detachInputs(baselineInputs)
-                hooks.despawnShadow(host, differential.twin.ref)
-            }
-            hooks.promoted(incumbent.ref)
+            detachBaseline?.invoke()
+            onPromoted()
             state = EvolutionHandle.State.PROMOTED
             return state
         }
@@ -430,10 +609,6 @@ object Evolve {
             violationSubscriptions.forEach { subscription ->
                 subscription.outlet.unsubscribe(subscription.ref)
             }
-        }
-
-        private fun detachInputs(refs: List<PortRef>) {
-            refs.forEach { hooks.untapShadow(gateOutlet, it) }
         }
 
         private fun EvolutionHandle.State.isTerminal(): Boolean =

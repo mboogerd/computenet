@@ -110,7 +110,8 @@ class AlignmentServerTest {
     }
 
     @Test
-    fun `ratings and creator weights move the live ranking through the worked examples`() = withApp(tmpJournal()) { _, probe ->
+    fun `ratings and creator weights move the live ranking through the worked examples`() = withApp(tmpJournal()) { app, probe ->
+        assertEquals(mapOf("scored" to "scored"), app.observationGroups)
         seed(probe)
         val topics = probe.get("/topics").body()
         assertTrue(

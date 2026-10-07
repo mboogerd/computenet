@@ -28,8 +28,11 @@
  * viewer's `snb-person` ref, not its `snb-authored` ref: a viewer who has
  * posted nothing has no authored cell, and spawning one just to carry a
  * declaration would grow `authored.keys()`, which `[SOC1-SREAD-03]` asserts
- * against. `setInterest` only records (kernel `InstanceIndex`); nothing links
- * or spawns on it here.
+ * against. `setInterest` returns the kernel's admission: this source waits
+ * for its `spawned` future before exposing the scope, so a
+ * `KeyedFamily(spawnOnInterest = true)` has materialized every named author
+ * before [FeedSession] enumerates its legs. The default family has no
+ * participant, and its admission completes immediately with an empty set.
  *
  * **Why a refusal is not `Empty` (4q9is-D4).** A person-cell read answering
  * [StateReadResult.Unavailable] (or `Unbounded`) on any page completes
@@ -37,7 +40,12 @@
  * `Empty` instead would make "the scope could not be read" indistinguishable
  * from "this viewer knows nobody" and silently empty the board — the
  * silent-narrow twin of the silent-widen `[SOC1-INT-05]` guards against. The
- * pull fails; nothing is registered; the caller sees the named reason.
+ * pull fails; nothing is registered; the caller sees the named reason. An
+ * exceptional interest admission is already recorded by the registry, but
+ * likewise fails the pull before any leg is issued, preserving the kernel's
+ * typed cause (for example
+ * [civictech.cell.host.InterestSpawnRefused] or
+ * [civictech.cell.BudgetRefusedException]).
  */
 package civictech.demo.social
 
@@ -84,12 +92,12 @@ class ViewerInterest(
 
     override fun scopeOf(viewer: Long): CompletableFuture<Interest> {
         val personRef = locate.person(viewer) ?: return CompletableFuture.completedFuture(Interest.Empty)
-        return knowsOf(personRef).thenApply { ids ->
+        return knowsOf(personRef).thenCompose { ids ->
             val scope: Interest =
                 if (ids.isEmpty()) Interest.Empty
                 else Interest.Ranges(ids.sorted().map { Interest.Ranges.Range(it, it + 1) })
-            registry.setInterest(personRef, scope)
-            scope
+            val admission = registry.setInterest(personRef, scope)
+            admission.spawned.thenApply { scope }
         }
     }
 

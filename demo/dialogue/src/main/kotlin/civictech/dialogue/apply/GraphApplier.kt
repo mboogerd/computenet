@@ -2,11 +2,10 @@ package civictech.dialogue.apply
 
 import civictech.agora.AgoraService
 import civictech.cell.CellRef
-import civictech.cell.data.delta.MapDelta
 import civictech.cell.host.ManagedHost
-import civictech.cell.link.LinkResult
-import civictech.cell.observe.ObserveCell
-import civictech.cell.observe.View
+import civictech.cell.observe.Observation
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import civictech.dialogue.ClaimKey
 import civictech.dialogue.DialogueRuntime
 import civictech.dialogue.DialoguePipeline
@@ -21,8 +20,8 @@ import civictech.dialogue.mint.StanceAggregate
  * writer** into the agora graph.
  *
  * It observes the pipeline's three canonical folds — `canonicalClaims`,
- * `canonicalRelations`, `projectedStances` — and, when the driver says the
- * graph is at rest, reconciles those snapshots against a fold-backed
+ * `canonicalRelations`, `projectedStances` — through one-view observations.
+ * When the driver says the graph is at rest, it reconciles those snapshots against a fold-backed
  * [BindingTable] by issuing `AgoraService.createClaim` / `createEdge` /
  * `remove` / `setStance`. Nothing else in `:demo:dialogue` holds an
  * [AgoraService].
@@ -34,18 +33,24 @@ import civictech.dialogue.mint.StanceAggregate
  * quiesced; between reconciles the applier is inert no matter what the
  * pipeline emits.
  *
- * That is a correctness property, not an ergonomic one. `computenet-23bf`
- * measured that the relation leg's semijoins (stages 5d/5e) ship at the
- * ungated `emitOnFrontier` default because gating wedges this graph, so
- * admitting the utterance that mints a relation's last endpoint can flicker
- * that relation into and *out of* the canonical fold **within one wave**.
- * Reacting to the delta stream would turn that transient into a real
+ * That is a correctness property, not an ergonomic one. Reacting to the
+ * delta stream would turn any within-wave transient upstream into a real
  * create-then-retract against the agora graph — and since this applier is the
  * sole writer, there is nobody to correct it. Pulling a settled snapshot
- * instead makes the flicker two folds into a `MapView` and zero agora ops:
+ * instead makes such a transient mere folds into a `MapView` and zero agora ops:
  * unobservable by construction. **Do not add an `onChange` subscription to
  * the write path**; it would silently reintroduce the defect the design
  * exists to exclude.
+ *
+ * The measured instance was the relation leg's semijoins (stages 5d/5e):
+ * ungated, admitting the utterance that mints a relation's last endpoint
+ * could flicker that relation into and *out of* the canonical fold **within
+ * one wave**. computenet-13dby gated both (`emitOnFrontier = true`), and
+ * `RelationMintTest` asserts the gated fold publishes no such transition, so
+ * this boundary no longer compensates for 5d/5e. It still guards every other
+ * fold: `projectedStances` has an ungated `JoinSetCell` upstream, and the
+ * write path must not depend on every upstream operator being gated
+ * (doc/demo-findings.md F-15).
  *
  * ### Never spawning ClaimCell/EdgeCell ([AGO1-APPLY-03], DESIGN D3)
  *
@@ -148,49 +153,38 @@ class GraphApplier(
      */
     private val appliedStances = mutableMapOf<Pair<String, ClaimKey>, Double>()
 
-    private val claimSink = sink("claims", refs.canonicalClaims.ref, View.map<ClaimKey, ClaimAggregate>())
-    private val relationSink =
-        sink("relations", refs.canonicalRelations.ref, View.map<RelationKey, RelationAggregate>())
-    private val stanceSink =
-        sink("stances", refs.projectedStances.ref, View.map<Pair<String, ClaimKey>, StanceAggregate>())
-
-    /**
-     * Spawn one [ObserveCell] under a **deterministic** ref and connect it to
-     * [source]'s outlet.
-     *
-     * The ref matters: `ObserveCell`'s default is `CellRef(randomUUID())`, and
-     * a journalled host replaying frames addressed to last run's random sink
-     * ref would dead-letter every one of them — the same hazard
-     * `AgoraService.hub`'s "deterministic ref: journaled hub frames re-deliver
-     * after a restart" comment records. `dialogue:sink:` is disjoint from
-     * `BindingTable`'s `dialogue:claim:`/`dialogue:relation:` prefixes, from
-     * the pipeline's own `$namespace:$handle` refs, and from `agora:hub`.
-     *
-     * The ref is derived from [DialogueRuntime.sinkRef] rather than
-     * re-literalizing `dialogue:sink:$name` here: `DialogueRuntime` uses the
-     * same prefix, via [DialogueRuntime.SINK_PREFIX], to build `volatileRefs`
-     * and decide [DialogueRuntime.isDurable]. A second, independent literal
-     * would silently drift out of `volatileRefs` if `SINK_PREFIX` ever
-     * changed, making these sinks durable and routing `MapDelta` payloads
-     * over a non-`@Serializable` vocabulary through the journal
-     * (computenet-oy26).
-     *
-     * No `onChange` listener is registered here — see the class doc.
-     */
-    private fun <K, V> sink(
-        name: String,
-        source: CellRef,
-        view: View<MapDelta<K, V>, Map<K, V>>,
-    ): ObserveCell<MapDelta<K, V>, Map<K, V>> {
-        val cell = ObserveCell(view, DialogueRuntime.sinkRef(name))
-        val management = host.managementInlet.call
-        management.spawn(cell)
-        val result = management.connect(source, "outlet", cell.ref, "inlet")
-        check(result !is LinkResult.Rejected) {
-            "GraphApplier: link $source.outlet -> $name sink rejected: ${(result as LinkResult.Rejected).reason}"
-        }
-        return cell
+    // Three separate one-view observations, not one: the builder would join
+    // these folds into a single group (they share the extraction root through
+    // pure hops), and that joined group holds waves at rest. The split is the
+    // disclosed interim for computenet-6ovpx, as in DialogueRuntime.
+    private val claimsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        map("claims", refs.canonicalClaims.ref)
     }
+
+    private val relationsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        map("relations", refs.canonicalRelations.ref)
+    }
+
+    private val stancesObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+        // projectedStances has an ungated JoinSetCell upstream. Admission
+        // must therefore be explicit at this app edge (computenet-axcyk.5).
+        unchecked("stances")
+        map("stances", refs.projectedStances.ref)
+    }
+
+    internal val observationGroups: Map<String, String>
+        get() = mapOf(
+            "claims" to claimsObservation.groups.single(),
+            "relations" to relationsObservation.groups.single(),
+            "stances" to stancesObservation.groups.single(),
+        )
+
+    internal val observationGroupRefs: Map<String, CellRef>
+        get() = mapOf(
+            "claims" to claimsObservation.group("claims").ref,
+            "relations" to relationsObservation.group("relations").ref,
+            "stances" to stancesObservation.group("stances").ref,
+        )
 
     /** The claim keys currently bound — [AGO1-APPLY-07]'s "bound" half. */
     fun boundClaims(): Set<ClaimKey> = bindings.boundClaims()
@@ -199,13 +193,13 @@ class GraphApplier(
     fun boundRelations(): Set<RelationKey> = bindings.boundRelations()
 
     /** The canonical claim snapshot the next [reconcile] would read. */
-    fun observedClaims(): Map<ClaimKey, ClaimAggregate> = claimSink.current()
+    fun observedClaims(): Map<ClaimKey, ClaimAggregate> = claimsObservation.get("claims")
 
     /** The canonical relation snapshot the next [reconcile] would read. */
-    fun observedRelations(): Map<RelationKey, RelationAggregate> = relationSink.current()
+    fun observedRelations(): Map<RelationKey, RelationAggregate> = relationsObservation.get("relations")
 
     /** The projected-stance snapshot the next [reconcile] would read. */
-    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> = stanceSink.current()
+    fun observedStances(): Map<Pair<String, ClaimKey>, StanceAggregate> = stancesObservation.get("stances")
 
     /**
      * Apply the current canonical snapshots to the agora graph and return
@@ -218,9 +212,9 @@ class GraphApplier(
      * this method does not throw on a rejection.
      */
     fun reconcile(): ReconcileReport {
-        val claims = claimSink.current()
-        val relations = relationSink.current()
-        val stances = stanceSink.current()
+        val claims = observedClaims()
+        val relations = observedRelations()
+        val stances: Map<Pair<String, ClaimKey>, StanceAggregate> = observedStances()
 
         val ops = mutableListOf<ApplyOp>()
         val failures = mutableListOf<ApplyFailure>()

@@ -93,8 +93,6 @@ import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.link.Interest
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** How one leg of a pull ended (8eb53-D5). */
@@ -150,9 +148,13 @@ data class PullReport(val legs: Map<CellRef, LegOutcome>)
  * unknown key, so a key is resolved to a ref only if `KeyedCells.contains`
  * admits it — one O(1) lookup per scope key, never a whole-family `keys()`
  * copy (tbmhn: `FeedSession.pull` cost O(total authors) per pull before this).
- * A friend who has authored nothing has no cell: no read is issued for them
- * and they are not in the [PullReport] (there is no ref to key them by); they
- * join the pull that follows their first post, reading from `since = null`.
+ * With the default authored family, a friend who has authored nothing has no
+ * cell: no read is issued for them and they are not in the [PullReport] (there
+ * is no ref to key them by); they join the pull that follows their first post,
+ * reading from `since = null`. With the authored family declared
+ * `spawnOnInterest`, [ViewerInterest] waits for the kernel admission before
+ * this enumeration, so the absent friend already has a cell and answers an
+ * empty leg at `since = null`.
  *
  * Not reentrant: one caller, one pull at a time — [pull] itself. A caller
  * that cannot guarantee single-flight callers of its own (SocialApp's
@@ -167,19 +169,6 @@ class FeedSession(
     private val registry: LocationRegistry,
     private val reader: BoundedReader,
     private val pageLimit: Int = 200,
-    // 4q9is-D7: opt-in demo-layer join of a derived scope to
-    // KeyedCells.getOrSpawn (the kernel seam `doc/demo-findings.md` F-24
-    // records as missing). Null (the default) is today's behavior: an
-    // admitted-but-absent friend gets no leg. Non-null spawns their
-    // `snb-authored` cell durably on the pull that first admits them, so they
-    // get a leg answering Empty at since = null from then on.
-    private val spawner: InterestDrivenFamily? = null,
-    // computenet-pvtcj: the executor [fanOut] dispatches spawner.admit() onto
-    // (see the companion's KDoc). Unused when spawner is null. A constructor
-    // parameter rather than the former mutable companion `var`, so
-    // `SocialApp` can own and shut down its own instance, and a test can
-    // inject its own without touching shared global state.
-    private val spawnExecutor: Executor = DEFAULT_SPAWN_EXECUTOR,
 ) {
     /** A session over a caller-supplied scope that never changes ([ScopeSource.fixed]). */
     constructor(
@@ -189,44 +178,12 @@ class FeedSession(
         registry: LocationRegistry,
         reader: BoundedReader,
         pageLimit: Int = 200,
-        spawner: InterestDrivenFamily? = null,
-        spawnExecutor: Executor = DEFAULT_SPAWN_EXECUTOR,
-    ) : this(viewer, ScopeSource.fixed(scope), families, registry, reader, pageLimit, spawner, spawnExecutor) {
+    ) : this(viewer, ScopeSource.fixed(scope), families, registry, reader, pageLimit) {
         this.scope = scope
     }
 
     init {
         require(pageLimit > 0) { "pageLimit must be positive, got $pageLimit" }
-    }
-
-    private companion object {
-        /**
-         * Fallback [spawnExecutor] used only when a caller omits the
-         * constructor parameter. 4q9is-D7's admit() call needs a thread that
-         * is not the host's own (see [fanOut]'s KDoc): production
-         * (`VirtualThreadScheduler`) drains its queue on its own dedicated
-         * thread regardless of who else is waiting, so a genuinely separate
-         * pool thread calling the blocking `getOrSpawn` is exactly the normal
-         * "application thread" usage pattern every other `getOrSpawn` call
-         * site in this demo already relies on.
-         *
-         * Every caller that never sets [spawner] (the default) never touches
-         * this either, since [fanOut] only reads [spawnExecutor] on the
-         * `spawner != null` branch. `SocialApp(interestDriven = true)` is the
-         * one production caller that does use it, and it builds and passes
-         * its own instance instead of relying on this fallback, so it can
-         * shut that instance down in `stop()` (computenet-pvtcj residual of
-         * 4q9is). This value is an immutable default, not shared mutable
-         * state: nothing here mutates it, and no test substitutes it by
-         * assignment — `SocialInterestTest`'s queueing [Executor] (needed
-         * because `SimulationController`'s own KDoc says "Stepping and
-         * awaiting are expected on one thread... not thread-safe by design",
-         * and a genuine background thread calling back into it concurrently
-         * with the test's driving thread is a real, observed race) is passed
-         * through this same constructor parameter instead.
-         */
-        val DEFAULT_SPAWN_EXECUTOR: Executor =
-            Executors.newCachedThreadPool { r -> Thread(r, "FeedSession-spawn").apply { isDaemon = true } }
     }
 
     /**
@@ -307,39 +264,22 @@ class FeedSession(
             .whenComplete { _, _ -> inFlight.set(false) }
     }
 
-    /**
-     * Legs for [derived] (validated before it becomes [scope]), then the
-     * walks. [spawner], when present, is admitted first — dispatched onto
-     * [spawnExecutor] rather than called inline (see its KDoc): this method
-     * runs as the continuation of [derived]'s own future, which for a derived
-     * [ScopeSource] completes ON THE HOST'S OWN THREAD (the read that
-     * produced it), and `KeyedCells.getOrSpawn` blocks synchronously waiting
-     * on that same host — a wait it (or the production `VirtualThreadScheduler`)
-     * refuses as a same-thread deadlock. A null [spawner] takes the
-     * already-completed branch, so every existing call site (no spawner) runs
-     * exactly as before, inline, on this same thread.
-     */
+    /** Legs for [derived] (validated before it becomes [scope]), then the walks. */
     private fun fanOut(derived: Interest): CompletableFuture<PullReport> {
         val keys = keysOf(derived)
         scope = derived
-        val admitted: CompletableFuture<Void> =
-            if (spawner != null) {
-                CompletableFuture.supplyAsync({ spawner.admit(derived) }, spawnExecutor).thenApply { null }
-            } else {
-                CompletableFuture.completedFuture(null)
-            }
-        return admitted.thenCompose {
-            val legs = keys
-                .filter { families.authored.contains(it) }
-                .map { families.authored.getOrSpawn(it).ref }
-                .filter { registry.interestOf(it).overlaps(derived) }
-            val outcomes = legs.map { ref ->
-                val since = synchronized(state) { retained[ref] }
-                ref to walk(ref, since)
-            }
-            CompletableFuture.allOf(*outcomes.map { it.second }.toTypedArray())
-                .thenApply { PullReport(outcomes.associateTo(LinkedHashMap()) { (ref, f) -> ref to f.join() }) }
+        val legs = keys
+            .filter { families.authored.contains(it) }
+            .map { families.authored.getOrSpawn(it).ref }
+            .filter { registry.interestOf(it).overlaps(derived) }
+        val outcomes = legs.map { ref ->
+            val since = synchronized(state) { retained[ref] }
+            ref to walk(ref, since)
         }
+        return CompletableFuture.allOf(*outcomes.map { it.second }.toTypedArray())
+            .thenApply {
+                PullReport(outcomes.associateTo(LinkedHashMap()) { (ref, future) -> ref to future.join() })
+            }
     }
 
     /**

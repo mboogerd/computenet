@@ -16,6 +16,7 @@ import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -103,6 +104,11 @@ class QuorumSetCell<E>(
     private val ledger: JoinLedger<E> = MintedLedger(ref, "quorum")
 
     init {
+        // An upstream Progress carries no lane delta to fold. Forward its exact
+        // source/counter only when this QuorumSetCell has one input edge. With
+        // fan-in, one lane's ack cannot settle the other lanes; this cell's own
+        // absorbed data waves still use emitOrAbsorb below.
+        inlet.relayAbsorbAcks()
         ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
             when (event) {
                 // n changed → the threshold shifted; re-evaluate the whole

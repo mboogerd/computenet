@@ -13,6 +13,7 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 
 @CellBase
@@ -36,6 +37,10 @@ class FilterCell<E>(
     private val op = TaggedSetOperator<E>()
 
     init {
+        // With exactly one input edge, Progress means the upstream wave
+        // produced no input delta anywhere in this hop. A fan-in FilterCell
+        // conservatively stops the relay until it owns a per-edge fold.
+        inlet.relayAbsorbAcks()
         outlet.catchUpOnLinked { if (op.state.size > 0) op.state.asDelta() else null }
     }
 

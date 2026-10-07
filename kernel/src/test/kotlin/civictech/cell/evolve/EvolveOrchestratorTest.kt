@@ -3,11 +3,21 @@ package civictech.cell.evolve
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.Propagate
+import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.host.LocationRegistry
+import civictech.cell.replication.Replication
 import civictech.cell.Stateful
 import civictech.cell.control.Magnitude
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.TrafficLightCell
@@ -23,6 +33,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
@@ -326,6 +337,265 @@ class EvolveOrchestratorTest {
     }
 
     @Test
+    fun `candidate waves share one pending settlement fence`() {
+        val run = Run(seed = 15)
+        val handle = run.start()
+
+        (1..3).forEach(run::submit)
+        run.idle()
+
+        run.scheduler.lowestPrioritySubmissions.get() shouldBe 1
+        handle.verdict() shouldBe PromotionVerdict.Accept
+    }
+
+    @Test
+    fun `a terminated scheduler cannot throw from the candidate observation tap`() {
+        val run = Run(seed = 16)
+        val handle = run.start()
+        run.scheduler.refuseSubmissions()
+
+        val failure = runCatching { run.candidate.outlet.call.provide(1L) }.exceptionOrNull()
+
+        failure shouldBe null
+        handle.verdict() shouldBe PromotionVerdict.Pending
+    }
+
+    @Test
+    fun `recovery succeeds while an evolution settlement fence is pending`() {
+        val run = Run(seed = 17)
+        val handle = run.start()
+        run.submit(1)
+        while (run.scheduler.lowestPrioritySubmissions.get() == 0) {
+            run.controller.step() shouldBe true
+        }
+
+        val recovery = run.host.recoverFrom(InMemoryJournal())
+
+        run.idle()
+        recovery.isApplied shouldBe true
+        handle.verdict() shouldBe PromotionVerdict.Pending
+    }
+
+    @Test
+    fun `a settlement fence that runs during recovery waits for gated deliveries and re-arms`() {
+        val scheduler = RecordingScheduler(VirtualThreadScheduler("evolve-recovery-settlement"))
+        val host = ManagedHost(scheduler = scheduler)
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = BlockingAfterEmitSummer(CellRef(logicalId, instanceId = 1))
+        val candidateGate = nonDecreasingGate()
+        val adapter = InvariantAdapterCell(candidateGate)
+        val view = CollectorCell()
+        val journal = BlockingReplayJournal()
+        val recoveryFailure = AtomicReference<Throwable>()
+        val recoveryDone = CountDownLatch(1)
+
+        try {
+            listOf<Cell>(source, gate, incumbent, candidateGate, adapter, view).forEach {
+                host.managementInlet.call.spawn(it)
+            }
+            host.quiescence().await(5_000, "spawn recovery-settlement graph")
+            val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java) as GateProxy).dataInlet.call
+            val routedInvariant =
+                (HostedCellProxy.create(adapter.ref, host, LongConsumerProxy::class.java) as LongConsumerProxy).inlet.call
+            source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+            gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+            incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+            candidate.outlet.subscribe(Use.fixed(routedInvariant, PortRef.generate()))
+            gate.controlInlet.call.setGreen()
+
+            val handle = Evolve.run(
+                host = host,
+                gate = gate,
+                incumbent = incumbent,
+                candidate = candidate,
+                outletName = "outlet",
+                downstream = listOf(view.inlet),
+                policy = policy().copy(window = ObservationWindow(1)),
+                gates = listOf(candidateGate),
+            )
+            val submissionsBeforeWave = scheduler.lowestPrioritySubmissions.get()
+            val settlementFenceRan = scheduler.expectLowestPriorityRun()
+            source.emit(1)
+            candidate.emitted.await(5, TimeUnit.SECONDS) shouldBe true
+            scheduler.lowestPrioritySubmissions.get() shouldBe submissionsBeforeWave + 1
+
+            val recoveryFenceSubmitted = scheduler.expectManagementSubmission()
+            Thread.ofVirtual().start {
+                try {
+                    host.recoverFrom(journal).awaitApplied(5_000)
+                } catch (failure: Throwable) {
+                    recoveryFailure.set(failure)
+                } finally {
+                    recoveryDone.countDown()
+                }
+            }
+            recoveryFenceSubmitted.await(5, TimeUnit.SECONDS) shouldBe true
+            candidate.release()
+            journal.replayEntered.await(5, TimeUnit.SECONDS) shouldBe true
+            settlementFenceRan.await(5, TimeUnit.SECONDS) shouldBe true
+
+            handle.verdict() shouldBe PromotionVerdict.Pending
+
+            journal.release()
+            recoveryDone.await(5, TimeUnit.SECONDS) shouldBe true
+            recoveryFailure.get() shouldBe null
+            handle.verdict()
+                .shouldBeInstanceOf<PromotionVerdict.Reject>()
+                .reason.shouldContain("violated the promotion policy")
+        } finally {
+            candidate.release()
+            journal.release()
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
+    fun `a settlement fence dequeued under the recovery gate cannot complete after the lift`() {
+        val scheduler = RecordingScheduler(VirtualThreadScheduler("evolve-recovery-lift-race"))
+        val host = ManagedHost(scheduler = scheduler)
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = BlockingAfterEmitSummer(CellRef(logicalId, instanceId = 1))
+        val candidateGate = nonDecreasingGate()
+        val adapter = InvariantAdapterCell(candidateGate)
+        val view = CollectorCell()
+        val journal = BlockingReplayJournal()
+        val recovery = AtomicReference<civictech.cell.host.Recovery>()
+        val recoveryFailure = AtomicReference<Throwable>()
+        val recoveryReturned = CountDownLatch(1)
+        var hold: RecordingScheduler.Hold? = null
+
+        try {
+            listOf<Cell>(source, gate, incumbent, candidateGate, adapter, view).forEach {
+                host.managementInlet.call.spawn(it)
+            }
+            host.quiescence().await(5_000, "spawn recovery-lift graph")
+            val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java) as GateProxy).dataInlet.call
+            val routedInvariant =
+                (HostedCellProxy.create(adapter.ref, host, LongConsumerProxy::class.java) as LongConsumerProxy).inlet.call
+            source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+            gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+            incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+            candidate.outlet.subscribe(Use.fixed(routedInvariant, PortRef.generate()))
+            gate.controlInlet.call.setGreen()
+
+            val handle = Evolve.run(
+                host = host,
+                gate = gate,
+                incumbent = incumbent,
+                candidate = candidate,
+                outletName = "outlet",
+                downstream = listOf(view.inlet),
+                policy = policy().copy(window = ObservationWindow(1)),
+                gates = listOf(candidateGate),
+            )
+            source.emit(1)
+            candidate.emitted.await(5, TimeUnit.SECONDS) shouldBe true
+            hold = scheduler.holdNextLowestPriorityRun()
+
+            val recoveryFenceSubmitted = scheduler.expectManagementSubmission()
+            Thread.ofVirtual().start {
+                try {
+                    recovery.set(host.recoverFrom(journal))
+                } catch (failure: Throwable) {
+                    recoveryFailure.set(failure)
+                } finally {
+                    recoveryReturned.countDown()
+                }
+            }
+            recoveryFenceSubmitted.await(5, TimeUnit.SECONDS) shouldBe true
+            candidate.release()
+            journal.replayEntered.await(5, TimeUnit.SECONDS) shouldBe true
+            // The settlement fence has been dequeued while the gate is raised, and has not yet
+            // looked at it: the interleaving where the scheduler thread takes the task just
+            // before recovery lowers the gate and re-arms the staged violation delivery.
+            hold.entered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            journal.release()
+            recoveryReturned.await(5, TimeUnit.SECONDS) shouldBe true
+            recoveryFailure.get() shouldBe null
+            hold.release.countDown()
+
+            recovery.get().awaitApplied(5_000)
+            host.quiescence().await(5_000, "settle after recovery lift")
+            handle.verdict()
+                .shouldBeInstanceOf<PromotionVerdict.Reject>()
+                .reason.shouldContain("violated the promotion policy")
+        } finally {
+            hold?.release?.countDown()
+            candidate.release()
+            journal.release()
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
+    fun `recovery can start during a candidate emission without leaking settlement refusal`() {
+        val scheduler = RecordingScheduler(VirtualThreadScheduler("evolve-recovery-overlap"))
+        val host = ManagedHost(scheduler = scheduler)
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = BlockingBeforeEmitSummer(CellRef(logicalId, instanceId = 1))
+        val candidateGate = nonDecreasingGate()
+        val view = CollectorCell()
+        val recoveryFailure = AtomicReference<Throwable>()
+        val recoveryDone = CountDownLatch(1)
+
+        try {
+            listOf<Cell>(source, gate, incumbent, candidateGate, view).forEach {
+                host.managementInlet.call.spawn(it)
+            }
+            val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java) as GateProxy).dataInlet.call
+            source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+            gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+            incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+            connectGate(candidate, candidateGate)
+            gate.controlInlet.call.setGreen()
+
+            val handle = Evolve.run(
+                host = host,
+                gate = gate,
+                incumbent = incumbent,
+                candidate = candidate,
+                outletName = "outlet",
+                downstream = listOf(view.inlet),
+                policy = policy(),
+                gates = listOf(candidateGate),
+            )
+            val recoveryFenceSubmitted = scheduler.expectManagementSubmission()
+            source.emit(1)
+            candidate.entered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            Thread.ofVirtual().start {
+                try {
+                    host.recoverFrom(InMemoryJournal()).awaitApplied(5_000)
+                } catch (failure: Throwable) {
+                    recoveryFailure.set(failure)
+                } finally {
+                    recoveryDone.countDown()
+                }
+            }
+            recoveryFenceSubmitted.await(5, TimeUnit.SECONDS) shouldBe true
+            candidate.release()
+
+            recoveryDone.await(5, TimeUnit.SECONDS) shouldBe true
+            recoveryFailure.get() shouldBe null
+            candidate.emissionFailure.get() shouldBe null
+            handle.verdict() shouldBe PromotionVerdict.Pending
+        } finally {
+            candidate.release()
+            scheduler.shutdown()
+        }
+    }
+
+    @Test
     fun `await on a live host rejects after the window-filling violation leaves the queue`() {
         val host = ManagedHost()
         val logicalId = UUID.randomUUID()
@@ -513,6 +783,70 @@ class EvolveOrchestratorTest {
         }
     }
 
+    private class BlockingBeforeEmitSummer(override val ref: CellRef) : SummingCell {
+        override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
+        val entered = CountDownLatch(1)
+        val emissionFailure = AtomicReference<Throwable>()
+        private val release = CountDownLatch(1)
+        private var sum = 0L
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    sum += input
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "test did not release candidate emission" }
+                    try {
+                        outlet.call.provide(sum)
+                    } catch (failure: Throwable) {
+                        emissionFailure.set(failure)
+                    }
+                }
+            })
+        }
+
+        fun release() {
+            release.countDown()
+        }
+    }
+
+    private class BlockingAfterEmitSummer(override val ref: CellRef) : SummingCell {
+        override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
+        val emitted = CountDownLatch(1)
+        private val release = CountDownLatch(1)
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    outlet.call.provide(-input.toLong())
+                    emitted.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "test did not release candidate after emission" }
+                }
+            })
+        }
+
+        fun release() {
+            release.countDown()
+        }
+    }
+
+    private class BlockingReplayJournal : Journal by InMemoryJournal() {
+        val replayEntered = CountDownLatch(1)
+        private val release = CountDownLatch(1)
+
+        override fun replay(): List<ByteArray> {
+            replayEntered.countDown()
+            check(release.await(10, TimeUnit.SECONDS)) { "test did not release journal replay" }
+            return emptyList()
+        }
+
+        fun release() {
+            release.countDown()
+        }
+    }
+
     private class NonIdempotentSummer(override val ref: CellRef) : SummingCell, Promotion.NonIdempotentCatchUp {
         override val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
         override val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
@@ -608,6 +942,153 @@ class EvolveOrchestratorTest {
         }
     }
 
+    private class RecordingScheduler(private val delegate: HostScheduler) : HostScheduler by delegate {
+        val lowestPrioritySubmissions = AtomicInteger()
+        private val refusing = AtomicBoolean()
+        private val nextManagementSubmission = AtomicReference<CountDownLatch>()
+        private val nextLowestPriorityRun = AtomicReference<CountDownLatch>()
+
+        override fun submit(priority: Int, action: suspend () -> Unit) {
+            check(!refusing.get()) { "host scheduler terminated" }
+            if (priority == Int.MAX_VALUE) lowestPrioritySubmissions.incrementAndGet()
+            if (priority == 0) nextManagementSubmission.getAndSet(null)?.countDown()
+            delegate.submit(priority) {
+                if (priority == Int.MAX_VALUE) {
+                    nextLowestPriorityHold.getAndSet(null)?.let { hold ->
+                        hold.entered.countDown()
+                        check(hold.release.await(10, TimeUnit.SECONDS)) { "test did not release held fence" }
+                    }
+                }
+                action()
+                if (priority == Int.MAX_VALUE) nextLowestPriorityRun.getAndSet(null)?.countDown()
+            }
+        }
+
+        /** Dequeued-but-not-yet-run point of the next lowest-priority task. */
+        class Hold {
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+        }
+
+        private val nextLowestPriorityHold = AtomicReference<Hold>()
+
+        fun holdNextLowestPriorityRun(): Hold = Hold().also { hold ->
+            check(nextLowestPriorityHold.compareAndSet(null, hold)) {
+                "a lowest-priority hold is already armed"
+            }
+        }
+
+        fun refuseSubmissions() {
+            refusing.set(true)
+        }
+
+        fun expectManagementSubmission(): CountDownLatch = CountDownLatch(1).also { latch ->
+            check(nextManagementSubmission.compareAndSet(null, latch)) {
+                "a management submission expectation is already armed"
+            }
+        }
+
+        fun expectLowestPriorityRun(): CountDownLatch = CountDownLatch(1).also { latch ->
+            check(nextLowestPriorityRun.compareAndSet(null, latch)) {
+                "a lowest-priority run expectation is already armed"
+            }
+        }
+    }
+
+    interface SetInletProxy {
+        val inlet: Use<SetOps<String>>
+    }
+
+    private inner class ReplicaRun(seed: Long, val gate: InvariantCell<SetDelta<String>, Unit>) {
+        val controller = SimulationController(seed)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val replication = Replication(registry)
+        val ref = CellRef(UUID.randomUUID(), instanceId = 0)
+        val incumbent = SetCell<String>(ref)
+        val candidate = SetCell<String>(ref)
+
+        init {
+            host.managementInlet.call.spawn(gate)
+            replication.replicate(incumbent, host)
+            controller.runToIdle()
+            @Suppress("UNCHECKED_CAST")
+            (candidate.outlet as FanOutlet<Propagate<SetDelta<String>>>)
+                .subscribe(gate.inlet as Use<Propagate<SetDelta<String>>>)
+        }
+
+        fun start(authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly): EvolutionHandle =
+            Evolve.runReplica(
+                host = host,
+                replication = replication,
+                incumbent = incumbent,
+                candidate = candidate,
+                policy = policy(gates = listOf(REPLICA_GATE)),
+                gates = listOf(gate),
+                authority = authority,
+            )
+
+        fun add(element: String) {
+            host.lookup<SetInletProxy>(ref)!!.inlet.call.add(element)
+            controller.runToIdle()
+        }
+
+    }
+
+    private fun noPoisonGate(): InvariantCell<SetDelta<String>, Unit> =
+        InvariantCell.observing(REPLICA_GATE) { delta ->
+            if (delta.adds.keys.any { it == "poison" }) "poison element observed" else null
+        }
+
+    @Test
+    fun `replicated arm accepts and swaps through promoteReplica under the incumbent's ref`() {
+        val run = ReplicaRun(seed = 11, gate = noPoisonGate())
+        val handle = run.start()
+
+        listOf("a", "b", "c").forEach(run::add)
+
+        // The shadow was fed from the incumbent's effective-delta outlet, not hosted.
+        run.candidate.membership() shouldBe setOf("a", "b", "c")
+        handle.advance() shouldBe EvolutionHandle.State.PROMOTED
+        run.controller.runToIdle()
+        run.candidate.ref shouldBe run.incumbent.ref
+        // production writes now land on the swapped-in candidate, not the retired incumbent
+        run.add("d")
+        run.candidate.membership() shouldBe setOf("a", "b", "c", "d")
+        run.incumbent.membership() shouldBe setOf("a", "b", "c")
+    }
+
+    @Test
+    fun `replicated arm rejects on a gate violation and leaves the incumbent live`() {
+        val run = ReplicaRun(seed = 12, gate = noPoisonGate())
+        val handle = run.start()
+
+        listOf("a", "poison", "c").forEach(run::add)
+
+        handle.advance() shouldBe EvolutionHandle.State.REJECTED
+        handle.reason!!.shouldContain("violated the promotion policy")
+        run.controller.runToIdle()
+        run.add("d")
+        run.incumbent.membership() shouldBe setOf("a", "poison", "c", "d")
+        // the tap is gone: the rejected shadow no longer sees production
+        run.candidate.membership() shouldBe setOf("a", "poison", "c")
+    }
+
+    @Test
+    fun `replicated arm keeps the evolution authority gate`() {
+        val run = ReplicaRun(seed = 13, gate = noPoisonGate())
+        val handle = run.start()
+        listOf("a", "b", "c").forEach(run::add)
+
+        CurrentPeer.with(PeerId("remote")) {
+            shouldThrow<Evolve.Refused> { handle.advance() }
+            shouldThrow<Evolve.Refused> { run.start() }
+        }
+        run.add("d")
+        run.incumbent.membership() shouldBe setOf("a", "b", "c", "d")
+        handle.advance() shouldBe EvolutionHandle.State.PROMOTED
+    }
+
     private inner class Run(
         seed: Long,
         incumbentFactory: (CellRef) -> SummingCell = ::SummerV1,
@@ -617,7 +1098,8 @@ class EvolveOrchestratorTest {
         stagedCandidateGate: Boolean = false,
     ) {
         val controller = SimulationController(seed)
-        val host = ManagedHost(scheduler = controller.scheduler())
+        val scheduler = RecordingScheduler(controller.scheduler())
+        val host = ManagedHost(scheduler = scheduler)
         val logicalId = UUID.randomUUID()
         val source = SourceCell(consumerInt)
         val gate = TrafficLightCell.create<Consumer<Int>>()
@@ -740,5 +1222,6 @@ class EvolveOrchestratorTest {
 
     private companion object {
         const val GATE_NAME = "non-decreasing"
+        const val REPLICA_GATE = "no-poison"
     }
 }

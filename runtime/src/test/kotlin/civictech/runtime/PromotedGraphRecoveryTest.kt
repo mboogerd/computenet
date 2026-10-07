@@ -12,6 +12,7 @@ import civictech.cell.data.delta.DeliveryTracking
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.StabilityReclaim
 import civictech.cell.data.delta.TagLaneContinuity
+import civictech.cell.evolve.Evolve
 import civictech.cell.evolve.StateMigrating
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
@@ -19,7 +20,9 @@ import civictech.cell.graph.DespawnStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.SpawnStep
+import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkOptions
+import civictech.cell.link.PeerId
 import civictech.cell.membrane.TrafficLightCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -30,6 +33,7 @@ import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
@@ -178,6 +182,14 @@ class PromotedGraphRecoveryTest {
             awaitUntil("b's incumbent replica converges before the promotion", 15_000) {
                 "before" in membership(replicaCaptured.getValue("b"))
             }
+
+            // [53-AUTH-01]: the privileged replica primitive refuses a remote-stamped caller under the
+            // default authority before anything is swapped (computenet-0hzxc).
+            val refusal = CurrentPeer.with(PeerId("mallory")) {
+                assertThrows(Evolve.Refused::class.java) { b1.promoteReplica("items", CandidateFactory("b")) }
+            }
+            assertTrue(refusal.message!!.contains("authority"), refusal.message)
+            assertInstanceOf(SetCell::class.java, replicaCaptured.getValue("b"))
 
             b1.promoteReplica("items", CandidateFactory("b"))
             assertInstanceOf(CandidateSetCell::class.java, replicaCaptured.getValue("b"))

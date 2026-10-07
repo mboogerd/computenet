@@ -1,12 +1,13 @@
 package civictech.demo.alignment
 
-import civictech.cell.data.view.MapHubCell
 import civictech.cell.data.OrMapCell
 import civictech.cell.durability.FileJournal
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.lookup
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.observe.ObservationFrame
+import civictech.cell.observe.observation
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
@@ -109,6 +110,9 @@ private fun fail(status: Int, error: String): Nothing = throw Fail(status, error
 private const val HOST_JOURNAL_ID = "host"
 internal const val ALIGNMENT_JOURNAL_FILE = "host.journal"
 
+@Suppress("UNCHECKED_CAST")
+private fun <T> ObservationFrame.view(name: String): T = views.getValue(name) as T
+
 /** The one host/context pair that owns an optional alignment journal. */
 private data class AlignmentRuntime(
     val registry: LocationRegistry,
@@ -179,7 +183,6 @@ class AlignmentApp(
     private val host = runtime.host
     private val context = runtime.context
     private val journal = runtime.journal
-    private val manage = host.managementInlet.call
     private val refs = runtime.refs
     private val ratingOps = host.lookup(refs.ratings)!!.inlet.call
     private val weightOps = host.lookup(refs.weights)!!.inlet.call
@@ -202,6 +205,13 @@ class AlignmentApp(
 
     private val shell = DemoShell(port)
 
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
+
+    private val observation = host.observation {
+        map("scored", refs.fusion)
+    }
+
     val boundPort: Int get() = shell.boundPort
 
     /** Non-null once [start] has run with an opt-in `--inspect-port` (`InspectorFlag`). */
@@ -214,10 +224,10 @@ class AlignmentApp(
             host.checkpoint(checkNotNull(journal))
         }
 
-        // one hub suffices: Scored carries the per-dimension n/mean/stdev
-        val hub = MapHubCell<IdeaKey, Scored>({ m -> synchronized(state) { scored = m }; broadcast() })
-        manage.spawn(hub)
-        manage.connect(refs.fusion, "outlet", hub.ref, "inlet")
+        observation.onChange { frame ->
+            synchronized(state) { scored = frame.view("scored") }
+            broadcast()
+        }
 
         shell.route("/") { ex ->
             // `/t/{id}` is the per-topic page URL (computenet-k1d4g-D8): same page, any id
