@@ -13,6 +13,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
+import civictech.cell.port.identity
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import java.util.concurrent.TimeUnit
@@ -122,6 +123,17 @@ interface EvolutionHandle {
  */
 object Evolve {
     class Refused(reason: String) : RuntimeException(reason)
+
+    /** Keep graph/runtime callers behind the evolution package's invariant-type boundary. */
+    internal fun isInvariant(cell: Cell?): Boolean = cell is InvariantCell<*, *>
+
+    /** Keep graph/runtime callers behind the evolution package's membrane-type boundary. */
+    internal fun isTrafficLightDataOutlet(cell: Cell?, owner: CellRef, outletName: String): Boolean {
+        val gate = cell as? TrafficLightApi<*> ?: return false
+        val outlet = gate.dataOutlet as? FanOutlet<*> ?: return false
+        val identity = outlet.identity() ?: return false
+        return identity.owner == owner && identity.name == outletName
+    }
 
     /** Incumbent-side differential shadow and the gates that judge it. */
     data class Baseline(
