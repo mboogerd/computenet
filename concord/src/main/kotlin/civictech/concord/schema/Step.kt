@@ -34,6 +34,32 @@ data class ApplyStep(
 ) : Step
 
 /**
+ * Apply one author-signed set operation at authority-bearing replica [on]
+ * (`[43-FLOW-04]`). [actor] is a scenario-local principal handle; the driver
+ * owns its signing key, replay counter and merge tag source.
+ */
+@Serializable
+@SerialName("signed-apply")
+data class SignedApplyStep(
+    val on: String,
+    val actor: String,
+    val op: String,
+    @Contextual val value: Value,
+) : Step
+
+/**
+ * Submit an author-signed principal transfer at authority-bearing replica [on].
+ * Both [actor] and [to] are scenario-local principal handles.
+ */
+@Serializable
+@SerialName("transfer-authority")
+data class TransferAuthorityStep(
+    val on: String,
+    val actor: String,
+    val to: String,
+) : Step
+
+/**
  * A quiescence barrier: everything before it settles (driver `quiesce(budget)`)
  * before anything after it starts. [budget] overrides the harness default.
  */

@@ -371,7 +371,7 @@ branch (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:518-539`):
 The registered polymorphic list, grouped as `WireCodec.baselineModule`
 registers them (`kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:183-272`;
 `grep -c 'subclass(' kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt`
-prints `41` = 34 `Any`-polymorphic registrations + 7 `Interest` arms):
+prints `43` = 36 `Any`-polymorphic registrations + 7 `Interest` arms):
 
 **Primitives** (no `@SerialName` — builtin kotlinx serializers; discriminator
 is the builtin descriptor's serial name, §3): `String` (`kotlin.String`),
@@ -386,7 +386,8 @@ is the builtin descriptor's serial name, §3): `String` (`kotlin.String`),
 `MapDelta`, `TaggedMapDelta`, `ListDelta`.
 
 **Replication / routing**: `RoutedCommand`, `Stamped`, `LeaderMark`,
-`Assignment`.
+`Assignment`, `SignedWrite`, `SignedWriteBatch` (author-signed write-authority
+envelopes, computenet-ermvz).
 
 **Ownership wrappers** (spec 23): `Owned`, `Frozen`, `Borrowed`. `Leased`
 is **not** in this list — it is never registered, because a `Leased`
@@ -408,11 +409,11 @@ string a reader must match is `Interest.<Name>`, not `<Name>` — distinct
 both from the bare simple name and from the `Any`-polymorphic namespace
 above (verify: `git grep -n 'SerialName("Interest\.' kernel/src/main/kotlin/civictech/cell/link/Interest.kt`).
 
-Every one of the 34+7 registrations except the 5 primitives and `Uuid`
-carries an explicit `@SerialName` — equal to its simple name for the 28
+Every one of the 36+7 registrations except the 5 primitives and `Uuid`
+carries an explicit `@SerialName` — equal to its simple name for the 30
 `Any`-polymorphic classes, `Interest.<Name>` for the 7 arms above (verified by the
 sibling task ncz.1.3's breakdown comment: `git grep -n 'SerialName("'` over
-`kernel/src/main/kotlin` matches all 34 `Any` registrations and 7 `Interest`
+`kernel/src/main/kotlin` matches all 36 `Any` registrations and 7 `Interest`
 arms) — no fully-qualified Kotlin class name appears among these
 discriminators.
 
