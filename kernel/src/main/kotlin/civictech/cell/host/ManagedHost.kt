@@ -999,7 +999,7 @@ open class ManagedHost(
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
         synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
-            if (consumeStagedLinkCloseMarker(parked)) return@forEach
+            if (isTeardownBookkeepingMarker(parked)) return@forEach
             synchronized(dataLock) { checkpointSequences.remove(parked) }
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
@@ -1255,6 +1255,16 @@ open class ManagedHost(
 
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
         synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
+
+    /**
+     * Terminal protocol bookkeeping has no payload fate to account for when a
+     * cell leaves the host. In-process EdgeClose markers are tracked by
+     * [stagedLinkCloseMarkers]; bridged frontier markers arrive independently
+     * over a [civictech.cell.wire.WireEdgeLink] and are identified by their
+     * protocol/link shape instead. Both follow the same teardown rule.
+     */
+    private fun isTeardownBookkeepingMarker(hostedInvocation: HostedPortInvocation): Boolean =
+        consumeStagedLinkCloseMarker(hostedInvocation) || isBridgedFrontierMarker(hostedInvocation)
 
     /**
      * True only for the bridged frontier markers that spec 20/22 requires to
@@ -2305,6 +2315,73 @@ open class ManagedHost(
     private lateinit var internalApi: HostManagementApi
 
     /**
+     * Add source-side-only Consume links to the ordinary target-side ancestry.
+     *
+     * `streamTo`'s routed/bypass branch deliberately has no [Link.toPort], so
+     * the ordinary inbound walk cannot encounter it. Two identities recover
+     * enough structure without pretending the bypass was admitted topology:
+     *
+     * - a source-side link whose destination is the stable ref of a hosted port
+     *   contributes its producer ref;
+     * - a [RoutedPropagate] attached to an outlet hosted by this host contributes
+     *   a target-derived ingress-family ref, independent of `streamTo`'s
+     *   anonymous attachment ref.
+     *
+     * Both stay opaque. In particular, even a hosted producer is not traversed:
+     * the bypass has no target-side topology record on which to base that walk.
+     * This is conservative for a managed `S -> W` plus bypass `W -> U`
+     * diamond: `W.outlet` remains an extra root of `U`, so `S` and `U` form
+     * separate observation groups rather than risking the over-alignment
+     * `[22-LIVE-01]` forbids.
+     */
+    private fun upstreamConsumeAncestorsIncludingBypasses(ref: CellRef): UpstreamAncestry {
+        val ancestry = civictech.cell.host.upstreamConsumeAncestors(cells, ref)
+        if (ancestry.self == null) return ancestry
+
+        val reachable = linkedSetOf(ref).apply { addAll(ancestry.local.keys) }
+        val reachablePorts = reachable.flatMapTo(linkedSetOf()) { cellRef ->
+            val cell = cells[cellRef] ?: return@flatMapTo emptyList()
+            val ports = PortRegistry.of(cell)
+            ports.names().mapNotNull(ports::get)
+        }.mapTo(linkedSetOf()) { it.ref }
+        val routedRoots = linkedSetOf<PortRef>()
+        val bypassRoots = linkedSetOf<PortRef>()
+        cells.values.forEach { cell ->
+            val ports = PortRegistry.of(cell)
+            ports.names().forEach { name ->
+                val port = ports[name] ?: return@forEach
+                if (port is FanOutlet<*>) {
+                    port.attachedConsumerApis().forEach attachment@{ api ->
+                        val ingress = (api as? RoutedPropagate<*>)?.ingress ?: return@attachment
+                        if (ingress.cellRef !in reachable) return@attachment
+                        val target = cells[ingress.cellRef] ?: return@attachment
+                        if (PortRegistry.of(target)[ingress.portName] != null) {
+                            routedRoots += ingress.root
+                        }
+                    }
+                }
+                val linked = port as? Linked ?: return@forEach
+                linked.linking.links.forEach { link ->
+                    if (link.role == LinkRole.Consume && link.toPort == null && link.to in reachablePorts) {
+                        bypassRoots += link.from
+                    }
+                }
+            }
+        }
+        if (bypassRoots.isEmpty() && routedRoots.isEmpty()) return ancestry
+        return UpstreamAncestry(
+            ancestry.self,
+            ancestry.local,
+            ancestry.opaque + bypassRoots + routedRoots,
+        )
+    }
+
+    private val topologyView = object : HostTopologyView {
+        override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
+            upstreamConsumeAncestorsIncludingBypasses(ref)
+    }
+
+    /**
      * Spec 33's drain protocol (`33 §The drain protocol` steps 1–3) applied at
      * **cell** granularity, then despawn — which is what spec 42 defines an
      * eviction to be: *"intake closes (spec 33's drain, applied at cell instead
@@ -2563,7 +2640,10 @@ open class ManagedHost(
             }
 
             override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
-                civictech.cell.host.upstreamConsumeAncestors(cells, ref)
+                upstreamConsumeAncestorsIncludingBypasses(ref)
+
+            override fun <T> inspectTopology(inspection: HostTopologyInspection<T>): T =
+                inspection.inspect(topologyView)
 
             override fun declareWrite(name: String, cells: Set<CellRef>): DeclaredWrite {
                 val declaredCells = cells.toSet()
@@ -2768,8 +2848,8 @@ open class ManagedHost(
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
-            } else if (method.name == "upstreamConsumeAncestors") {
-                internalApi.upstreamConsumeAncestors(args!![0] as CellRef)
+            } else if (method.name == "upstreamConsumeAncestors" || method.name == "inspectTopology") {
+                enqueueAwaiting(0) { invocation.invoke() }
             } else if (method.name == "declareWrite" || method.name == "declaredWrite") {
                 enqueueAwaiting(0) { invocation.invoke() }
             } else if (method.name.startsWith("connect")) {

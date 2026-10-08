@@ -174,6 +174,7 @@ function rateCard(idea, t, dims, tid) {
     const v = idea.ratings[dim.id];
     const row = document.getElementById('sliderRow').content.firstElementChild.cloneNode(true);
     row.querySelector('label').textContent = dim.name;
+    row.querySelector('label').title = dim.description || '';
     const input = row.querySelector('input');
     const shown = row.querySelector('span');
     const clearBtn = row.querySelector('button');

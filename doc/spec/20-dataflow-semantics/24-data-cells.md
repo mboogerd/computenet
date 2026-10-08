@@ -550,9 +550,11 @@ partitions replicate (93 I-25/I-2/I-3/I-8).
 > `computenet-6gkou`/`computenet-3vd7k`), and so did the generative lateness
 > harness and `:demo:slotfinder` adoption (96 §E4.6, `computenet-fh1fo`).
 > Concord corpus coverage of the `[24-WL-*]` ids landed too (96 §E4,
-> `computenet-t4od7`): every id is covered except `[24-WL-04]`,
-> `[24-WL-15]`, `[24-WL-17]` and `[24-WL-18]`, whose reasons are filed in
-> `concord/corpus/DISPUTES.md`. Retracts the eviction
+> `computenet-t4od7`): every id is covered except `[24-WL-15]`,
+> `[24-WL-17]` and `[24-WL-18]`, which remain gap rows for reasons filed in
+> `concord/corpus/DISPUTES.md`. `[24-WL-04]` is covered by its settlement
+> consequence (`computenet-tcovt`); its structural half (the floor is not a
+> wave position or completeness-set member) stays disputed there. Retracts the eviction
 > trigger that used to trail `[24-OP-WINDOW-02]` (the session-windows
 > deferral stays there). Research: Feldera's lateness → waterline → GC
 > (`doc/research/incremental-engines/01-dbsp-feldera.md` §5), Flink's
@@ -1274,6 +1276,17 @@ cells and re-delivers nothing to a co-hosted volatile cell — recover each
 distinct journal once. `[24-DUR-03]` A journal SHALL only ever hold its own
 cells' records, such that replaying it restores exactly those cells and
 re-delivers nothing to a co-hosted volatile cell (Ubiquitous).
+
+"Rebuild the graph, then replay the frame tail" (`[24-DUR-02]`) has one
+decided refinement (computenet-q37rn): a frame tail's *staging* for delivery
+is itself deferred until the rebuilt graph's topology is complete, and a
+decoded frame targeting a cell still named by `TopologyFold.activeEvolutions`
+— an `Evolve`-tapped shadow a crashed process never finished judging, 53
+§Recovery provenance for an in-flight shadow — is excluded from staging
+rather than delivered, because graph rebuild's own recovery cleanup is about
+to despawn exactly that cell. Every other frame still stages as this section
+describes; the refinement narrows which frames reach the intake, not the
+rebuild-then-replay order itself.
 `checkpoint` is keyed the same way: it snapshots only the cells teeing to the
 passed journal and compacts that journal atomically; the compaction carries
 every frame accepted for that journal and not yet delivered, plus a pending

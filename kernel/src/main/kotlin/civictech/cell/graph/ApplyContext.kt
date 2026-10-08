@@ -22,6 +22,7 @@ import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.membrane.SignatureVerifier
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -29,6 +30,9 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.identity
 import civictech.cell.replication.Replication
+import civictech.cell.replication.WriteAuthority
+import civictech.cell.replication.WriteSigner
+import civictech.cell.verify.InvariantCell
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -69,6 +73,8 @@ class ApplyContext(
     val journals: Map<String, Journal> = emptyMap(),
     val journalDirs: Map<String, File> = emptyMap(),
     val topology: Journal? = null,
+    val writeSigner: WriteSigner? = null,
+    val signatureVerifier: SignatureVerifier? = null,
 ) : TopologyApplier {
     private val journalBindings = ConcurrentHashMap<CellRef, Journal>()
     private val fold = MutableTopologyFold()
@@ -76,6 +82,7 @@ class ApplyContext(
     private val cells = ConcurrentHashMap<CellRef, Cell>()
     private val familyInstances = mutableMapOf<String, KeyedCells<*>>()
     private var replayDepth = 0
+    private var checkpointRehandshakeDepth = 0
 
     init {
         topology?.let { journal ->
@@ -100,6 +107,8 @@ class ApplyContext(
     /** Immutable view of the successfully-applied live topology. */
     fun live(): TopologyFold = fold.snapshot()
 
+    override fun activeEvolutions(): Set<CellRef> = live().activeEvolutions
+
     /** Recover topology and frames together, preserving this context's services and handle table. */
     fun recover(journal: Journal): Recovery = host.recoverFrom(journal, this)
 
@@ -107,22 +116,63 @@ class ApplyContext(
      * Apply only topology records from [journal]. Checkpoints and frames remain untouched; this
      * is the offline topology seam used by consumers that need the fold but not a live replay.
      */
-    fun replayTopology(journal: Journal): TopologyFold = replaying {
-        journal.replay().forEach { record ->
-            val decoded = JournalRecords.decode(record)
-            if (decoded is DecodedJournalRecord.Topology) decoded.events.forEach(::apply)
+    fun replayTopology(journal: Journal): TopologyFold {
+        replaying {
+            journal.replay().forEach { record ->
+                val decoded = JournalRecords.decode(record)
+                if (decoded is DecodedJournalRecord.Topology) decoded.events.forEach(::apply)
+            }
         }
-        live()
+        return live()
     }
 
-    /** Suppress topology recording for the dynamic extent of a recovery replay. */
+    /**
+     * Suppress topology recording for the dynamic extent of a recovery replay, then abort any
+     * recovered evolution whose imperative judge/handle died with the prior process. Cleanup
+     * runs after the final replay record, while [ManagedHost]'s recovery record-loop gate is
+     * still held, so a later Promote record wins and data cannot race the abort.
+     */
     internal fun <T> replaying(action: () -> T): T {
+        val outermost = replayDepth == 0
         replayDepth++
+        var completed = false
         return try {
-            action()
+            action().also { completed = true }
         } finally {
             replayDepth--
+            if (outermost && completed) abortRecoveredEvolutions()
         }
+    }
+
+    /**
+     * A candidate still named by [TopologyFold.activeEvolutions] after the complete journal has
+     * replayed is an interrupted evolution (computenet-q37rn): [TopoEvent.EvolutionTap] is
+     * written only by this context's own `evolve` hooks, before the tap it precedes, and is
+     * retired by [applyPromote]/[TopoEvent.Promote] or by a [TopoEvent.Despawn] of the same
+     * candidate — never by link shape or declaration order. Write the whole reversal before
+     * applying any part of it so another crash deterministically finishes the same abort. Gate
+     * colour is deliberately untouched.
+     */
+    private fun abortRecoveredEvolutions() {
+        val recovered = live()
+        recovered.activeEvolutions
+            .mapNotNull { ref -> recovered.spawns[ref] }
+            .forEach { spawn ->
+                val candidate = spawn.ref
+                val taps = recovered.links.values.filter { edge ->
+                    edge.to == candidate && edge.options.staged && isEvolutionTap(edge)
+                }
+                val unlinks = taps.map { edge ->
+                    TopoEvent.Unlink(edge.from, edge.outlet, edge.to, edge.inlet)
+                }
+                journalTopology(unlinks + TopoEvent.Despawn(candidate))
+                unlinks.forEach(::applyUnlink)
+                applyDespawn(TopoEvent.Despawn(candidate))
+            }
+    }
+
+    private fun isEvolutionTap(edge: TopoEvent.Connect): Boolean {
+        return Evolve.isTrafficLightDataOutlet(cells[edge.from], edge.from, edge.outlet)
     }
 
     /** One write-ahead topology record for one GraphSpec delta or one builder operation. */
@@ -153,6 +203,7 @@ class ApplyContext(
                 host.recoverFamilyKey(event.namespace, event.key)
                 fold.record(event)
             }
+            is TopoEvent.EvolutionTap -> fold.record(event)
         }
     }
 
@@ -162,15 +213,25 @@ class ApplyContext(
      * state; an uncompacted frame tail needs no such nudge because its replay emits normally.
      */
     override fun checkpointRestored() {
-        live().links.values.forEach { event ->
-            val key = TopologyLinkKey.of(event)
-            synchronized(activeLinks) { activeLinks.remove(key) }?.unlink()
-            applyConnect(event)
+        checkpointRehandshakeDepth++
+        try {
+            live().links.values.forEach { event ->
+                val key = TopologyLinkKey.of(event)
+                synchronized(activeLinks) { activeLinks.remove(key) }?.unlink()
+                applyConnect(event)
+            }
+        } finally {
+            checkpointRehandshakeDepth--
         }
     }
 
+    /** Both write-authority seams are present; checked before journaling so a refusal leaves no record. */
+    internal fun hasAuthoritySeams(): Boolean = writeSigner != null && signatureVerifier != null
+
     internal fun applySpawn(event: TopoEvent.Spawn, prepared: Cell? = null): CellRef {
         check(!fold.containsHandle(event.handle)) { "duplicate handle '${event.handle}'" }
+        val authority = event.authority ?: WriteAuthority.Open
+        if (authority != WriteAuthority.Open && !hasAuthoritySeams()) throw missingAuthoritySeams(event.handle)
         event.journalId?.let { journalId ->
             bind(event.ref, journals[journalId] ?: throw missingJournal(event.handle, journalId))
         }
@@ -186,7 +247,7 @@ class ApplyContext(
                     "spawn step '${event.handle}': parameter 'replicated' requires a Replicable cell " +
                         "(built ${cell.javaClass.name})",
                 )
-            service.replicate(replicable, host)
+            service.replicate(replicable, host, authority, writeSigner, signatureVerifier)
             if (event.shadow) suppressShadow(cell)
             cell.ref
         } else if (event.shadow) {
@@ -295,8 +356,21 @@ class ApplyContext(
 
     /** Lower one declarative [PromoteStep] onto the live evolution pipeline. */
     fun evolve(step: PromoteStep): EvolutionHandle {
-        val gateRef = evolutionRef(step.gate, "gate")
         val incumbentRef = evolutionRef(step.incumbent, "incumbent")
+        val incumbentSpawn = live().spawns[incumbentRef]
+            ?: throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "incumbent '${step.incumbent}' ($incumbentRef) has no recorded spawn",
+            )
+        if (incumbentSpawn.replicated) return evolveReplica(step, incumbentRef)
+        if (step.candidate.isBlank() || step.replicatedCandidateFactory != null) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "single-instance promotion requires one candidate handle and no replicated candidate factory",
+            )
+        }
+
+        val gateRef = evolutionRef(step.gate, "gate")
         val candidateRef = evolutionRef(step.candidate, "candidate")
         val downstream = step.downstream.map { (handle, inlet) ->
             evolutionRef(handle, "downstream") to inlet
@@ -340,12 +414,21 @@ class ApplyContext(
         }.orEmpty()
         val hooks = object : EvolutionHooks {
             private val taps = mutableMapOf<PortRef, TopoEvent.Connect>()
+            private val tappedCandidates = mutableSetOf<CellRef>()
 
             override val journal: PromotionJournal = prepared.journal
 
             override fun <T : Any> tapShadow(outlet: FanOutlet<T>, inlet: FanInlet<T>): PortRef {
                 val from = requireNotNull(outlet.identity()) { "evolution gate outlet has no registered identity" }
                 val to = requireNotNull(inlet.identity()) { "evolution candidate inlet has no registered identity" }
+                // Write-ahead evidence that THIS evolution owns the tap it is about to install,
+                // before installing it (computenet-q37rn). One per candidate: a shadow may have
+                // several matching inlets, so later calls for the same candidate are no-ops here.
+                if (tappedCandidates.add(to.owner)) {
+                    val begin = TopoEvent.EvolutionTap(to.owner)
+                    journalTopology(listOf(begin))
+                    apply(begin)
+                }
                 val event = TopoEvent.Connect(
                     from = from.owner,
                     outlet = from.name,
@@ -397,6 +480,97 @@ class ApplyContext(
             gates = gates,
             baselineTwin = baselineTwin,
             baselineGates = baselineGates,
+            hooks = hooks,
+        )
+    }
+
+    private fun evolveReplica(step: PromoteStep, incumbentRef: CellRef): EvolutionHandle {
+        val candidateFactory = step.replicatedCandidateFactory
+        if (step.candidate.isNotBlank() || candidateFactory == null) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion requires one replicated candidate factory and no candidate handle",
+            )
+        }
+        if (step.gate.isNotBlank()) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'gate'",
+            )
+        }
+        if (step.downstream.isNotEmpty()) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'downstream'",
+            )
+        }
+        if (step.baseline != null) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'baseline'",
+            )
+        }
+        if (step.baselineGates.isNotEmpty()) {
+            throw Promotion.PromotionAborted(
+                "PRECHECK",
+                "replicated promotion does not accept single-instance field 'baselineGates'",
+            )
+        }
+        checkEvolutionAuthority(::defaultEvolutionAuthorityRefusal)
+        val gates = step.gates.map { handle ->
+            handle to cells.getValue(evolutionRef(handle, "gate"))
+        }
+        val prepared = prepareReplicatedPromotion(
+            ref = incumbentRef,
+            candidateFactory = candidateFactory,
+            outletName = step.outletName,
+        )
+        var replicaTapSeen = false
+        var activeReplicaTap: PortRef? = null
+        val hooks = object : EvolutionHooks {
+            override val journal: PromotionJournal = prepared.journal
+
+            override fun <T : Any> tapReplicatedShadow(
+                outlet: FanOutlet<T>,
+                inlet: FanInlet<T>,
+            ): PortRef {
+                check(activeReplicaTap == null) { "replicated evolution already has an active shadow tap" }
+                outlet.subscribe(inlet)
+                replicaTapSeen = true
+                activeReplicaTap = inlet.ref
+                return inlet.ref
+            }
+
+            override fun <T : Any> untapReplicatedShadow(outlet: FanOutlet<T>, inlet: PortRef) {
+                check(activeReplicaTap == inlet) {
+                    "replicated evolution shadow tap $inlet was not installed by this handle"
+                }
+                outlet.unsubscribe(inlet)
+                activeReplicaTap = null
+            }
+
+            override fun promotedReplica(ref: CellRef) {
+                check(replicaTapSeen && activeReplicaTap == null) {
+                    "replicated promotion committed without closing its graph-owned shadow tap"
+                }
+                cells[ref] = prepared.candidateCell
+            }
+        }
+
+        return Evolve.runReplica(
+            host = host,
+            replication = prepared.replication,
+            incumbent = prepared.incumbent,
+            candidate = prepared.candidate,
+            policy = step.policy,
+            gates = gates.map { (handle, cell) ->
+                cell as? InvariantCell<*, *>
+                    ?: throw Promotion.PromotionAborted(
+                        "PRECHECK",
+                        "gate handle '$handle' (${cell.ref}) is not an InvariantCell",
+                    )
+            },
+            outletName = step.outletName,
             hooks = hooks,
         )
     }
@@ -537,6 +711,34 @@ class ApplyContext(
         judge: PromotionJudge? = null,
     ) {
         checkEvolutionAuthority(authorityRefusal)
+        val prepared = prepareReplicatedPromotion(ref, candidateFactory, outletName)
+
+        Promotion.promoteReplica(
+            host = host,
+            replication = prepared.replication,
+            incumbent = prepared.incumbent,
+            candidate = prepared.candidate,
+            outletName = outletName,
+            judge = judge,
+            journal = prepared.journal,
+        )
+        cells[ref] = prepared.candidateCell
+    }
+
+    private data class PreparedReplicatedPromotion(
+        val replication: Replication,
+        val incumbent: Replicable<*>,
+        val candidate: Replicable<*>,
+        val candidateCell: Cell,
+        val journal: PromotionJournal,
+    )
+
+    /** Shared PRECHECK and durability seam for direct and declarative rolling promotion. */
+    private fun prepareReplicatedPromotion(
+        ref: CellRef,
+        candidateFactory: CellFactory,
+        outletName: String,
+    ): PreparedReplicatedPromotion {
         val before = live()
         val service = replication
             ?: throw Promotion.PromotionAborted("PRECHECK", "replicated promotion requires a Replication service")
@@ -605,16 +807,13 @@ class ApplyContext(
             }
         }
 
-        Promotion.promoteReplica(
-            host = host,
+        return PreparedReplicatedPromotion(
             replication = service,
             incumbent = incumbent,
             candidate = candidate,
-            outletName = outletName,
-            judge = judge,
+            candidateCell = candidateCell,
             journal = promotionJournal,
         )
-        cells[ref] = candidateCell
     }
 
     private fun checkEvolutionAuthority(authorityRefusal: () -> String?) {

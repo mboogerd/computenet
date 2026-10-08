@@ -235,7 +235,9 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  overlay (5eefp-D8) and by the Board's drill-down (renderDrill() in
  *                  DrilldownView.kt, w0i5h-D8), both only while boardGate(t).open;
  *                  Setup's progress block (0dvra-D15) reads names and counts only,
- *                  never a value. No other code reads state.ratings.
+ *                  never a value. No other code reads state.ratings. AI raters'
+ *                  ratings (participant `ai:<model-version>`) are in it too, and
+ *                  each of those readers leaves them out (isAi).
  * loaded           false until the first frame; render nothing topic-specific before.
  * me()             the viewer's name (sessionStorage.participant). Only the
  *                  #identity chip changes it; a change clears meCache and re-renders.
@@ -255,8 +257,12 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  * myProgress(tid)  {rated, total} summed over meCache[tid].ideas, or null if uncached.
  * boardGate(t)     {open, reason, rated, total, pending} (0dvra-D10): done = every
  *                  cached idea has rated === total (vacuously true with no ideas);
- *                  open = done && (t.boardVisibility !== 'after-reveal' || t.revealed);
- *                  reason 'rate' (not done) | 'reveal' (done, unrevealed) | null (open).
+ *                  open = after-reveal ? t.revealed : done — the Board unlocks on own
+ *                  completion OR the facilitator's reveal (epic computenet-9y79n R5),
+ *                  never on both: in after-reveal mode the reveal alone opens it, for
+ *                  everyone, finished rating or not (planning poker).
+ *                  reason 'reveal' (after-reveal, unrevealed) | 'rate' (not done) |
+ *                  null (open).
  *                  Until meCache has the topic: {open:false, reason:'rate', rated:0,
  *                  total:0, pending:true}; otherwise pending is false. Applies to the
  *                  creator too.
@@ -304,6 +310,9 @@ const el = id => document.getElementById(id);
 
 if (!(sessionStorage.participant || '').trim()) sessionStorage.participant = 'p-' + Math.random().toString(36).slice(2, 6);
 const me = () => (sessionStorage.participant || '').trim();
+// AI raters rate under `ai:<model-version>` (RaterClass); their ratings fold into the AI score, so
+// every view that lists people's ratings leaves them out.
+const isAi = name => name.startsWith('ai:');
 
 function topicId() {
   const m = location.pathname.match(/^\/t\/([^/]+)\/?/);
@@ -342,8 +351,9 @@ function boardGate(t) {
   const p = t ? myProgress(t.id) : null;
   if (!p) return { open: false, reason: 'rate', rated: 0, total: 0, pending: true };
   const done = meCache[t.id].ideas.every(i => i.rated === i.total);
-  const open = done && (t.boardVisibility !== 'after-reveal' || t.revealed === true);
-  return { open: open, reason: open ? null : (done ? 'reveal' : 'rate'), rated: p.rated, total: p.total, pending: false };
+  const byReveal = t.boardVisibility === 'after-reveal';
+  const open = byReveal ? t.revealed === true : done;
+  return { open: open, reason: open ? null : (byReveal ? 'reveal' : 'rate'), rated: p.rated, total: p.total, pending: false };
 }
 
 // three-way partition (design contract 2026-09-22): a factor dim draws from its own

@@ -17,6 +17,8 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.data.delta.TaggedMapDeltaSerializer
 import civictech.cell.replication.Stamped
+import civictech.cell.replication.SignedWrite
+import civictech.cell.replication.SignedWriteBatch
 import civictech.cell.port.PortRef
 import civictech.cell.protocol.ProtocolId
 import civictech.cell.control.Attention
@@ -257,6 +259,10 @@ object WireCodec {
                 // sets): a journaled, ref-addressed hosted invocation to a shard's
                 // assignInlet — so it rides the WAL and crosses a bridge.
                 subclass(civictech.cell.replication.Assignment::class)
+                // author-signed replication writes (INT3, computenet-ermvz):
+                // additive @SerialName payloads beside Assignment, no VERSION bump.
+                subclass(SignedWrite::class)
+                subclass(SignedWriteBatch::class)
             }
             // the interest algebra crosses the wire as a polymorphic value inside
             // an Assignment (PN-6): every arm is a registered @Serializable subclass.

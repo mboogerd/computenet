@@ -18,6 +18,7 @@ import civictech.cell.host.inlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
+import civictech.cell.port.streamTo
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -25,6 +26,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
+import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.Random
 import java.util.UUID
@@ -78,6 +80,263 @@ class ObservationBuilderTest {
         val routed: Propagate<SetDelta<Int>> = host.inlet(target, portName)
         outlet.unsubscribe(inletRef)
         outlet.subscribe(Use.fixed(routed, inletRef))
+    }
+
+    private fun observedGroups(host: ManagedHost, union: CellRef, source: CellRef): Set<String> {
+        val observation = host.observation {
+            set("union", union)
+            set("source", source)
+        }
+        return try {
+            observation.groups
+        } finally {
+            observation.close()
+        }
+    }
+
+    /**
+     * Keeps the never-attached handle live while the first observation is
+     * built, then returns only a weak reference so the test can prove the
+     * post-collection partition is identical.
+     */
+    private fun groupsWithNeverLinkedHandleAlive(
+        host: ManagedHost,
+        union: CellRef,
+        source: CellRef,
+    ): Pair<Set<String>, WeakReference<Propagate<SetDelta<Int>>>> {
+        val routed: Propagate<SetDelta<Int>> = host.inlet(union, "inlet")
+        val weak = WeakReference(routed)
+        return observedGroups(host, union, source) to weak
+    }
+
+    /**
+     * Keeps the detached handle live while the first observation is built.
+     * The bypass link does not retain the routed target after unlink.
+     */
+    private fun groupsWithUnlinkedHandleAlive(
+        host: ManagedHost,
+        writer: SetCell<Int>,
+        union: CellRef,
+        source: CellRef,
+    ): Pair<Set<String>, WeakReference<Propagate<SetDelta<Int>>>> {
+        val routed: Propagate<SetDelta<Int>> = host.inlet(union, "inlet")
+        val weak = WeakReference(routed)
+        writer.outlet.streamTo(routed).unlink()
+        return observedGroups(host, union, source) to weak
+    }
+
+    /** Force enough collection to distinguish a weak index from live topology. */
+    private fun collectRoutedHandle() {
+        repeat(8) {
+            System.gc()
+            @Suppress("UNUSED_EXPRESSION")
+            ByteArray(1 shl 20)
+        }
+        System.gc()
+    }
+
+    @Test
+    fun `unmanaged union feed keeps its managed source in a separate group regardless of link order`() {
+        listOf(true, false).forEach { linkBeforeObservation ->
+            val controller = SimulationController()
+            val host = ManagedHost(scheduler = controller.scheduler())
+            val management = host.managementInlet.call
+            val source = SetCell<Int>()
+            val writer = SetCell<Int>()
+            val union = UnionSetCell<Int>()
+            listOf(source, writer, union).forEach(management::spawn)
+
+            writer.outlet.streamTo(union.inlet.call, at = union.inlet.ref)
+            management.upstreamConsumeAncestors(union.ref).opaque shouldBe setOf(writer.outlet.ref)
+            if (linkBeforeObservation) {
+                management.connect(source.ref, "outlet", union.ref, "inlet")
+            }
+
+            val observation = host.observation {
+                set("union", union.ref)
+                set("source", source.ref)
+            }
+
+            observation.groups shouldContainExactly setOf("union", "source")
+            observation.current().groupOf shouldBe mapOf(
+                "union" to "union",
+                "source" to "source",
+            )
+
+            if (!linkBeforeObservation) {
+                management.connect(source.ref, "outlet", union.ref, "inlet")
+            }
+            observation.close()
+        }
+    }
+
+    @Test
+    fun `anonymous routed union feed does not collapse onto its managed source`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val writer = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, writer, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val routed: Propagate<SetDelta<Int>> = host.inlet(union.ref, "inlet")
+        writer.outlet.streamTo(routed)
+        val routedRoots = management.upstreamConsumeAncestors(union.ref).opaque
+        routedRoots.size shouldBe 1
+        routedRoots.single().cell shouldBe union.ref
+        (writer.outlet.ref in routedRoots) shouldBe false
+
+        val observation = host.observation {
+            set("union", union.ref)
+            set("source", source.ref)
+        }
+
+        observation.groups shouldContainExactly setOf("union", "source")
+        observation.current().groupOf shouldBe mapOf(
+            "union" to "union",
+            "source" to "source",
+        )
+        observation.close()
+    }
+
+    @Test
+    fun `never-linked routed handle cannot change observation groups before collection`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val expected = setOf("union+source")
+        val (beforeCollection, handle) = groupsWithNeverLinkedHandleAlive(
+            host,
+            union.ref,
+            source.ref,
+        )
+        beforeCollection shouldContainExactly expected
+
+        collectRoutedHandle()
+        handle.get() shouldBe null
+        observedGroups(host, union.ref, source.ref) shouldContainExactly expected
+    }
+
+    @Test
+    fun `unlinked routed feed cannot change observation groups before collection`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val writer = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, writer, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val expected = setOf("union+source")
+        val (beforeCollection, handle) = groupsWithUnlinkedHandleAlive(
+            host,
+            writer,
+            union.ref,
+            source.ref,
+        )
+        beforeCollection shouldContainExactly expected
+
+        collectRoutedHandle()
+        handle.get() shouldBe null
+        observedGroups(host, union.ref, source.ref) shouldContainExactly expected
+    }
+
+    @Test
+    fun `routed feed attached on another host cannot change equal-ref observation groups`() {
+        val sharedUnionRef = CellRef(UUID.randomUUID())
+        val observedHost = ManagedHost()
+        val observedManagement = observedHost.managementInlet.call
+        val source = SetCell<Int>()
+        val union = UnionSetCell<Int>(sharedUnionRef)
+        listOf(source, union).forEach(observedManagement::spawn)
+        observedManagement.connect(source.ref, "outlet", union.ref, "inlet")
+
+        val otherHost = ManagedHost()
+        val otherManagement = otherHost.managementInlet.call
+        val otherWriter = SetCell<Int>()
+        val otherUnion = UnionSetCell<Int>(sharedUnionRef)
+        listOf(otherWriter, otherUnion).forEach(otherManagement::spawn)
+        val otherRouted: Propagate<SetDelta<Int>> = otherHost.inlet(otherUnion.ref, "inlet")
+        otherWriter.outlet.streamTo(otherRouted)
+
+        observedGroups(observedHost, union.ref, source.ref) shouldContainExactly setOf("union+source")
+    }
+
+    @Test
+    fun `hosted bypass producer remains an opaque root instead of being traversed`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val writer = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        listOf(source, writer, union).forEach(management::spawn)
+        management.connect(source.ref, "outlet", writer.ref, "inlet")
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+        writer.outlet.streamTo(union.inlet.call, at = union.inlet.ref)
+
+        management.upstreamConsumeAncestors(union.ref).opaque shouldBe setOf(writer.outlet.ref)
+        val observation = host.observation {
+            set("union", union.ref)
+            set("source", source.ref)
+        }
+
+        observation.groups shouldContainExactly setOf("union", "source")
+        observation.close()
+    }
+
+    @Test
+    fun `declared future unmanaged feed propagates to downstream view roots`() {
+        val host = ManagedHost()
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val union = UnionSetCell<Int>()
+        val filtered = FilterCell<Int> { true }
+        listOf(source, union, filtered).forEach(management::spawn)
+        management.connect(source.ref, "outlet", union.ref, "inlet")
+        management.connect(union.ref, "outlet", filtered.ref, "inlet")
+        val futureWriterFamily = PortRef.generate()
+
+        val observation = host.observation {
+            unmanagedFeed(union.ref, futureWriterFamily)
+            set("union", union.ref)
+            set("filtered", filtered.ref)
+            set("source", source.ref)
+        }
+
+        observation.groups shouldContainExactly setOf("union+filtered", "source")
+        observation.current().groupOf shouldBe mapOf(
+            "union" to "union+filtered",
+            "filtered" to "union+filtered",
+            "source" to "source",
+        )
+        observation.close()
+    }
+
+    @Test
+    fun `unmanaged feed declared on a cell outside every view's ancestry rejects before spawning`() {
+        val registry = LocationRegistry()
+        val host = ManagedHost(registry = registry)
+        val management = host.managementInlet.call
+        val source = SetCell<Int>()
+        val stray = UnionSetCell<Int>()
+        listOf(source, stray).forEach(management::spawn)
+
+        val refsBefore = registry.localRefs().size
+        val error = assertThrows<IllegalArgumentException> {
+            host.observation {
+                unmanagedFeed(stray.ref, PortRef.generate())
+                set("source", source.ref)
+            }
+        }
+        error.message shouldBe
+            "observation: unmanaged feed targets must be a registered view or its managed ancestor: [${stray.ref}]"
+        registry.localRefs().size shouldBe refsBefore
     }
 
     @Test

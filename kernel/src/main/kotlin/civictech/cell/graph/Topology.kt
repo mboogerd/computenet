@@ -2,6 +2,7 @@ package civictech.cell.graph
 
 import civictech.cell.CellRef
 import civictech.cell.link.LinkOptions
+import civictech.cell.replication.WriteAuthority
 import java.io.Serializable
 import java.util.UUID
 
@@ -19,7 +20,12 @@ sealed interface TopoEvent : Serializable {
         val replicated: Boolean,
         val journalId: String?,
         val shadow: Boolean,
-    ) : TopoEvent
+        val authority: WriteAuthority? = null,
+    ) : TopoEvent {
+        private companion object {
+            private const val serialVersionUID: Long = 9183278101467966974L
+        }
+    }
 
     data class Connect(
         val from: CellRef,
@@ -62,6 +68,28 @@ sealed interface TopoEvent : Serializable {
     ) : TopoEvent
 
     data class FamilyKey(val namespace: String, val key: String) : TopoEvent
+
+    /**
+     * Write-ahead evidence that [candidate] is tapped by a live [civictech.cell.evolve.Evolve]
+     * run (computenet-q37rn): written only by `ApplyContext.evolve`'s hooks, before the tap
+     * [Connect] it precedes, never by a declarative [GraphSpec] writer. A declared shadow's
+     * staged links — however they are ordered relative to its other edges — carry no such
+     * record, so recovery no longer infers "interrupted evolution" from link shape or
+     * declaration order.
+     *
+     * Additive: a journal written before this change contains no `EvolutionTap`, and decodes
+     * unchanged (existing [Connect] bytes are untouched). A build predating this change cannot
+     * decode a journal that contains one — `ObjectInputStream` fails closed on the unknown
+     * class — which is this record's explicit downgrade boundary.
+     *
+     * Retired implicitly, never by a paired "end" record: [MutableTopologyFold] drops the
+     * marker the moment [candidate] is folded into a completed [Promote], or removed by a
+     * [Despawn] (the abort-cleanup path `ApplyContext.abortRecoveredEvolutions` and the live
+     * reject path `EvolutionHooks.despawnShadow` both end with one). So after a complete
+     * journal replay, [TopologyFold.activeEvolutions] holds exactly the candidates whose
+     * evolution never reached either outcome before the process stopped.
+     */
+    data class EvolutionTap(val candidate: CellRef) : TopoEvent
 }
 
 /** Stable key for one live edge in a [TopologyFold]. */
@@ -96,10 +124,21 @@ data class TopologyFold(
      * incumbent's spawn for every Promote, so a downgrade fails recovery of such a journal.
      */
     val promotions: Map<CellRef, TopoEvent.Promote>,
+    /**
+     * Candidates with an open [TopoEvent.EvolutionTap] and no retiring [TopoEvent.Promote] or
+     * [TopoEvent.Despawn] yet (computenet-q37rn). Carried through checkpoint compaction via
+     * [events] so a checkpoint taken mid-evolution still marks the candidate recoverable as
+     * "interrupted" rather than silently losing that provenance. Empty for every journal
+     * written before this field existed; such a journal never contains an `EvolutionTap`
+     * either, so recovery of it classifies no candidate as interrupted (same as before this
+     * change).
+     */
+    val activeEvolutions: Set<CellRef> = emptySet(),
 ) {
     fun events(): List<TopoEvent> = buildList {
         addAll(spawns.values)
         addAll(promotions.values)
+        activeEvolutions.forEach { candidate -> add(TopoEvent.EvolutionTap(candidate)) }
         families.values.forEach { state ->
             add(state.declaration)
             state.keys.forEach { key -> add(TopoEvent.FamilyKey(state.declaration.family.namespace, key)) }
@@ -108,7 +147,7 @@ data class TopologyFold(
     }
 
     companion object {
-        val EMPTY = TopologyFold(emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyMap())
+        val EMPTY = TopologyFold(emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptySet())
     }
 }
 
@@ -118,6 +157,17 @@ fun interface TopologyApplier {
 
     /** Called immediately after a checkpoint was restored, before the next journal record. */
     fun checkpointRestored() {}
+
+    /**
+     * The candidate refs this applier's fold currently holds an open [TopoEvent.EvolutionTap]
+     * for (computenet-q37rn), read by [civictech.cell.host.HostDurability.recoverFrom] once the
+     * complete journal has been applied, before it stages any decoded frame for delivery. A
+     * frame targeting one of these refs is excluded from staging rather than delivered and
+     * later dead-lettered once [ApplyContext] despawns the still-unjudged candidate. The
+     * default empty set is correct for a caller with no topology (no evolution is possible
+     * without one).
+     */
+    fun activeEvolutions(): Set<CellRef> = emptySet()
 }
 
 /** Mutable, synchronized owner behind [ApplyContext]'s immutable fold snapshots. */
@@ -127,6 +177,7 @@ internal class MutableTopologyFold {
     private val links = linkedMapOf<TopologyLinkKey, TopoEvent.Connect>()
     private val handles = linkedMapOf<String, CellRef>()
     private val promotions = linkedMapOf<CellRef, TopoEvent.Promote>()
+    private val activeEvolutions = linkedSetOf<CellRef>()
 
     private data class MutableFamily(val declaration: TopoEvent.Family, val keys: LinkedHashSet<String>)
 
@@ -165,6 +216,7 @@ internal class MutableTopologyFold {
             is TopoEvent.Unlink -> links.remove(TopologyLinkKey.of(event))
             is TopoEvent.Despawn -> remove(event.ref)
             is TopoEvent.Promote -> recordPromotion(event)
+            is TopoEvent.EvolutionTap -> activeEvolutions.add(event.candidate)
         }
     }
 
@@ -181,6 +233,7 @@ internal class MutableTopologyFold {
         links = LinkedHashMap(links),
         handles = LinkedHashMap(handles),
         promotions = LinkedHashMap(promotions),
+        activeEvolutions = LinkedHashSet(activeEvolutions),
     )
 
     private fun remove(ref: CellRef) {
@@ -188,6 +241,7 @@ internal class MutableTopologyFold {
         handles.entries.removeIf { it.value == ref }
         links.entries.removeIf { (_, edge) -> edge.from == ref || edge.to == ref }
         promotions.entries.removeIf { (incumbent, event) -> incumbent == ref || event.candidate == ref }
+        activeEvolutions.remove(ref)
     }
 
     private fun recordPromotion(event: TopoEvent.Promote) {
@@ -208,6 +262,7 @@ internal class MutableTopologyFold {
                 replicated = event.replicated,
                 shadow = false,
             )
+            activeEvolutions.remove(event.incumbent)
             return
         }
 
@@ -227,6 +282,7 @@ internal class MutableTopologyFold {
             replicated = event.replicated,
             shadow = false,
         )
+        activeEvolutions.remove(event.candidate)
         (inheritedRoots + event.incumbent).forEach { root ->
             promotions[root] = event.copy(incumbent = root)
         }

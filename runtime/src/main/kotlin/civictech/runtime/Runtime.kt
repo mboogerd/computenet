@@ -16,7 +16,9 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RoutedPropagate
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.LinkResult
+import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanInlet
@@ -27,6 +29,8 @@ import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.StateRequest
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.replication.Replication
+import civictech.cell.replication.WriteAuthorityBytes
+import civictech.cell.replication.WriteSigner
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.BridgeInstallMode
 import civictech.cell.wire.PeerConnection
@@ -40,13 +44,28 @@ import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
+import civictech.identity.Ed25519SignatureVerifier
+import civictech.identity.FilePeerIncarnationStore
+import civictech.identity.FilePeerKeyStore
+import civictech.identity.PeerIdentity
+import civictech.identity.fingerprint
 import civictech.inspect.InspectorFlag
 import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
+import civictech.wire.durableIncarnation
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.security.PublicKey
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+
+private fun peerIdForKey(publicKey: PublicKey): PeerId =
+    when (val resolution = PeerIdentityBinding.Interim.resolve(fingerprint(publicKey), emptyList())) {
+        is IdentityResolution.Bound -> resolution.peer
+        is IdentityResolution.Unbound -> error(
+            "PeerIdentityBinding.Interim refused the manifest principal key: ${resolution.reason}",
+        )
+    }
 
 /** Builds one manifest node without exposing host, journal or transport construction to its caller. */
 object Runtime {
@@ -287,6 +306,29 @@ object Runtime {
         require(transport == null || transport.scheme == nodeSpec.transport) {
             "transport override scheme '${transport?.scheme}' does not match node '$node' scheme '${nodeSpec.transport}'"
         }
+        val keyStorePath = nodeSpec.keyStore?.let { keyStore -> File(keyStore).toPath() }
+        val identity = keyStorePath?.let { keyStore ->
+            FilePeerKeyStore(keyStore).loadOrGenerate()
+        }
+        val writeSigner = identity?.let { loaded ->
+            val counterIncarnationSource = durableIncarnation(
+                FilePeerIncarnationStore(checkNotNull(keyStorePath)),
+            )
+            object : WriteSigner {
+                override val peerId: PeerId = loaded.peerId
+                override val counterIncarnation: () -> Long = counterIncarnationSource
+                override fun sign(input: ByteArray): ByteArray = loaded.sign(input)
+            }
+        }
+        val signatureVerifier = identity?.let { loaded ->
+            val publicKeys = buildMap {
+                nodeSpec.principals
+                    .map(::decodePrincipalPublicKey)
+                    .forEach { key -> put(peerIdForKey(key), key) }
+                put(loaded.peerId, loaded.publicKey)
+            }
+            Ed25519SignatureVerifier(publicKeys::get, WriteAuthorityBytes.canonicalBytes)
+        }
         val registry = LocationRegistry()
         val budget = nodeSpec.budget?.let { policyFile ->
             val policy = Json.decodeFromString(EconomicPolicy.serializer(), File(policyFile).readText())
@@ -319,6 +361,8 @@ object Runtime {
                 journals = nodeJournals,
                 journalDirs = journalDirs.toMap(),
                 topology = topology,
+                writeSigner = writeSigner,
+                signatureVerifier = signatureVerifier,
             )
             val placement = PlacementPlan.of(spec, manifest, node)
             val recovered = topology?.replay()?.isNotEmpty() == true
@@ -383,6 +427,7 @@ object Runtime {
                 replication = replication,
                 replica = nodeSpec.replica,
                 budget = budget,
+                identity = identity,
                 overrides = overrides.toMap(),
                 inspectorOptions = inspector,
                 transportOverride = transport,
@@ -426,6 +471,8 @@ object Runtime {
         val replication: Replication,
         val replica: Long?,
         val budget: BudgetLedger,
+        /** The node's key-store identity, or null when this manifest node is unsigned. */
+        val identity: PeerIdentity?,
         private val overrides: Map<String, String>,
         private val inspectorOptions: InspectorFlag.Options?,
         private val transportOverride: PeerTransport?,

@@ -112,6 +112,7 @@ HUMAN ANSWER (Merlijn, 2026-08-10): take the second form
 HUMAN CLARIFICATION (Merlijn, 2026-08-10): the constraint is per-key
 ANSWER to the 2026-08-19 07:45 QUESTION — resolved, option (a)/(b) combined
 COUNCIL DECISION (deliberate, 2026-09-27): B — refuse by name
+COUNCIL ADVICE (deliberate, 2026-10-08): A — treat as maintainer-reserved
 WORDINGS
 
 echo
@@ -123,6 +124,16 @@ thread <<'T'
 T
 out=$(run); rc=$?
 [ "$rc" -eq 1 ] && ok "no-consensus leaves the park standing" || bad "exits $rc, wanted 1"
+
+echo
+echo "a council SKIPPED is a record, not an answer"
+fixture
+thread <<'T'
+2026-01-01T00:00:00Z|QUESTION: which option?
+2026-01-02T00:00:00Z|COUNCIL SKIPPED (deliberate, 2026-09-27): this is a permission, not a choice
+T
+out=$(run); rc=$?
+[ "$rc" -eq 1 ] && ok "skipped leaves the park standing" || bad "exits $rc, wanted 1"
 
 echo
 echo "a QUESTION carrying the answer vocabulary is NOT its own answer"

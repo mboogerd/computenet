@@ -593,6 +593,16 @@ class FanOutlet<Api : Any>(
     }
 
     /**
+     * Read-only snapshot of the APIs currently attached through the Consume
+     * funnel. This is a structural-discovery seam, not a delivery path: callers
+     * can classify a source-side-only attachment without exposing or mutating
+     * [consumers]. Detached and superseded targets disappear synchronously via
+     * the same [consumerOrder]/[consumers] pair emission uses.
+     */
+    internal fun attachedConsumerApis(): List<Api> =
+        consumerOrder.mapNotNull { key -> consumers[key]?.call }
+
+    /**
      * Observe-role attachment (spec 20/23 §Taps, 10/12 §Cardinality rule 2
      * extension, G-47): an uncounted read-only tap, always admitted
      * regardless of the exclusive bit. Fires before the sole consumer on

@@ -314,3 +314,16 @@ data class RefusalCount(
     val cell: String,
     val exactly: Int,
 ) : Check
+
+/**
+ * [cell]'s `write-authority` boundary denied exactly [exactly] writes, optionally
+ * restricted to denials attributed to scenario-local [principal]. A driver
+ * without an authority adapter at [cell] must fail loudly rather than answer 0.
+ */
+@Serializable
+@SerialName("write-denials")
+data class WriteDenials(
+    val cell: String,
+    val exactly: Int,
+    val principal: String? = null,
+) : Check
