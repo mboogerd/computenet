@@ -54,8 +54,9 @@ class WriteAuthoritySpecTest {
         controller.runToIdle()
 
         val adapter = replication.authorityOf(ref).shouldNotBeNull()
-        host.lookup<SetCell<String>>(ref) shouldBe cell
-        host.lookup<AuthorityGossip>(adapter.ref).shouldNotBeNull()
+        host.portAt(ref, "outlet").shouldNotBeNull()
+        host.portAt(adapter.ref, "outlet").shouldNotBeNull()
+        cell.ref shouldBe ref
     }
 
     @Test
@@ -108,7 +109,7 @@ class WriteAuthoritySpecTest {
             "spawn step 'owned': parameter 'authority' requires a WriteSigner and a " +
             "SignatureVerifier on the ApplyContext"
         factoryCalls shouldBe 0
-        host.lookup<SetCell<String>>(ref) shouldBe null
+        host.portAt(ref, "outlet") shouldBe null
     }
 
     @Test
@@ -132,7 +133,7 @@ class WriteAuthoritySpecTest {
         val report = spec.applyRemote(host.managementInlet)
         val rejection = report.results.getValue("owned") as StepResult.Rejected
         rejection.reason shouldBe "spawn step 'owned': parameter 'authority' is not supported by applyRemote"
-        host.lookup<SetCell<String>>(ref) shouldBe null
+        host.portAt(ref, "outlet") shouldBe null
 
         val builderFailure = shouldThrow<IllegalStateException> {
             graph(host.managementInlet) {
@@ -203,7 +204,8 @@ class WriteAuthoritySpecTest {
         recovery.awaitApplied(30_000)
 
         val adapter = recoveredContext.replication!!.authorityOf(ref).shouldNotBeNull()
-        recoveredHost.lookup<AuthorityGossip>(adapter.ref).shouldNotBeNull()
+        recoveredHost.portAt(ref, "outlet").shouldNotBeNull()
+        recoveredHost.portAt(adapter.ref, "outlet").shouldNotBeNull()
         recoveredContext.live().spawns.getValue(ref).authority shouldBe WriteAuthority.Principal(principal)
     }
 
