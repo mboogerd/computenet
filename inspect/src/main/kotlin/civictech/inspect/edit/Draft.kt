@@ -1,7 +1,9 @@
 package civictech.inspect.edit
 
 import civictech.cell.CellRef
+import civictech.cell.evolve.PromotionPolicy
 import civictech.cell.graph.BoundaryLink
+import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.Plan
 import civictech.cell.graph.StepCheck
@@ -29,11 +31,33 @@ data class Draft(
 )
 
 /**
- * Placeholder for a promotion request (a staged cell superseding a live one).
- * Feature F9 fills it; until then a non-empty [Draft.promotions] is refused
- * with `NOT_YET_SUPPORTED` before PRECHECK (e1ojt-D5).
+ * One requested replacement of [incumbent]. Exactly one form is selected:
+ *
+ * - single-instance: [candidateHandle] names a staged [civictech.cell.graph.SpawnStep]
+ *   and [gate] names the live traffic-light feeding both instances;
+ * - rolling: [replicaCandidate] builds the same-ref candidate and [gate] is absent.
+ *
+ * This task executes only the single-instance form. The rolling form and a
+ * non-null [policy] are retained in the model for their sibling implementations
+ * and are rejected as caller faults by [StagedApplier] until those land.
  */
-class PromotionRequest
+data class PromotionRequest(
+    val incumbent: CellRef,
+    val outletName: String = "outlet",
+    val gate: CellRef? = null,
+    val candidateHandle: String? = null,
+    val replicaCandidate: CellFactory? = null,
+    val policy: PromotionPolicy? = null,
+) {
+    init {
+        require((candidateHandle != null) xor (replicaCandidate != null)) {
+            "exactly one of candidateHandle and replicaCandidate is required"
+        }
+        require((candidateHandle != null) == (gate != null)) {
+            "gate is required exactly for the single-instance candidateHandle form"
+        }
+    }
+}
 
 /**
  * Serialisable projection of F2's [Plan] — what [ApplyRecord.plan] carries so

@@ -279,7 +279,7 @@ class StagedApplierListenerTest {
 
         shouldThrow<IllegalArgumentException> { applier.plan(Draft("nope", spec())) }
         shouldThrow<IllegalArgumentException> {
-            applier.plan(Draft(HOST, spec(), promotions = listOf(PromotionRequest())))
+            PromotionRequest(incumbent = CellRef(UUID.randomUUID()))
         }
         val live = f.live(SinkCell()).ref
         shouldThrow<IllegalArgumentException> { applier.plan(Draft(HOST, spec(), despawns = listOf(live, live))) }
