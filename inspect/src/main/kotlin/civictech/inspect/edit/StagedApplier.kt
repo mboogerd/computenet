@@ -630,7 +630,7 @@ class StagedApplier(
 
         /** F2's boundary step key, so plan keys and record step keys agree. */
         fun boundaryKey(link: BoundaryLink): String {
-            val liveSide = "${link.liveRef}.${link.livePort}"
+            val liveSide = "${InspectorServer.encodeRef(link.liveRef)}.${link.livePort}"
             val stagedSide = "${link.handle}.${link.handlePort}"
             return when (link.direction) {
                 Direction.INBOUND -> "$liveSide->$stagedSide"
