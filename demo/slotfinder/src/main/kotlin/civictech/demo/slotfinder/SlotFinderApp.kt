@@ -219,6 +219,13 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         // [24-WL-07] / [KE4-39]: the observable half of a late drop — byDay's `late`
         // outlet (a SetDelta port not on GroupByApi, so observed by CellRef + name).
         set("late", refs.byDay.ref, outletName = "late")
+    }.let { inner ->
+        object : Observation by inner {
+            override fun current(): ObservationFrame {
+                observationCurrentReads.incrementAndGet()
+                return inner.current()
+            }
+        }
     }
 
     internal val observationGroups: Map<String, String>
@@ -276,7 +283,7 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
     private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
-        val frame = currentFrame()
+        val frame = view.current()
 
         // T08 finding 2: checked accessors — a wrong-shaped registration now
         // throws naming what was registered vs requested, instead of degrading
@@ -294,11 +301,6 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         val counts = Slot.DAYS.filter { it in byDay }
             .joinToString(",", "{", "}") { "\"$it\":${byDay.getValue(it)}" }
         return """{$sets,"byDay":$counts}"""
-    }
-
-    private fun currentFrame(): ObservationFrame {
-        observationCurrentReads.incrementAndGet()
-        return view.current()
     }
 
     fun start(): SlotFinderApp = apply {
