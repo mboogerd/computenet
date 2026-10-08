@@ -234,6 +234,17 @@ class FanOutlet<Api : Any>(
     internal val mintedAsRoot: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
 
     /**
+     * Live, outlet-owned source-provenance publisher installed by a transparent
+     * fan-in relay. Keeping the resolver on the outlet makes its lifetime match
+     * the graph: the resolver may capture the relay (and therefore this outlet),
+     * but that self-contained cycle is collectible once the graph is no longer
+     * reachable. A JVM-global publisher map would instead root every retired
+     * graph and make structural root scans grow for the life of the process.
+     */
+    @Volatile
+    internal var sourceProvenanceResolver: (() -> Set<UUID>?)? = null
+
+    /**
      * SPSC rule (spec 23, G-21 phase 2): a contract carrying `Owned`/`Leased`
      * payloads gets exactly one subscriber. Read from generated metadata —
      * no runtime reflection; un-annotated contracts are never exclusive.

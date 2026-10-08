@@ -4,7 +4,6 @@ import civictech.cell.link.Link
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortIdentities
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Best-effort, synchronous, **in-process-only** per-edge source reachability
@@ -44,9 +43,6 @@ import java.util.concurrent.ConcurrentHashMap
  * dynamic completeness rule.
  */
 internal object SourceProvenance {
-
-    private val published = ConcurrentHashMap<FanOutlet<*>, () -> Set<UUID>?>()
-
     /**
      * Declares [outlet]'s resolved source set as [resolve]'s result, re-read
      * fresh on every call (no snapshot, so a later topology change — an edge
@@ -58,7 +54,7 @@ internal object SourceProvenance {
      * locally minted ids to a successfully resolved set.
      */
     fun publish(outlet: FanOutlet<*>, resolve: () -> Set<UUID>?) {
-        published[outlet] = resolve
+        outlet.sourceProvenanceResolver = resolve
     }
 
     /** The sourceIds [link] can ever carry, or `null` if unknown (see class KDoc). */
@@ -70,7 +66,7 @@ internal object SourceProvenance {
     private fun resolve(outlet: FanOutlet<*>, visiting: MutableSet<FanOutlet<*>>): Set<UUID>? {
         if (!visiting.add(outlet)) return null // cycle guard: degrade to unknown, never loop
         try {
-            published[outlet]?.let { resolvePublished ->
+            outlet.sourceProvenanceResolver?.let { resolvePublished ->
                 val relayedSources = resolvePublished() ?: return null
                 return relayedSources + outlet.mintedAsRoot
             }
