@@ -266,7 +266,7 @@ class ApplyResidueTest {
 
         record.outcome shouldBe ApplyOutcome.RefusedAtPrecheck
         val plan = record.plan.shouldNotBeNull()
-        val intake = plan.steps.single { it.key == "${producer.ref}.outlet->c.inlet" }
+        val intake = plan.steps.single { it.key == "${InspectorServer.encodeRef(producer.ref)}.outlet->c.inlet" }
         intake.refusal.shouldNotBeNull().code shouldBe "OWNED_INTAKE"
         boundaryAttempted shouldBe false
         record.stagedRefs shouldBe emptyList()

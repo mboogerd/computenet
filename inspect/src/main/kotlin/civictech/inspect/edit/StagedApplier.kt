@@ -250,7 +250,11 @@ class StagedApplier(
             )
             return Plan(listOf(refused), Verdict.NotAppliable(listOf(refused)))
         }
-        val planned = draft.spec.precheck(draft.boundary, HostLiveView(host, registry)).steps +
+        // The kernel keys a boundary LINK step with the live ref's toString(); re-key it to
+        // boundaryKey's encoded form so plan and record keys agree and are a contract (yz3xc).
+        val rekey = draft.boundary.associate { kernelBoundaryKey(it) to boundaryKey(it) }
+        val planned = draft.spec.precheck(draft.boundary, HostLiveView(host, registry)).steps
+            .map { step -> rekey[step.key]?.let { step.copy(key = it) } ?: step } +
             draft.despawns.map { planDespawn(host, draft, it) }
         val refusals = planned.filter { it.result is StepCheck.Refused }
         return Plan(planned, if (refusals.isEmpty()) Verdict.Appliable else Verdict.NotAppliable(refusals))
@@ -627,6 +631,16 @@ class StagedApplier(
         val STAGED_PHASES = setOf(ApplyPhase.STAGE, ApplyPhase.CUT_OVER, ApplyPhase.UNWIND)
 
         fun despawnKey(ref: CellRef) = "despawn:${InspectorServer.encodeRef(ref)}"
+
+        /** The kernel precheck's own (CellRef.toString-based) boundary step key; see [planFor]. */
+        private fun kernelBoundaryKey(link: BoundaryLink): String {
+            val liveSide = "${link.liveRef}.${link.livePort}"
+            val stagedSide = "${link.handle}.${link.handlePort}"
+            return when (link.direction) {
+                Direction.INBOUND -> "$liveSide->$stagedSide"
+                Direction.OUTBOUND -> "$stagedSide->$liveSide"
+            }
+        }
 
         /** F2's boundary step key, so plan keys and record step keys agree. */
         fun boundaryKey(link: BoundaryLink): String {
