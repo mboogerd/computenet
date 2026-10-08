@@ -235,6 +235,13 @@ sealed interface Admission {
  * author are instead resolved by their counter, so a lower-counter transfer
  * delivered late deterministically supersedes a higher-counter one.
  *
+ * That deterministic supersession converges the authority chain, not data
+ * already admitted under the superseded edge. If an author equivocates by
+ * signing competing transfers, data writes admitted under the briefly selected
+ * edge stay applied on replicas that saw it first and may be refused elsewhere.
+ * The in-process local gate prevents this equivocation, but a restarted author
+ * without a durable chain can still produce it.
+ *
  * Retention is deliberately unbounded and in-memory. Compaction requires an
  * author-signed folded checkpoint (a relay cannot mint one), and restart does
  * not snapshot this state; a restarted adapter rebuilds it from peer catch-up.

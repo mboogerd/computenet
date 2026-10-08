@@ -202,7 +202,13 @@ class OwnershipTransferTest {
         reordered.admit(bToP, signing.verifier).shouldBeInstanceOf<Admission.Denied>().reason shouldBe
             DenialReason.UNAUTHORIZED_WRITER
 
-        listOf(causal, reordered).forEach { state ->
+        val fullyReversed = AuthorityState(WriteAuthority.Principal(pA))
+        admitApply(fullyReversed, pToC, signing).shouldBeInstanceOf<Admission.Admitted>()
+        fullyReversed.admit(bToP, signing.verifier).shouldBeInstanceOf<Admission.Denied>().reason shouldBe
+            DenialReason.UNAUTHORIZED_WRITER
+        admitApply(fullyReversed, pToB, signing).shouldBeInstanceOf<Admission.Admitted>()
+
+        listOf(causal, reordered, fullyReversed).forEach { state ->
             state.authorizesLocal(pA, add("a", 30)) shouldBe false
             state.authorizesLocal(pB, add("b", 30)) shouldBe true
             state.authorizesLocal(pC, add("c", 30)) shouldBe false
