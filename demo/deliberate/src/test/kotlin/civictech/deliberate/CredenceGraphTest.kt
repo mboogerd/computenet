@@ -474,10 +474,23 @@ class CredenceGraphTest {
         assertTrue(g.wiring.none { it.inlet == "frameInlet" || it.inlet == "feedbackFrameInlet" })
 
         val links = world.registry.localLinks()
-        assertEquals(g.wiring.size, links.size, "every named wire must be an admitted local link")
+        val observationLinks = listOf(
+            Triple(g.hub.ref, g.observationGroupRefs.getValue("hub"), "hub"),
+            Triple(g.sensitivityHub.ref, g.observationGroupRefs.getValue("sensitivityHub"), "sensitivityHub"),
+            Triple(g.sharesHub.ref, g.observationGroupRefs.getValue("sharesHub"), "sharesHub"),
+        )
+        assertEquals(
+            g.wiring.size + observationLinks.size,
+            links.size,
+            "every named graph wire plus the three canonical observation edges must be admitted locally",
+        )
         g.wiring.forEach { wire ->
             val link = links.single { it.from.cell == wire.from && it.to.cell == wire.to && it.from == PortRef.of(wire.from, wire.outlet) }
             assertEquals(PortRef.of(wire.to, wire.inlet), link.to)
+        }
+        observationLinks.forEach { (feed, observation, inlet) ->
+            val link = links.single { it.from == PortRef.of(feed, "outlet") && it.to.cell == observation }
+            assertEquals(PortRef.of(observation, inlet), link.to)
         }
 
         world.runToIdle()
