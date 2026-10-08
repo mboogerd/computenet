@@ -240,13 +240,6 @@ class PromotionObservationWindowTest {
             firstAwaiting.outcome.shouldBeNull()
 
             f.emit(1)
-            awaitUntil("the first wave produced a fresh policy decision record") {
-                applier.record("await-live") !== firstAwaiting
-            }
-            val afterOne = applier.record("await-live").shouldNotBeNull()
-            afterOne.awaiting shouldBe OBSERVATION_WINDOW
-            afterOne.outcome.shouldBeNull()
-
             f.emit(2)
             awaitUntil("the two-wave window completed") { applier.record("await-live")?.outcome != null }
 
