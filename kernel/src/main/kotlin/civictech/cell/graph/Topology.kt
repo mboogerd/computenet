@@ -2,6 +2,7 @@ package civictech.cell.graph
 
 import civictech.cell.CellRef
 import civictech.cell.link.LinkOptions
+import civictech.cell.replication.WriteAuthority
 import java.io.Serializable
 import java.util.UUID
 
@@ -19,7 +20,12 @@ sealed interface TopoEvent : Serializable {
         val replicated: Boolean,
         val journalId: String?,
         val shadow: Boolean,
-    ) : TopoEvent
+        val authority: WriteAuthority? = null,
+    ) : TopoEvent {
+        private companion object {
+            private const val serialVersionUID: Long = 9183278101467966974L
+        }
+    }
 
     data class Connect(
         val from: CellRef,

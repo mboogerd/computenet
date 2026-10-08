@@ -22,6 +22,7 @@ import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.identity
+import civictech.cell.replication.WriteAuthority
 import java.io.Serializable
 import java.util.UUID
 import kotlin.random.Random
@@ -154,8 +155,24 @@ data class SpawnStep(
      * journaled: a node journals only the steps it applied.
      */
     val placement: String? = null,
+    /**
+     * Declared write authority for a replicated slice. This is the GraphSpec
+     * surface for [43-FLOW-04] and ermvz-D1/D12/D16: [WriteAuthority.Open]
+     * preserves the existing path, while another authority is installed by
+     * [civictech.cell.replication.Replication] at apply time. `KeyIsPrincipal`
+     * is deliberately not provided: keyed families are not replicated, so
+     * authority belongs on explicit replicated spawns (or on a shared
+     * [WriteAuthority.PerElementOwner] slice), not on a family declaration.
+     */
+    val authority: WriteAuthority = WriteAuthority.Open,
 ) : GraphStep {
     init {
+        require(authority == WriteAuthority.Open || replicated) {
+            "spawn step '$handle': parameter 'authority' requires 'replicated'"
+        }
+        require(authority == WriteAuthority.Open || family == null) {
+            "spawn step '$handle': a keyed family cannot declare authority"
+        }
         if (family != null) {
             require(factory is KeyedCellFactory) {
                 "spawn step '$handle': parameter 'family' requires a KeyedCellFactory"
@@ -455,6 +472,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                             step.replicated,
                             step.journalId,
                             step.shadow,
+                            authority = step.authority,
                         )
                         active[step.handle] = ref
                         plannedSpawnRefs += ref
@@ -620,6 +638,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.inputs.isNotEmpty() }?.let { step ->
             throw unsupportedInputs(step.handle, "applyTo(Use<HostManagementApi>)")
         }
+        lowered.filterIsInstance<SpawnStep>().firstOrNull { it.authority != WriteAuthority.Open }?.let { step ->
+            throw unsupportedAuthority(step.handle, "applyTo(Use<HostManagementApi>)")
+        }
         lowered.filterIsInstance<SpawnStep>().firstOrNull { it.replicated }?.let { step ->
             throw unsupportedReplication(step.handle, "applyTo(Use<HostManagementApi>)")
         }
@@ -731,6 +752,10 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                     } else if (step.inputs.isNotEmpty()) {
                         results[step.handle] = StepResult.Rejected(
                             "spawn step '${step.handle}': parameter 'inputs' is not supported by applyRemote",
+                        )
+                    } else if (step.authority != WriteAuthority.Open) {
+                        results[step.handle] = StepResult.Rejected(
+                            "spawn step '${step.handle}': parameter 'authority' is not supported by applyRemote",
                         )
                     } else if (step.replicated) {
                         results[step.handle] = StepResult.Rejected(
@@ -887,6 +912,10 @@ private fun unsupportedShadow(handle: String, path: String): IllegalStateExcepti
     "spawn step '$handle': parameter 'shadow' cannot be applied by $path; use apply(ApplyContext)",
 )
 
+private fun unsupportedAuthority(handle: String, path: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'authority' cannot be applied by $path; use apply(ApplyContext)",
+)
+
 private fun unsupportedPromote(handle: String, path: String): IllegalStateException = IllegalStateException(
     "promote step '$handle' is not supported by $path; use apply(ApplyContext)",
 )
@@ -966,6 +995,7 @@ class GraphBuilder private constructor(
         shadow: Boolean = false,
         inputs: Set<String> = emptySet(),
         placement: String? = null,
+        authority: WriteAuthority = WriteAuthority.Open,
         factory: TypedCellFactory<C>,
     ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
@@ -974,6 +1004,7 @@ class GraphBuilder private constructor(
             if (inputs.isNotEmpty()) throw unsupportedInputs(name, "graph(Use<HostManagementApi>)")
             if (journalId != null) throw unsupportedJournal(name, "graph(Use<HostManagementApi>)")
             if (shadow) throw unsupportedShadow(name, "graph(Use<HostManagementApi>)")
+            if (authority != WriteAuthority.Open) throw unsupportedAuthority(name, "graph(Use<HostManagementApi>)")
         } else {
             if (replicated && context.replication == null) throw missingReplication(name)
             if (journalId != null && journalId !in context.journals) throw missingJournal(name, journalId)
@@ -989,8 +1020,18 @@ class GraphBuilder private constructor(
             shadow = shadow,
             inputs = inputs,
             placement = placement,
+            authority = authority,
         )
-        val event = TopoEvent.Spawn(name, ref, factory, parent?.ref, replicated, journalId, shadow)
+        val event = TopoEvent.Spawn(
+            name,
+            ref,
+            factory,
+            parent?.ref,
+            replicated,
+            journalId,
+            shadow,
+            authority = authority,
+        )
         context?.journalTopology(listOf(event))
         val cell = factory.create(ref)
         requireBoundRef(name, identity, ref, cell.ref)
