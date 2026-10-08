@@ -9,7 +9,9 @@ import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
+import civictech.cell.ReplayProvenance
 import civictech.cell.Stateful
+import civictech.cell.Timestamp
 import civictech.cell.data.LocalWriteGate
 import civictech.cell.data.OrMapCell
 import civictech.cell.data.Replicable
@@ -54,6 +56,16 @@ import java.util.concurrent.ConcurrentHashMap
  * stream, not this security history. Folding the retained history itself would
  * still need an author-signed checkpoint (a relay cannot create one). A
  * volatile adapter has no snapshot and rebuilds from peers' catch-up.
+ * Following the repository's additive-`Stateful` precedent, this did not bump
+ * the journal format: an older build cannot decode a new checkpoint containing
+ * [SignedWrite], so downgrade across that checkpoint is unsupported.
+ *
+ * A locally signed envelope is also written ahead as an ordinary frame through
+ * the guarded cell's journaled `deltaInlet` before [CountingWriteSigner] returns
+ * it. `[24-DUR-02]` therefore replays the original envelope after the local
+ * operation that produced it. Replay provenance suppresses re-signing that
+ * operation; the marked envelope frame restores the retained pair and transfer
+ * chain without applying the idempotent data delta a second time.
  *
  * A new owner's write that reaches a replica before the signed transfer is
  * refused there. The next catch-up/anti-entropy re-fire carries both envelopes
@@ -65,6 +77,7 @@ class AuthorityGossip internal constructor(
     authority: WriteAuthority,
     private val signer: CountingWriteSigner,
     private val verifier: SignatureVerifier,
+    private val writeAhead: (SignedWrite) -> Unit,
     override val ref: CellRef = adapterRef(cell.ref),
 ) : Cell, Stateful, BoundaryDenialAccounting {
     private data class WriteKey(val author: PeerId, val counter: Long)
@@ -78,6 +91,7 @@ class AuthorityGossip internal constructor(
     private val state = AuthorityState(authority)
     private val inbound = ThreadLocal<SignedWrite?>()
     private val firstCrossing = ConcurrentHashMap<WriteKey, FirstCrossing>()
+    private val localWriteAheadPort = cell.outlet.ref
 
     @Volatile
     private var hostContext: CellContext? = null
@@ -211,9 +225,14 @@ class AuthorityGossip internal constructor(
         // PeerStamp is intentionally ambient only at the host boundary and may
         // be gone after an inlet policy hop. The rewritten source port is the
         // durable per-hop identity that MessageContext carries through it.
-        val crossing = FirstCrossing.Inbound(CurrentContext.get()?.sourcePort)
+        val crossing = if (CurrentContext.get()?.sourcePort == localWriteAheadPort) {
+            FirstCrossing.Local
+        } else {
+            FirstCrossing.Inbound(CurrentContext.get()?.sourcePort)
+        }
         when (val admission = state.admit(write, verifier)) {
             is Admission.Denied -> {
+                if (admission.reason == DenialReason.REPLAY && crossing == FirstCrossing.Local) return
                 val first = firstCrossing[WriteKey(write.author, write.counter)]
                 if (admission.reason != DenialReason.REPLAY || first == null || first == crossing) {
                     deny(write, admission.reason, admission.principal, admission.detail)
@@ -233,6 +252,10 @@ class AuthorityGossip internal constructor(
                 }
                 state.apply(write, payload)
                 firstCrossing.putIfAbsent(WriteKey(write.author, write.counter), crossing)
+                if (crossing == FirstCrossing.Local) {
+                    CurrentContext.with(null) { outlet.call.propagate(write) }
+                    return
+                }
                 // A transfer has no data-cell emission to ride, so the adapter
                 // relays the admitted envelope itself, as it relays a data write.
                 if (payload is TransferAuthority) outlet.call.propagate(write)
@@ -253,6 +276,11 @@ class AuthorityGossip internal constructor(
             outlet.call.propagate(relayed)
             return
         }
+        // The corresponding SignedWrite frame follows this replayed local
+        // operation in the same journal. Re-signing here would reuse a stub
+        // counter (or mint a second production envelope) before that original
+        // frame restores its retained pair.
+        if (ReplayProvenance.get() != null) return
         if (!state.authorizesLocal(signer.peerId, delta)) {
             denyLocal("outlet", delta, delta)
             return
@@ -261,7 +289,15 @@ class AuthorityGossip internal constructor(
     }
 
     private fun signApplyAndForward(payload: Any?) {
-        val write = signer.sign(cell.ref.id, WriteAuthorityBytes.encodePayload(payload))
+        val write = signer.signWriteAhead(cell.ref.id, WriteAuthorityBytes.encodePayload(payload)) { signed ->
+            val current = CurrentContext.get()
+            val marked = current?.copy(sourcePort = localWriteAheadPort)
+                ?: civictech.cell.MessageContext(
+                    timestamp = Timestamp(ref.id, signed.counter),
+                    sourcePort = localWriteAheadPort,
+                )
+            CurrentContext.with(marked) { writeAhead(signed) }
+        }
         state.apply(write, payload)
         firstCrossing.putIfAbsent(WriteKey(write.author, write.counter), FirstCrossing.Local)
         outlet.call.propagate(write)

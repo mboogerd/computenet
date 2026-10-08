@@ -197,7 +197,23 @@ class CountingWriteSigner(
 
     /** Assign the next counter for [logicalId], sign, and return its envelope. */
     @Synchronized
-    fun sign(logicalId: UUID, payload: ByteArray): SignedWrite {
+    fun sign(logicalId: UUID, payload: ByteArray): SignedWrite = nextWrite(logicalId, payload)
+
+    /**
+     * Assign and sign, then complete [writeAhead] before returning the envelope.
+     *
+     * The sequence is reserved before either signing or persistence. If either
+     * fails, this signer leaves a harmless counter gap rather than risking a
+     * retry that reuses a pair whose append may actually have reached storage.
+     */
+    @Synchronized
+    internal fun signWriteAhead(
+        logicalId: UUID,
+        payload: ByteArray,
+        writeAhead: (SignedWrite) -> Unit,
+    ): SignedWrite = nextWrite(logicalId, payload).also(writeAhead)
+
+    private fun nextWrite(logicalId: UUID, payload: ByteArray): SignedWrite {
         val sequence = (sequences[logicalId] ?: 0L) + 1L
         require(sequence <= WRITE_COUNTER_SEQUENCE_MASK) {
             "write counter sequence exhausted for logical cell $logicalId in this incarnation"
