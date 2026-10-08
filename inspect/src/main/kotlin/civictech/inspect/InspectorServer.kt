@@ -5,6 +5,7 @@ import civictech.cell.Timestamp
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.PortRef
+import civictech.cell.replication.Replication
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.beginSse
 import civictech.demo.shell.respond
@@ -145,6 +146,12 @@ import java.util.concurrent.TimeUnit
 class InspectorServer internal constructor(
     registry: LocationRegistry,
     /**
+     * Optional process replication service for rolling write-plane promotion.
+     * Without it, rolling requests are refused `ROLLING_ONLY` at plan time;
+     * the read-only inspector and single-instance promotion are unchanged.
+     */
+    replication: Replication? = null,
+    /**
      * The process hosts to inspect, by the name their cells report as
      * `Node.host`. A located host that is not named here falls back to a name
      * derived from its ref.
@@ -221,7 +228,8 @@ class InspectorServer internal constructor(
         netName: String = Node.LOCAL_NET,
         uiDist: Path = defaultUiDist(),
         writePlane: WritePlane = WritePlane.Disabled,
-    ) : this(registry, hosts, port, cellNames, netName, uiDist, writePlane, Shells.Real)
+        replication: Replication? = null,
+    ) : this(registry, replication, hosts, port, cellNames, netName, uiDist, writePlane, Shells.Real)
 
     /** Name the hosts by ref — the convenience form when the app has no names of its own. */
     constructor(registry: LocationRegistry, hosts: Set<ManagedHost>, port: Int = DEFAULT_PORT) :
@@ -321,6 +329,7 @@ class InspectorServer internal constructor(
      */
     internal val stagedApplier: StagedApplier = StagedApplier(
         hosts, registry,
+        replication = replication,
         clock = { inspectorClock() },
         listener = WritePlaneRoutes.listener(model),
     )

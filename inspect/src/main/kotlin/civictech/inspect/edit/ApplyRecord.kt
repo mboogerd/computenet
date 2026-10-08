@@ -48,7 +48,13 @@ data class ApplyRecord(
     val awaiting: String? = null,
 )
 
-/** One promotion's additive audit shape (8joqm-D7, `[WKB2-22]`..`[WKB2-24]`). */
+/**
+ * One promotion's additive audit shape (8joqm-D7, `[WKB2-22]`..`[WKB2-24]`).
+ * [incumbentRetired] becomes true only for the single-instance form: a
+ * committed rolling rebind keeps the incumbent's ref serving as the candidate
+ * and retains the incumbent on every surviving peer, so committed-before-
+ * retire holds vacuously because that form has no RETIRE operation.
+ */
 @Serializable
 data class PromotionRecord(
     val incumbent: String,

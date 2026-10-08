@@ -30,6 +30,7 @@ import civictech.cell.port.Port
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.natures
+import civictech.cell.replication.Replication
 import civictech.inspect.Edge
 import civictech.inspect.Endpoint
 import civictech.inspect.InspectorServer
@@ -65,9 +66,11 @@ import kotlin.concurrent.withLock
  * - **CUT_OVER** — the boundary links, in list order, each wrapped in the
  *   applier's own payload-agnostic tap on the producing outlet
  *   (`FanOutlet.observe`, installed before `connect`, baseline read right
- *   after; e1ojt-D3), followed by a single-instance promotion through
- *   `Evolve.promoteDirect`. A rejected or throwing boundary `connect`, or a
- *   PRECHECK/infrastructure promotion failure, unwinds.
+ *   after; e1ojt-D3), followed by the requested promotion. A rejected or
+ *   throwing boundary `connect`, or a
+ *   PRECHECK/infrastructure promotion failure, unwinds. Single-instance
+ *   promotion uses `Evolve.promoteDirect`; rolling promotion uses
+ *   `Evolve.promoteReplicaDirect` through the optional [replication] service.
  * - **RETIRE** — reached only when every boundary link connected and the
  *   optional promotion committed. The record
  *   is marked `outcome = Committed` first, then [Draft.despawns] run in list
@@ -126,11 +129,15 @@ import kotlin.concurrent.withLock
  *   applier it did not construct.
  * @param beforeBoundaryLink test-only (e1ojt-D8): invoked with the list index
  *   before each boundary `connect`. A `var` for the same reason.
+ * @param replication the process replication service used by rolling
+ *   promotion. Without one, rolling requests are refused `ROLLING_ONLY`
+ *   during planning; read-only and single-instance inspectors need none.
  * @param listener the apply observer (wczst-D2.1); [ApplyListener.None] by default.
  */
 class StagedApplier(
     private val hosts: Map<String, ManagedHost>,
     private val registry: LocationRegistry,
+    private val replication: Replication? = null,
     private val clock: () -> Long,
     internal val skipPrecheck: Boolean = false,
     @Volatile internal var afterStage: (ApplyRecord) -> Unit = {},
@@ -157,8 +164,8 @@ class StagedApplier(
      * already answers its PRECHECK record.
      *
      * @throws IllegalArgumentException when [Draft.host] is not a known host,
-     *   a promotion uses a not-yet-supported policy/rolling form, more than
-     *   one promotion is requested, a promotion incumbent is also despawned,
+     *   a promotion uses a not-yet-supported policy, more than one promotion
+     *   is requested, a promotion incumbent is also despawned,
      *   a despawn target is listed twice, or [applyId] was already used.
      */
     fun apply(
@@ -241,9 +248,6 @@ class StagedApplier(
             "a promotion incumbent must not also be a despawn target"
         }
         draft.promotions.forEach { request ->
-            require(request.replicaCandidate == null) {
-                "NOT_YET_SUPPORTED: the rolling form is applied by the rolling-form task of computenet-8joqm"
-            }
             require(request.policy == null) {
                 "NOT_YET_SUPPORTED: promotion policy is applied by the observation-window task of computenet-8joqm"
             }
@@ -267,7 +271,7 @@ class StagedApplier(
         }
         val planned = draft.spec.precheck(draft.boundary, HostLiveView(host, registry)).steps +
             draft.despawns.map { planDespawn(host, draft, it) } +
-            draft.promotions.map { PromotionCutOver.plan(host, registry, draft, it) }
+            draft.promotions.map { PromotionCutOver.plan(host, registry, replication, draft, it) }
         val refusals = planned.filter { it.result is StepCheck.Refused }
         return Plan(planned, if (refusals.isEmpty()) Verdict.Appliable else Verdict.NotAppliable(refusals))
     }
@@ -511,10 +515,17 @@ class StagedApplier(
             val promotion = draft.promotions.singleOrNull()
             if (promotion != null) {
                 val candidateRef = promotion.candidateHandle?.let(refByHandle::get)
-                when (val result = PromotionCutOver.perform(host, registry, promotion, candidateRef)) {
+                when (val result = PromotionCutOver.perform(host, registry, replication, promotion, candidateRef)) {
                     PromotionCutOver.Result.Committed -> {
                         steps[PromotionCutOver.key(promotion.incumbent)] = StepOutcome.Applied
-                        promotionRecords[0] = promotionRecords[0].copy(status = PromotionRecord.Status.COMMITTED)
+                        promotionRecords[0] = promotionRecords[0].copy(
+                            candidate = if (promotion.replicaCandidate != null) {
+                                InspectorServer.encodeRef(promotion.incumbent)
+                            } else {
+                                promotionRecords[0].candidate
+                            },
+                            status = PromotionRecord.Status.COMMITTED,
+                        )
                     }
                     is PromotionCutOver.Result.RefusedAtPrecheck -> {
                         failPromotion(promotion, PromotionRecord.Status.REFUSED_AT_PRECHECK, result.reason)
@@ -534,9 +545,10 @@ class StagedApplier(
                 }
             }
             // The point of no return (e1ojt-D7 / [WKB2-24]): publish committed
-            // before recording either the promoted incumbent or explicit despawns retired.
+            // before recording either a single-form incumbent or explicit despawns retired.
+            // Rolling rebind retains the same ref; there is no retirement to record.
             publish(phase = ApplyPhase.RETIRE, outcome = ApplyOutcome.Committed, completedAtMs = clock())
-            if (promotion != null) {
+            if (promotion?.candidateHandle != null) {
                 promotionRecords[0] = promotionRecords[0].copy(incumbentRetired = true)
                 publish()
             }

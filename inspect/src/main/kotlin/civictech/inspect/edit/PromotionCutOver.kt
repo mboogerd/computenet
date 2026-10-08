@@ -1,6 +1,7 @@
 package civictech.inspect.edit
 
 import civictech.cell.CellRef
+import civictech.cell.data.Replicable
 import civictech.cell.evolve.Evolve
 import civictech.cell.evolve.Promotion
 import civictech.cell.graph.Direction
@@ -17,12 +18,13 @@ import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
+import civictech.cell.replication.Replication
 import civictech.inspect.InspectorServer
 
 /**
- * Plans and performs the single-instance promotion arm of WKB2 F9. Planning
- * is cold; execution delegates the complete swap and rollback protocol to the
- * authority-gated kernel primitive.
+ * Plans and performs both promotion forms of WKB2 F9. Planning is cold;
+ * execution delegates the complete single-instance swap or rolling replica
+ * rebind to the corresponding authority-gated kernel primitive.
  */
 internal object PromotionCutOver {
     sealed interface Result {
@@ -35,27 +37,34 @@ internal object PromotionCutOver {
     fun plan(
         host: ManagedHost,
         registry: LocationRegistry,
+        replication: Replication?,
         draft: Draft,
         request: PromotionRequest,
     ): PlannedStep {
-        val gate = requireNotNull(request.gate)
-        val handle = requireNotNull(request.candidateHandle)
+        val rolling = request.replicaCandidate != null
+        val gate = request.gate
+        val handle = request.candidateHandle
         val key = key(request.incumbent)
+        val incumbent = host.cellAt(request.incumbent)
         val liveOutlet = host.portAt(request.incumbent, request.outletName) as? FanOutlet<*>
-        val touches = buildSet {
-            add(request.incumbent)
-            add(gate)
-            if (liveOutlet != null) {
-                registry.swapSet(request.incumbent)
-                    .filter { it.from == liveOutlet.ref }
-                    .mapNotNullTo(this) { it.to.cell }
+        val touches = if (rolling) {
+            setOf(request.incumbent)
+        } else {
+            buildSet {
+                add(request.incumbent)
+                add(requireNotNull(gate))
+                if (liveOutlet != null) {
+                    registry.swapSet(request.incumbent)
+                        .filter { it.from == liveOutlet.ref }
+                        .mapNotNullTo(this) { it.to.cell }
+                }
             }
         }
 
         val refusal = localRef(host, registry, request.incumbent, draft.host, "incumbent")
-            ?: localRef(host, registry, gate, draft.host, "gate")
+            ?: (if (rolling) null else localRef(host, registry, requireNotNull(gate), draft.host, "gate"))
             ?: when {
-                host.cellAt(request.incumbent) is CompositeCell -> refused(
+                incumbent is CompositeCell -> refused(
                     RefusalCode.COUPLED_FLOW,
                     "promotion of CompositeCell ${request.incumbent} is refused by G-53 ([WKB2-27]): " +
                         "the fate of a coupled transaction in a swap window is undefined",
@@ -64,12 +73,21 @@ internal object PromotionCutOver {
                     RefusalCode.UNRESOLVED_PORT,
                     "incumbent ${request.incumbent} has no FanOutlet named '${request.outletName}'",
                 )
-                registry.replicasOf(request.incumbent.id).size > 1 -> refused(
+                rolling && incumbent !is Replicable<*> -> refused(
+                    RefusalCode.ROLLING_ONLY,
+                    "rolling promotion incumbent ${request.incumbent} is not Replicable ([WKB2-54])",
+                )
+                rolling && replication == null -> refused(
+                    RefusalCode.ROLLING_ONLY,
+                    "this inspector was built without a Replication service",
+                )
+                !rolling && registry.replicasOf(request.incumbent.id).size > 1 -> refused(
                     RefusalCode.ROLLING_ONLY,
                     "logical cell ${request.incumbent.id} has more than one live instance; " +
                         "a replicated incumbent is offered only the rolling form ([WKB2-54])",
                 )
-                host.cellAt(gate) !is TrafficLightApi<*> -> refused(
+                rolling -> null
+                host.cellAt(requireNotNull(gate)) !is TrafficLightApi<*> -> refused(
                     RefusalCode.NO_GATE,
                     "gate $gate is not a live TrafficLightApi",
                 )
@@ -84,18 +102,30 @@ internal object PromotionCutOver {
                     boundary.direction == Direction.INBOUND &&
                         boundary.liveRef == gate &&
                         boundary.livePort == "dataOutlet" &&
-                        boundary.handle == handle
+                        boundary.handle == requireNotNull(handle)
                 } -> refused(
                     RefusalCode.NO_GATE,
                     "the candidate would be promoted unfed; the draft must draw the gate's dataOutlet into it",
                 )
-                else -> candidateRefusal(draft, request, handle, liveOutlet)
+                else -> candidateRefusal(draft, request, requireNotNull(handle), liveOutlet)
             }
 
         return PlannedStep(key, handle, PlannedAction.PROMOTE, touches, refusal ?: StepCheck.Ok)
     }
 
     fun perform(
+        host: ManagedHost,
+        registry: LocationRegistry,
+        replication: Replication?,
+        request: PromotionRequest,
+        candidateRef: CellRef?,
+    ): Result = if (request.replicaCandidate != null) {
+        performRolling(host, replication, request)
+    } else {
+        performSingle(host, registry, request, candidateRef)
+    }
+
+    private fun performSingle(
         host: ManagedHost,
         registry: LocationRegistry,
         request: PromotionRequest,
@@ -126,7 +156,7 @@ internal object PromotionCutOver {
             downstream += use
         }
 
-        return try {
+        return invokePrimitive {
             Evolve.promoteDirect(
                 host = host,
                 gate = gate,
@@ -136,19 +166,56 @@ internal object PromotionCutOver {
                 downstream = downstream,
                 judge = null,
             )
-            Result.Committed
-        } catch (e: Evolve.Refused) {
-            Result.RefusedAtPrecheck(e.message ?: e.toString())
-        } catch (e: Promotion.PromotionAborted) {
-            val reason = e.message ?: e.toString()
-            when {
-                reason.startsWith(COMMIT_ABORT) -> Result.RolledBackAtCommit(reason)
-                reason.startsWith(PRECHECK_ABORT) -> Result.RefusedAtPrecheck(reason)
-                else -> Result.Failed(reason)
-            }
-        } catch (e: Exception) {
-            Result.Failed(e.toString())
         }
+    }
+
+    private fun performRolling(
+        host: ManagedHost,
+        replication: Replication?,
+        request: PromotionRequest,
+    ): Result {
+        val service = replication
+            ?: return Result.RefusedAtPrecheck("this inspector was built without a Replication service")
+        val incumbent = host.cellAt(request.incumbent) as? Replicable<*>
+            ?: return Result.RefusedAtPrecheck(
+                "rolling promotion incumbent ${request.incumbent} is not Replicable ([WKB2-54])",
+            )
+        val factory = request.replicaCandidate
+            ?: return Result.Failed("rolling promotion has no replica candidate factory")
+        val candidateCell = try {
+            factory.create(request.incumbent)
+        } catch (e: Exception) {
+            return Result.Failed(e.toString())
+        }
+        val candidate = candidateCell as? Replicable<*>
+            ?: return Result.RefusedAtPrecheck("rolling candidate ${candidateCell.ref} is not Replicable")
+
+        return invokePrimitive {
+            Evolve.promoteReplicaDirect(
+                host = host,
+                replication = service,
+                incumbent = incumbent,
+                candidate = candidate,
+                outletName = request.outletName,
+                judge = null,
+            )
+        }
+    }
+
+    private fun invokePrimitive(block: () -> Unit): Result = try {
+        block()
+        Result.Committed
+    } catch (e: Evolve.Refused) {
+        Result.RefusedAtPrecheck(e.message ?: e.toString())
+    } catch (e: Promotion.PromotionAborted) {
+        val reason = e.message ?: e.toString()
+        when {
+            reason.startsWith(COMMIT_ABORT) -> Result.RolledBackAtCommit(reason)
+            reason.startsWith(PRECHECK_ABORT) -> Result.RefusedAtPrecheck(reason)
+            else -> Result.Failed(reason)
+        }
+    } catch (e: Exception) {
+        Result.Failed(e.toString())
     }
 
     fun key(incumbent: CellRef): String = "promote ${InspectorServer.encodeRef(incumbent)}"
