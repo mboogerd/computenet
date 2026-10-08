@@ -85,6 +85,19 @@ interface QuorumSetApi<E> {
  * A delivery flagged [civictech.cell.MessageContext.baseline] is a recovery,
  * not a live wave, and is admitted regardless of [threshold] — see [onInlet]
  * (`[24-REPLAY-01]`).
+ *
+ * ### Aligned observation
+ *
+ * This operator has no coalescing output gate. [relayAbsorbAcks] waits to relay
+ * a swallowed wave until every eligible input edge has settled it, but a real
+ * later-wave delta still emits eagerly and can advance this cell's single
+ * output edge past an earlier wave that another input lane has not delivered.
+ * `observeAligned` therefore rejects a multi-input [QuorumSetCell] whose
+ * ancestry crosses an opaque host boundary, naming this operator. A fully
+ * host-local fan-in remains admissible because its deliveries share the host's
+ * serialized execution context; callers that deliberately accept eager
+ * cross-boundary semantics must opt out with the builder's `unchecked` escape
+ * hatch.
  */
 class QuorumSetCell<E>(
     ref: CellRef = CellRef(UUID.randomUUID()),

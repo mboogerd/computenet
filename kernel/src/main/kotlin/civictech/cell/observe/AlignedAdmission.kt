@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.data.op.FrontierGateable
+import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.HostTopologyView
 import civictech.cell.host.UpstreamAncestry
@@ -65,7 +66,11 @@ private class ViewAncestry(
  * Admit one aligned contributor set from the host's live Consume-link structure.
  *
  * Two rules apply, in order. First, every checked view's inclusive ancestry
- * must contain no ungated [FrontierGateable]. Second, a [CycleHead] or a
+ * must contain no operator whose output is not wave-complete. That includes an
+ * ungated [FrontierGateable] and a multi-input [QuorumSetCell] whose ancestry
+ * crosses an opaque host boundary: its fan-in Progress relay settles absorb-acks
+ * across its input edges but does not hold a real later-wave delta behind an
+ * earlier unsettled lane. Second, a [CycleHead] or a
  * [Replicable] whose `deltaInlet` is linked as a Consume re-origination point
  * may not sit on only one branch of shared upstream provenance. [unchecked]
  * exempts its named view from the first rule only.
@@ -103,7 +108,7 @@ private fun admitAlignedInTurn(
         if (view in unchecked) return@forEach
         val ancestry = ancestryByView.getValue(view)
         ancestry.cells.forEach { (ref, cell) ->
-            if (cell is FrontierGateable && !cell.frontierGated) {
+            if (cell.isUngatedAlignedAncestor(api, ref)) {
                 val verdict = AdmissionVerdict.Rejected.UngatedAncestor(
                     view = view,
                     cell = ref,
@@ -140,6 +145,35 @@ private fun admitAlignedInTurn(
     }
 
     return AdmissionVerdict.Admitted(opaque)
+}
+
+/**
+ * Whether [this] can expose a partial input wave on its outlet.
+ *
+ * [QuorumSetCell] has no `emitOnFrontier` mode. Its fan-in relay makes a
+ * swallowed wave positive only after every eligible input edge settles, but a
+ * real delta still emits eagerly and can monotonically settle earlier counters
+ * on the single output edge. Fully local inputs share the inspected host's
+ * serialized execution context and remain admissible. A multi-input quorum with
+ * opaque upstream ancestry does not provide that ordering guarantee, so aligned
+ * observation fails closed until the operator gains a coalescing output gate.
+ */
+private fun Cell.isUngatedAlignedAncestor(api: HostTopologyView, ref: CellRef): Boolean = when (this) {
+    is QuorumSetCell<*> -> hasMultipleConsumeInputs() && api.upstreamConsumeAncestors(ref).opaque.isNotEmpty()
+    is FrontierGateable -> !frontierGated
+    else -> false
+}
+
+private fun Cell.hasMultipleConsumeInputs(): Boolean {
+    var inputs = 0
+    val ports = PortRegistry.of(this)
+    ports.names().forEach { name ->
+        val port = ports[name] as? Linked ?: return@forEach
+        port.linking.links.forEach { link ->
+            if (link.role == LinkRole.Consume && link.toPort === port) inputs++
+        }
+    }
+    return inputs > 1
 }
 
 private fun UpstreamAncestry.includingSelf(spec: AlignedObserveBuilder.Spec): ViewAncestry {
