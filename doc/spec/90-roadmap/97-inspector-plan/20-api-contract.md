@@ -151,7 +151,7 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
   "promotions": [                   // one PromotionRecord per requested promotion
     { "incumbent": "…:0", "candidate": "…:1", "gate": "…:0", "outletName": "outlet",
       "form": "single", "status": "committed", "incumbentRetired": true,
-      "reversible": false, "reversibleNote": "a committed promotion is not reversible by the write plane: rollback after RETIRE is a fresh swap in the reverse direction (53 §The promotion swap)" }
+      "reversible": false, "reversibleNote": "a committed promotion is not reversible by the write plane: rollback after RETIRE is a fresh swap in the reverse direction (53 §The promotion swap); the retired incumbent's retention window is not built (JAR2/WKB3)" }
   ],
   "awaiting": null                    // or "observation-window" while a policy window is in flight
 }

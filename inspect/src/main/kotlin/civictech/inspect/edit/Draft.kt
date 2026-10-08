@@ -36,10 +36,6 @@ data class Draft(
  * - single-instance: [candidateHandle] names a staged [civictech.cell.graph.SpawnStep]
  *   and [gate] names the live traffic-light feeding both instances;
  * - rolling: [replicaCandidate] builds the same-ref candidate and [gate] is absent.
- *
- * This task executes only the single-instance form. The rolling form and a
- * non-null [policy] are retained in the model for their sibling implementations
- * and are rejected as caller faults by [StagedApplier] until those land.
  */
 data class PromotionRequest(
     val incumbent: CellRef,
