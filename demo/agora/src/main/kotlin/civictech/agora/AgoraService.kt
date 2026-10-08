@@ -49,9 +49,9 @@ private val AGORA_OBSERVATION_REF =
  * map-delta vocabulary consumed by `host.observation { map(...) }`.
  *
  * The source keeps the historical `agora:hub` ref and the old [CredenceView]
- * snapshot shape. Journal replay and checkpoints therefore still address and
- * restore the same durable fold; [publishCurrent] seeds the derived observation
- * after recovery, including from a checkpoint written before the migration.
+ * snapshot shape. Its fold and the canonical observation group are both
+ * checkpointable state, so recovery restores the materialized read without a
+ * separate republish step.
  */
 class CredenceObservationSource internal constructor(
     override val ref: CellRef,
@@ -77,11 +77,6 @@ class CredenceObservationSource internal constructor(
     internal fun attach(observation: Observation) {
         check(!this::observation.isInitialized) { "credence observation already attached" }
         this.observation = observation
-    }
-
-    internal fun publishCurrent() {
-        fold.current().takeIf { it.isNotEmpty() }
-            ?.let { outlet.call.propagate(MapDelta(it, emptySet())) }
     }
 
     fun credenceOf(ref: CellRef): Double? =
@@ -358,7 +353,6 @@ class AgoraService(
             nodes.putAll(rebuiltNodes)
         }
         rebuiltCells.values.forEach { it.catchUp = true }
-        hub.publishCurrent()
     }
 
     /**
