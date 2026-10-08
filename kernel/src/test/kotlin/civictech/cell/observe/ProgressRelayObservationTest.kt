@@ -137,4 +137,42 @@ class ProgressRelayObservationTest {
             observation.close()
         }
     }
+
+    @Test
+    fun `two same-source fan-in arms settle an aligned observation over 20 seeds`() {
+        for (seed in 0L until 20L) {
+            val controller = SimulationController(seed)
+            val host = ManagedHost(scheduler = controller.scheduler())
+            val source = SetCell<String>()
+            val left = FilterCell<String> { false }
+            val right = FilterCell<String> { false }
+            val quorum = QuorumSetCell<String> { 1 }
+            val management = host.managementInlet.call
+            listOf(source, left, right, quorum).forEach(management::spawn)
+            management.connect(source.ref, "outlet", left.ref, "inlet")
+            management.connect(source.ref, "outlet", right.ref, "inlet")
+            management.connect(left.ref, "outlet", quorum.ref, "inlet")
+            management.connect(right.ref, "outlet", quorum.ref, "inlet")
+
+            val observation = host.observation {
+                set("source", source.ref)
+                set("quorum", quorum.ref)
+            }
+            observation.groups shouldBe setOf("source+quorum")
+            controller.runToIdle()
+
+            val writer = host.lookup<StringSetInlet>(source.ref)!!.inlet.call
+            writer.add("swallowed-$seed")
+            val random = Random(seed)
+            repeat(random.nextInt(4)) { controller.step() }
+            controller.runToIdle()
+
+            withClue("seed $seed") {
+                observation.bufferedWaves shouldBe 0
+                observation.get<Set<String>>("source") shouldBe setOf("swallowed-$seed")
+                observation.get<Set<String>>("quorum") shouldBe emptySet()
+            }
+            observation.close()
+        }
+    }
 }
