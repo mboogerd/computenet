@@ -477,7 +477,7 @@ class WritePlaneRoutesTest {
 
         val late = send("POST", "${InspectorServer.APPLY_PATH}/$id/abort")
         late.statusCode() shouldBe 409
-        reasonOf(late) shouldBe "apply $id is not in STAGE"
+        reasonOf(late) shouldBe "apply $id is not in STAGE or awaiting an observation window"
     }
 
     @Test
@@ -499,6 +499,33 @@ class WritePlaneRoutesTest {
         done.outcome shouldBe ApplyOutcome.UnwoundClean
         awaitUntil("staged refs gone from the topology") { atAbort.stagedRefs.all { nodeOf(topology(), it) == null } }
         awaitUntil("ring holds the record") { entries().any { it["applyId"]!!.jsonPrimitive.content == id } }
+    }
+
+    @Test
+    fun `abort of an observation-window apply is 202 and unwinds the staged candidate`() {
+        val logicalId = UUID.randomUUID()
+        val gate = live(TrafficLightCell(CONSUMER_STRING, CellRef(UUID.randomUUID())))
+        val incumbent = live(PromotionCell(CellRef(logicalId, 0)))
+        host.managementInlet.call.connect(gate.ref, "dataOutlet", incumbent.ref, "inlet")
+        gate.controlInlet.call.setGreen()
+        val draft = """{"nodes":[{"handle":"candidate","catalogueId":"$PROMOTION_CELL","replaces":"${enc(incumbent.ref)}"}],"edges":[{"from":{"ref":"${enc(gate.ref)}","port":"dataOutlet"},"to":{"handle":"candidate","port":"inlet"}}],"promotions":[{"incumbent":"${enc(incumbent.ref)}","gate":"${enc(gate.ref)}","candidate":"candidate","policy":{"windowWaves":2,"judge":"workbench"}}]}"""
+
+        val accepted = send("POST", InspectorServer.APPLY_PATH, body = """{"draft":$draft,"baseSeq":1}""")
+        accepted.statusCode() shouldBe 202
+        val id = body(accepted)["applyId"]!!.jsonPrimitive.content
+        awaitUntil("route-visible apply awaits its observation window") {
+            val waiting = record(send("GET", "${InspectorServer.APPLY_PATH}/$id"))
+            waiting.phase == ApplyPhase.CUT_OVER && waiting.awaiting == "observation-window"
+        }
+
+        val aborted = send("POST", "${InspectorServer.APPLY_PATH}/$id/abort")
+
+        aborted.statusCode() shouldBe 202
+        record(aborted).applyId shouldBe id
+        val done = awaitTerminal(id)
+        done.outcome shouldBe ApplyOutcome.UnwoundClean
+        done.promotions.single().status shouldBe PromotionRecord.Status.ABORTED
+        done.awaiting shouldBe null
     }
 
     // ---- 11. [WKB2-41]: residue is retrievable after completion ---------------------------

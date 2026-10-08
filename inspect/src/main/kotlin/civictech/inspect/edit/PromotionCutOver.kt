@@ -4,6 +4,8 @@ import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.evolve.Evolve
 import civictech.cell.evolve.Promotion
+import civictech.cell.evolve.PromotionJudge
+import civictech.cell.evolve.PromotionVerdict
 import civictech.cell.graph.Direction
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.PlannedAction
@@ -15,11 +17,15 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.membrane.CompositeCell
 import civictech.cell.membrane.TrafficLightApi
+import civictech.cell.port.CycleHead
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRegistry
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.replication.Replication
 import civictech.inspect.InspectorServer
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Plans and performs both promotion forms of WKB2 F9. Planning is cold;
@@ -29,6 +35,7 @@ import civictech.inspect.InspectorServer
 internal object PromotionCutOver {
     sealed interface Result {
         data object Committed : Result
+        data object Pending : Result
         data class RefusedAtPrecheck(val reason: String) : Result
         data class RolledBackAtCommit(val reason: String) : Result
         data class Failed(val reason: String) : Result
@@ -91,7 +98,7 @@ internal object PromotionCutOver {
                     "logical cell ${request.incumbent.id} has more than one live instance; " +
                         "a replicated incumbent is offered only the rolling form ([WKB2-54])",
                 )
-                rolling -> null
+                rolling -> policyRefusal(request)
                 host.cellAt(requireNotNull(gate)) !is TrafficLightApi<*> -> refused(
                     RefusalCode.NO_GATE,
                     "gate $gate is not a live TrafficLightApi",
@@ -113,6 +120,7 @@ internal object PromotionCutOver {
                     "the candidate would be promoted unfed; the draft must draw the gate's dataOutlet into it",
                 )
                 else -> candidateRefusal(draft, request, requireNotNull(handle), liveOutlet)
+                    ?: policyRefusal(request)
             }
 
         return PlannedStep(key, handle, PlannedAction.PROMOTE, touches, refusal ?: StepCheck.Ok)
@@ -124,10 +132,100 @@ internal object PromotionCutOver {
         replication: Replication?,
         request: PromotionRequest,
         candidateRef: CellRef?,
+        judge: PromotionJudge? = null,
     ): Result = if (request.replicaCandidate != null) {
-        performRolling(host, replication, request)
+        performRolling(host, replication, request, judge)
     } else {
-        performSingle(host, registry, request, candidateRef)
+        performSingle(host, registry, request, candidateRef, judge)
+    }
+
+    /**
+     * The write-plane-owned observation tap for a staged single-instance candidate.
+     * The callback only counts and signals; the applying thread remains the sole
+     * thread that consults the verdict and invokes the promotion primitive.
+     */
+    class PolicyObservation private constructor(
+        private val outlet: FanOutlet<*>,
+        incumbent: Any,
+        policy: civictech.cell.evolve.PromotionPolicy,
+        private val onObservedWave: () -> Unit,
+    ) : AutoCloseable {
+        val judge = PromotionJudge(policy, incumbent as? CycleHead<*>)
+
+        private val lock = ReentrantLock()
+        private val changed = lock.newCondition()
+        private val tapRef = PortRef.generate()
+        private var version = 0L
+
+        init {
+            outlet.observe(tapRef) {
+                judge.observeCandidateWave()
+                onObservedWave()
+                lock.withLock {
+                    version++
+                    changed.signalAll()
+                }
+            }
+        }
+
+        data class ObservedVerdict(val version: Long, val verdict: PromotionVerdict)
+
+        /** Null means [aborted] won; otherwise one or more new candidate waves were observed. */
+        fun awaitVerdict(afterVersion: Long, aborted: () -> Boolean): ObservedVerdict? {
+            lock.lock()
+            try {
+                while (version <= afterVersion && !aborted()) {
+                    changed.await()
+                }
+                if (aborted()) return null
+                return ObservedVerdict(version, judge.verdict())
+            } finally {
+                lock.unlock()
+            }
+        }
+
+        /** Publishes the public awaiting state under the lock shared with [requestAbortIfAwaiting]. */
+        fun publishAwaiting(publish: () -> Unit) = lock.withLock(publish)
+
+        /**
+         * Atomically leaves the abortable awaiting state or reports that an
+         * accepted abort already won. A true abort can therefore never race
+         * the next promotion attempt.
+         */
+        fun clearAwaitingUnlessAborted(aborted: () -> Boolean, clear: () -> Unit): Boolean = lock.withLock {
+            if (aborted()) return@withLock false
+            clear()
+            true
+        }
+
+        /** Checks awaiting, accepts the abort and wakes [awaitVerdict] under one lock. */
+        fun requestAbortIfAwaiting(isAwaiting: () -> Boolean, accept: () -> Unit): Boolean = lock.withLock {
+            if (!isAwaiting()) return@withLock false
+            accept()
+            changed.signalAll()
+            true
+        }
+
+        override fun close() {
+            outlet.untap(tapRef)
+        }
+
+        companion object {
+            fun install(
+                host: ManagedHost,
+                request: PromotionRequest,
+                candidateRef: CellRef,
+                onObservedWave: () -> Unit = {},
+            ): PolicyObservation {
+                val policy = requireNotNull(request.policy)
+                val incumbent = requireNotNull(host.cellAt(request.incumbent)) {
+                    "promotion incumbent ${request.incumbent} is no longer hosted"
+                }
+                val outlet = host.portAt(candidateRef, request.outletName) as? FanOutlet<*>
+                    ?: error("promotion candidate $candidateRef has no FanOutlet named '${request.outletName}'")
+                return PolicyObservation(outlet, incumbent, policy, onObservedWave)
+            }
+        }
     }
 
     private fun performSingle(
@@ -135,6 +233,7 @@ internal object PromotionCutOver {
         registry: LocationRegistry,
         request: PromotionRequest,
         candidateRef: CellRef?,
+        judge: PromotionJudge?,
     ): Result {
         val incumbent = host.cellAt(request.incumbent)
             ?: return Result.Failed("promotion incumbent ${request.incumbent} is no longer hosted")
@@ -169,7 +268,7 @@ internal object PromotionCutOver {
                 candidate = candidate,
                 outletName = request.outletName,
                 downstream = downstream,
-                judge = null,
+                judge = judge,
             )
         }
     }
@@ -178,6 +277,7 @@ internal object PromotionCutOver {
         host: ManagedHost,
         replication: Replication?,
         request: PromotionRequest,
+        judge: PromotionJudge?,
     ): Result {
         val service = replication
             ?: return Result.RefusedAtPrecheck("this inspector was built without a Replication service")
@@ -202,7 +302,7 @@ internal object PromotionCutOver {
                 incumbent = incumbent,
                 candidate = candidate,
                 outletName = request.outletName,
-                judge = null,
+                judge = judge,
             )
         }
     }
@@ -216,6 +316,7 @@ internal object PromotionCutOver {
         val reason = e.message ?: e.toString()
         when {
             reason.startsWith(COMMIT_ABORT) -> Result.RolledBackAtCommit(reason)
+            reason == PENDING_ABORT -> Result.Pending
             reason.startsWith(PRECHECK_ABORT) -> Result.RefusedAtPrecheck(reason)
             else -> Result.Failed(reason)
         }
@@ -281,8 +382,25 @@ internal object PromotionCutOver {
         }
     }
 
+    private fun policyRefusal(request: PromotionRequest): StepCheck.Refused? {
+        val policy = request.policy ?: return null
+        return when {
+            policy.gates.isNotEmpty() || policy.baseline -> refused(
+                RefusalCode.POLICY_DENIAL,
+                "the workbench wires no InvariantCell gates and no baseline twin",
+            )
+            request.replicaCandidate != null -> refused(
+                RefusalCode.POLICY_DENIAL,
+                "the workbench observation window requires a staged single-instance candidate",
+            )
+            else -> null
+        }
+    }
+
     private fun refused(code: RefusalCode, reason: String) = StepCheck.Refused(code, reason)
 
     private const val PRECHECK_ABORT = "promotion aborted at PRECHECK:"
     private const val COMMIT_ABORT = "promotion aborted at COMMIT:"
+    private const val PENDING_ABORT =
+        "promotion aborted at PRECHECK: promotion policy's observation window is not yet filled (verdict: Pending)"
 }

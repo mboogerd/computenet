@@ -129,6 +129,13 @@ import kotlin.concurrent.withLock
  *   applier it did not construct.
  * @param beforeBoundaryLink test-only (e1ojt-D8): invoked with the list index
  *   before each boundary `connect`. A `var` for the same reason.
+ * @param beforePromotion test-only (8joqm-D6): invoked after boundary links
+ *   and the policy observation tap are installed, before the first primitive call.
+ * @param beforePromotionAttempt test-only: invoked immediately before every
+ *   promotion primitive call, including observation-window retries.
+ * @param onPromotionWaveObserved test-only: invoked by the policy tap for
+ *   every candidate wave, allowing cleanup to be asserted without exposing
+ *   the tap's identity.
  * @param replication the process replication service used by rolling
  *   promotion. Without one, rolling requests are refused `ROLLING_ONLY`
  *   during planning; read-only and single-instance inspectors need none.
@@ -142,6 +149,9 @@ class StagedApplier(
     internal val skipPrecheck: Boolean = false,
     @Volatile internal var afterStage: (ApplyRecord) -> Unit = {},
     @Volatile internal var beforeBoundaryLink: (Int) -> Unit = {},
+    @Volatile internal var beforePromotion: (ApplyRecord) -> Unit = {},
+    @Volatile internal var beforePromotionAttempt: (ApplyRecord) -> Unit = {},
+    @Volatile internal var onPromotionWaveObserved: () -> Unit = {},
     private val listener: ApplyListener = ApplyListener.None,
 ) {
     private val applyLock = ReentrantLock()
@@ -164,7 +174,7 @@ class StagedApplier(
      * already answers its PRECHECK record.
      *
      * @throws IllegalArgumentException when [Draft.host] is not a known host,
-     *   a promotion uses a not-yet-supported policy, more than one promotion
+     *   more than one promotion
      *   is requested, a promotion incumbent is also despawned,
      *   a despawn target is listed twice, or [applyId] was already used.
      */
@@ -201,15 +211,15 @@ class StagedApplier(
 
     /**
      * Requests that the in-flight apply [applyId] unwind. True — and the flag
-     * set — only while that apply is in STAGE; it is honoured at the pause
-     * point after STAGE (e1ojt-D8) by the same [Run.unwind] a failure runs.
-     * Otherwise false, and nothing changes. Does no work itself.
+     * set — while that apply is in STAGE or CUT_OVER awaiting a policy window.
+     * The latter also signals the condition so an unbounded wave wait wakes.
+     * Both paths use the same [Run.unwind] a failure runs. Otherwise false,
+     * and nothing changes. Does no graph work itself.
      */
     fun abort(applyId: String): Boolean {
         val run = inFlight ?: return false
-        if (run.applyId != applyId || run.record.phase != ApplyPhase.STAGE) return false
-        run.abortRequested.set(true)
-        return true
+        if (run.applyId != applyId) return false
+        return run.requestAbort()
     }
 
     /** The latest snapshot of [applyId]'s record — queued, in flight or terminal — or null. */
@@ -246,11 +256,6 @@ class StagedApplier(
         }
         require(draft.promotions.none { it.incumbent in draft.despawns }) {
             "a promotion incumbent must not also be a despawn target"
-        }
-        draft.promotions.forEach { request ->
-            require(request.policy == null) {
-                "NOT_YET_SUPPORTED: promotion policy is applied by the observation-window task of computenet-8joqm"
-            }
         }
         require(draft.despawns.distinct().size == draft.despawns.size) { "a despawn target is listed more than once" }
         return hosts.getValue(draft.host)
@@ -322,6 +327,11 @@ class StagedApplier(
             private set
 
         val abortRequested = AtomicBoolean(false)
+
+        @Volatile
+        private var policyObservation: PromotionCutOver.PolicyObservation? = null
+
+        private var awaiting: String? = null
 
         private val steps = LinkedHashMap<String, StepOutcome>()
         private val stagedRefs = mutableListOf<CellRef>()
@@ -421,6 +431,7 @@ class StagedApplier(
                 steps = LinkedHashMap(steps),
                 stagedRefs = stagedRefs.map(InspectorServer::encodeRef),
                 promotions = promotionRecords.toList(),
+                awaiting = awaiting,
             )
             record = next
             synchronized(records) { records[applyId] = next }
@@ -497,65 +508,169 @@ class StagedApplier(
 
         private fun cutOver() {
             publish(phase = ApplyPhase.CUT_OVER)
-            draft.boundary.forEachIndexed { index, boundary ->
-                beforeBoundaryLink(index)
-                val key = boundaryKey(boundary)
-                val attached = try {
-                    attach(boundary, key)
-                } catch (e: Exception) {
-                    steps[key] = StepOutcome.Failed(e.message ?: e.toString())
-                    null
-                }
-                publish()
-                if (attached == null) {
+            val promotion = draft.promotions.singleOrNull()
+            var observation: PromotionCutOver.PolicyObservation? = null
+            if (promotion?.policy != null) {
+                val candidateRef = promotion.candidateHandle?.let(refByHandle::get)
+                if (candidateRef == null) {
+                    failPromotion(
+                        promotion,
+                        PromotionRecord.Status.FAILED,
+                        "a policy observation window requires a staged candidate",
+                    )
                     unwind()
                     return
                 }
+                observation = try {
+                    PromotionCutOver.PolicyObservation.install(
+                        host,
+                        promotion,
+                        candidateRef,
+                        onPromotionWaveObserved,
+                    )
+                } catch (e: Exception) {
+                    failPromotion(promotion, PromotionRecord.Status.FAILED, e.toString())
+                    unwind()
+                    return
+                }
+                policyObservation = observation
             }
-            val promotion = draft.promotions.singleOrNull()
-            if (promotion != null) {
-                val candidateRef = promotion.candidateHandle?.let(refByHandle::get)
-                when (val result = PromotionCutOver.perform(host, registry, replication, promotion, candidateRef)) {
-                    PromotionCutOver.Result.Committed -> {
-                        steps[PromotionCutOver.key(promotion.incumbent)] = StepOutcome.Applied
-                        promotionRecords[0] = promotionRecords[0].copy(
-                            candidate = if (promotion.replicaCandidate != null) {
-                                InspectorServer.encodeRef(promotion.incumbent)
-                            } else {
-                                promotionRecords[0].candidate
-                            },
-                            status = PromotionRecord.Status.COMMITTED,
-                        )
+
+            try {
+                draft.boundary.forEachIndexed { index, boundary ->
+                    beforeBoundaryLink(index)
+                    val key = boundaryKey(boundary)
+                    val attached = try {
+                        attach(boundary, key)
+                    } catch (e: Exception) {
+                        steps[key] = StepOutcome.Failed(e.message ?: e.toString())
+                        null
                     }
-                    is PromotionCutOver.Result.RefusedAtPrecheck -> {
-                        failPromotion(promotion, PromotionRecord.Status.REFUSED_AT_PRECHECK, result.reason)
-                        unwind()
-                        return
-                    }
-                    is PromotionCutOver.Result.RolledBackAtCommit -> {
-                        failPromotion(promotion, PromotionRecord.Status.ROLLED_BACK_AT_COMMIT, result.reason, retained = true)
-                        rollbackAtCommit(promotion, result.reason)
-                        return
-                    }
-                    is PromotionCutOver.Result.Failed -> {
-                        failPromotion(promotion, PromotionRecord.Status.FAILED, result.reason)
+                    publish()
+                    if (attached == null) {
                         unwind()
                         return
                     }
                 }
+
+                if (promotion != null) {
+                    beforePromotion(record)
+                    val candidateRef = promotion.candidateHandle?.let(refByHandle::get)
+                    beforePromotionAttempt(record)
+                    var result = PromotionCutOver.perform(
+                        host, registry, replication, promotion, candidateRef, observation?.judge,
+                    )
+                    var observedVersion = 0L
+                    while (result == PromotionCutOver.Result.Pending) {
+                        val activeObservation = checkNotNull(observation) {
+                            "a Pending promotion has no observation window"
+                        }
+                        activeObservation.publishAwaiting {
+                            promotionRecords[0] = promotionRecords[0].copy(
+                                status = PromotionRecord.Status.AWAITING_OBSERVATION_WINDOW,
+                            )
+                            awaiting = OBSERVATION_WINDOW
+                            publish()
+                        }
+                        val observed = activeObservation.awaitVerdict(observedVersion, abortRequested::get)
+                            ?: run {
+                                abortAwaitingPromotion()
+                                return
+                            }
+                        observedVersion = observed.version
+                        if (abortRequested.get()) {
+                            abortAwaitingPromotion()
+                            return
+                        }
+                        if (observed.verdict is civictech.cell.evolve.PromotionVerdict.Pending) {
+                            publish()
+                            continue
+                        }
+                        val mayAttempt = activeObservation.clearAwaitingUnlessAborted(abortRequested::get) {
+                            awaiting = null
+                            publish()
+                        }
+                        if (!mayAttempt) {
+                            abortAwaitingPromotion()
+                            return
+                        }
+                        beforePromotionAttempt(record)
+                        result = PromotionCutOver.perform(
+                            host, registry, replication, promotion, candidateRef, activeObservation.judge,
+                        )
+                    }
+                    when (result) {
+                        PromotionCutOver.Result.Committed -> {
+                            steps[PromotionCutOver.key(promotion.incumbent)] = StepOutcome.Applied
+                            promotionRecords[0] = promotionRecords[0].copy(
+                                candidate = if (promotion.replicaCandidate != null) {
+                                    InspectorServer.encodeRef(promotion.incumbent)
+                                } else {
+                                    promotionRecords[0].candidate
+                                },
+                                status = PromotionRecord.Status.COMMITTED,
+                            )
+                        }
+                        is PromotionCutOver.Result.RefusedAtPrecheck -> {
+                            failPromotion(promotion, PromotionRecord.Status.REFUSED_AT_PRECHECK, result.reason)
+                            unwind()
+                            return
+                        }
+                        is PromotionCutOver.Result.RolledBackAtCommit -> {
+                            failPromotion(
+                                promotion,
+                                PromotionRecord.Status.ROLLED_BACK_AT_COMMIT,
+                                result.reason,
+                                retained = true,
+                            )
+                            rollbackAtCommit(promotion, result.reason)
+                            return
+                        }
+                        is PromotionCutOver.Result.Failed -> {
+                            failPromotion(promotion, PromotionRecord.Status.FAILED, result.reason)
+                            unwind()
+                            return
+                        }
+                        PromotionCutOver.Result.Pending -> error("pending loop did not consume Pending")
+                    }
+                }
+                // The point of no return (e1ojt-D7 / [WKB2-24]): publish committed
+                // before recording either a single-form incumbent or explicit despawns retired.
+                // Rolling rebind retains the same ref; there is no retirement to record.
+                publish(phase = ApplyPhase.RETIRE, outcome = ApplyOutcome.Committed, completedAtMs = clock())
+                if (promotion?.candidateHandle != null) {
+                    promotionRecords[0] = promotionRecords[0].copy(incumbentRetired = true)
+                    publish()
+                }
+                draft.despawns.forEach { ref ->
+                    steps[despawnKey(ref)] = despawnAwaited(ref)?.let(StepOutcome::Failed) ?: StepOutcome.Applied
+                    publish()
+                }
+            } finally {
+                observation?.close()
+                policyObservation = null
             }
-            // The point of no return (e1ojt-D7 / [WKB2-24]): publish committed
-            // before recording either a single-form incumbent or explicit despawns retired.
-            // Rolling rebind retains the same ref; there is no retirement to record.
-            publish(phase = ApplyPhase.RETIRE, outcome = ApplyOutcome.Committed, completedAtMs = clock())
-            if (promotion?.candidateHandle != null) {
-                promotionRecords[0] = promotionRecords[0].copy(incumbentRetired = true)
-                publish()
+        }
+
+        private fun abortAwaitingPromotion() {
+            awaiting = null
+            promotionRecords[0] = promotionRecords[0].copy(status = PromotionRecord.Status.ABORTED)
+            publish()
+            unwind()
+        }
+
+        fun requestAbort(): Boolean {
+            if (record.phase == ApplyPhase.STAGE) {
+                abortRequested.set(true)
+                return true
             }
-            draft.despawns.forEach { ref ->
-                steps[despawnKey(ref)] = despawnAwaited(ref)?.let(StepOutcome::Failed) ?: StepOutcome.Applied
-                publish()
-            }
+            val observation = policyObservation ?: return false
+            return observation.requestAbortIfAwaiting(
+                isAwaiting = {
+                    record.phase == ApplyPhase.CUT_OVER && record.awaiting != null
+                },
+                accept = { abortRequested.set(true) },
+            )
         }
 
         private fun failPromotion(
@@ -730,6 +845,9 @@ class StagedApplier(
 
         /** The synthetic step a drained target host is refused under (e1ojt-D6). */
         const val HOST_STEP = "host"
+
+        /** The only in-flight wait discriminator this task introduces (8joqm-D6). */
+        const val OBSERVATION_WINDOW = "observation-window"
 
         /** The phases in which an in-flight apply's staged refs are not live (wczst-D2.2). */
         val STAGED_PHASES = setOf(ApplyPhase.STAGE, ApplyPhase.CUT_OVER, ApplyPhase.UNWIND)
