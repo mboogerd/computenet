@@ -19,7 +19,7 @@ package civictech.demo.alignment
  * highLabel?}`; `PUT /topics/{t}/dimensions/{d} {creator, weight?, direction?, lowLabel?,
  * highLabel?, description?}`; `DELETE /topics/{t}/dimensions/{d}?creator=`; `PUT /topics/{t}/policy {creator,
  * ideas?, boardVisibility?, gutCheck?, dotBudget?}` (the last two are the experimental Gut check
- * round's settings, teu97-D2/D10); `POST /topics/{t}/reveal {creator}`; `POST /topics/{t}/ai-rate {creator}`; `POST /topics/{t}/ideas
+ * round's settings, teu97-D2/D10); `POST /topics/{t}/reveal {creator}`; `POST /topics/{t}/ai-rate {creator}`; `DELETE /topics/{t}/ai-rate?creator=`; `POST /topics/{t}/ideas
  * {participant, title, description?}`; `PUT /topics/{t}/ideas/{i} {creator, title?,
  * description?}`; `DELETE /topics/{t}/ideas/{i}?creator=`; LLM ideation ([IdeationRun]): `POST
  * /topics/{t}/ideate {creator}`, `DELETE /topics/{t}/ideate?creator=`, `POST
@@ -131,7 +131,8 @@ function ensureSetupSkeleton() {
     '<div class="card" id="setupAiRoot" hidden><h3>AI raters</h3>' +
       '<p class="muted">Asks <span id="setupAiNames"></span> to rate every idea on every dimension it has not yet rated. ' +
       'Each idea is judged on its own, blind to the others and to people\'s ratings; the result is a separate AI score on the Board.</p>' +
-      '<button type="button" id="setupAiRate">Get AI ratings</button>' +
+      '<button type="button" id="setupAiRate">Get AI ratings</button> ' +
+      '<button type="button" id="setupAiClear" class="link">clear AI ratings</button>' +
     '</div>' +
     '<div class="card"><h3>Gut check</h3><div id="setupGutCheckRoot">' +
       '<label><input type="checkbox" id="setupGutCheck"> run a dot-voting gut check before rating</label>' +
@@ -179,6 +180,12 @@ function ensureSetupSkeleton() {
     const t = currentTopic();
     if (!t) return;
     send('POST', '/topics/' + t.id + '/ai-rate', { creator: me() }).then(renderSetup, () => {});
+  };
+  el('setupAiClear').onclick = () => {
+    const t = currentTopic();
+    if (!t) return;
+    if (!confirm('removes every AI rating on this topic (people\'s ratings stay)')) return;
+    send('DELETE', '/topics/' + t.id + '/ai-rate?creator=' + encodeURIComponent(me())).then(renderSetup, () => {});
   };
   el('setupReveal').onclick = () => {
     const t = currentTopic();
@@ -307,6 +314,7 @@ function paintPolicyAndVisibility(t) {
   const aiBtn = el('setupAiRate');
   aiBtn.disabled = t.aiRunning === true;
   aiBtn.textContent = t.aiRunning === true ? 'AI rating…' : 'Get AI ratings';
+  el('setupAiClear').disabled = t.aiRunning === true;
   const polRoot = el('setupPolicy');
   if (!editing(polRoot)) polRoot.querySelectorAll('input').forEach(r => { r.checked = r.value === (t.ideas || 'everyone'); });
   const visRoot = el('setupVisibility');

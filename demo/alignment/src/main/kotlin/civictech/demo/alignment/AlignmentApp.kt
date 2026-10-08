@@ -787,6 +787,7 @@ class AlignmentApp internal constructor(
             seg.size == 2 && seg[1] == "policy" && method == "PUT" -> putPolicy(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "reveal" && method == "POST" -> postReveal(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "ai-rate" && method == "POST" -> postAiRate(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "ai-rate" && method == "DELETE" -> deleteAiRate(topic, ex.query("creator"))
             seg.size == 2 && seg[1] == "rate" && method == "POST" -> postRate(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "dots" && method == "POST" -> postDots(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "judge" && method == "POST" -> postJudge(topic, ex.jsonBody())
@@ -1029,6 +1030,22 @@ class AlignmentApp internal constructor(
         val started = aiRunning.add(topic.id)
         if (started) aiExecutor.execute { runAiRating(topic.id) }
         return """{"started":$started}"""
+    }
+
+    /**
+     * `?creator=`: the facilitator clears every AI rating and decline on this topic — all models,
+     * all versions — leaving people's ratings untouched; the next run asks afresh. 409 while a run
+     * is in flight, so a run cannot refill what is being cleared. Answers how many ratings went.
+     */
+    private fun deleteAiRate(topic: Topic, creator: String?): String {
+        requireCreator(topic, creator)
+        if (topic.id in aiRunning) fail(409, "an AI rating run is in progress on this topic")
+        val cleared = synchronized(state) {
+            val n = ratings.keys.count { it.topic == topic.id && it.raters == RaterClass.AI }
+            clearAiRatings(topic.id) { true }
+            n
+        }
+        return """{"cleared":$cleared}"""
     }
 
     private fun putWeight(topic: Topic, json: JsonObject): String {

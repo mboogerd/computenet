@@ -277,4 +277,29 @@ class AiScoreTest {
             probe.awaitRow("a") { it.aiMean("impact") == 5.0 && it["aiDeclined"]!!.jsonObject.isEmpty() }
         }
     }
+
+    /** The facilitator can clear the AI side wholesale; people's ratings stay, and the next run asks afresh. */
+    @Test
+    fun `the facilitator clears every AI rating and decline, and nothing else`() {
+        val rater = jev()
+        withApp(raters = listOf(rater)) { probe ->
+            seed(probe)
+            assertEquals(200, probe.postJson("""{"participant":"ann","idea":"a","dim":"impact","value":3}""", "/topics/t/rate").statusCode())
+            aiRate(probe)
+            probe.awaitRow("b") { it["aiDeclined"]!!.jsonObject.isNotEmpty() && it.aiMean("impact") != null }
+            probe.awaitIdle()
+
+            assertEquals(403, probe.delete("/topics/t/ai-rate?creator=ann").statusCode())
+            val cleared = probe.delete("/topics/t/ai-rate?creator=cat")
+            assertEquals(200, cleared.statusCode(), cleared.body())
+            assertEquals("""{"cleared":3}""", cleared.body(), "a×2 + b×1")
+
+            val a = probe.awaitRow("a") { it.ai() == null }
+            assertEquals(3.0, a["byDim"]!!.jsonObject["impact"]!!.jsonObject.num("mean"), "ann's rating stays: $a")
+            assertEquals(emptyMap(), probe.awaitRow("b") { it.ai() == null }["aiDeclined"]!!.jsonObject, "declines go too")
+
+            aiRate(probe)
+            probe.awaitRow("a") { it.aiMean("impact") == 8.0 }
+        }
+    }
 }
