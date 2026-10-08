@@ -101,6 +101,9 @@ class TwoNodesWriteAuthorityTest {
             }
             requireNotNull(b.bridgeHost).quiescence().await(15_000, "draining node b's peering bridge")
             b.mainHost.quiescence().await(15_000, "draining node b after the restarted write")
+            awaitUntil("node b admits the restarted authority's write", 15_000) {
+                "after-restart" in bCell.membership()
+            }
 
             assertTrue(
                 "after-restart" in bCell.membership(),
