@@ -72,8 +72,10 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * A live journal append can still fail after the guarded data cell has mutated.
  * The adapter then records an `UNSIGNED` refusal, publishes no envelope, and
- * latches closed against later local writes; restart/recovery is required to
- * turn the already-journaled operation into a signed envelope. This is the
+ * latches closed against signing later local writes (each is refused
+ * `UNSIGNED`, though the data cell's own mutation still lands locally, as the
+ * failed one did); restart/recovery is required to turn the already-journaled
+ * operations into signed envelopes. This is the
  * existing two-frame ceiling rather than an atomic data-cell/envelope commit.
  *
  * A new owner's write that reaches a replica before the signed transfer is
