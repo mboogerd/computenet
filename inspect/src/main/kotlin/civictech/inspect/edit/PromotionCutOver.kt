@@ -61,8 +61,13 @@ internal object PromotionCutOver {
             }
         }
 
+        val gateLocationRefusal = if (rolling) {
+            null
+        } else {
+            localRef(host, registry, requireNotNull(gate), draft.host, "gate")
+        }
         val refusal = localRef(host, registry, request.incumbent, draft.host, "incumbent")
-            ?: (if (rolling) null else localRef(host, registry, requireNotNull(gate), draft.host, "gate"))
+            ?: gateLocationRefusal
             ?: when {
                 incumbent is CompositeCell -> refused(
                     RefusalCode.COUPLED_FLOW,

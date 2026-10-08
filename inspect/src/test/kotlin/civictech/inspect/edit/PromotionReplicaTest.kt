@@ -66,6 +66,9 @@ class PromotionReplicaTest {
         controller.runToIdle()
 
         record.outcome shouldBe ApplyOutcome.Committed
+        val step = promotionStep(record.plan.shouldNotBeNull())
+        step.handle shouldBe null
+        step.touches shouldBe listOf(InspectorServer.encodeRef(incumbent.ref))
         val promotion = record.promotions.single()
         promotion.form shouldBe PromotionRecord.Form.ROLLING
         promotion.status shouldBe PromotionRecord.Status.COMMITTED
