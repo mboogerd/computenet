@@ -152,9 +152,11 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   `KeyedCells` (durable per-key families), supervision, dead
   letters (sanitized — no live `Owned`/`Leased` escapes), `CellError`,
   remoting proxies (`HostProxy`, `HostedCellProxy`, `RoutedInlet`), `TypedLink`.
-- `.observe` — app-facing reads: `ObservationSink` (`current()`, `onChange`
-  with late-join catch-up), `View.set()/map()/count()`, `host.observe` /
-  `host.observeAll`. Caveat: `observeAll` is point-consistent per outlet, not
+- `.observe` — app-facing reads: `Observation` (`observation {}` is the one
+  app-edge API; `current()`, `onChange` with late-join catch-up, grouped
+  views, and `crossRoot` disclosure), `ObservationSink`,
+  `View.set()/map()/count()`, and the `host.observe` / `host.observeAll`
+  specialisations. Caveat: `observeAll` is point-consistent per outlet, not
   wave-aligned across outlets (G-13).
 - `.durability` — `Journal` (`append`/`replay`/`reset`), `InMemoryJournal`,
   `FileJournal`. Records are opaque bytes; the host writes `WireCodec` frames —

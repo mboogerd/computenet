@@ -1,5 +1,7 @@
 # Idea: a first-class observation sink (materialized edge with snapshot + catch-up)
 
+> **Status: ABSORBED** — computenet-axcyk (`civictech.cell.observe.observation`), 2026-10.
+
 > Type: demo backend operation that belongs in the framework
 > Origin: `:demo:slotfinder` — the hand-rolled `SlotHubCell` / `DayCountHubCell` / `SlotMembership`
 > + `/state` endpoint, and the SSE-stall bug that hand-rolling caused
