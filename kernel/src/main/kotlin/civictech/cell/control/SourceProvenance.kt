@@ -2,8 +2,8 @@ package civictech.cell.control
 
 import civictech.cell.link.Link
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortIdentities
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Best-effort, synchronous, **in-process-only** per-edge source reachability
@@ -23,26 +23,26 @@ import java.util.concurrent.ConcurrentHashMap
  *  - a concrete, non-null [Set] when the answer is **known** — either a cell
  *    explicitly [publish]ed its outlet's resolved provenance (the relay hops
  *    in [AbsorbAck.kt], which compose this recursively through their own
- *    input edges), or the edge's upstream outlet has been **observed**,
- *    directly, to mint every one of its waves spontaneously and never once
- *    forward a reactive wave ([FanOutlet.mintedAsRoot] /
- *    [FanOutlet.observedAsRelay] — ground truth read off the outlet's own
- *    emission history, not inference);
+ *    input edges), or the outlet's owning cell is structurally a root — it has
+ *    no currently open inbound link (Consume, Observe or feedback). A published set includes both its
+ *    resolved input sources and every id the outlet minted itself;
  *  - `null` ("unknown") for everything else — a bridged edge
  *    ([Link.fromPort] is `null` across the wire, matching the existing
- *    cross-host residual in 20/22 §Bridged frontier), a non-participating
- *    operator cell, or a graph cycle this resolver has already entered
- *    (guarded below so a cycle degrades to "unknown" instead of looping).
+ *    cross-host residual in 20/22 §Bridged frontier), an unpublished outlet
+ *    whose owning cell has an open inbound link, an unregistered outlet, or
+ *    a graph cycle this resolver has already entered (guarded below so a
+ *    cycle degrades to "unknown" instead of looping).
  *
  * `null` is the fail-closed default throughout: every caller treats "unknown"
  * exactly as it treats "this edge might carry that source" today — the
  * existing, safe, over-aligning behavior this mechanism only ever narrows
- * from, never widens past.
+ * from, never widens past. Root classification is evaluated from live
+ * topology on every resolution; emission history never excludes an edge. An
+ * inlet linked to an otherwise-root cell after a wave is in flight is
+ * therefore counted when that wave's Progress is evaluated, matching the
+ * dynamic completeness rule.
  */
 internal object SourceProvenance {
-
-    private val published = ConcurrentHashMap<FanOutlet<*>, () -> Set<UUID>?>()
-
     /**
      * Declares [outlet]'s resolved source set as [resolve]'s result, re-read
      * fresh on every call (no snapshot, so a later topology change — an edge
@@ -50,10 +50,11 @@ internal object SourceProvenance {
      * immediately, with no separate invalidation step). A relay hop
      * ([civictech.cell.control.relayAbsorbAcks]'s fan-in overload) calls this
      * once per output at construction, publishing the union of its own open
-     * input edges' resolved sets.
+     * input edges' resolved sets. [resolve] adds the publishing outlet's own
+     * locally minted ids to a successfully resolved set.
      */
     fun publish(outlet: FanOutlet<*>, resolve: () -> Set<UUID>?) {
-        published[outlet] = resolve
+        outlet.sourceProvenanceResolver = resolve
     }
 
     /** The sourceIds [link] can ever carry, or `null` if unknown (see class KDoc). */
@@ -65,8 +66,14 @@ internal object SourceProvenance {
     private fun resolve(outlet: FanOutlet<*>, visiting: MutableSet<FanOutlet<*>>): Set<UUID>? {
         if (!visiting.add(outlet)) return null // cycle guard: degrade to unknown, never loop
         try {
-            published[outlet]?.let { return it() }
-            return if (outlet.observedAsRelay) null else outlet.mintedAsRoot.takeIf { it.isNotEmpty() }
+            outlet.sourceProvenanceResolver?.let { resolvePublished ->
+                val relayedSources = resolvePublished() ?: return null
+                return relayedSources + outlet.mintedAsRoot
+            }
+            return when (PortIdentities.hasOpenInboundLink(outlet)) {
+                false -> outlet.mintedAsRoot.takeIf { it.isNotEmpty() }
+                true, null -> null
+            }
         } finally {
             visiting.remove(outlet)
         }
