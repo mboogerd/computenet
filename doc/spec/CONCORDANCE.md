@@ -150,7 +150,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 24-WL-01 | 24-WL-LATE-01 | covered |
 | 24-WL-02 | 24-WL-FLOOR-01, 24-WL-JOINLOW-01 | covered |
 | 24-WL-03 | 24-WL-DUP-01, 24-WL-FLOOR-01 | covered |
-| 24-WL-04 | — | gap |
+| 24-WL-04 | 24-WL-SETTLE-01 | covered |
 | 24-WL-05 | 24-WL-CATCHUP-01, 24-WL-REC-01 | covered |
 | 24-WL-06 | 24-WL-LATE-01 | covered |
 | 24-WL-07 | 24-WL-JOINLOW-01, 24-WL-LATE-01, 24-WL-REC-02 | covered |
@@ -292,7 +292,6 @@ None.
 - Coverage gap: requirement '24-TAG-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-TAG-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-TAG-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
-- Coverage gap: requirement '24-WL-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-15' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-17' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-18' (20-dataflow-semantics/24-data-cells.md) has no covering scenario

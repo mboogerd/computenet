@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.data.op.FrontierGateable
 import civictech.cell.host.HostManagementApi
+import civictech.cell.host.HostTopologyView
 import civictech.cell.host.UpstreamAncestry
 import civictech.cell.link.Linked
 import civictech.cell.link.LinkRole
@@ -69,15 +70,23 @@ private class ViewAncestry(
  * may not sit on only one branch of shared upstream provenance. [unchecked]
  * exempts its named view from the first rule only.
  *
- * The walk sees links present during these synchronous management reads only.
- * Links added after construction are not rechecked, and bypass wiring absent
- * from the host's live link set reads as a root. Callers must serialize graph
- * construction around this call: the underlying live link collections are not
- * an atomic topology snapshot and are not safe to mutate concurrently. A
- * producer outside this host is opaque and admitted rather than guessed at.
+ * Every ancestry walk and re-origination-port read for one verdict runs inside
+ * one [HostManagementApi.inspectTopology] turn. Concurrent host topology
+ * mutations therefore order wholly before or after admission. Links added
+ * after that turn are not rechecked, and bypass wiring absent from the host's
+ * live link set reads as a root. A producer outside this host is opaque and
+ * admitted rather than guessed at.
  */
 internal fun admitAligned(
     api: HostManagementApi,
+    specs: Map<String, AlignedObserveBuilder.Spec>,
+    unchecked: Set<String>,
+): AdmissionVerdict = api.inspectTopology { topology ->
+    admitAlignedInTurn(topology, specs, unchecked)
+}
+
+private fun admitAlignedInTurn(
+    api: HostTopologyView,
     specs: Map<String, AlignedObserveBuilder.Spec>,
     unchecked: Set<String>,
 ): AdmissionVerdict {

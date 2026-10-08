@@ -2376,6 +2376,11 @@ open class ManagedHost(
         )
     }
 
+    private val topologyView = object : HostTopologyView {
+        override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
+            upstreamConsumeAncestorsIncludingBypasses(ref)
+    }
+
     /**
      * Spec 33's drain protocol (`33 §The drain protocol` steps 1–3) applied at
      * **cell** granularity, then despawn — which is what spec 42 defines an
@@ -2637,6 +2642,9 @@ open class ManagedHost(
             override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
                 upstreamConsumeAncestorsIncludingBypasses(ref)
 
+            override fun <T> inspectTopology(inspection: HostTopologyInspection<T>): T =
+                inspection.inspect(topologyView)
+
             override fun declareWrite(name: String, cells: Set<CellRef>): DeclaredWrite {
                 val declaredCells = cells.toSet()
                 val missing = declaredCells.filterNot(this@ManagedHost.cells::containsKey)
@@ -2840,8 +2848,8 @@ open class ManagedHost(
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
-            } else if (method.name == "upstreamConsumeAncestors") {
-                internalApi.upstreamConsumeAncestors(args!![0] as CellRef)
+            } else if (method.name == "upstreamConsumeAncestors" || method.name == "inspectTopology") {
+                enqueueAwaiting(0) { invocation.invoke() }
             } else if (method.name == "declareWrite" || method.name == "declaredWrite") {
                 enqueueAwaiting(0) { invocation.invoke() }
             } else if (method.name.startsWith("connect")) {

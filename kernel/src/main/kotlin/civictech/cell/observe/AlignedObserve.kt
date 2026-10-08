@@ -1172,10 +1172,10 @@ class AlignedObserveBuilder internal constructor() {
  * current local Consume ancestry. It rejects ungated non-monotone contributors
  * and re-origination points that split shared provenance; remote producers are
  * opaque and admitted. [AlignedObserveBuilder.unchecked] opts one view out of
- * the ungated rule only. This is a synchronous build-time check over links
- * visible at the call: later links are not rechecked, bypass wiring the host
- * cannot see reads as a root, and graph construction must not mutate links
- * concurrently with admission.
+ * the ungated rule only. The complete build-time check runs as one awaited
+ * host-executor turn, so a concurrent topology mutation orders before or after
+ * its verdict. Later links are not rechecked, and bypass wiring the host cannot
+ * see reads as a root.
  */
 fun Use<HostManagementApi>.observeAligned(
     maxOutstandingHandles: Int = 1024,
