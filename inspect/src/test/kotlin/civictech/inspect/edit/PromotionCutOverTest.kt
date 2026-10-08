@@ -364,7 +364,7 @@ class PromotionCutOverTest {
     }
 
     @Test
-    fun `promotion caller faults are refused by plan and apply`() {
+    fun `promotion caller faults are refused while a supported policy reaches planning`() {
         val f = Fixture(seed = 28)
         val applier = f.applier()
         val request = f.request()
@@ -403,8 +403,7 @@ class PromotionCutOverTest {
             policy = PromotionPolicy(emptyList(), ObservationWindow(1), judge = "judge"),
         )
         val policyDraft = f.draft(request = policyRequest)
-        shouldThrow<IllegalArgumentException> { applier.plan(policyDraft) }
-        shouldThrow<IllegalArgumentException> { applier.apply(policyDraft, "policy", "operator", 1) }
+        f.promotionStep(applier.plan(policyDraft)).refusal.shouldBeNull()
     }
 
     @Test
