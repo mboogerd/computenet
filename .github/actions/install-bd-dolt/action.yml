@@ -67,12 +67,13 @@ runs:
       run: |
         set -euo pipefail
 
-        curl -fsSL -o /tmp/bd.tar.gz \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/bd.tar.gz \
           "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz"
         tar -xzf /tmp/bd.tar.gz -C /tmp bd
         sudo install -m 0755 /tmp/bd /usr/local/bin/bd
 
-        curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+          "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
 
         bd --version
         dolt version
