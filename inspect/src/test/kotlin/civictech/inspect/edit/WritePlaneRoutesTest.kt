@@ -2,10 +2,15 @@ package civictech.inspect.edit
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Consumer
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.membrane.TrafficLightCell
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.registerPort
 import civictech.inspect.Event
 import civictech.inspect.InspectorServer
 import civictech.inspect.inspectorJson
@@ -78,6 +83,8 @@ class WritePlaneRoutesTest {
         register(SET) { ref -> SetCell<Any>(ref = ref) }
         register(EMITTER) { ref -> EmitterCell(ref).also { emitters += it } }
         register(SINK) { ref -> SinkCell(ref) }
+        register(PROMOTION_GATE) { ref -> TrafficLightCell(CONSUMER_STRING, ref) }
+        register(PROMOTION_CELL) { ref -> PromotionCell(ref) }
         server = started(mapOf("h" to host))
     }
 
@@ -87,7 +94,7 @@ class WritePlaneRoutesTest {
         taps.forEach { it.close() }
         servers.forEach { it.close() }
         schedulers.forEach { it.shutdown() }
-        listOf(SET, EMITTER, SINK).forEach(Catalogue::unregister)
+        listOf(SET, EMITTER, SINK, PROMOTION_GATE, PROMOTION_CELL).forEach(Catalogue::unregister)
     }
 
     // ---- 1. route order (wczst-D8) ------------------------------------------------
@@ -234,6 +241,82 @@ class WritePlaneRoutesTest {
 
         response.statusCode() shouldBe 400
         reasonOf(response) shouldBe "draft.host is required: this inspector has 2 hosts"
+    }
+
+    @Test
+    fun `promotion DTO resolves to a PROMOTE plan with incumbent and gate touches`() {
+        val logicalId = UUID.randomUUID()
+        val gate = live(TrafficLightCell(CONSUMER_STRING, CellRef(UUID.randomUUID())))
+        val incumbent = live(PromotionCell(CellRef(logicalId, 0)))
+        host.managementInlet.call.connect(gate.ref, "dataOutlet", incumbent.ref, "inlet")
+
+        val response = send(
+            "POST", PRECHECK,
+            body = """{"nodes":[{"handle":"candidate","catalogueId":"$PROMOTION_CELL","replaces":"${enc(incumbent.ref)}"}],"edges":[{"from":{"ref":"${enc(gate.ref)}","port":"dataOutlet"},"to":{"handle":"candidate","port":"inlet"}}],"promotions":[{"incumbent":"${enc(incumbent.ref)}","gate":"${enc(gate.ref)}","candidate":"candidate"}]}""",
+        )
+
+        response.statusCode() shouldBe 200
+        val plan = inspectorJson.decodeFromString(PlanDto.serializer(), response.body())
+        val promote = plan.steps.single { it.action == "PROMOTE" }
+        promote.key shouldBe "promote ${enc(incumbent.ref)}"
+        promote.touches shouldContainExactly listOf(enc(gate.ref), enc(incumbent.ref))
+        promote.refusal shouldBe null
+    }
+
+    @Test
+    fun `promotion wire validation rejects bad refs, candidate shape, and empty windows`() {
+        val badIncumbent = send(
+            "POST", PRECHECK,
+            body = """{"nodes":[],"promotions":[{"incumbent":"garbage"}]}""",
+        )
+        badIncumbent.statusCode() shouldBe 400
+        reasonOf(badIncumbent) shouldBe
+            "promotions[0].incumbent: 'garbage' is not an encoded cell ref (\"<uuid>:<instanceId>\")"
+
+        val badGate = send(
+            "POST", PRECHECK,
+            body = """{"nodes":[],"promotions":[{"incumbent":"${enc(CellRef(UUID.randomUUID()))}","gate":"garbage"}]}""",
+        )
+        badGate.statusCode() shouldBe 400
+        reasonOf(badGate) shouldBe
+            "promotions[0].gate: 'garbage' is not an encoded cell ref (\"<uuid>:<instanceId>\")"
+
+        val unknownReplica = send(
+            "POST", PRECHECK,
+            body = """{"nodes":[],"promotions":[{"incumbent":"${enc(CellRef(UUID.randomUUID()))}","replicaCandidate":{"catalogueId":"missing"}}]}""",
+        )
+        unknownReplica.statusCode() shouldBe 400
+        reasonOf(unknownReplica) shouldBe
+            "draft node 'promotions[0].replicaCandidate': catalogue id 'missing' is not registered"
+
+        val bothCandidates = send(
+            "POST", PRECHECK,
+            body = """{"nodes":[],"promotions":[{"incumbent":"${enc(CellRef(UUID.randomUUID()))}","candidate":"candidate","replicaCandidate":{"catalogueId":"$SET"}}]}""",
+        )
+        bothCandidates.statusCode() shouldBe 400
+        reasonOf(bothCandidates) shouldBe "exactly one of candidateHandle and replicaCandidate is required"
+
+        val neitherCandidate = send(
+            "POST", PRECHECK,
+            body = """{"nodes":[],"promotions":[{"incumbent":"${enc(CellRef(UUID.randomUUID()))}"}]}""",
+        )
+        neitherCandidate.statusCode() shouldBe 400
+        reasonOf(neitherCandidate) shouldBe "exactly one of candidateHandle and replicaCandidate is required"
+
+        val emptyWindow = send(
+            "POST", PRECHECK,
+            body = """{"nodes":[],"promotions":[{"incumbent":"${enc(CellRef(UUID.randomUUID()))}","replicaCandidate":{"catalogueId":"$SET"},"policy":{"windowWaves":0,"judge":"judge"}}]}""",
+        )
+        emptyWindow.statusCode() shouldBe 400
+        reasonOf(emptyWindow) shouldBe "an observation window must require at least one observed wave"
+    }
+
+    @Test
+    fun `rollback is not a route`() {
+        val response = send("POST", "${InspectorServer.APPLY_PATH}/anything/rollback")
+
+        response.statusCode() shouldBe 404
+        reasonOf(response) shouldBe WritePlaneRoutes.APPLY_SHAPE
     }
 
     // ---- 6. apply, committed -------------------------------------------------------------
@@ -564,6 +647,17 @@ class WritePlaneRoutesTest {
     /** One SSE envelope, parsed. */
     private data class Frame(val seq: Long, val kind: String, val payload: JsonObject)
 
+    private class PromotionCell(override val ref: CellRef) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>())
+        val outlet = registerPort("outlet", FanOutlet.create<Consumer<String>>())
+
+        init {
+            inlet.serve(object : Consumer<String> {
+                override fun provide(input: String) = outlet.call.provide(input)
+            })
+        }
+    }
+
     private fun frame(data: String): Frame {
         val event = Json.parseToJsonElement(data).jsonObject
         return Frame(event["seq"]!!.jsonPrimitive.long, event["kind"]!!.jsonPrimitive.content, event["payload"]!!.jsonObject)
@@ -576,6 +670,10 @@ class WritePlaneRoutesTest {
         const val SET = "test.WritePlaneRoutesTest.set"
         const val EMITTER = "test.WritePlaneRoutesTest.emitter"
         const val SINK = "test.WritePlaneRoutesTest.sink"
+        const val PROMOTION_GATE = "test.WritePlaneRoutesTest.promotionGate"
+        const val PROMOTION_CELL = "test.WritePlaneRoutesTest.promotionCell"
+        @Suppress("UNCHECKED_CAST")
+        val CONSUMER_STRING = Consumer::class.java as Class<Consumer<String>>
 
         /** Two staged set entries and one internal edge; no boundary link. */
         const val TWO_NODE_DRAFT = """{"nodes":[{"handle":"x","catalogueId":"$SET"},{"handle":"y","catalogueId":"$SET"}],""" +

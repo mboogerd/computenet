@@ -1,6 +1,8 @@
 package civictech.inspect.edit
 
 import civictech.cell.CellRef
+import civictech.cell.evolve.ObservationWindow
+import civictech.cell.evolve.PromotionPolicy
 import civictech.cell.graph.StepEvent
 import civictech.cell.host.ManagedHost
 import civictech.demo.shell.respond
@@ -177,8 +179,53 @@ internal class WritePlaneRoutes(
             InspectorServer.decodeRef(encoded)
                 ?: throw RouteRefusal(400, "despawns[$i]: '$encoded' is not an encoded cell ref (\"<uuid>:<instanceId>\")")
         }
-        return Resolved.Ready(Draft(host, ok.spec, ok.boundary, despawns))
+        val promotions = dto.promotions.mapIndexed(::promotion)
+        return Resolved.Ready(Draft(host, ok.spec, ok.boundary, despawns, promotions))
     }
+
+    /** Maps the wire promotion shape after the ordinary graph has compiled. */
+    private fun promotion(index: Int, dto: PromotionRequestDto): PromotionRequest {
+        val incumbent = encodedRef(dto.incumbent, "promotions[$index].incumbent")
+        val gate = dto.gate?.let { encodedRef(it, "promotions[$index].gate") }
+        val replicaCandidate = dto.replicaCandidate?.let {
+            try {
+                DraftCompiler.resolveFactory(
+                    catalogueId = it.catalogueId,
+                    params = it.params,
+                    handle = "promotions[$index].replicaCandidate",
+                )
+            } catch (e: DraftException) {
+                throw RouteRefusal(400, e.reason)
+            }
+        }
+        val policy = dto.policy?.let {
+            try {
+                PromotionPolicy(
+                    gates = emptyList(),
+                    window = ObservationWindow(it.windowWaves),
+                    judge = it.judge,
+                )
+            } catch (e: IllegalArgumentException) {
+                throw RouteRefusal(400, e.message ?: e.toString())
+            }
+        }
+        return try {
+            PromotionRequest(
+                incumbent = incumbent,
+                outletName = dto.outletName,
+                gate = gate,
+                candidateHandle = dto.candidate,
+                replicaCandidate = replicaCandidate,
+                policy = policy,
+            )
+        } catch (e: IllegalArgumentException) {
+            throw RouteRefusal(400, e.message ?: e.toString())
+        }
+    }
+
+    private fun encodedRef(encoded: String, field: String): CellRef =
+        InspectorServer.decodeRef(encoded)
+            ?: throw RouteRefusal(400, "$field: '$encoded' is not an encoded cell ref (\"<uuid>:<instanceId>\")")
 
     /** [StagedApplier.plan]; its `IllegalArgumentException` is a caller fault, answered 400 (AMENDS wczst.1). */
     private fun planOf(draft: Draft): PlanDto = try {
