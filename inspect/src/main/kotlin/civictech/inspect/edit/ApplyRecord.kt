@@ -24,8 +24,8 @@ import kotlinx.serialization.json.JsonElement
  *   staged while [phase] is [ApplyPhase.STAGE]; it is kept after an unwind as
  *   the audit of what was created and then despawned.
  * - [promotions] — the replacement-specific audit entries (8joqm-D7).
- * - [awaiting] — a sibling's in-flight wait discriminator; null in the
- *   synchronous single-instance form implemented here.
+ * - [awaiting] — the in-flight wait discriminator; `"observation-window"`
+ *   while a policy judge remains Pending, otherwise null (8joqm-D6).
  *
  * [identity] is the label [WriteGate] admitted for this apply (`[WKB2-49]`,
  * record half) — the capability-holder's default identity when the caller
@@ -72,12 +72,14 @@ data class PromotionRecord(
             "is a fresh swap in the reverse direction (53 §The promotion swap); the retired " +
             "incumbent's retention window is not built (JAR2/WKB3)",
 ) {
-    /** Open string vocabulary: sibling tasks add waiting/rolling statuses without changing this wire type. */
+    /** Open string vocabulary carried additively without changing this wire type. */
     object Status {
         const val NOT_RUN = "not-run"
+        const val AWAITING_OBSERVATION_WINDOW = "awaiting-observation-window"
         const val COMMITTED = "committed"
         const val REFUSED_AT_PRECHECK = "refused-at-precheck"
         const val ROLLED_BACK_AT_COMMIT = "rolled-back-at-commit"
+        const val ABORTED = "aborted"
         const val FAILED = "failed"
     }
 

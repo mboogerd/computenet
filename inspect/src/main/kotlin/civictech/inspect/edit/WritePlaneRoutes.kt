@@ -139,10 +139,12 @@ internal class WritePlaneRoutes(
         exchange.respondJson(200, inspectorJson.encodeToString(ApplyRecord.serializer(), record))
     }
 
-    /** wczst-D4: the 202 body is the current record (phase STAGE); the outcome follows on `apply.done`. */
+    /** The 202 body is the current STAGE or awaiting-CUT_OVER record; the outcome follows on `apply.done`. */
     private fun abort(exchange: HttpExchange, applyId: String) {
         applier.record(applyId) ?: return exchange.respondProblem(404, "unknown apply: $applyId")
-        if (!applier.abort(applyId)) return exchange.respondProblem(409, "apply $applyId is not in STAGE")
+        if (!applier.abort(applyId)) {
+            return exchange.respondProblem(409, "apply $applyId is not in STAGE or awaiting an observation window")
+        }
         val record = checkNotNull(applier.record(applyId))
         exchange.respondJson(202, inspectorJson.encodeToString(ApplyRecord.serializer(), record))
     }
