@@ -3,6 +3,7 @@ package civictech.cell.port
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.link.LinkRole
+import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -19,13 +20,20 @@ import java.util.WeakHashMap
 data class PortIdentity(val owner: CellRef, val name: String)
 
 /**
- * JVM-global weak port → [PortIdentity] table. Mirrors [PortRegistry]'s own
- * `registries` map (C-5, M5): the KSP-generated registries are the KMP path,
- * so the identity is stamped on the same JVM-only seam and never leaks into the
- * cell/port model itself — [Port] stays a pure structural contract.
+ * JVM-global weak port → registration table. Each registration carries the
+ * public [PortIdentity] plus a weak reference to the owner's existing
+ * [PortRegistry]. This mirrors that registry's own weak-owner lifecycle (C-5,
+ * M5): the KSP-generated registries are the KMP path, so both facts are stamped
+ * on the same JVM-only seam and never leak into the cell/port model itself —
+ * [Port] stays a pure structural contract.
  */
 internal object PortIdentities {
-    private val table = Collections.synchronizedMap(WeakHashMap<Port, PortIdentity>())
+    private class Registration(
+        val identity: PortIdentity,
+        val registry: WeakReference<PortRegistry>,
+    )
+
+    private val table = Collections.synchronizedMap(WeakHashMap<Port, Registration>())
 
     /**
      * Records [identity] for [port] when it is registered on a [Cell]. Ports
@@ -43,7 +51,10 @@ internal object PortIdentities {
 
     fun stamp(owner: Any?, name: String, port: Port) {
         if (owner is Cell) {
-            table[port] = PortIdentity(owner.ref, name)
+            table[port] = Registration(
+                identity = PortIdentity(owner.ref, name),
+                registry = WeakReference(PortRegistry.of(owner)),
+            )
             // PN-1: a hosted cell's port gets a replay-stable ref derived from
             // (ownerRef, name) here, at the one seam that knows both. Anonymous
             // ports (not a Cell owner) are never stamped and keep generate().
@@ -51,25 +62,27 @@ internal object PortIdentities {
         }
     }
 
-    fun of(port: Port): PortIdentity? = table[port]
+    fun of(port: Port): PortIdentity? = table[port]?.identity
 
     /**
      * Whether [port]'s owning cell currently has an open [LinkRole.Consume]
      * edge on any registered [FanInlet], or `null` when [port] has no
-     * registered owner. This is a live structural query over the existing weak
-     * identity table: no parallel owner/port registry or emission history is
-     * involved, and an inlet linked after a wave began is visible when the
-     * query is evaluated.
+     * registered owner. This is a live structural query over the owning cell's
+     * existing [PortRegistry]: no parallel owner/port registry or emission
+     * history is involved, and an inlet linked after a wave began is visible
+     * when the query is evaluated. The registry reference is weak, so a released
+     * owner degrades to `null` (unknown) rather than being kept alive or
+     * misclassified as a root.
      *
-     * Iteration is synchronized explicitly, as required by
-     * [Collections.synchronizedMap]. [FanInlet.linking] contains only active
-     * links, so an unlinked edge stops counting immediately.
+     * [FanInlet.linking] contains only active links, so an unlinked edge stops
+     * counting immediately. Work is bounded by this one owner's registered
+     * ports rather than every port created during the JVM's lifetime.
      */
-    fun hasOpenConsumeInput(port: Port): Boolean? = synchronized(table) {
-        val owner = table[port]?.owner ?: return@synchronized null
-        table.entries.any { (candidate, identity) ->
-            identity.owner == owner &&
-                candidate is FanInlet<*> &&
+    fun hasOpenConsumeInput(port: Port): Boolean? {
+        val registry = table[port]?.registry?.get() ?: return null
+        return registry.names().any { name ->
+            val candidate = registry[name]
+            candidate is FanInlet<*> &&
                 candidate.linking.links.any { it.role == LinkRole.Consume }
         }
     }
