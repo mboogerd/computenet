@@ -113,6 +113,12 @@ class HostLiveView(override val host: ManagedHost, private val registry: Locatio
  * them. They live here because the compiler reports them in this [Plan]
  * shape, keyed by the draft node's handle, and an enum is not extensible from
  * another module.
+ *
+ * `NO_GATE` is minted by the write-plane promotion planner when a single-instance promotion
+ * has no live gate serving the incumbent. `COUPLED_FLOW` is minted when the incumbent is a
+ * composite cell whose coupled transaction fate during the swap window is undefined (G-53,
+ * [WKB2-27]). `ROLLING_ONLY` is minted when a replicated incumbent is offered only the
+ * single-instance form ([WKB2-54]). The [precheck] function itself never produces these codes.
  */
 enum class RefusalCode {
     UNRESOLVED_HANDLE,
@@ -131,6 +137,9 @@ enum class RefusalCode {
     MULTI_HOST,
     UNKNOWN_CATALOGUE_ID,
     INVALID_PARAMS,
+    NO_GATE,
+    COUPLED_FLOW,
+    ROLLING_ONLY,
 }
 
 /** The cold verdict on one planned step. */

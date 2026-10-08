@@ -2976,6 +2976,13 @@ open class ManagedHost(
     fun portAt(ref: CellRef, name: String): Port? = cells[ref]?.let { findPort(it, name) }
 
     /**
+     * Return the live [Cell] instance hosted at [ref], or `null` when this host does not own it.
+     * The inspector's write plane needs the instance because [Promotion] takes cells, while
+     * [lookup] hands out proxies.
+     */
+    fun cellAt(ref: CellRef): Cell? = cells[ref]
+
+    /**
      * Host-routed state read (the [Stateful] half of the observation seam,
      * spec 33 §Snapshot / G-25): [ref]'s own `snapshot()`, captured **on this
      * host's execution context** rather than on the caller's thread — off-thread

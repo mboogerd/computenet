@@ -3,6 +3,7 @@ package civictech.cell.evolve
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.data.Replicable
 import civictech.cell.host.ManagedHost
 import civictech.cell.membrane.Principal
 import civictech.cell.membrane.TrafficLightApi
@@ -14,6 +15,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.port.identity
+import civictech.cell.replication.Replication
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import java.util.concurrent.TimeUnit
@@ -133,6 +135,59 @@ object Evolve {
         val outlet = gate.dataOutlet as? FanOutlet<*> ?: return false
         val identity = outlet.identity() ?: return false
         return identity.owner == owner && identity.name == outletName
+    }
+
+    /**
+     * Privileged direct primitive for a caller that holds the live cells but no [ApplyContext].
+     * The authority check is deliberately first; [Promotion] owns the synchronous four-phase
+     * swap and its PRECHECK/COMMIT failure semantics.
+     */
+    fun promoteDirect(
+        host: ManagedHost,
+        gate: Cell,
+        incumbent: Cell,
+        candidate: Cell,
+        outletName: String,
+        downstream: List<Use<*>>,
+        judge: PromotionJudge? = null,
+        authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly,
+    ) {
+        checkAuthority(authority)
+        Promotion.promote(
+            host = host,
+            gate = gate,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            downstream = downstream,
+            judge = judge,
+            journal = null,
+        )
+    }
+
+    /**
+     * Privileged direct primitive for the same-ref rolling swap of a replicated cell. The
+     * authority check is deliberately first; [Promotion] owns the replica rebind protocol.
+     */
+    fun promoteReplicaDirect(
+        host: ManagedHost,
+        replication: Replication,
+        incumbent: Replicable<*>,
+        candidate: Replicable<*>,
+        outletName: String = "outlet",
+        judge: PromotionJudge? = null,
+        authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly,
+    ) {
+        checkAuthority(authority)
+        Promotion.promoteReplica(
+            host = host,
+            replication = replication,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            judge = judge,
+            journal = null,
+        )
     }
 
     /** Incumbent-side differential shadow and the gates that judge it. */
