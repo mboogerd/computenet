@@ -121,6 +121,7 @@ optional descriptor param the driver binds. The v1 named params:
 | `inlet-mode` | inlet admission policy (`single-writer`, `fan-in`) |
 | `host` | host placement (dist profile) |
 | `replica-of` | logical replica-group id (dist profile) |
+| `authority` | principal-owned replicated slice: `{principal: <actor>}` (dist profile; requires `replica-of`) — see below |
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
 | `family` | keyed-family declaration (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
@@ -131,6 +132,23 @@ optional descriptor param the driver binds. The v1 named params:
 unchanged (all optional; `window` absent on every non-`window` cell). The parser
 stays lenient — an unknown key is ignored — so promoting a further param to a
 typed field remains a schema-change ticket.
+
+#### `authority` (computenet-ermvz.5, `[43-FLOW-04]`)
+
+An authority-bearing replica declares the scenario-local actor that initially
+owns its whole logical slice:
+
+```yaml
+- {id: r1, type: set-source, host: h1, replica-of: slice, authority: {principal: alice}}
+```
+
+This attribute is **dist profile only** and valid only together with
+`replica-of`; a cell declaring `authority` without `replica-of` is a schema
+error. Every replica in one authority-bearing logical group declares the same
+initial principal. Actor names are neutral handles: the driver owns their
+identity, key material and counters, and a corpus file never states those
+implementation values. Omitting `authority` preserves ordinary open
+replication byte-for-byte.
 
 #### `window` (R2-B, `24-OP-WINDOW-01`/`-02`)
 
@@ -308,6 +326,8 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | verb | YAML | driver verb |
 |---|---|---|
 | apply | `{type: apply, on: a, op: add, value: apple}` (also `times: N`) | `apply(cell, op)` |
+| signed-apply | `{type: signed-apply, on: r1, actor: alice, op: add, value: apple}` | `signedApply(cell, actor, op, value)` (dist) |
+| transfer-authority | `{type: transfer-authority, on: r1, actor: alice, to: bob}` | `transferAuthority(cell, actor, to)` (dist) |
 | quiesce | `{type: quiesce}` (also `budget: N`) | `quiesce(budget)` barrier |
 | declare-interest | `{type: declare-interest, on: f, interest: {ranges: [[2, 4]]}}` | `declareInterest(family, interest)` and await induced spawns |
 | connect | `{type: connect, from: s, to: late, inlet?, outlet?, role?, expect?}` | `connect(...)` |
@@ -344,6 +364,27 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   actor again"; there is no `counter:`, because a scenario that could state the
   position would be describing the graph's frame rather than an outsider's. See
   below.
+
+#### `signed-apply` and `transfer-authority` (computenet-ermvz.5, `[43-FLOW-04]`)
+
+These verbs are **dist profile only** and target an authority-bearing
+`set-source` replica. `signed-apply` accepts `add` and `remove`. The driver
+constructs the corresponding set delta, wraps its serialized bytes in a
+`SignedWrite` made by `actor`'s deterministic scenario-local signer, and drives
+that envelope through the target replica's real gossip inlet. For `remove`, it
+reads the target replica's live add tags and carries those tags plus a fresh
+remove dot; it never fabricates a source cell or bypasses the OR-set algebra.
+
+`transfer-authority` uses the same route and signing rules, with a
+`TransferAuthority(to)` payload. It does not call a privileged management
+shortcut: admission is decided by the same adapter and current-authority rule
+as any other signed write. Repeating an actor handle continues that actor's
+per-logical-cell counter lane for the whole run.
+
+Neither verb is an ordinary local `apply`. An ordinary `apply` reaches the
+cell's local app inlet and is signed by the adapter's configured local signer;
+these verbs deliberately let a scenario author as any actor, including one the
+slice must refuse.
 
 #### `declare-interest` (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
 
@@ -781,6 +822,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 | emission-count | `{type: emission-count, cell: r2, since: 7, exactly: 0}` | `r2`'s outlet emitted exactly N times from just before script step `since` to check time (window must be `quiesce`-barriered) |
 | refusal-count | `{type: refusal-count, cell: s, exactly: 1}` | `s` refused exactly N deliveries as undeliverable-for-want-of-a-position, over the whole run |
+| write-denials | `{type: write-denials, cell: r1, exactly: 1, principal?: bob}` | authority adapter at `r1` recorded exactly N write-boundary denials, optionally attributed to actor `bob` (dist) |
 
 Inline construction-time expectations use `expect:` on the `connect`/`disconnect`
 step, not a check entry.
@@ -1008,6 +1050,24 @@ loudly rather than answer `0` — see the next section — and the evaluator rep
 that as this check's failure. A negative reading fails for the same reason: a
 tally that only ascends cannot produce one, so it is not a count of refusals.
 
+### `write-denials`: authority-boundary accounting (computenet-ermvz.5)
+
+`{type: write-denials, cell: r1, exactly: 1}` reads the monotonic
+`write-authority` sink owned by `r1`'s authority adapter. With `principal: bob`,
+it counts the adapter's structured denial audit records whose
+`BoundaryDenial.principal` names the scenario-local actor `bob`; it does not
+attribute the refusal to the host that happened to relay or receive the frame.
+
+This check is **dist profile only**. A cell with no write-authority adapter must
+make the driver fail loudly. It may never answer zero: `exactly: 0` is a valid
+passing assertion, so treating an absent adapter as an empty counter would be a
+vacuous green. The tally is whole-run, like `refusal-count`.
+
+An authority refusal is reported through the host's dead-letter outlet but is
+not a supervision fault. Therefore a scenario expecting one deliberately does
+not assert `no-dead-letters`; its header says why, following the
+`drive-contextless` precedent.
+
 ### Family membership and interest refusals (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
 
 `family-holds` compares the driver's exact membership of `family` with `keys`
@@ -1162,6 +1222,13 @@ same rule as `emission-count` and `retransmit`: `0` is exactly what an
 `exactly: 0` check accepts, so a silent 0 converts an unwatched cell into a
 green check — the one failure this observation exists to prevent, and the one
 that leaves no trace in a passing run.
+
+**`write-denials`** requires the driver to report the named replica adapter's
+`write-authority` sink total and, when requested, the count of its structured
+denial records attributed to one author principal. A driver with no adapter at
+that cell refuses the observation rather than returning zero. The principal is
+the denied write's author, read from the audit record, not inferred from a host
+or relay.
 
 **`family-holds`** requires the driver to report the exact set of long keys the
 named family has materialized. The result is membership only: no member cell

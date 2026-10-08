@@ -4057,3 +4057,53 @@ test names below were checked with `git grep -n` at that commit.
 - **Resolves**: a named-inlet cross-host link binding in `KernelDriverDist`,
   together with the `[22-GF-03]`-shaped corpus check that exercises its
   `EdgeOpen`/`EdgeClose`/`Progress` ordering and aligned-view completeness.
+
+---
+
+## 43-security authority coverage boundaries (computenet-ermvz.5)
+
+### `[43-ADMIT-01]` — deny-by-default peer admission is not reachable in the dist driver (`driver-binding-gap`)
+
+- **Requirement**: `[43-ADMIT-01]` says deny-by-default is a boundary control at
+  peer admission (`Peering.Side.allow` / transport hello refusal).
+- **Why it stays `gap`**: the Concord dist binding models N managed hosts over
+  one `LocationRegistry` by default. It constructs replication links, but no
+  scenario declares a `Peering.Side`, a hello, an allowlist or an admitted peer
+  identity. Its optional real-transport mode builds an open full mesh chosen by
+  a test property, not scenario vocabulary; it still exposes no hello policy or
+  admission result to a check. A replica write denial is a flow-time data
+  admission and cannot stand in for peer admission.
+- **What was not done instead**: neither `authority:` nor `write-denials` is
+  claimed as coverage of this id. They exercise `[43-FLOW-04]` after a replica
+  already exists and say nothing about whether an unlisted peer could join.
+- **Existing evidence**: kernel `TrustBoundaryTest` pins the deny-by-default
+  allowlist and open-mode control. It is implementation-level evidence, not a
+  cross-implementation Concord obligation.
+- **Resolves**: scenario-declarable peers and allowlists, a hello/admission step,
+  and a check reading the typed admission refusal from a transport-capable
+  driver. Until all three exist, `[43-ADMIT-01]` remains a concordance gap.
+
+### `[43-PRIN-01]` — a signed write's author is not the crossing `Principal` (`requirement-mismatch` + `driver-binding-gap`)
+
+- **Requirement**: `[43-PRIN-01]` requires *every crossing* to carry
+  `Principal.LocalTrusted` or `Principal.Peer(id, auth)`. The identity belongs
+  to the crossing and includes authentication strength.
+- **Why it stays `gap`**: the new authority scenarios observe the author inside
+  a `SignedWrite` and the author copied into `BoundaryDenial.principal`. That is
+  deliberately relay-independent data attribution: a write authored by Bob may
+  cross a link carried by Alice's host. Treating Bob as the crossing principal
+  would conflate the two identities and weaken the requirement. The dist driver
+  also has no check that reads `currentPrincipal()` at a crossing or its
+  `AuthLevel`.
+- **What was not done instead**: no three-replica scenario claims that an author
+  name surviving relay proves the relay crossing carried a `Principal`. Such a
+  scenario could pass while every crossing was unstamped, exactly the defect
+  `[43-PRIN-01]` forbids.
+- **What is covered nearby**: `43-FLOW-AUTH-01` and `43-FLOW-AUTH-02` cover
+  `[43-FLOW-04]`: signed-author admission, attributable refusal,
+  drop-and-reconverge, and ownership transfer. They make no crossing-principal
+  claim.
+- **Resolves**: a transport/peering scenario surface plus an observation made by
+  a boundary predicate at the crossing, reporting the full neutral principal
+  classification including authentication strength. Until then,
+  `[43-PRIN-01]` remains a concordance gap.
