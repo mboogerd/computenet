@@ -13,7 +13,9 @@ import civictech.cell.graph.lookupOrThrow
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.observe.observeAll
+import civictech.cell.observe.Observation
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
@@ -206,7 +208,7 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
     // hub cells, no synchronized mutable snapshot. Typed overloads (T08 finding 2): the
     // element/key type flows from each TypedRef's API shape, so a wrong-shaped source
     // here is a compile error, not an Any?-erased fold read back with an unchecked cast.
-    private val view = host.observeAll {
+    private val view: Observation = host.observation {
         PARTICIPANTS.forEach { set(it, refs.participants.getValue(it)) }
         set("nearMiss", refs.nearMiss)
         set("common", refs.common)
@@ -216,6 +218,12 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         // outlet (a SetDelta port not on GroupByApi, so observed by CellRef + name).
         set("late", refs.byDay.ref, outletName = "late")
     }
+
+    internal val observationGroups: Map<String, String>
+        get() = view.current().groupOf
+
+    internal val observationGroupBufferedWaves: Map<String, Int>
+        get() = view.groups.associateWith { view.group(it).bufferedWaves }
 
     private val shell = DemoShell(port)
 
@@ -289,10 +297,8 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
     fun stop() {
         inspector?.stop()
         shell.stop()
-        // T08 finding 4: stop this composite's listener-dispatch thread — the
-        // per-outlet ObserveCells close themselves via onDeactivate on despawn,
-        // but nothing despawns them for a demo that runs for the process
-        // lifetime, so stop() is this app's shutdown hook instead.
+        // Stop the canonical observation's group dispatchers; the demo keeps its
+        // graph alive for the process lifetime, so stop() is its shutdown hook.
         view.close()
     }
 }
