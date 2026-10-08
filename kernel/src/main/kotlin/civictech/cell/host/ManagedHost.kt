@@ -121,6 +121,14 @@ open class ManagedHost(
      * journal named for an outlet alone, or one disagreeing with the inlets',
      * is refused the same way — outlet-side journaling of spontaneous
      * emissions is undecided (spec 90 roadmap I-7 §8). See [cellJournal].
+     *
+     * Exception: this selector is never consulted for the authority companion
+     * [civictech.cell.replication.Replication.replicate] spawns beside an
+     * authority-bearing replica. The companion takes its owner's journal
+     * unconditionally ([spawnDurabilityCompanion]), so its outlet-only port set
+     * is not refused under a blanket selector, and no answer for the companion's
+     * ref can make it volatile or journal it apart from its owner
+     * (computenet-yx36a).
      */
     private val journalForPort: ((CellRef, String) -> Journal?)? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
@@ -1668,16 +1676,18 @@ open class ManagedHost(
      * is copied into the spawn-time cache before the ordinary spawn path asks
      * [cellJournal]. A plain [journalFor] function cannot reveal whether its
      * answer came from an explicit binding or a default fallback, so the owner
-     * selection wins unconditionally for the companion. An explicit
-     * [journalForPort] is still evaluated first to preserve its inlet-agreement
-     * and outlet-only configuration refusals.
+     * selection wins unconditionally for the companion. The same applies to an
+     * explicit [journalForPort]: the companion has no independent durability
+     * choice to validate, and evaluating a blanket selector against its
+     * outlet-only shape would mistake the owner's selection for unsupported
+     * outlet-side journaling. Ordinary cells still take the validating
+     * [cellJournal] path.
      */
     internal fun spawnDurabilityCompanion(companion: Cell, ownerRef: CellRef) {
         require(cells.containsKey(ownerRef)) {
             "durability companion ${companion.ref} requires live owner $ownerRef"
         }
         val ownerJournal = journalSelector(ownerRef)
-        if (journalForPort != null) cellJournal(companion.ref, companion)
 
         val override = SpawnJournalOverride(ownerJournal)
         check(spawnJournalOverrides.putIfAbsent(companion.ref, override) == null) {
