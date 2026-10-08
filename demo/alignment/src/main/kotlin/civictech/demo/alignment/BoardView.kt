@@ -101,6 +101,9 @@ internal const val BOARD_MAIN = """
   #boardMode button { font-size: .75rem; padding: .25rem .7rem; border-radius: 999px; border: 1px solid var(--line);
                        background: var(--surface); color: var(--muted); cursor: pointer; }
   #boardMode button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  #boardMode #boardAiRate { margin-left: auto; color: var(--accent); border-color: var(--accent); }
+  #boardMode #boardAiRate[hidden] { display: none; }
+  #boardMode #boardAiRate:disabled { opacity: .6; cursor: default; }
   #ranking { position: relative; }
   .rankrow { position: absolute; left: 0; right: 0; top: 0; height: 58px; background: var(--surface);
              box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
@@ -187,6 +190,7 @@ internal const val BOARD_MAIN = """
   <div id="boardMode" hidden>
     <button type="button" data-mode="score" aria-pressed="true">score</button>
     <button type="button" data-mode="spread" aria-pressed="false">spread</button>
+    <button type="button" id="boardAiRate" hidden>Get AI ratings</button>
   </div>
   <div id="ranking"></div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
@@ -213,12 +217,12 @@ let boardMode = 'score'; // 'score' | 'spread', persisted below
 try { if (sessionStorage.boardMode === 'spread') boardMode = 'spread'; } catch (e) { /* ignore */ }
 
 function updateBoardModeButtons() {
-  document.querySelectorAll('#boardMode button').forEach(b => {
+  document.querySelectorAll('#boardMode button[data-mode]').forEach(b => {
     b.setAttribute('aria-pressed', b.dataset.mode === boardMode ? 'true' : 'false');
   });
 }
 updateBoardModeButtons();
-document.querySelectorAll('#boardMode button').forEach(b => {
+document.querySelectorAll('#boardMode button[data-mode]').forEach(b => {
   b.addEventListener('click', () => {
     if (b.dataset.mode === boardMode) return;
     boardMode = b.dataset.mode;
@@ -321,6 +325,7 @@ function renderBoard() {
   gateBox.hidden = true;
   weightsBox.hidden = false;
   modeBox.hidden = false;
+  renderAiRateButton(t);
   rankingBox.hidden = false;
   if (noteEl) noteEl.hidden = false;
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -348,6 +353,22 @@ function renderBoard() {
   renderDrill();
 }
 
+/**
+ * The facilitator's "Get AI ratings" (the same POST /topics/{t}/ai-rate as Setup's card): shown
+ * only to the topic's creator, and only when the server has an AI rater configured; disabled with
+ * "AI rating…" while a run is in flight. The new AI scores arrive over /events as each call returns.
+ */
+function renderAiRateButton(t) {
+  const btn = document.getElementById('boardAiRate');
+  const raters = t.aiRaters || [];
+  btn.hidden = !(isCreator(t) && raters.length > 0);
+  if (btn.hidden) return;
+  btn.disabled = t.aiRunning === true;
+  btn.textContent = t.aiRunning === true ? 'AI rating…' : 'Get AI ratings';
+  btn.title = 'ask ' + raters.join(', ') + ' to rate every idea it has not yet rated';
+  btn.onclick = () => send('POST', '/topics/' + t.id + '/ai-rate', { creator: me() }).then(renderBoard, () => {});
+}
+
 function renderGate(box, g) {
   box.innerHTML = '';
   const card = document.createElement('div');
@@ -357,7 +378,7 @@ function renderGate(box, g) {
   p.className = 'muted';
   if (g.reason === 'reveal') {
     h.textContent = 'waiting for the facilitator to reveal';
-    p.textContent = 'you have rated everything';
+    p.textContent = g.rated === g.total ? 'you have rated everything' : g.rated + ' of ' + g.total + ' rated';
   } else {
     h.textContent = 'rate everything to see the board';
     p.textContent = g.rated + ' of ' + g.total + ' rated';
