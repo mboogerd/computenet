@@ -148,6 +148,7 @@ internal object PromotionCutOver {
         private val outlet: FanOutlet<*>,
         incumbent: Any,
         policy: civictech.cell.evolve.PromotionPolicy,
+        private val onObservedWave: () -> Unit,
     ) : AutoCloseable {
         val judge = PromotionJudge(policy, incumbent as? CycleHead<*>)
 
@@ -159,6 +160,7 @@ internal object PromotionCutOver {
         init {
             outlet.observe(tapRef) {
                 judge.observeCandidateWave()
+                onObservedWave()
                 lock.withLock {
                     version++
                     changed.signalAll()
@@ -182,21 +184,46 @@ internal object PromotionCutOver {
             }
         }
 
-        fun signal() = lock.withLock { changed.signalAll() }
+        /** Publishes the public awaiting state under the lock shared with [requestAbortIfAwaiting]. */
+        fun publishAwaiting(publish: () -> Unit) = lock.withLock(publish)
+
+        /**
+         * Atomically leaves the abortable awaiting state or reports that an
+         * accepted abort already won. A true abort can therefore never race
+         * the next promotion attempt.
+         */
+        fun clearAwaitingUnlessAborted(aborted: () -> Boolean, clear: () -> Unit): Boolean = lock.withLock {
+            if (aborted()) return@withLock false
+            clear()
+            true
+        }
+
+        /** Checks awaiting, accepts the abort and wakes [awaitVerdict] under one lock. */
+        fun requestAbortIfAwaiting(isAwaiting: () -> Boolean, accept: () -> Unit): Boolean = lock.withLock {
+            if (!isAwaiting()) return@withLock false
+            accept()
+            changed.signalAll()
+            true
+        }
 
         override fun close() {
             outlet.untap(tapRef)
         }
 
         companion object {
-            fun install(host: ManagedHost, request: PromotionRequest, candidateRef: CellRef): PolicyObservation {
+            fun install(
+                host: ManagedHost,
+                request: PromotionRequest,
+                candidateRef: CellRef,
+                onObservedWave: () -> Unit = {},
+            ): PolicyObservation {
                 val policy = requireNotNull(request.policy)
                 val incumbent = requireNotNull(host.cellAt(request.incumbent)) {
                     "promotion incumbent ${request.incumbent} is no longer hosted"
                 }
                 val outlet = host.portAt(candidateRef, request.outletName) as? FanOutlet<*>
                     ?: error("promotion candidate $candidateRef has no FanOutlet named '${request.outletName}'")
-                return PolicyObservation(outlet, incumbent, policy)
+                return PolicyObservation(outlet, incumbent, policy, onObservedWave)
             }
         }
     }

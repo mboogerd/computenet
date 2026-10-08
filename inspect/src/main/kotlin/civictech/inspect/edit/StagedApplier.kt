@@ -131,6 +131,11 @@ import kotlin.concurrent.withLock
  *   before each boundary `connect`. A `var` for the same reason.
  * @param beforePromotion test-only (8joqm-D6): invoked after boundary links
  *   and the policy observation tap are installed, before the first primitive call.
+ * @param beforePromotionAttempt test-only: invoked immediately before every
+ *   promotion primitive call, including observation-window retries.
+ * @param onPromotionWaveObserved test-only: invoked by the policy tap for
+ *   every candidate wave, allowing cleanup to be asserted without exposing
+ *   the tap's identity.
  * @param replication the process replication service used by rolling
  *   promotion. Without one, rolling requests are refused `ROLLING_ONLY`
  *   during planning; read-only and single-instance inspectors need none.
@@ -145,6 +150,8 @@ class StagedApplier(
     @Volatile internal var afterStage: (ApplyRecord) -> Unit = {},
     @Volatile internal var beforeBoundaryLink: (Int) -> Unit = {},
     @Volatile internal var beforePromotion: (ApplyRecord) -> Unit = {},
+    @Volatile internal var beforePromotionAttempt: (ApplyRecord) -> Unit = {},
+    @Volatile internal var onPromotionWaveObserved: () -> Unit = {},
     private val listener: ApplyListener = ApplyListener.None,
 ) {
     private val applyLock = ReentrantLock()
@@ -515,7 +522,12 @@ class StagedApplier(
                     return
                 }
                 observation = try {
-                    PromotionCutOver.PolicyObservation.install(host, promotion, candidateRef)
+                    PromotionCutOver.PolicyObservation.install(
+                        host,
+                        promotion,
+                        candidateRef,
+                        onPromotionWaveObserved,
+                    )
                 } catch (e: Exception) {
                     failPromotion(promotion, PromotionRecord.Status.FAILED, e.toString())
                     unwind()
@@ -544,18 +556,21 @@ class StagedApplier(
                 if (promotion != null) {
                     beforePromotion(record)
                     val candidateRef = promotion.candidateHandle?.let(refByHandle::get)
+                    beforePromotionAttempt(record)
                     var result = PromotionCutOver.perform(
                         host, registry, replication, promotion, candidateRef, observation?.judge,
                     )
                     var observedVersion = 0L
                     while (result == PromotionCutOver.Result.Pending) {
-                        promotionRecords[0] = promotionRecords[0].copy(
-                            status = PromotionRecord.Status.AWAITING_OBSERVATION_WINDOW,
-                        )
-                        awaiting = OBSERVATION_WINDOW
-                        publish()
                         val activeObservation = checkNotNull(observation) {
                             "a Pending promotion has no observation window"
+                        }
+                        activeObservation.publishAwaiting {
+                            promotionRecords[0] = promotionRecords[0].copy(
+                                status = PromotionRecord.Status.AWAITING_OBSERVATION_WINDOW,
+                            )
+                            awaiting = OBSERVATION_WINDOW
+                            publish()
                         }
                         val observed = activeObservation.awaitVerdict(observedVersion, abortRequested::get)
                             ?: run {
@@ -571,8 +586,15 @@ class StagedApplier(
                             publish()
                             continue
                         }
-                        awaiting = null
-                        publish()
+                        val mayAttempt = activeObservation.clearAwaitingUnlessAborted(abortRequested::get) {
+                            awaiting = null
+                            publish()
+                        }
+                        if (!mayAttempt) {
+                            abortAwaitingPromotion()
+                            return
+                        }
+                        beforePromotionAttempt(record)
                         result = PromotionCutOver.perform(
                             host, registry, replication, promotion, candidateRef, activeObservation.judge,
                         )
@@ -638,12 +660,17 @@ class StagedApplier(
         }
 
         fun requestAbort(): Boolean {
-            val abortable = record.phase == ApplyPhase.STAGE ||
-                (record.phase == ApplyPhase.CUT_OVER && record.awaiting != null)
-            if (!abortable) return false
-            abortRequested.set(true)
-            policyObservation?.signal()
-            return true
+            if (record.phase == ApplyPhase.STAGE) {
+                abortRequested.set(true)
+                return true
+            }
+            val observation = policyObservation ?: return false
+            return observation.requestAbortIfAwaiting(
+                isAwaiting = {
+                    record.phase == ApplyPhase.CUT_OVER && record.awaiting != null
+                },
+                accept = { abortRequested.set(true) },
+            )
         }
 
         private fun failPromotion(

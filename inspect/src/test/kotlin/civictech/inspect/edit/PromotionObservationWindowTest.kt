@@ -31,6 +31,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -111,6 +112,8 @@ class PromotionObservationWindowTest {
         val gate = TrafficLightCell.create<Consumer<Int>>()
         val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
         val collector = CollectorCell()
+        lateinit var candidate: SummerV2
+            private set
         private var now = 1_000L
 
         init {
@@ -140,7 +143,7 @@ class PromotionObservationWindowTest {
                 listOf(
                     SpawnStep(
                         CANDIDATE,
-                        CellFactory(::SummerV2),
+                        CellFactory { ref -> SummerV2(ref).also { candidate = it } },
                         identity = IdentityBinding.NewInstanceOf(logicalId),
                     ),
                 ),
@@ -163,6 +166,11 @@ class PromotionObservationWindowTest {
                 source.emit(it)
                 controller.runToIdle()
             }
+        }
+
+        fun emitFromDetachedCandidate(value: Int) {
+            candidate.inlet.call.provide(value)
+            controller.runToIdle()
         }
 
         private fun connect(from: CellRef, outlet: String, to: CellRef, inlet: String) {
@@ -224,6 +232,8 @@ class PromotionObservationWindowTest {
     fun `WKB2-53 an unfilled window is awaiting and fills from live waves`() {
         val f = Fixture(seed = 54)
         val applier = f.applier()
+        val attempts = AtomicInteger()
+        applier.beforePromotionAttempt = { attempts.incrementAndGet() }
         val running = startApply(applier, f.draft(f.policy(waves = 2)), "await-live")
         try {
             val firstAwaiting = awaitAwaiting(applier, "await-live")
@@ -244,9 +254,55 @@ class PromotionObservationWindowTest {
             record.outcome shouldBe ApplyOutcome.Committed
             record.awaiting.shouldBeNull()
             record.promotions.single().status shouldBe PromotionRecord.Status.COMMITTED
+            attempts.get() shouldBe 2
             f.collector.received shouldContainExactly listOf(1L, 3L)
         } finally {
             stopIfRunning(applier, "await-live", running)
+        }
+    }
+
+    @Test
+    fun `the policy observation tap is removed after commit and abort`() {
+        val committed = Fixture(seed = 56)
+        val committedApplier = committed.applier()
+        val committedWaves = AtomicInteger()
+        committedApplier.onPromotionWaveObserved = { committedWaves.incrementAndGet() }
+        val committing = startApply(
+            committedApplier,
+            committed.draft(committed.policy(waves = 1)),
+            "tap-commit",
+        )
+        try {
+            awaitAwaiting(committedApplier, "tap-commit")
+            committed.emit(1)
+            committing.awaitResult().outcome shouldBe ApplyOutcome.Committed
+            committedWaves.get() shouldBe 1
+
+            committed.emit(2)
+            committedWaves.get() shouldBe 1
+        } finally {
+            stopIfRunning(committedApplier, "tap-commit", committing)
+        }
+
+        val aborted = Fixture(seed = 57)
+        val abortedApplier = aborted.applier()
+        val abortedWaves = AtomicInteger()
+        abortedApplier.onPromotionWaveObserved = { abortedWaves.incrementAndGet() }
+        val aborting = startApply(
+            abortedApplier,
+            aborted.draft(aborted.policy(waves = 2)),
+            "tap-abort",
+        )
+        try {
+            awaitAwaiting(abortedApplier, "tap-abort")
+            abortedApplier.abort("tap-abort") shouldBe true
+            aborting.awaitResult().outcome shouldBe ApplyOutcome.UnwoundClean
+            abortedWaves.get() shouldBe 0
+
+            aborted.emitFromDetachedCandidate(1)
+            abortedWaves.get() shouldBe 0
+        } finally {
+            stopIfRunning(abortedApplier, "tap-abort", aborting)
         }
     }
 
