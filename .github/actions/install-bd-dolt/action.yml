@@ -72,8 +72,22 @@ runs:
         tar -xzf /tmp/bd.tar.gz -C /tmp bd
         sudo install -m 0755 /tmp/bd /usr/local/bin/bd
 
-        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-          "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
+        # install.sh downloads the dolt tarball with its own `curl -fsL` and no
+        # --retry, so the flags above cover only the script fetch. Retry the
+        # whole install (install.sh runs under `set -euo pipefail`, so a failed
+        # inner download exits non-zero) to cover the tarball as well.
+        for attempt in 1 2 3 4 5; do
+          if curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash; then
+            break
+          fi
+          if [ "$attempt" -eq 5 ]; then
+            echo "dolt install failed after ${attempt} attempts" >&2
+            exit 1
+          fi
+          echo "dolt install attempt ${attempt} failed; retrying" >&2
+          sleep 5
+        done
 
         bd --version
         dolt version
