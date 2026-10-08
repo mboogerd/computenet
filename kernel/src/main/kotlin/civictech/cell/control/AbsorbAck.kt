@@ -63,7 +63,14 @@ private fun FanOutlet<*>.sendAbsorbAck(progress: Progress) {
  * count is deliberately conservative across sources: this unary overload never
  * claims whole-hop settlement from one edge's [Progress]. Operators that obey
  * the uniform emit-or-[absorbAck] shape can use the `outputs`-taking overload
- * below, which owns the proper per-edge watermark fold. [ProtocolSupport]
+ * below, which owns the proper per-edge watermark fold. Independently of that
+ * relay decision, this hop publishes [output]'s live source provenance: the
+ * union of every resolved link open into this inlet frontier, of either role,
+ * plus [output]'s own minted ids. Unknown input provenance publishes unknown,
+ * preserving Reading 1's fail-closed behavior downstream. An empty linked
+ * frontier is also unknown here: an un-negotiated `Use.fixed` path can still
+ * invoke a unary hop, so known-empty would recreate the first-edge relay
+ * hazard. [ProtocolSupport]
  * evaluates this overload's predicate for every arriving acknowledgement, and
  * [FanInlet.linking] exposes only the currently active links, so links added
  * after construction count and an unlinked edge stops counting before the next
@@ -74,14 +81,38 @@ private fun FanOutlet<*>.sendAbsorbAck(progress: Progress) {
  * policy is installed after cell construction — one [Progress] must either be
  * consumed by that frontier or pass through this transparent hop, never both.
  */
-internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
+internal fun FanInlet<*>.relayAbsorbAcks(
+    output: FanOutlet<*>,
+    vararg otherInlets: FanInlet<*>,
+) {
+    val inlets = listOf(this) + otherInlets
+    SourceProvenance.publish(output) { resolvedInputSources(inlets, emptyIsUnknown = true) }
     val support = ProtocolSupport.of(this)
     support.relay(Protocols.Progress) {
         support.handles(Protocols.Progress) ||
-            (sequenceOf(this) + otherInlets.asSequence())
+            inlets.asSequence()
                 .flatMap { it.linking.links.asSequence() }
                 .count { it.role == LinkRole.Consume } != 1
     }
+}
+
+/**
+ * Live union for a provenance-publishing relay hop. Every open input link is
+ * included regardless of role because an Observe-fed hop can re-emit under the
+ * observed source's wave. Any unknown input keeps the union unknown.
+ */
+private fun resolvedInputSources(
+    inlets: List<FanInlet<*>>,
+    emptyIsUnknown: Boolean = false,
+): Set<UUID>? {
+    val openLinks = inlets.flatMap { it.linking.links }
+    if (emptyIsUnknown && openLinks.isEmpty()) return null
+    val result = mutableSetOf<UUID>()
+    for (link in openLinks) {
+        val sources = SourceProvenance.resolve(link) ?: return null
+        result += sources
+    }
+    return result
 }
 
 /**
@@ -231,25 +262,8 @@ private class SettledAbsorbAckRelay(
         // edges' resolved source sets, plus the output's own minted ids (added
         // by SourceProvenance) — so a chain of relay hops composes.
         this.outputs.forEach { output ->
-            SourceProvenance.publish(output) { resolvedInputSources() }
+            SourceProvenance.publish(output) { resolvedInputSources(inlets) }
         }
-    }
-
-    /**
-     * The union of the resolved source sets of every link currently open into
-     * this hop's inlets, of either [LinkRole]: an Observe tap delivers under the
-     * producer's wave exactly as a Consume edge does, so omitting it would
-     * publish a set that misses a source the hop can emit (the same rule
-     * [civictech.cell.port.PortIdentities.hasOpenInboundLink] applies to roots).
-     */
-    private fun resolvedInputSources(): Set<UUID>? {
-        val openLinks = inlets.flatMap { it.linking.links }
-        val result = mutableSetOf<UUID>()
-        for (link in openLinks) {
-            val sources = SourceProvenance.resolve(link) ?: return null
-            result += sources
-        }
-        return result
     }
 
     fun owns(outlet: FanOutlet<*>): Boolean = outputs.any { it === outlet }

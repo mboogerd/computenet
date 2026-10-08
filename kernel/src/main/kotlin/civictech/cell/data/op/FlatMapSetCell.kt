@@ -54,7 +54,7 @@ class FlatMapSetCell<A, B>(
         // An upstream Progress carries no delta to remap. Forward the exact
         // source/counter only while this hop has one input edge; a fan-in
         // FlatMapSetCell cannot settle the whole hop from one edge's ack.
-        inlet.relayAbsorbAcks()
+        inlet.relayAbsorbAcks(outlet)
         // late-join catch-up (G-22): output state is derived, so recompute it
         // from input state rather than keeping a second copy
         outlet.catchUpOnLinked { if (op.state.size > 0) SetDelta(adds = remap(op.state.asDelta().adds)) else null }

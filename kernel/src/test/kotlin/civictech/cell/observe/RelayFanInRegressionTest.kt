@@ -8,6 +8,7 @@ import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.control.Progress
 import civictech.cell.data.Aggregators
+import civictech.cell.data.WaterlineCell
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
@@ -53,6 +54,12 @@ class RelayFanInRegressionTest {
 
     private class IntProgressSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Int>>>())
+
+        fun send(value: Int) {
+            outlet.call.propagate(
+                SetDelta(adds = mapOf(value to setOf(Timestamp(UUID.randomUUID(), 1L)))),
+            )
+        }
 
         fun send(timestamp: Timestamp, delta: SetDelta<Int>) {
             CurrentContext.with(MessageContext(timestamp, outlet.ref)) {
@@ -391,6 +398,96 @@ class RelayFanInRegressionTest {
             probe.dataWaves.size shouldBe 1
             probe.duplicateSettlements() shouldBe emptySet()
         }
+    }
+
+    @Test
+    fun `a manual waterline retirement wave does not wait on its unary filter sibling`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val first = IntProgressSource()
+        val second = IntProgressSource()
+        val filter = FilterCell<Int> { true }
+        val waterline = WaterlineCell(
+            lateness = Windows.Lateness({ value: Int -> value.toLong() }, 0),
+        )
+        val grouped = GroupByCell(
+            keyFn = { value: Int -> value },
+            aggregator = Aggregators.count<Int>(),
+            lateness = Windows.Lateness({ value: Int -> value.toLong() }, 0),
+            keyTime = { value: Int -> value.toLong() + 1L },
+        )
+        val management = host.managementInlet.call
+        listOf(first, second, filter, waterline, grouped).forEach(management::spawn)
+        management.connect(first.ref, "outlet", filter.ref, "inlet")
+        management.connect(second.ref, "outlet", filter.ref, "inlet")
+        management.connect(filter.ref, "outlet", waterline.ref, "inlet")
+        management.connect(waterline.ref, "outlet", grouped.ref, "waterline")
+        management.connect(filter.ref, "outlet", grouped.ref, "inlet")
+
+        val observation = host.observation {
+            count("grouped", grouped.ref)
+            set("late", grouped.ref, outletName = "late")
+        }
+        controller.runToIdle()
+        first.send(10)
+        controller.runToIdle()
+        second.send(20)
+        controller.runToIdle()
+        waterline.floor() shouldBe 10L
+        observation.bufferedWaves shouldBe 0
+
+        val retiringSource = waterline.maxima().entries.single { it.value == 10L }.key
+        waterline.retire(retiringSource)
+        controller.runToIdle()
+
+        waterline.floor() shouldBe 20L
+        observation.bufferedWaves shouldBe 0
+        observation.close()
+    }
+
+    @Test
+    fun `an EdgeClose waterline retirement wave does not wait on its unary filter sibling`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val first = IntProgressSource()
+        val second = IntProgressSource()
+        val filter = FilterCell<Int> { true }
+        val waterline = WaterlineCell(
+            lateness = Windows.Lateness({ value: Int -> value.toLong() }, 0),
+        )
+        val grouped = GroupByCell(
+            keyFn = { value: Int -> value },
+            aggregator = Aggregators.count<Int>(),
+            lateness = Windows.Lateness({ value: Int -> value.toLong() }, 0),
+            keyTime = { value: Int -> value.toLong() + 1L },
+        )
+        val management = host.managementInlet.call
+        listOf(first, second, filter, waterline, grouped).forEach(management::spawn)
+        management.connect(first.ref, "outlet", filter.ref, "inlet")
+        management.connect(second.ref, "outlet", filter.ref, "inlet")
+        management.connect(first.ref, "outlet", waterline.ref, "inlet")
+        management.connect(second.ref, "outlet", waterline.ref, "inlet")
+        management.connect(waterline.ref, "outlet", grouped.ref, "waterline")
+        management.connect(filter.ref, "outlet", grouped.ref, "inlet")
+
+        val observation = host.observation {
+            count("grouped", grouped.ref)
+            set("late", grouped.ref, outletName = "late")
+        }
+        controller.runToIdle()
+        first.send(10)
+        controller.runToIdle()
+        second.send(20)
+        controller.runToIdle()
+        waterline.floor() shouldBe 10L
+        observation.bufferedWaves shouldBe 0
+
+        first.outlet.linking.links.single { it.to == waterline.inlet.ref }.unlink()
+        controller.runToIdle()
+
+        waterline.floor() shouldBe 20L
+        observation.bufferedWaves shouldBe 0
+        observation.close()
     }
 
     @Test

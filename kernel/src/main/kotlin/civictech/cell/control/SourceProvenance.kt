@@ -21,11 +21,12 @@ import java.util.UUID
  * [resolve] on a [Link] answers "which sourceIds can ever arrive on this
  * edge?" with:
  *  - a concrete, non-null [Set] when the answer is **known** — either a cell
- *    explicitly [publish]ed its outlet's resolved provenance (the relay hops
- *    in [AbsorbAck.kt], which compose this recursively through their own
- *    input edges), or the outlet's owning cell is structurally a root — it has
- *    no currently open inbound link (Consume, Observe or feedback). A published set includes both its
- *    resolved input sources and every id the outlet minted itself;
+ *    explicitly [publish]ed its outlet's resolved provenance (the unary and
+ *    fan-in relay hops in [AbsorbAck.kt], which compose this recursively
+ *    through their own input edges), or the outlet's owning cell is
+ *    structurally a root — it has no currently open inbound link (Consume,
+ *    Observe or feedback). A published set includes both its resolved input
+ *    sources and every id the outlet minted itself;
  *  - `null` ("unknown") for everything else — a bridged edge
  *    ([Link.fromPort] is `null` across the wire, matching the existing
  *    cross-host residual in 20/22 §Bridged frontier), an unpublished outlet
@@ -56,7 +57,7 @@ internal object SourceProvenance {
      * fresh on every call (no snapshot, so a later topology change — an edge
      * opening or closing on the publishing hop's own inputs — is reflected
      * immediately, with no separate invalidation step). A relay hop
-     * ([civictech.cell.control.relayAbsorbAcks]'s fan-in overload) calls this
+     * ([civictech.cell.control.relayAbsorbAcks]) calls this
      * once per output at construction, publishing the union of its own open
      * input edges' resolved sets. [resolve] adds the publishing outlet's own
      * locally minted ids to a successfully resolved set.

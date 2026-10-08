@@ -112,7 +112,7 @@ class WaterlineCell<E> internal constructor(
     init {
         // WaterlineCell is a unary transparent hop for waves it does not see as
         // data. Preserve an upstream absorb-ack for the downstream waterline arm.
-        inlet.relayAbsorbAcks()
+        inlet.relayAbsorbAcks(outlet)
         inlet.serve(object : Propagate<SetDelta<E>> {
             override fun propagate(value: SetDelta<E>) = onDelta(value)
         })
