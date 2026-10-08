@@ -17,6 +17,7 @@ import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.wire.Peering
+import io.kotest.assertions.withClue
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -214,6 +215,297 @@ class OwnershipTransferTest {
         donor.membership() shouldBe recovered.membership()
         recoveredAuthority.retained().size shouldBe 4
         donorReplication.authorityOf(donorRef)!!.retained().size shouldBe 4
+    }
+
+    @Test
+    fun `local transfer survives recovery without re-signing journaled writes`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val delegate = signing.signer(pA)
+        var signCalls = 0
+        val countingSigner = object : WriteSigner {
+            override val peerId: PeerId = delegate.peerId
+
+            override fun sign(input: ByteArray): ByteArray {
+                signCalls += 1
+                return delegate.sign(input)
+            }
+        }
+        val journal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID(), 0)
+        val authority = WriteAuthority.Principal(pA)
+
+        val originalRegistry = LocationRegistry()
+        val originalHost = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = originalRegistry,
+            journalFor = { selected -> if (selected == ref) journal else null },
+        )
+        val originalReplication = Replication(originalRegistry)
+        val original = SetCell<String>(ref).also {
+            originalReplication.replicate(it, originalHost, authority, countingSigner, signing.verifier)
+        }
+        val originalOps = (HostedCellProxy.create(ref, originalRegistry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+
+        originalOps.add("before-transfer")
+        controller.runToIdle()
+        originalReplication.authorityOf(ref)!!.transfer(pB)
+        controller.runToIdle()
+        originalOps.add("refused-before-crash")
+        controller.runToIdle()
+
+        signCalls shouldBe 2
+        original.membership() shouldBe setOf("before-transfer")
+        val originalRetained = originalReplication.authorityOf(ref)!!.retained()
+        originalRetained.size shouldBe 2
+        originalRetained.map { WriteAuthorityBytes.decodePayload(it.payload) }
+            .filterIsInstance<TransferAuthority>() shouldBe listOf(TransferAuthority(pB))
+
+        val recoveredRegistry = LocationRegistry()
+        val recoveredHost = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = recoveredRegistry,
+            journalFor = { selected -> if (selected == ref) journal else null },
+        )
+        val recoveredReplication = Replication(recoveredRegistry)
+        val recoveredBridge = ManagedHost(scheduler = controller.scheduler(), registry = recoveredRegistry)
+        val recoveredSide = Peering.Side(recoveredRegistry, recoveredBridge, peer = pA)
+        val recoveredDeadLetters = mutableListOf<DeadLetter>()
+        recoveredHost.deadLetterOutlet.subscribe(
+            Use.fixed(Propagate { recoveredDeadLetters += it }, PortRef.generate()),
+        )
+        val recovered = SetCell<String>(ref).also {
+            recoveredReplication.replicate(it, recoveredHost, authority, countingSigner, signing.verifier)
+        }
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+
+        signCalls shouldBe 2
+        recovered.membership() shouldBe setOf("before-transfer")
+        recoveredDeadLetters.mapNotNull { it.denial?.reason } shouldBe
+            listOf(DenialReason.UNAUTHORIZED_WRITER)
+        val retained = recoveredReplication.authorityOf(ref)!!.retained()
+        retained.map { it.author to it.counter }.distinct().size shouldBe 2
+        retained.map { WriteAuthorityBytes.decodePayload(it.payload) }.filterIsInstance<TransferAuthority>() shouldBe
+            listOf(TransferAuthority(pB))
+
+        val recoveredOps = (HostedCellProxy.create(ref, recoveredRegistry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+        recoveredOps.add("refused-after-restart")
+        controller.runToIdle()
+        recovered.membership() shouldBe setOf("before-transfer")
+        recoveredDeadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+            principal shouldBe pA
+        }
+        signCalls shouldBe 2
+
+        val donorRegistry = LocationRegistry()
+        val donorHost = ManagedHost(scheduler = controller.scheduler(), registry = donorRegistry)
+        val donorBridge = ManagedHost(scheduler = controller.scheduler(), registry = donorRegistry)
+        val donorSide = Peering.Side(donorRegistry, donorBridge, peer = pB)
+        val donorReplication = Replication(donorRegistry)
+        val donor = SetCell<String>(CellRef(ref.id, 1)).also {
+            donorReplication.replicate(it, donorHost, authority, signing.signer(pB), signing.verifier)
+        }
+        Peering.loopback(recoveredSide, donorSide)
+        controller.runToIdle()
+
+        recoveredReplication.authorityOf(ref)!!.retained().size shouldBe 2
+        donorReplication.authorityOf(donor.ref)!!.retained().size shouldBe 2
+        donor.membership() shouldBe recovered.membership()
+
+        val donorOps = (HostedCellProxy.create(donor.ref, donorRegistry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+        donorOps.add("current-owner-after-catch-up")
+        controller.runToIdle()
+        donor.membership() shouldBe setOf("before-transfer", "current-owner-after-catch-up")
+        recovered.membership() shouldBe donor.membership()
+        recoveredReplication.authorityOf(ref)!!.retained().size shouldBe 3
+        donorReplication.authorityOf(donor.ref)!!.retained().size shouldBe 3
+        signCalls shouldBe 2
+    }
+
+    @Test
+    fun `accepted but undelivered local write is signed after recovery`() {
+        listOf(false, true).forEach { checkpointBeforeQueuedWrite ->
+            withClue("checkpointBeforeQueuedWrite=$checkpointBeforeQueuedWrite") {
+                val originalController = SimulationController()
+                val signing = StubWriteSigning(pA, pB)
+                val journal = InMemoryJournal()
+                val logicalId = UUID.randomUUID()
+                val recoveredRef = CellRef(logicalId, 0)
+                val donorRef = CellRef(logicalId, 1)
+                val authority = WriteAuthority.Principal(pA)
+
+                val originalRegistry = LocationRegistry()
+                val originalHost = ManagedHost(
+                    scheduler = originalController.scheduler(),
+                    registry = originalRegistry,
+                    journalFor = { selected -> if (selected == recoveredRef) journal else null },
+                )
+                val originalReplication = Replication(originalRegistry)
+                SetCell<String>(recoveredRef).also {
+                    originalReplication.replicate(
+                        it,
+                        originalHost,
+                        authority,
+                        signing.signer(pA),
+                        signing.verifier,
+                    )
+                }
+                val originalOps = (HostedCellProxy.create(
+                    recoveredRef,
+                    originalRegistry,
+                    AuthoritySetInletProxy::class.java,
+                ) as AuthoritySetInletProxy).inlet.call
+
+                originalOps.add("x1")
+                originalController.runToIdle()
+                if (checkpointBeforeQueuedWrite) originalHost.checkpoint(journal)
+                originalOps.add("x2") // accepted and journaled; crash before its host task runs
+
+                val recoveredController = SimulationController()
+                val recoveredRegistry = LocationRegistry()
+                val recoveredHost = ManagedHost(
+                    scheduler = recoveredController.scheduler(),
+                    registry = recoveredRegistry,
+                    journalFor = { selected -> if (selected == recoveredRef) journal else null },
+                )
+                val recoveredBridge = ManagedHost(
+                    scheduler = recoveredController.scheduler(),
+                    registry = recoveredRegistry,
+                )
+                val recoveredSide = Peering.Side(recoveredRegistry, recoveredBridge, peer = pA)
+                val recoveredReplication = Replication(recoveredRegistry)
+                val recovered = SetCell<String>(recoveredRef).also {
+                    recoveredReplication.replicate(
+                        it,
+                        recoveredHost,
+                        authority,
+                        signing.signer(pA),
+                        signing.verifier,
+                    )
+                }
+                recoveredController.runToIdle()
+                recoveredHost.recoverFrom(journal)
+                recoveredController.runToIdle()
+
+                recovered.membership() shouldBe setOf("x1", "x2")
+                val recoveredWrites = recoveredReplication.authorityOf(recoveredRef)!!.retained()
+                recoveredWrites.size shouldBe 2
+                recoveredWrites.map { it.author to it.counter }.distinct().size shouldBe 2
+
+                val donorRegistry = LocationRegistry()
+                val donorHost = ManagedHost(
+                    scheduler = recoveredController.scheduler(),
+                    registry = donorRegistry,
+                )
+                val donorBridge = ManagedHost(
+                    scheduler = recoveredController.scheduler(),
+                    registry = donorRegistry,
+                )
+                val donorSide = Peering.Side(donorRegistry, donorBridge, peer = pB)
+                val donorReplication = Replication(donorRegistry)
+                val donor = SetCell<String>(donorRef).also {
+                    donorReplication.replicate(
+                        it,
+                        donorHost,
+                        authority,
+                        signing.signer(pB),
+                        signing.verifier,
+                    )
+                }
+
+                Peering.loopback(recoveredSide, donorSide)
+                recoveredController.runToIdle()
+
+                donor.membership() shouldBe recovered.membership()
+                donorReplication.authorityOf(donorRef)!!.retained().size shouldBe 2
+            }
+        }
+    }
+
+    @Test
+    fun `failed live write-ahead append refuses the envelope and later local signing until recovery`() {
+        // Fails the write-ahead SignedWrite frame of exactly one local write; the
+        // operation frame that precedes it in the same journal still lands.
+        class OneFailingAppendJournal : civictech.cell.durability.Journal {
+            val inner = InMemoryJournal()
+            var failAppend = -1
+            var appends = 0
+            override val durability get() = inner.durability
+            override fun append(record: ByteArray) {
+                appends += 1
+                if (appends == failAppend) throw java.io.IOException("append refused by test")
+                inner.append(record)
+            }
+            override fun replay(): List<ByteArray> = inner.replay()
+            override fun reset(records: List<ByteArray>) = inner.reset(records)
+        }
+
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val journal = OneFailingAppendJournal()
+        val ref = CellRef(UUID.randomUUID(), 0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journalFor = { selected -> if (selected == ref) journal else null },
+        )
+        val deadLetters = mutableListOf<DeadLetter>()
+        host.deadLetterOutlet.subscribe(Use.fixed(Propagate { deadLetters += it }, PortRef.generate()))
+        val replication = Replication(registry)
+        SetCell<String>(ref).also {
+            replication.replicate(it, host, WriteAuthority.Principal(pA), signing.signer(pA), signing.verifier)
+        }
+        controller.runToIdle()
+        val ops = (HostedCellProxy.create(ref, registry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+
+        ops.add("x1")
+        controller.runToIdle()
+        replication.authorityOf(ref)!!.retained().size shouldBe 1
+
+        journal.failAppend = journal.appends + 2 // x2's operation frame lands; its envelope frame does not
+        ops.add("x2")
+        controller.runToIdle()
+        replication.authorityOf(ref)!!.retained().size shouldBe 1
+        deadLetters.mapNotNull { it.denial?.reason } shouldBe listOf(DenialReason.UNSIGNED)
+
+        ops.add("x3") // the append path works again, but the adapter stays latched
+        controller.runToIdle()
+        replication.authorityOf(ref)!!.retained().size shouldBe 1
+        deadLetters.mapNotNull { it.denial?.reason } shouldBe listOf(DenialReason.UNSIGNED, DenialReason.UNSIGNED)
+
+        val recoveredController = SimulationController()
+        val recoveredRegistry = LocationRegistry()
+        val recoveredHost = ManagedHost(
+            scheduler = recoveredController.scheduler(),
+            registry = recoveredRegistry,
+            journalFor = { selected -> if (selected == ref) journal else null },
+        )
+        val recoveredReplication = Replication(recoveredRegistry)
+        val recovered = SetCell<String>(ref).also {
+            recoveredReplication.replicate(
+                it,
+                recoveredHost,
+                WriteAuthority.Principal(pA),
+                signing.signer(pA),
+                signing.verifier,
+            )
+        }
+        recoveredController.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        recoveredController.runToIdle()
+
+        recovered.membership() shouldBe setOf("x1", "x2", "x3")
+        val retained = recoveredReplication.authorityOf(ref)!!.retained()
+        retained.size shouldBe 3
+        retained.map { it.author to it.counter }.distinct().size shouldBe 3
     }
 
     @Test

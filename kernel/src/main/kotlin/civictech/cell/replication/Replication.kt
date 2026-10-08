@@ -516,6 +516,8 @@ class Replication(
             require(registry.instances.interestOf(cell.ref) is Interest.Total) {
                 "write authority for ${cell.ref} requires total interest"
             }
+            val localDelta = (HostedCellProxy.create(cell.ref, host, ReplicaDeltaInlet::class.java)
+                as ReplicaDeltaInlet).deltaInlet.call
             AuthorityGossip(
                 cell = cell,
                 authority = authority,
@@ -523,6 +525,11 @@ class Replication(
                     CountingWriteSigner(requiredSigner)
                 },
                 verifier = requiredVerifier,
+                writeAhead = localDelta::propagate,
+                afterRecoveryApplied = { block ->
+                    host.recoveryAwareQuiescence().asFuture().thenRun(block)
+                    Unit
+                },
             )
         }
         val superseded = supersedeLocalInstance(cell)
