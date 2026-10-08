@@ -84,10 +84,6 @@ internal object PortIdentities {
             candidate is LinkFrom<*> && candidate !is Subscribe<*>
         }
     }
-
-    /** Compatibility name for the root-classification seam's former, narrower rule. */
-    @Deprecated("Root classification must include link-bypassing inputs")
-    fun hasOpenInboundLink(port: Port): Boolean? = hasRegisteredInputPort(port)
 }
 
 /**

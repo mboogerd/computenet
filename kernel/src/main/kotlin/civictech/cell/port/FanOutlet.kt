@@ -227,7 +227,7 @@ class FanOutlet<Api : Any>(
      *
      * This is source-id inventory, not evidence that the outlet is a root.
      * [civictech.cell.control.SourceProvenance] decides that structurally from
-     * the owning cell's open inbound links at evaluation time; emission
+     * the owning cell's registered input ports at evaluation time; emission
      * history must never make an edge look source-disjoint. A relay-aware cell
      * additionally publishes the sources resolved through its inputs.
      */

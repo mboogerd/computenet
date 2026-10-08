@@ -119,13 +119,13 @@ internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
  * spec names as undesigned (G-13's declined multiplex-port traversal form,
  * G-39's hop-by-hop source-set propagation gap) — so it is precise only
  * through two decided shapes: an outlet whose owning cell structurally has no
- * open inbound link, and a chain of [relayAbsorbAcks] fan-in hops that each
- * republish their resolved input provenance plus their outlet's own minted
- * ids. An unpublished outlet on a cell with an open inbound link is
+ * registered input-capable port, and a chain of [relayAbsorbAcks] fan-in hops
+ * that each republish their resolved input provenance plus their outlet's own
+ * minted ids. An unpublished outlet on a cell with an input-capable port is
  * "unknown", whatever it emitted before, so its edge remains expected exactly
- * as in Reading 1. Root classification reads the live input topology when
- * Progress is evaluated; an input linked after the wave began therefore
- * withholds that in-flight wave too. These fail-closed rules keep the
+ * as in Reading 1. Root classification reads the owner's registered input
+ * ports when Progress is evaluated; a port registered after the wave began
+ * therefore withholds that in-flight wave too. These fail-closed rules keep the
  * computenet-6ovpx first-edge-relay safety fix intact: no edge is excluded on
  * emission history or unresolved reachability.
  */
@@ -240,7 +240,7 @@ private class SettledAbsorbAckRelay(
      * this hop's inlets, of either [LinkRole]: an Observe tap delivers under the
      * producer's wave exactly as a Consume edge does, so omitting it would
      * publish a set that misses a source the hop can emit (the same rule
-     * [civictech.cell.port.PortIdentities.hasOpenInboundLink] applies to roots).
+     * [civictech.cell.port.PortIdentities.hasRegisteredInputPort] applies to roots).
      */
     private fun resolvedInputSources(): Set<UUID>? {
         val openLinks = inlets.flatMap { it.linking.links }
