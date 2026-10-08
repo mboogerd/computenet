@@ -542,7 +542,28 @@ class Replication(
             authorityBindings[cell.ref] = AuthorityBinding(authority, signer!!, verifier!!)
         }
         host.managementInlet.call.spawn(cell)
-        adapter?.let { host.spawnDurabilityCompanion(it, cell.ref) }
+        if (adapter != null) {
+            try {
+                host.spawnDurabilityCompanion(adapter, cell.ref)
+            } catch (failure: Throwable) {
+                try {
+                    host.rollbackSpawn(cell.ref)
+                } catch (cleanupFailure: Throwable) {
+                    failure.addSuppressed(cleanupFailure)
+                }
+                localReplicas[cell.ref.id]?.let { replicas ->
+                    replicas.remove(cell)
+                    if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
+                }
+                if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
+                linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
+                if (adapters[cell.ref] === adapter) {
+                    adapters.remove(cell.ref)
+                    authorityBindings.remove(cell.ref)
+                }
+                throw failure
+            }
+        }
         registry.instances.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
         trackDeliveries(cell, host, rehome = superseded)
     }
