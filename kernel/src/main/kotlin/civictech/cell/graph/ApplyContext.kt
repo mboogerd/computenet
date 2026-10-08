@@ -22,7 +22,6 @@ import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
-import civictech.cell.membrane.SignatureVerifier
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -73,7 +72,7 @@ class ApplyContext(
     val journalDirs: Map<String, File> = emptyMap(),
     val topology: Journal? = null,
     val writeSigner: WriteSigner? = null,
-    val signatureVerifier: SignatureVerifier? = null,
+    val signatureVerifier: civictech.cell.membrane.SignatureVerifier? = null,
 ) : TopologyApplier {
     private val journalBindings = ConcurrentHashMap<CellRef, Journal>()
     private val fold = MutableTopologyFold()

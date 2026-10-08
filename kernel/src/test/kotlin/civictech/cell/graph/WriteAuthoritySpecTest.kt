@@ -7,7 +7,6 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.PeerId
-import civictech.cell.replication.AuthorityGossip
 import civictech.cell.replication.Replication
 import civictech.cell.replication.StubWriteSigning
 import civictech.cell.replication.WriteAuthority
