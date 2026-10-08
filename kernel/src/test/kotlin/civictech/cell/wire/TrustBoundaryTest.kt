@@ -435,7 +435,7 @@ class TrustBoundaryTest {
      * the q→P peering: nothing supplies a [PeerId] to the invocation, so the
      * only identity in play is the one P's [BridgeIngressCell] stamped.
      */
-    private class RedirectRig {
+    private class RedirectRig(private val anonymous: Boolean = false) {
         val controller = SimulationController(0)
         val registryP = LocationRegistry()
         val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
@@ -465,9 +465,9 @@ class TrustBoundaryTest {
         val pr: Peering.Loopback
 
         init {
-            val p = Peering.Side(registryP, bridgeP, peer = PEER_P)
-            val q = Peering.Side(registryQ, bridgeQ, peer = REQUESTER_Q)
-            val r = Peering.Side(registryR, bridgeR, peer = THIRD_R)
+            val p = Peering.Side(registryP, bridgeP, peer = if (anonymous) null else PEER_P)
+            val q = Peering.Side(registryQ, bridgeQ, peer = if (anonymous) null else REQUESTER_Q)
+            val r = Peering.Side(registryR, bridgeR, peer = if (anonymous) null else THIRD_R)
             listOf(hostP, bridgeP).forEach { h ->
                 h.deadLetterOutlet.subscribe(Use.fixed(object : Propagate<DeadLetter> {
                     override fun propagate(value: DeadLetter) {
@@ -608,6 +608,63 @@ class TrustBoundaryTest {
         rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret")
         impostorOnR.received.shouldBeEmpty()
         rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
+    }
+
+    /**
+     * computenet-4f55i: open-mode peerings may omit [PeerId], but each
+     * connection still owns only the locations it announced. The first
+     * anonymous connection's sink is therefore the ownership fallback; null
+     * is not a shared owner token for publish or retract.
+     */
+    @Test
+    fun `computenet-4f55i - anonymous connections cannot capture each other's announcements`() {
+        val rig = RedirectRig(anonymous = true)
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        rig.consumerOnQ.received shouldBe listOf("first")
+
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+        val firstImpostorOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("q-only-secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret")
+        firstImpostorOnR.received.shouldBeEmpty()
+
+        rig.hostR.managementInlet.call.despawn(rig.consumerOnQ.ref)
+        rig.controller.runToIdle()
+        val secondImpostorOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("still-q-only")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret", "still-q-only")
+        secondImpostorOnR.received.shouldBeEmpty()
+        val location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        location.peer shouldBe null
+        (location.sink === rig.pq.aToB).shouldBeTrue()
+
+        val letters = rig.deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+        letters.map { it.denial!!.subject } shouldBe listOf(
+            "RegistryAnnounce.published",
+            "RegistryAnnounce.unpublished",
+            "RegistryAnnounce.published",
+        )
+        letters.forEach { letter ->
+            val denial = letter.denial!!
+            denial.seam shouldBe BoundarySeam.ADMISSION
+            denial.reason shouldBe DenialReason.NOT_ADMITTED
+            denial.principal shouldBe null
+            letter.cause shouldBe null
+            letter.description shouldContain "<anonymous>"
+        }
+        rig.bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
+        rig.bridgeP.supervisionAccounting().restarts shouldBe 0L
     }
 
     /**
