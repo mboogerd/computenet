@@ -23,6 +23,9 @@ import kotlinx.serialization.json.JsonElement
  *   inspector's `"<uuid>:<instanceId>"` encoding. It is what a reader marks as
  *   staged while [phase] is [ApplyPhase.STAGE]; it is kept after an unwind as
  *   the audit of what was created and then despawned.
+ * - [promotions] — the replacement-specific audit entries (8joqm-D7).
+ * - [awaiting] — a sibling's in-flight wait discriminator; null in the
+ *   synchronous single-instance form implemented here.
  *
  * [identity] is the label [WriteGate] admitted for this apply (`[WKB2-49]`,
  * record half) — the capability-holder's default identity when the caller
@@ -41,7 +44,42 @@ data class ApplyRecord(
     val outcome: ApplyOutcome? = null,
     val plan: PlanDto? = null,
     val stagedRefs: List<String> = emptyList(),
+    val promotions: List<PromotionRecord> = emptyList(),
+    val awaiting: String? = null,
 )
+
+/** One promotion's additive audit shape (8joqm-D7, `[WKB2-22]`..`[WKB2-24]`). */
+@Serializable
+data class PromotionRecord(
+    val incumbent: String,
+    val candidate: String?,
+    val gate: String?,
+    val outletName: String,
+    val form: String,
+    val status: String,
+    val reason: String? = null,
+    val retained: Boolean? = null,
+    val incumbentRetired: Boolean = false,
+    val reversible: Boolean = false,
+    val reversibleNote: String =
+        "a committed promotion is not reversible by the write plane: rollback after RETIRE " +
+            "is a fresh swap in the reverse direction (53 §The promotion swap); the retired " +
+            "incumbent's retention window is not built (JAR2/WKB3)",
+) {
+    /** Open string vocabulary: sibling tasks add waiting/rolling statuses without changing this wire type. */
+    object Status {
+        const val NOT_RUN = "not-run"
+        const val COMMITTED = "committed"
+        const val REFUSED_AT_PRECHECK = "refused-at-precheck"
+        const val ROLLED_BACK_AT_COMMIT = "rolled-back-at-commit"
+        const val FAILED = "failed"
+    }
+
+    object Form {
+        const val SINGLE = "single"
+        const val ROLLING = "rolling"
+    }
+}
 
 /**
  * The four states a single apply step can end in under the STAGE/UNWIND

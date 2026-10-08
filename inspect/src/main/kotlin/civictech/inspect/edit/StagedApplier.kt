@@ -52,7 +52,8 @@ import kotlin.concurrent.withLock
  * left in place (`[WKB2-20]`).
  *
  * - **PRECHECK** — F2's cold `GraphSpec.precheck` over a [HostLiveView],
- *   plus one DESPAWN step per [Draft.despawns] (e1ojt-D6). A drained target
+ *   plus one DESPAWN step per [Draft.despawns] and the optional PROMOTE step
+ *   planned by [PromotionCutOver] (e1ojt-D6, 8joqm-D4). A drained target
  *   host is refused with one synthetic step keyed `"host"`. Any refusal ends
  *   the apply as [ApplyOutcome.RefusedAtPrecheck] with the whole plan on the
  *   record and every step [StepOutcome.NotRun] (`[WKB2-15]`).
@@ -64,8 +65,11 @@ import kotlin.concurrent.withLock
  * - **CUT_OVER** — the boundary links, in list order, each wrapped in the
  *   applier's own payload-agnostic tap on the producing outlet
  *   (`FanOutlet.observe`, installed before `connect`, baseline read right
- *   after; e1ojt-D3). A rejected or throwing boundary `connect` unwinds.
- * - **RETIRE** — reached only when every boundary link connected. The record
+ *   after; e1ojt-D3), followed by a single-instance promotion through
+ *   `Evolve.promoteDirect`. A rejected or throwing boundary `connect`, or a
+ *   PRECHECK/infrastructure promotion failure, unwinds.
+ * - **RETIRE** — reached only when every boundary link connected and the
+ *   optional promotion committed. The record
  *   is marked `outcome = Committed` first, then [Draft.despawns] run in list
  *   order; a despawn that fails (it dead-letters on the host — see
  *   [Run.despawnAwaited]) is recorded [StepOutcome.Failed] on its step and
@@ -153,8 +157,9 @@ class StagedApplier(
      * already answers its PRECHECK record.
      *
      * @throws IllegalArgumentException when [Draft.host] is not a known host,
-     *   [Draft.promotions] is non-empty (`NOT_YET_SUPPORTED`, F9), a despawn
-     *   target is listed twice, or [applyId] was already used.
+     *   a promotion uses a not-yet-supported policy/rolling form, more than
+     *   one promotion is requested, a promotion incumbent is also despawned,
+     *   a despawn target is listed twice, or [applyId] was already used.
      */
     fun apply(
         draft: Draft,
@@ -210,8 +215,7 @@ class StagedApplier(
      * cold (F2) — that is its only effect, and it touches no host.
      * [skipPrecheck] does not apply: the verdict is reported as found.
      *
-     * @throws IllegalArgumentException for the same caller faults as [apply]
-     *   (unknown host, non-empty promotions, a despawn listed twice).
+     * @throws IllegalArgumentException for the same caller faults as [apply].
      */
     fun plan(draft: Draft): PlanDto = planFor(admit(draft), draft).toDto()
 
@@ -230,8 +234,19 @@ class StagedApplier(
     /** The caller-fault checks [apply] and [plan] share; the draft's target host. */
     private fun admit(draft: Draft): ManagedHost {
         require(draft.host in hosts) { "unknown host '${draft.host}' (known: ${hosts.keys})" }
-        require(draft.promotions.isEmpty()) {
-            "NOT_YET_SUPPORTED: promotion requests are applied by WKB2 F9, not by this applier"
+        require(draft.promotions.size <= 1) {
+            "at most one promotion may be applied per draft"
+        }
+        require(draft.promotions.none { it.incumbent in draft.despawns }) {
+            "a promotion incumbent must not also be a despawn target"
+        }
+        draft.promotions.forEach { request ->
+            require(request.replicaCandidate == null) {
+                "NOT_YET_SUPPORTED: the rolling form is applied by the rolling-form task of computenet-8joqm"
+            }
+            require(request.policy == null) {
+                "NOT_YET_SUPPORTED: promotion policy is applied by the observation-window task of computenet-8joqm"
+            }
         }
         require(draft.despawns.distinct().size == draft.despawns.size) { "a despawn target is listed more than once" }
         return hosts.getValue(draft.host)
@@ -251,7 +266,8 @@ class StagedApplier(
             return Plan(listOf(refused), Verdict.NotAppliable(listOf(refused)))
         }
         val planned = draft.spec.precheck(draft.boundary, HostLiveView(host, registry)).steps +
-            draft.despawns.map { planDespawn(host, draft, it) }
+            draft.despawns.map { planDespawn(host, draft, it) } +
+            draft.promotions.map { PromotionCutOver.plan(host, registry, draft, it) }
         val refusals = planned.filter { it.result is StepCheck.Refused }
         return Plan(planned, if (refusals.isEmpty()) Verdict.Appliable else Verdict.NotAppliable(refusals))
     }
@@ -309,6 +325,16 @@ class StagedApplier(
         private val refByHandle = mutableMapOf<String, CellRef>()
         private val internalLinks = mutableListOf<Pair<Link, String>>()
         private val attachments = mutableListOf<Attachment>()
+        private val promotionRecords = draft.promotions.map { request ->
+            PromotionRecord(
+                incumbent = InspectorServer.encodeRef(request.incumbent),
+                candidate = null,
+                gate = request.gate?.let(InspectorServer::encodeRef),
+                outletName = request.outletName,
+                form = if (request.candidateHandle != null) PromotionRecord.Form.SINGLE else PromotionRecord.Form.ROLLING,
+                status = PromotionRecord.Status.NOT_RUN,
+            )
+        }.toMutableList()
 
         private val delegate: HostManagementApi = host.managementInlet.call
 
@@ -390,6 +416,7 @@ class StagedApplier(
                 completedAtMs = completedAtMs,
                 steps = LinkedHashMap(steps),
                 stagedRefs = stagedRefs.map(InspectorServer::encodeRef),
+                promotions = promotionRecords.toList(),
             )
             record = next
             synchronized(records) { records[applyId] = next }
@@ -435,6 +462,12 @@ class StagedApplier(
                 if (spawned != null) {
                     refByHandle[event.handle] = spawned
                     handleByRef[spawned] = event.handle
+                    val promotionIndex = draft.promotions.indexOfFirst { it.candidateHandle == event.handle }
+                    if (promotionIndex >= 0) {
+                        promotionRecords[promotionIndex] = promotionRecords[promotionIndex].copy(
+                            candidate = InspectorServer.encodeRef(spawned),
+                        )
+                    }
                 }
                 listener.onStep(applyId, event)
                 publish()
@@ -475,12 +508,53 @@ class StagedApplier(
                     return
                 }
             }
-            // The point of no return (e1ojt-D7): committed before the first despawn.
+            val promotion = draft.promotions.singleOrNull()
+            if (promotion != null) {
+                val candidateRef = promotion.candidateHandle?.let(refByHandle::get)
+                when (val result = PromotionCutOver.perform(host, registry, promotion, candidateRef)) {
+                    PromotionCutOver.Result.Committed -> {
+                        steps[PromotionCutOver.key(promotion.incumbent)] = StepOutcome.Applied
+                        promotionRecords[0] = promotionRecords[0].copy(status = PromotionRecord.Status.COMMITTED)
+                    }
+                    is PromotionCutOver.Result.RefusedAtPrecheck -> {
+                        failPromotion(promotion, PromotionRecord.Status.REFUSED_AT_PRECHECK, result.reason)
+                        unwind()
+                        return
+                    }
+                    is PromotionCutOver.Result.RolledBackAtCommit -> {
+                        failPromotion(promotion, PromotionRecord.Status.ROLLED_BACK_AT_COMMIT, result.reason, retained = true)
+                        rollbackAtCommit(promotion, result.reason)
+                        return
+                    }
+                    is PromotionCutOver.Result.Failed -> {
+                        failPromotion(promotion, PromotionRecord.Status.FAILED, result.reason)
+                        unwind()
+                        return
+                    }
+                }
+            }
+            // The point of no return (e1ojt-D7 / [WKB2-24]): publish committed
+            // before recording either the promoted incumbent or explicit despawns retired.
             publish(phase = ApplyPhase.RETIRE, outcome = ApplyOutcome.Committed, completedAtMs = clock())
+            if (promotion != null) {
+                promotionRecords[0] = promotionRecords[0].copy(incumbentRetired = true)
+                publish()
+            }
             draft.despawns.forEach { ref ->
                 steps[despawnKey(ref)] = despawnAwaited(ref)?.let(StepOutcome::Failed) ?: StepOutcome.Applied
                 publish()
             }
+        }
+
+        private fun failPromotion(
+            request: PromotionRequest,
+            status: String,
+            reason: String,
+            retained: Boolean? = null,
+        ) {
+            steps[PromotionCutOver.key(request.incumbent)] = StepOutcome.Failed(reason)
+            promotionRecords[0] = promotionRecords[0].copy(status = status, reason = reason, retained = retained)
+            publish()
         }
 
         /** Connects one boundary link inside its tap; null (step marked Failed) when refused. */
@@ -568,6 +642,28 @@ class StagedApplier(
          */
         fun unwind() {
             publish(phase = ApplyPhase.UNWIND)
+            val residue = retractStagedPrefix()
+            finish(if (residue.isEmpty()) ApplyOutcome.UnwoundClean else ApplyOutcome.UnwoundWithResidue(residue))
+        }
+
+        /** Kernel COMMIT rollback plus the ordinary staged-prefix retraction (8joqm-D5). */
+        private fun rollbackAtCommit(request: PromotionRequest, reason: String) {
+            publish(phase = ApplyPhase.UNWIND)
+            val residue = retractStagedPrefix()
+            finish(
+                ApplyOutcome.RolledBackAtCommit(
+                    reason = reason,
+                    retained = InspectorServer.encodeRef(request.incumbent),
+                    residue = residue,
+                ),
+            )
+        }
+
+        /**
+         * Retracts only artifacts this apply staged and returns what could not
+         * be compensated. The caller chooses the terminal outcome.
+         */
+        private fun retractStagedPrefix(): List<Residue> {
             val residue = mutableListOf<Residue>()
             attachments.asReversed().forEach { a ->
                 a.link.unlink()
@@ -590,7 +686,7 @@ class StagedApplier(
                 handleByRef[ref]?.let { steps[it] = outcome }
                 publish()
             }
-            finish(if (residue.isEmpty()) ApplyOutcome.UnwoundClean else ApplyOutcome.UnwoundWithResidue(residue))
+            return residue
         }
 
         /**
