@@ -4,6 +4,7 @@ import civictech.cell.BoundaryDenialAccounting
 import civictech.cell.BoundaryDenials
 import civictech.cell.BoundarySeam
 import civictech.cell.Cell
+import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.DenialReason
@@ -73,6 +74,9 @@ class AuthorityGossip internal constructor(
     private val inbound = ThreadLocal<SignedWrite?>()
     private val firstCrossing = ConcurrentHashMap<WriteKey, FirstCrossing>()
 
+    @Volatile
+    private var hostContext: CellContext? = null
+
     /** The only outlet replication links for an authority-bearing replica. */
     val outlet = registerPort("outlet", FanOutlet.create<Propagate<Any?>>())
 
@@ -90,8 +94,31 @@ class AuthorityGossip internal constructor(
         }
     }
 
-    /** Sign and gossip a transfer by this node's current principal. */
+    override fun onActivate(ctx: CellContext) {
+        hostContext = ctx
+    }
+
+    override fun onDeactivate(ctx: CellContext) {
+        if (hostContext === ctx) hostContext = null
+    }
+
+    /**
+     * Sign and gossip a transfer by this node's current principal.
+     *
+     * The caller may be an application thread, while the guarded cell's local
+     * writes run on its host. Enqueueing here gives transfer and those writes
+     * one host order: a write task completes gate, mutation, emission and
+     * signing before a later transfer can run, or the transfer runs first and
+     * the write is refused by its local gate before mutation.
+     */
     fun transfer(to: PeerId) {
+        val context = checkNotNull(hostContext) {
+            "write-authority adapter $ref is not active"
+        }
+        context.enqueueBarrier { applyTransfer(to) }
+    }
+
+    private fun applyTransfer(to: PeerId) {
         val payload = TransferAuthority(to)
         if (!state.authorizesLocal(signer.peerId, payload)) {
             denyLocal("transfer", to, payload)

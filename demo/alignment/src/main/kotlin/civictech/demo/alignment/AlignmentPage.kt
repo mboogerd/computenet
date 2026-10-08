@@ -235,7 +235,9 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  *                  overlay (5eefp-D8) and by the Board's drill-down (renderDrill() in
  *                  DrilldownView.kt, w0i5h-D8), both only while boardGate(t).open;
  *                  Setup's progress block (0dvra-D15) reads names and counts only,
- *                  never a value. No other code reads state.ratings.
+ *                  never a value. No other code reads state.ratings. AI raters'
+ *                  ratings (participant `ai:<model-version>`) are in it too, and
+ *                  each of those readers leaves them out (isAi).
  * loaded           false until the first frame; render nothing topic-specific before.
  * me()             the viewer's name (sessionStorage.participant). Only the
  *                  #identity chip changes it; a change clears meCache and re-renders.
@@ -304,6 +306,9 @@ const el = id => document.getElementById(id);
 
 if (!(sessionStorage.participant || '').trim()) sessionStorage.participant = 'p-' + Math.random().toString(36).slice(2, 6);
 const me = () => (sessionStorage.participant || '').trim();
+// AI raters rate under `ai:<model-version>` (RaterClass); their ratings fold into the AI score, so
+// every view that lists people's ratings leaves them out.
+const isAi = name => name.startsWith('ai:');
 
 function topicId() {
   const m = location.pathname.match(/^\/t\/([^/]+)\/?/);

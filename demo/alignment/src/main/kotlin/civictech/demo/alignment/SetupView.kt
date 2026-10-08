@@ -17,9 +17,9 @@ package civictech.demo.alignment
  * API driven here (k1d4g-D6 + k1d4g.2 AMENDS, verified against `AlignmentApp.handleTopics` at
  * this task's base): `POST /topics/{t}/dimensions {creator, name, weight?, direction?, lowLabel?,
  * highLabel?}`; `PUT /topics/{t}/dimensions/{d} {creator, weight?, direction?, lowLabel?,
- * highLabel?}`; `DELETE /topics/{t}/dimensions/{d}?creator=`; `PUT /topics/{t}/policy {creator,
+ * highLabel?, description?}`; `DELETE /topics/{t}/dimensions/{d}?creator=`; `PUT /topics/{t}/policy {creator,
  * ideas?, boardVisibility?, gutCheck?, dotBudget?}` (the last two are the experimental Gut check
- * round's settings, teu97-D2/D10); `POST /topics/{t}/reveal {creator}`; `POST /topics/{t}/ideas
+ * round's settings, teu97-D2/D10); `POST /topics/{t}/reveal {creator}`; `POST /topics/{t}/ai-rate {creator}`; `POST /topics/{t}/ideas
  * {participant, title, description?}`; `PUT /topics/{t}/ideas/{i} {creator, title?,
  * description?}`; `DELETE /topics/{t}/ideas/{i}?creator=`; LLM ideation ([IdeationRun]): `POST
  * /topics/{t}/ideate {creator}`, `DELETE /topics/{t}/ideate?creator=`, `POST
@@ -47,6 +47,7 @@ internal const val SETUP_VIEW = """
   #setup .setup-dim-row .sw { width: .8rem; height: .8rem; border-radius: 4px; flex: none; }
   #setup .setup-dim-row .dim-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #setup .setup-dim-row .dim-weight { text-align: right; }
+  #setup .setup-dim-row .dim-desc { grid-column: 1 / -1; }
   #setup .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
   #setup .seg button { border: none; border-radius: 0; padding: .25rem .55rem; font-size: var(--fs-1);
     background: var(--surface); color: var(--muted); }
@@ -127,6 +128,11 @@ function ensureSetupSkeleton() {
       '<label><input type="radio" name="setupVisibility" value="after-rating">after rating</label>' +
       '<label><input type="radio" name="setupVisibility" value="after-reveal">after facilitator reveal</label>' +
     '</div><button type="button" id="setupReveal">Reveal</button></div>' +
+    '<div class="card" id="setupAiRoot" hidden><h3>AI raters</h3>' +
+      '<p class="muted">Asks <span id="setupAiNames"></span> to rate every idea on every dimension it has not yet rated. ' +
+      'Each idea is judged on its own, blind to the others and to people\'s ratings; the result is a separate AI score on the Board.</p>' +
+      '<button type="button" id="setupAiRate">Get AI ratings</button>' +
+    '</div>' +
     '<div class="card"><h3>Gut check</h3><div id="setupGutCheckRoot">' +
       '<label><input type="checkbox" id="setupGutCheck"> run a dot-voting gut check before rating</label>' +
       '<label>dots per participant <input type="number" id="setupDotBudget" min="1" max="20" step="1"></label>' +
@@ -169,6 +175,11 @@ function ensureSetupSkeleton() {
     if (!t) return;
     send('PUT', '/topics/' + t.id + '/policy', { creator: me(), boardVisibility: r.value }).then(renderSetup, () => {});
   });
+  el('setupAiRate').onclick = () => {
+    const t = currentTopic();
+    if (!t) return;
+    send('POST', '/topics/' + t.id + '/ai-rate', { creator: me() }).then(renderSetup, () => {});
+  };
   el('setupReveal').onclick = () => {
     const t = currentTopic();
     if (!t) return;
@@ -248,7 +259,8 @@ function paintDimensions(t) {
         '<span class="dim-weight num"></span>' +
         '<input class="dim-low" maxlength="80" placeholder="1 means…" aria-label="low anchor label">' +
         '<input class="dim-high" maxlength="80" placeholder="9 means…" aria-label="high anchor label">' +
-        '<button type="button" class="link" aria-label="remove dimension">remove</button>';
+        '<button type="button" class="link" aria-label="remove dimension">remove</button>' +
+        '<input class="dim-desc" maxlength="280" placeholder="what this dimension measures (raters and AI read this)" aria-label="dimension description">';
       box.appendChild(row);
       setupDimRows.set(d.id, row);
       const dimId = d.id;
@@ -264,6 +276,8 @@ function paintDimensions(t) {
       low.onchange = () => send('PUT', '/topics/' + t.id + '/dimensions/' + dimId, { creator: me(), lowLabel: low.value }).then(renderSetup, () => {});
       const high = row.querySelector('.dim-high');
       high.onchange = () => send('PUT', '/topics/' + t.id + '/dimensions/' + dimId, { creator: me(), highLabel: high.value }).then(renderSetup, () => {});
+      const desc = row.querySelector('.dim-desc');
+      desc.onchange = () => send('PUT', '/topics/' + t.id + '/dimensions/' + dimId, { creator: me(), description: desc.value }).then(renderSetup, () => {});
       row.querySelector('button.link').onclick = () => {
         if (!confirm('removes every rating on this dimension')) return;
         send('DELETE', '/topics/' + t.id + '/dimensions/' + dimId + '?creator=' + encodeURIComponent(me())).then(renderSetup, () => {});
@@ -281,11 +295,18 @@ function paintDimensions(t) {
     row.querySelector('.dim-weight').textContent = String(d.weight || 1);
     row.querySelector('.dim-low').value = d.lowLabel || '';
     row.querySelector('.dim-high').value = d.highLabel || '';
+    row.querySelector('.dim-desc').value = d.description || '';
   }
   for (const [id, row] of setupDimRows) if (!seen.has(id)) { setupDimRows.delete(id); row.remove(); }
 }
 
 function paintPolicyAndVisibility(t) {
+  const aiNames = t.aiRaters || [];
+  el('setupAiRoot').hidden = aiNames.length === 0;
+  el('setupAiNames').textContent = aiNames.join(', ');
+  const aiBtn = el('setupAiRate');
+  aiBtn.disabled = t.aiRunning === true;
+  aiBtn.textContent = t.aiRunning === true ? 'AI rating…' : 'Get AI ratings';
   const polRoot = el('setupPolicy');
   if (!editing(polRoot)) polRoot.querySelectorAll('input').forEach(r => { r.checked = r.value === (t.ideas || 'everyone'); });
   const visRoot = el('setupVisibility');
@@ -382,7 +403,7 @@ function setupPaintProgress(t) {
   const box = el('setupProgress');
   const total = state.ideas.filter(i => i.topic === t.id).length * t.dimensions.length;
   const counts = new Map();
-  for (const r of state.ratings) if (r.topic === t.id) counts.set(r.participant, (counts.get(r.participant) || 0) + 1);
+  for (const r of state.ratings) if (r.topic === t.id && !isAi(r.participant)) counts.set(r.participant, (counts.get(r.participant) || 0) + 1);
   box.innerHTML = '';
   const names = [...counts.keys()].sort();
   if (!names.length) {

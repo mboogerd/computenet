@@ -36,9 +36,15 @@ import java.util.concurrent.TimeUnit
 /**
  * A topic's creator-defined dimension (presentation-only; its weight and direction live in the
  * `weights` MapCell as a [DimConfig]). [lowLabel]/[highLabel] are the facilitator's anchors — what a
- * rating of 1 and of 9 mean on it (epic computenet-9y79n R3); empty when unset.
+ * rating of 1 and of 9 mean on it (epic computenet-9y79n R3); empty when unset. [description] says
+ * what the dimension measures, for people and for [AiRater]s alike; empty when unset.
  */
-internal data class Dimension(val name: String, val lowLabel: String = "", val highLabel: String = "")
+internal data class Dimension(
+    val name: String,
+    val lowLabel: String = "",
+    val highLabel: String = "",
+    val description: String = "",
+)
 
 /** Who may add ideas to a topic (computenet-k1d4g-D5): everyone, or only its facilitator (the creator). */
 internal enum class IdeaPolicy(val wire: String) { EVERYONE("everyone"), FACILITATOR("facilitator") }
@@ -178,6 +184,7 @@ class AlignmentApp internal constructor(
     inspector: InspectorFlag.Options? = null,
     private val ideaProposers: List<IdeaProposer> = emptyList(),
     private val ideaJudge: IdeaJudge? = null,
+    private val aiRaters: List<AiRater> = emptyList(),
 ) {
     private val inspectorOptions = inspector
 
@@ -208,6 +215,12 @@ class AlignmentApp internal constructor(
 
     // async read model, folded off the fusion outlet
     private var scored: Map<IdeaKey, Scored> = emptyMap()
+
+    // AI rating runs: one at a time, off the state lock (a model call takes seconds)
+    private val aiExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "alignment-ai-rater").apply { isDaemon = true }
+    }
+    private val aiRunning = java.util.concurrent.ConcurrentHashMap.newKeySet<TopicId>()
 
     private val shell = DemoShell(port)
 
@@ -282,7 +295,7 @@ class AlignmentApp internal constructor(
         boardVisibility = parseWire(boardVisibility, BoardVisibility.entries) { it.wire },
     ).also { topic ->
         dimensions.forEach { (id, record) ->
-            topic.dims[id] = Dimension(record.name, record.lowLabel, record.highLabel)
+            topic.dims[id] = Dimension(record.name, record.lowLabel, record.highLabel, record.description)
         }
         ideas.forEach { (id, record) -> topic.ideas[id] = Idea(record.id, record.title, record.description, record.proposer) }
         notes.forEach { (id, record) -> topic.notes[id] = Note(record.text, record.author) }
@@ -300,7 +313,7 @@ class AlignmentApp internal constructor(
         boardVisibility = boardVisibility.wire,
         dimensions = dims.mapValues { (dimId, dim) ->
             val config = weights.getValue(DimKey(id, dimId))
-            DimensionRecord(dim.name, dim.lowLabel, dim.highLabel, config.weight, config.direction.wire)
+            DimensionRecord(dim.name, dim.lowLabel, dim.highLabel, config.weight, config.direction.wire, dim.description)
         },
         ideas = ideas.mapValues { (_, idea) -> IdeaRecord(idea.id, idea.title, idea.description, idea.proposer) },
         notes = notes.mapValues { (_, note) -> NoteRecord(note.text, note.author) },
@@ -345,6 +358,7 @@ class AlignmentApp internal constructor(
     /** Cascades: removes every rating and judgement on the dimension, then drops its weight row. */
     private fun removeDimension(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.dim == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
+        clearAiRatings(topic) { it.dim == id }
         judgements.keys.filter { it.topic == topic && it.dim == id }.forEach(::removeJudgementSet)
         weightOps.remove(DimKey(topic, id))
         weights.remove(DimKey(topic, id))
@@ -369,12 +383,16 @@ class AlignmentApp internal constructor(
         persistTopic(topics.getValue(topic.value))
     }
 
-    /** Anchor labels are presentation-only: the write-side index changes, the dataflow does not. */
-    private fun setLabels(topic: TopicId, dim: String, low: String, high: String) = synchronized(state) {
+    /**
+     * Anchor labels and the description are presentation-only for people: the write-side index
+     * changes, the human dataflow does not. They are, however, the question an [AiRater] answered,
+     * so a change clears the dimension's AI ratings and the next run re-asks.
+     */
+    private fun setDescribed(topic: TopicId, dim: String, new: Dimension) = synchronized(state) {
         val dims = topics.getValue(topic.value).dims
-        val old = dims.getValue(dim)
-        if (old.lowLabel == low && old.highLabel == high) return@synchronized
-        dims[dim] = old.copy(lowLabel = low, highLabel = high)
+        if (dims.getValue(dim) == new) return@synchronized
+        dims[dim] = new
+        clearAiRatings(topic) { it.dim == dim }
         persistTopic(topics.getValue(topic.value))
     }
 
@@ -412,8 +430,15 @@ class AlignmentApp internal constructor(
         persistTopic(t)
     }
 
-    /** Also the edit: replacing an idea under the same id updates its title/description (D5). */
+    /**
+     * Also the edit: replacing an idea under the same id updates its title/description (D5). An edit
+     * that changes what an [AiRater] read clears the idea's AI ratings; the next run re-asks.
+     */
     private fun addIdea(topic: TopicId, idea: Idea) = synchronized(state) {
+        val old = topics.getValue(topic.value).ideas[idea.id]
+        if (old != null && (old.title != idea.title || old.description != idea.description)) {
+            clearAiRatings(topic) { it.idea == idea.id }
+        }
         topics.getValue(topic.value).let { it.ideas[idea.id] = idea; persistTopic(it) }
     }
 
@@ -423,6 +448,7 @@ class AlignmentApp internal constructor(
      */
     private fun removeIdea(topic: TopicId, id: String) = synchronized(state) {
         ratings.keys.filter { it.topic == topic && it.idea == id }.sortedWith(RATING_ORDER).forEach { unrate(it) }
+        clearAiRatings(topic) { it.idea == id }
         dots.keys.filter { it.topic == topic && it.idea == id }.toList().forEach { key ->
             dotOps.remove(key)
             dots.remove(key)
@@ -486,6 +512,11 @@ class AlignmentApp internal constructor(
         ratingOps.remove(key)
         ratings.remove(key)
     }
+
+    /** Unrates every AI-class rating on [topic] that [which] selects: an edit invalidated the question it answered. */
+    private fun clearAiRatings(topic: TopicId, which: (RatingKey) -> Boolean) =
+        ratings.keys.filter { it.topic == topic && it.raters == RaterClass.AI && which(it) }
+            .sortedWith(RATING_ORDER).forEach { unrate(it) }
 
     /**
      * [count] is the participant's ABSOLUTE dot count on the idea (teu97-D3); `count == 0` removes
@@ -591,9 +622,8 @@ class AlignmentApp internal constructor(
         }
 
     /**
-     * The seeding path's rating write: [value] on the `[1, 9]` scale, or null to
-     * leave the slot UNRATED (absence, computenet-sigl0-D5) — which is how
-     * [Jev]'s abstention reaches the board, rather than as a middling 5.
+     * The seeding path's human-side rating write: [value] on the `[1, 9]` scale, or null to
+     * leave the slot UNRATED (absence, computenet-sigl0-D5), never a middling 5.
      */
     internal fun seedRating(topic: TopicId, idea: String, dim: String, participant: String, value: Double?) =
         synchronized(state) {
@@ -622,6 +652,83 @@ class AlignmentApp internal constructor(
         IdeationContext(t.title, t.dims.values.toList(), t.ideas.values.map { ProposedIdea(it.title, it.description) })
     }
 
+    /** Unrates every human-side rating [participant] holds on [topic]; answers how many went. */
+    internal fun dropHumanRatings(topic: TopicId, participant: String): Int = synchronized(state) {
+        val gone = ratings.keys.filter { it.topic == topic && it.participant == participant }.sortedWith(RATING_ORDER)
+        gone.forEach { unrate(it) }
+        gone.size
+    }
+
+    /**
+     * An AI rater's write, under participant `ai:` + [model] (model and version, [RaterClass]):
+     * [value] on the `[1, 9]` scale, or null to leave the slot unrated (an abstention, never a
+     * middling 5). A slot whose idea or dimension has gone since the rater was asked is skipped —
+     * the run is off the lock, so the topic may have moved.
+     */
+    internal fun seedAiRating(topic: TopicId, idea: String, dim: String, model: String, value: Double?) =
+        synchronized(state) {
+            val t = topics[topic.value] ?: return@synchronized
+            if (idea !in t.ideas || dim !in t.dims) return@synchronized
+            val key = RatingKey(topic, idea, dim, RaterClass.AI_PREFIX + model)
+            if (value == null) unrate(key) else rate(key, RatingScale.toMilli(value))
+        }
+
+    // ── AI rating runs ───────────────────────────────────────────────────
+
+    /**
+     * One run over [topic]: every [AiRater] is asked about every idea on which its CURRENT model
+     * version still has an unrated dimension, one call per (rater, idea), with the lock released
+     * while it waits. The version is only learnt from an answer, so each run asks its first idea
+     * regardless — one call per run that finds out which version is serving now. A new version (an
+     * upgraded `jev-latest`) is then a new rater that rates everything afresh beside the old one;
+     * an unchanged version finds nothing left to ask.
+     *
+     * An idea edited mid-call is not written (its answer is to a question no longer on the board);
+     * a slot already rated by that version keeps its value — runs fill, never re-roll. A failing
+     * call writes nothing for that idea and the run carries on.
+     */
+    private fun runAiRating(topic: TopicId) {
+        try {
+            for (rater in aiRaters) {
+                var model: String? = null // unknown until this run's first answer
+                val ideas = synchronized(state) { topics[topic.value]?.ideas?.keys?.toList() } ?: return
+                for (id in ideas) {
+                    val ask = synchronized(state) {
+                        val t = topics[topic.value] ?: return
+                        val idea = t.ideas[id] ?: return@synchronized null
+                        val holes = model == null ||
+                            t.dims.keys.any { RatingKey(topic, id, it, RaterClass.AI_PREFIX + model) !in ratings }
+                        if (holes) Triple(t.title, idea, TreeMap(t.dims)) else null
+                    } ?: continue
+                    val (title, idea, dims) = ask
+                    val answer = try {
+                        rater.rate(title, idea, dims)
+                    } catch (e: InterruptedException) {
+                        return // stop(): the app is shutting down
+                    } catch (e: Exception) {
+                        System.err.println("alignment: ${rater.name} failed on ${idea.id}: ${e.message}")
+                        continue
+                    }
+                    model = answer.model
+                    synchronized(state) {
+                        val t = topics[topic.value] ?: return
+                        if (t.ideas[idea.id] != idea) return@synchronized
+                        for (dim in dims.keys) {
+                            // only a dimension still described as the rater saw it
+                            if (t.dims[dim] != dims[dim]) continue
+                            if (RatingKey(topic, idea.id, dim, answer.participant) in ratings) continue
+                            val v = answer.ratings[dim]?.takeIf(RatingScale::valid)
+                            seedAiRating(topic, idea.id, dim, answer.model, v)
+                        }
+                    }
+                }
+            }
+        } finally {
+            aiRunning.remove(topic)
+            broadcast()
+        }
+    }
+
     // ── HTTP ─────────────────────────────────────────────────────────────
 
     private fun serve(ex: HttpExchange, handler: () -> String) {
@@ -634,7 +741,7 @@ class AlignmentApp internal constructor(
     }
 
     /**
-     * `/topics[/{t}[/ideas[/{i}[/note|/override]]|/dimensions[/{d}]|/weights|/policy|/reveal|/rate|/dots|/judge|/worklist|/me|/aggregate]]`,
+     * `/topics[/{t}[/ideas[/{i}[/note|/override]]|/dimensions[/{d}]|/weights|/policy|/reveal|/ai-rate|/rate|/dots|/judge|/worklist|/me|/aggregate]]`,
      * dispatched here.
      */
     private fun handleTopics(ex: HttpExchange): String {
@@ -663,6 +770,7 @@ class AlignmentApp internal constructor(
             seg.size == 2 && seg[1] == "weights" && method == "PUT" -> putWeight(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "policy" && method == "PUT" -> putPolicy(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "reveal" && method == "POST" -> postReveal(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "ai-rate" && method == "POST" -> postAiRate(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "rate" && method == "POST" -> postRate(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "dots" && method == "POST" -> postDots(topic, ex.jsonBody())
             seg.size == 2 && seg[1] == "judge" && method == "POST" -> postJudge(topic, ex.jsonBody())
@@ -693,7 +801,7 @@ class AlignmentApp internal constructor(
             ?: BoardVisibility.AFTER_RATING
         val dims = (json["dimensions"] as? JsonArray)?.map { d ->
             val o = d as? JsonObject
-                ?: fail(400, "a dimension must be an object {name, weight?, direction?, lowLabel?, highLabel?}")
+                ?: fail(400, "a dimension must be an object {name, weight?, direction?, lowLabel?, highLabel?, description?}")
             newDimension(o)
         } ?: fail(400, "missing dimensions")
         if (dims.isEmpty()) fail(400, "a topic needs at least one dimension")
@@ -707,12 +815,21 @@ class AlignmentApp internal constructor(
         return """{"id":${esc(id)}}"""
     }
 
-    /** A dimension object `{name, weight?, direction?, lowLabel?, highLabel?}` → (slug id, presentation, config). */
+    /**
+     * A dimension object `{name, weight?, direction?, lowLabel?, highLabel?, description?}` → (slug id,
+     * presentation, config).
+     */
     private fun newDimension(o: JsonObject): Triple<String, Dimension, DimConfig> {
         val name = o.str("name")?.takeIf { it.length <= 80 } ?: fail(400, "a dimension needs a name")
         val id = slug(name).ifEmpty { fail(400, "dimension slug is empty") }
         val direction = wireField(o, "direction", Direction.entries) { it.wire } ?: Direction.VALUE
-        return Triple(id, Dimension(name, label(o, "lowLabel") ?: "", label(o, "highLabel") ?: ""), DimConfig(weight(o), direction))
+        val dim = Dimension(
+            name,
+            label(o, "lowLabel") ?: "",
+            label(o, "highLabel") ?: "",
+            label(o, "description", DESCRIPTION_MAX) ?: "",
+        )
+        return Triple(id, dim, DimConfig(weight(o), direction))
     }
 
     private fun postIdea(topic: Topic, json: JsonObject): String {
@@ -815,8 +932,9 @@ class AlignmentApp internal constructor(
     }
 
     /**
-     * `{creator, weight?, direction?, lowLabel?, highLabel?}`: 403 non-creator, 400 on a bad value or
-     * when no field is given, 404 unknown dimension — all before any write. A label left out keeps its value.
+     * `{creator, weight?, direction?, lowLabel?, highLabel?, description?}`: 403 non-creator, 400 on a
+     * bad value or when no field is given, 404 unknown dimension — all before any write. A label or
+     * description left out keeps its value.
      */
     private fun putDimension(topic: Topic, dim: String, json: JsonObject): String {
         requireCreator(topic, json.str("creator"))
@@ -824,14 +942,22 @@ class AlignmentApp internal constructor(
         val direction = wireField(json, "direction", Direction.entries) { it.wire }
         val low = label(json, "lowLabel")
         val high = label(json, "highLabel")
-        if (w == null && direction == null && low == null && high == null) {
-            fail(400, "nothing to change: give weight, direction, lowLabel and/or highLabel")
+        val description = label(json, "description", DESCRIPTION_MAX)
+        if (w == null && direction == null && low == null && high == null && description == null) {
+            fail(400, "nothing to change: give weight, direction, lowLabel, highLabel and/or description")
         }
         synchronized(state) {
             val old = topic.dims[dim] ?: fail(404, "no such dimension")
             w?.let { setWeight(topic.id, dim, it) }
             direction?.let { setDirection(topic.id, dim, it) }
-            if (low != null || high != null) setLabels(topic.id, dim, low ?: old.lowLabel, high ?: old.highLabel)
+            setDescribed(
+                topic.id, dim,
+                old.copy(
+                    lowLabel = low ?: old.lowLabel,
+                    highLabel = high ?: old.highLabel,
+                    description = description ?: old.description,
+                ),
+            )
         }
         return """{"id":${esc(dim)}}"""
     }
@@ -874,6 +1000,19 @@ class AlignmentApp internal constructor(
         requireCreator(topic, json.str("creator"))
         reveal(topic.id)
         return """{"revealed":true}"""
+    }
+
+    /**
+     * `{creator}`: the facilitator asks every configured [AiRater] to fill its unrated slots on this
+     * topic. Answers at once; ratings arrive over `/events` as each call returns. 409 with no rater
+     * configured; a request while a run is in flight is absorbed by that run (`"started":false`).
+     */
+    private fun postAiRate(topic: Topic, json: JsonObject): String {
+        requireCreator(topic, json.str("creator"))
+        if (aiRaters.isEmpty()) fail(409, "no AI rater is configured on this server")
+        val started = aiRunning.add(topic.id)
+        if (started) aiExecutor.execute { runAiRating(topic.id) }
+        return """{"started":$started}"""
     }
 
     private fun putWeight(topic: Topic, json: JsonObject): String {
@@ -1026,9 +1165,16 @@ class AlignmentApp internal constructor(
         if (creator == null || creator.trim() != topic.creator) fail(403, "only the topic creator may do this")
     }
 
-    /** A participant or creator name: free text, non-empty, ≤ 40 chars. */
-    private fun name(raw: String?, what: String): String =
-        raw?.takeIf { it.isNotEmpty() && it.length <= 40 } ?: fail(400, "$what must be 1..40 characters")
+    /**
+     * A participant or creator name: free text, non-empty, ≤ 40 chars, and never with the
+     * [RaterClass.AI_PREFIX] — that prefix is what makes a rating an AI rating, so a person
+     * cannot take it.
+     */
+    private fun name(raw: String?, what: String): String {
+        val n = raw?.takeIf { it.isNotEmpty() && it.length <= 40 } ?: fail(400, "$what must be 1..40 characters")
+        if (RaterClass.of(n) == RaterClass.AI) fail(400, "names starting with ${RaterClass.AI_PREFIX} are reserved for AI raters")
+        return n
+    }
 
     /** An enum-valued field by its wire string: absent → null; any other string or non-string → 400. */
     private fun <E> wireField(json: JsonObject, key: String, values: List<E>, wire: (E) -> String): E? {
@@ -1038,11 +1184,11 @@ class AlignmentApp internal constructor(
             ?: fail(400, "$key must be one of ${values.joinToString(", ") { "\"${wire(it)}\"" }}")
     }
 
-    /** An anchor label: absent → null; otherwise a JSON string, trimmed, ≤ 80 chars ("" clears it). */
-    private fun label(json: JsonObject, key: String): String? {
+    /** An anchor label (or description): absent → null; otherwise a JSON string, trimmed, ≤ [max] chars ("" clears it). */
+    private fun label(json: JsonObject, key: String, max: Int = 80): String? {
         val raw = json[key] ?: return null
-        return (raw as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.length <= 80 }
-            ?: fail(400, "$key must be a string of at most 80 characters")
+        return (raw as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.length <= max }
+            ?: fail(400, "$key must be a string of at most $max characters")
     }
 
     /** A weight: absent → 1.0; otherwise a JSON number, finite and > 0 (D3). */
@@ -1084,12 +1230,14 @@ class AlignmentApp internal constructor(
     private fun topicJson(t: Topic): String =
         """{"id":${esc(t.id.value)},"title":${esc(t.title)},"creator":${esc(t.creator)},""" +
             """"ideas":${esc(t.ideaPolicy.wire)},"boardVisibility":${esc(t.boardVisibility.wire)},""" +
-            """"revealed":${t.revealed},"gutCheck":${t.gutCheck},"dotBudget":${t.dotBudget},"dimensions":""" +
+            """"revealed":${t.revealed},"gutCheck":${t.gutCheck},"dotBudget":${t.dotBudget},""" +
+            """"aiRaters":${aiRaters.joinToString(",", "[", "]") { esc(it.name) }},"aiRunning":${t.id in aiRunning},""" +
+            """"dimensions":""" +
             t.dims.entries.joinToString(",", "[", "]") { (id, d) ->
                 val config = weights[DimKey(t.id, id)]
                 """{"id":${esc(id)},"name":${esc(d.name)},"weight":${config?.weight?.let(::num) ?: "null"},""" +
                     """"direction":${config?.direction?.let { esc(it.wire) } ?: "null"},""" +
-                    """"lowLabel":${esc(d.lowLabel)},"highLabel":${esc(d.highLabel)}}"""
+                    """"lowLabel":${esc(d.lowLabel)},"highLabel":${esc(d.highLabel)},"description":${esc(d.description)}}"""
             } + "}"
 
     /**
@@ -1167,8 +1315,8 @@ class AlignmentApp internal constructor(
      * Ranked by "effective" score (w61az-D6): `topic.overrides[id] ?: scored[id]?.score` — the
      * facilitator's consensus override when set, else the unchanged computed score. Ideas with a
      * non-null effective are ranked, by effective desc, rating count desc (0 with no [Scored]), id
-     * asc; every other idea — no override and a null or absent computed score — is unranked, by id
-     * with `"rank":null`. `score` keeps its computed meaning unchanged in every row; `override` is the
+     * asc; every other idea — no override and a null or absent computed score — is unranked, by AI
+     * score desc then id, with `"rank":null`. `score` keeps its computed meaning unchanged in every row; `override` is the
      * facilitator's raw value, null unless set. An override on an idea with no [Scored] entry (or a
      * null computed score) still ranks it, carrying `"score":null` and its otherwise-empty byDim/tail.
      *
@@ -1192,7 +1340,7 @@ class AlignmentApp internal constructor(
                     .thenBy { it.first },
             )
         val rankedIds = ranked.mapTo(HashSet()) { it.first }
-        val live = ratings.keys.filter { it.topic == topic.id }
+        val (aiLive, live) = ratings.keys.filter { it.topic == topic.id }.partition { it.raters == RaterClass.AI }
         val ratersOf = live.groupBy({ it.idea }, { it.participant }).mapValues { (_, who) -> who.toSet().size }
         // dots total per idea (teu97-D5): a COUNT summed over every participant, never a name
         val dotsOf = dots.entries.filter { (k, _) -> k.topic == topic.id }
@@ -1205,11 +1353,31 @@ class AlignmentApp internal constructor(
         // computenet-i00bh): derived per read from the same byDim means below,
         // null while either axis is unrated, and null on a topic configured
         // with other dimensions than importance/urgency
+        val aiModelsOf = aiLive.groupBy({ it.idea }, { it.participant.removePrefix(RaterClass.AI_PREFIX) })
+            .mapValues { (_, models) -> models.toSortedSet() }
+        // the AI score (AiRater): the same fusion's AI-class key, side by side with the human one and
+        // never ranked on. AI raters are models, not people, so — unlike the human side's bare count —
+        // their model+version names are listed. `diverges` names each dimension where the two means
+        // part by at least Alignment.DIVERGE_GAP
+        fun ai(id: String, human: Scored?): String {
+            val a = scored[IdeaKey(topic.id, id, RaterClass.AI)] ?: return """"ai":null,"diverges":[]"""
+            val models = aiModelsOf[id].orEmpty()
+            val diverges = human?.byDim.orEmpty().keys.filter { d ->
+                val h = human!!.byDim.getValue(d).mean
+                val m = a.byDim[d]?.mean
+                m != null && kotlin.math.abs(h - m) >= Alignment.DIVERGE_GAP
+            }.sorted()
+            return """"ai":{"score":${a.score?.let(::num) ?: "null"},"value":${a.value?.let(::num) ?: "null"},""" +
+                """"cost":${a.cost?.let(::num) ?: "null"},"factor":${a.factor?.let(::num) ?: "null"},""" +
+                """"byDim":${byDim(a)},"raters":${models.size},"models":${models.joinToString(",", "[", "]") { esc(it) }},""" +
+                """"quadrant":${Eisenhower.quadrantOf(a.byDim)?.let { esc(it.wire) } ?: "null"}},""" +
+                """"diverges":${diverges.joinToString(",", "[", "]") { esc(it) }}"""
+        }
         fun tail(id: String, s: Scored?): String {
             val quadrant = s?.byDim?.let(Eisenhower::quadrantOf)
             return """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +
                 """"factor":${s?.factor?.let(::num) ?: "null"},"raters":${ratersOf[id] ?: 0},""" +
-                """"dots":${dotsOf[id] ?: 0},"quadrant":${quadrant?.let { esc(it.wire) } ?: "null"}}"""
+                """"dots":${dotsOf[id] ?: 0},"quadrant":${quadrant?.let { esc(it.wire) } ?: "null"},${ai(id, s)}}"""
         }
         val rows = ranked.mapIndexed { i, (id, _) ->
             val s = scored[IdeaKey(topic.id, id)] // present with a score (possibly null), or absent
@@ -1217,7 +1385,11 @@ class AlignmentApp internal constructor(
                 """"score":${s?.score?.let(::num) ?: "null"},"override":${topic.overrides[id]?.let(::num) ?: "null"},""" +
                 """"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},"byDim":${s?.let(::byDim) ?: "{}"},""" +
                 tail(id, s)
-        } + topic.ideas.keys.filter { it !in rankedIds }.map { id ->
+        } + topic.ideas.keys.filter { it !in rankedIds }
+            // unranked rows: AI score desc, then id — the ranking stays human, but a board nobody has
+            // rated yet (a fresh triage round) still reads in the AI's order
+            .sortedWith(compareByDescending<String> { scored[IdeaKey(topic.id, it, RaterClass.AI)]?.score ?: -1.0 }.thenBy { it })
+            .map { id ->
             val s = scored[IdeaKey(topic.id, id)] // present with a null score, or absent
             """{"rank":null,"id":${esc(id)},"title":${esc(topic.ideas.getValue(id).title)},""" +
                 """"score":null,"override":null,"split":${s?.split ?: false},"ratings":${s?.let(::count) ?: 0},""" +
@@ -1267,6 +1439,7 @@ class AlignmentApp internal constructor(
     }
 
     fun stop() {
+        aiExecutor.shutdownNow()
         inspector?.stop()
         shell.stop()
     }
@@ -1274,6 +1447,9 @@ class AlignmentApp internal constructor(
     private fun parseDirection(v: String): Direction = parseWire(v, Direction.entries) { it.wire }
 
     private companion object {
+        /** A dimension description's cap: a sentence or two, enough to anchor a rater. */
+        const val DESCRIPTION_MAX = 280
+
         /** A recovered record's enum value; an unknown one is corrupt durable state, not a request error. */
         fun <E> parseWire(v: String, values: List<E>, wire: (E) -> String): E =
             values.firstOrNull { wire(it) == v } ?: error("unknown durable value: $v")
@@ -1294,12 +1470,15 @@ class AlignmentApp internal constructor(
  */
 internal val TRIAGE_TOPIC = TopicId("triage")
 
+/** The heuristic's participant name in the HUMAN ratings, before it moved to the AI population. */
+internal const val LEGACY_HEURISTIC_PARTICIPANT = "jev"
+
 /**
  * Seeds (or re-seeds) the standing triage round from [source] and answers how
  * many candidates it saw (feature computenet-i00bh).
  *
  * Idempotent: the topic is created once, an unchanged idea writes no journal
- * frame, and an unchanged [Jev] rating is [AlignmentApp.rate]'s own no-op. So
+ * frame, and an unchanged [BeadsHeuristic] rating is a no-op. So
  * this is safe to run on every boot, which is what makes a standing round
  * survivable — the journal carries the human ratings and the seed only tops up
  * what the tracker has added.
@@ -1326,14 +1505,20 @@ internal fun seedBeadsTriage(
     val candidates = source.candidates()
     app.ensureTopic(TRIAGE_TOPIC, "Triage", facilitator, Eisenhower.DIMENSIONS)
     for (c in candidates) app.seedIdea(TRIAGE_TOPIC, c.id, c.title, c.description, facilitator)
-    // Jev rates the ROUND, not the item: its terms are rank-normalized across the
-    // whole candidate set, so every axis is one batch call. A candidate it abstains
+    // The heuristic rates the ROUND, not the item: its terms are rank-normalized across
+    // the whole candidate set, so every axis is one batch call. A candidate it abstains
     // on is absent from the answer and written as null — which UNRATES it, so an
-    // abstention arriving later clears the rating an earlier round derived.
+    // abstention arriving later clears the rating an earlier round derived. Its ratings
+    // are the AI population's, not the human one's.
     for ((dim, _, _) in Eisenhower.DIMENSIONS) {
-        val rated = Jev.rate(candidates, dim)
-        for (c in candidates) app.seedRating(TRIAGE_TOPIC, c.id, dim, Jev.PARTICIPANT, rated[c.id])
+        val rated = BeadsHeuristic.rate(candidates, dim)
+        for (c in candidates) app.seedAiRating(TRIAGE_TOPIC, c.id, dim, BeadsHeuristic.MODEL, rated[c.id])
     }
+    // One-time migration, idempotent: before the AI score, the heuristic wrote as
+    // participant `jev` into the HUMAN ratings. ponytail: on this facilitator-only
+    // topic a human calling themselves `jev` would be caught too; acceptable for a
+    // standing round nobody rates under that name.
+    app.dropHumanRatings(TRIAGE_TOPIC, LEGACY_HEURISTIC_PARTICIPANT)
     return candidates.size
 }
 
@@ -1351,6 +1536,7 @@ fun main(args: Array<String>) {
         inspector = parsed.options,
         ideaProposers = listOf(CliIdeaProposer.claude(cliGate), CliIdeaProposer.codex(cliGate)),
         ideaJudge = jevKey?.let { JevIdeaJudge(it) },
+        aiRaters = AiRater.defaults(),
     )
     if (jevKey == null) println("computenet alignment: TYPESAFE_API_KEY not set, LLM ideation disabled")
     // Seed BEFORE the socket opens (computenet-1f8b4), the discipline

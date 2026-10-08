@@ -156,6 +156,7 @@ internal const val BOARD_MAIN = """
                   font-size: .72rem; color: var(--muted); }
   .rankrow .sub div[hidden] { display: none; }
   .rankrow .sub .line1 { display: flex; gap: .5rem; align-items: baseline; }
+  .rankrow .sub .ai.diverges { color: var(--warn); }
   .rankrow.unranked { opacity: .5; }
   .rankrow.unranked .stack { visibility: hidden; } /* an unscored idea has no bar, not an empty one */
   .rankrow.unranked.enter, .rankrow.unranked.leave { opacity: 0; }
@@ -190,7 +191,7 @@ internal const val BOARD_MAIN = """
   <div id="ranking"></div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
   <div id="scatter" hidden></div>
-  <p class="note">Bar segments show each dimension's weighted contribution to the score; a × badge shows the factor multiplier and a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range.</p>
+  <p class="note">Bar segments show each dimension's weighted contribution to the score; a × badge shows the factor multiplier and a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range. "AI" is the AI raters' score, kept apart from the people's and never ranked on; "≠ AI" marks a dimension where the two disagree by 2 or more.</p>
 </section>
 <script>
 // ── Board: the aggregate view ──────────────────────────────────────────────
@@ -604,7 +605,7 @@ function renderRanking(t, ideas, participants, stagger) {
                          '</div>' +
                          '<div class="score"></div><span class="pill" hidden></span>' +
                        '</div>' +
-                       '<div class="sub"><div class="line1"><div class="raters" hidden></div><div class="dots" hidden></div></div>' +
+                       '<div class="sub"><div class="line1"><div class="raters" hidden></div><div class="dots" hidden></div><div class="ai" hidden></div></div>' +
                        '<div class="vc" hidden></div><div class="reason" hidden></div></div>';
       // place without transition, flush that style, then fade in. A forced
       // style flush rather than backlog-triage's double requestAnimationFrame:
@@ -807,6 +808,21 @@ function renderRanking(t, ideas, participants, stagger) {
       dotsEl.textContent = f.dots > 0 ? '● ' + f.dots + (f.dots === 1 ? ' dot' : ' dots') : 'no dots yet';
     } else {
       dotsEl.hidden = true;
+    }
+
+    // the AI score (AiRater): beside the human one, never ranked on; "≠ AI on <dims>" where the
+    // human and AI means part by 2 or more. AI rater names never reach the Board, only a count.
+    const aiEl = row.querySelector('.ai');
+    if (f.ai) {
+      aiEl.hidden = false;
+      const aiScore = f.ai.score;
+      const apart = (f.diverges || []).map(id => (dims.find(d => d.id === id) || { name: id }).name);
+      aiEl.textContent = 'AI ' + (aiScore === null || aiScore === undefined ? '—' : aiScore.toFixed(1)) +
+        (apart.length ? ' · ≠ AI on ' + apart.join(', ') : '');
+      aiEl.classList.toggle('diverges', apart.length > 0);
+      aiEl.title = 'AI score from ' + (f.ai.models || []).join(', ') + ', aggregated apart from the people\'s score';
+    } else {
+      aiEl.hidden = true;
     }
 
     row.querySelector('.pos').textContent = ranked ? String(f.rank) : '·';
