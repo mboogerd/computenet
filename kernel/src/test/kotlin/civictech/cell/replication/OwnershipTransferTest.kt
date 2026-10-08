@@ -17,6 +17,7 @@ import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.wire.Peering
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -105,6 +106,7 @@ class OwnershipTransferTest {
         val controller = SimulationController()
         val signing = StubWriteSigning(pA, pB)
         val journal = InMemoryJournal()
+        val defaultJournal = InMemoryJournal()
         val logicalId = UUID.randomUUID()
         val recoveredRef = CellRef(logicalId, 0)
         val donorRef = CellRef(logicalId, 1)
@@ -114,12 +116,14 @@ class OwnershipTransferTest {
         val originalHost = ManagedHost(
             scheduler = controller.scheduler(),
             registry = originalRegistry,
-            journalFor = { ref -> if (ref == recoveredRef) journal else null },
+            journalFor = { ref -> if (ref == recoveredRef) journal else defaultJournal },
         )
         val originalReplication = Replication(originalRegistry)
         val original = SetCell<String>(recoveredRef).also {
             originalReplication.replicate(it, originalHost, authority, signing.signer(pA), signing.verifier)
         }
+        originalHost.hosts(recoveredRef) shouldBe true
+        originalHost.hosts(originalReplication.authorityOf(recoveredRef)!!.ref) shouldBe true
 
         val donorRegistry = LocationRegistry()
         val donorHost = ManagedHost(scheduler = controller.scheduler(), registry = donorRegistry)
@@ -154,7 +158,7 @@ class OwnershipTransferTest {
         val recoveredHost = ManagedHost(
             scheduler = controller.scheduler(),
             registry = recoveredRegistry,
-            journalFor = { ref -> if (ref == recoveredRef) journal else null },
+            journalFor = { ref -> if (ref == recoveredRef) journal else defaultJournal },
         )
         val recoveredBridge = ManagedHost(scheduler = controller.scheduler(), registry = recoveredRegistry)
         val recoveredSide = Peering.Side(recoveredRegistry, recoveredBridge, peer = pA)
@@ -210,6 +214,36 @@ class OwnershipTransferTest {
         donor.membership() shouldBe recovered.membership()
         recoveredAuthority.retained().size shouldBe 4
         donorReplication.authorityOf(donorRef)!!.retained().size shouldBe 4
+    }
+
+    @Test
+    fun `failed durability companion spawn rolls back the data replica and authority registration`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA)
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            quota = 1,
+        )
+        val replication = Replication(registry)
+        val replica = SetCell<String>(CellRef(UUID.randomUUID(), 0))
+
+        shouldThrow<IllegalStateException> {
+            replication.replicate(
+                replica,
+                host,
+                WriteAuthority.Principal(pA),
+                signing.signer(pA),
+                signing.verifier,
+            )
+        }
+
+        host.hosts(replica.ref) shouldBe false
+        host.subtreeCellCount() shouldBe 0
+        registry.instances.replicasOf(replica.ref.id).shouldBeEmpty()
+        registry.locate(replica.ref) shouldBe null
+        replication.authorityOf(replica.ref) shouldBe null
     }
 
     @Test

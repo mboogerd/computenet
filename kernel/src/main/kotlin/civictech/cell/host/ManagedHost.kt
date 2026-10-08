@@ -222,6 +222,15 @@ open class ManagedHost(
      */
     private val cellJournals = ConcurrentHashMap<CellRef, Journal>()
 
+    /**
+     * One-call journal overrides for lifecycle companions. The wrapper is
+     * needed because [ConcurrentHashMap] cannot store the meaningful volatile
+     * (`null`) selection.
+     */
+    private data class SpawnJournalOverride(val journal: Journal?)
+
+    private val spawnJournalOverrides = ConcurrentHashMap<CellRef, SpawnJournalOverride>()
+
     /** Namespace registry used by journaled [TopoEvent.FamilyKey] recovery. */
     private val topologyFamilies = ConcurrentHashMap<String, KeyedCells<*>>()
 
@@ -265,6 +274,7 @@ open class ManagedHost(
      * spawn; the result is cached in [cellJournals].
      */
     private fun cellJournal(cellRef: CellRef, cell: Cell): Journal? {
+        spawnJournalOverrides[cellRef]?.let { return it.journal }
         // An explicit journalFor's null wins outright (volatile), exactly as pre-D4's
         // `journalFor ?: { journal }` — never a fallback to the whole-host journal.
         val explicit = journalForPort ?: return if (journalFor != null) journalFor.invoke(cellRef) else journal
@@ -1168,6 +1178,11 @@ open class ManagedHost(
         return future
     }
 
+    /** Synchronous teardown used to roll back a multi-cell spawn before its failure escapes. */
+    internal fun rollbackSpawn(ref: CellRef) {
+        enqueueAwaiting(0) { internalApi.despawn(ref) }
+    }
+
     /** Await a caller-owned management future using this host's scheduler semantics. */
     internal fun <T> awaitManagement(future: CompletableFuture<T>): T = scheduler.await(future)
 
@@ -1651,22 +1666,43 @@ open class ManagedHost(
      * boundary. An exact selector such as `ApplyContext.journalFor` cannot infer
      * that relationship from the companion's derived ref, so the owner journal
      * is copied into the spawn-time cache before the ordinary spawn path asks
-     * [cellJournal]. The direct selector may be absent or name that same journal;
-     * a conflicting journal is refused rather than splitting one logical state
-     * across two recovery streams.
+     * [cellJournal]. A plain [journalFor] function cannot reveal whether its
+     * answer came from an explicit binding or a default fallback, so the owner
+     * selection wins unconditionally for the companion. An explicit
+     * [journalForPort] is still evaluated first to preserve its inlet-agreement
+     * and outlet-only configuration refusals.
      */
     internal fun spawnDurabilityCompanion(companion: Cell, ownerRef: CellRef) {
         require(cells.containsKey(ownerRef)) {
             "durability companion ${companion.ref} requires live owner $ownerRef"
         }
         val ownerJournal = journalSelector(ownerRef)
-        val directlySelected = cellJournal(companion.ref, companion)
-        require(directlySelected == null || directlySelected === ownerJournal) {
-            "durability companion ${companion.ref} and owner $ownerRef name different journals"
+        if (journalForPort != null) cellJournal(companion.ref, companion)
+
+        val override = SpawnJournalOverride(ownerJournal)
+        check(spawnJournalOverrides.putIfAbsent(companion.ref, override) == null) {
+            "durability companion ${companion.ref} already has a spawn journal override"
         }
+        val previousJournal = cellJournals[companion.ref]
+        val wasHosted = cells.containsKey(companion.ref)
         if (ownerJournal == null) cellJournals.remove(companion.ref)
         else cellJournals[companion.ref] = ownerJournal
-        managementInlet.call.spawn(companion)
+        try {
+            managementInlet.call.spawn(companion)
+        } catch (failure: Throwable) {
+            if (!wasHosted && cells.containsKey(companion.ref)) {
+                try {
+                    rollbackSpawn(companion.ref)
+                } catch (cleanupFailure: Throwable) {
+                    failure.addSuppressed(cleanupFailure)
+                }
+            }
+            if (previousJournal == null) cellJournals.remove(companion.ref)
+            else cellJournals[companion.ref] = previousJournal
+            throw failure
+        } finally {
+            spawnJournalOverrides.remove(companion.ref, override)
+        }
     }
 
     /** Recover with the services and cumulative topology fold supplied by [context]. */
