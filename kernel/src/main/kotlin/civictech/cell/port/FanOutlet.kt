@@ -219,27 +219,19 @@ class FanOutlet<Api : Any>(
     private var sourceId: UUID = UUID.randomUUID()
 
     /**
-     * Source provenance learned purely from this outlet's own emission history
-     * — no opt-in, no graph traversal (spec 20/22 G-13/G-39's undesigned
-     * upstream-traversal residual; see [civictech.cell.control.SourceProvenance]
-     * for the relay-hop consumer of this). [mintedAsRoot] accumulates every
-     * `sourceId` this outlet has ever minted for a **spontaneous** emission
+     * Every `sourceId` this outlet has minted for a **spontaneous** emission
      * (`CurrentContext` was null — a true wave origination under this outlet's
-     * own epoch, [originate] or an external call); [mintFreshEpoch]/
+     * own epoch, [originate] or an external call). [mintFreshEpoch] and
      * [adoptWaveState] can rotate more than one epoch into the set over the
-     * outlet's life, so it is a set, not a single id. [observedAsRelay] flips
-     * true the first time this outlet **reactively** forwards an existing wave
-     * (`CurrentContext` non-null): once true, this outlet is not a pure
-     * mint-only root, and [mintedAsRoot] alone is no longer a safe account of
-     * every source this outlet's edge can carry — a relay-aware cell must
-     * publish its own resolved provenance instead
-     * ([civictech.cell.control.SourceProvenance.publish]).
+     * outlet's life, so this is a set rather than a single id.
+     *
+     * This is source-id inventory, not evidence that the outlet is a root.
+     * [civictech.cell.control.SourceProvenance] decides that structurally from
+     * the owning cell's open Consume inputs at evaluation time; emission
+     * history must never make an edge look source-disjoint. A relay-aware cell
+     * additionally publishes the sources resolved through its inputs.
      */
     internal val mintedAsRoot: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
-
-    @Volatile
-    internal var observedAsRelay: Boolean = false
-        private set
 
     /**
      * SPSC rule (spec 23, G-21 phase 2): a contract carrying `Owned`/`Leased`
@@ -258,11 +250,10 @@ class FanOutlet<Api : Any>(
         val reactive = CurrentContext.get()
         val ctx = reactive?.let { it.copy(sourcePort = ref, hop = it.hop + 1, baseline = it.baseline ?: ReplayScope.get()) }
             ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get(), baseline = ReplayScope.get())
-        // Source-provenance learning (undocumented opt-in, see field KDoc
-        // above): ground truth, read off the exact branch just taken — a
-        // spontaneous mint records its sourceId as a known root; a reactive
-        // forward marks this outlet as not pure-root.
-        if (reactive == null) mintedAsRoot += ctx.timestamp.sourceId else observedAsRelay = true
+        // Keep every locally minted epoch available to structural provenance.
+        // Reactive history is deliberately not recorded: whether this outlet
+        // is a root is a live topology fact, not an inference from past traffic.
+        if (reactive == null) mintedAsRoot += ctx.timestamp.sourceId
         CurrentContext.with(ctx) {
             // snapshot: link/unlink during a wave must not fail the broadcast
             // Taps fire first, in emission order (spec 20/23 "taps-fire-first"),

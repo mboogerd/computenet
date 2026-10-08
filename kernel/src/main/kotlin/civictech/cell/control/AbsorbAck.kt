@@ -118,14 +118,16 @@ internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
  * synchronous resolution — not the general upstream-traversal protocol the
  * spec names as undesigned (G-13's declined multiplex-port traversal form,
  * G-39's hop-by-hop source-set propagation gap) — so it is precise only
- * through two decided shapes: a genuinely mint-only root outlet, and a chain
- * of [relayAbsorbAcks] fan-in hops that each republish their own resolved
- * input provenance. Everywhere else it falls back to "unknown", which this
- * fold treats exactly as Reading 1 did: the edge remains expected. That
- * fallback is what keeps the computenet-6ovpx first-edge-relay safety fix
- * intact — this overload never excludes an edge it has not positively
- * resolved as source-disjoint, so it can only narrow Reading 1's expected
- * set, never miss a genuinely contributing edge.
+ * through two decided shapes: an outlet whose owning cell structurally has no
+ * open Consume input, and a chain of [relayAbsorbAcks] fan-in hops that each
+ * republish their resolved input provenance plus their outlet's own minted
+ * ids. An unpublished outlet on a cell with an open Consume input is
+ * "unknown", whatever it emitted before, so its edge remains expected exactly
+ * as in Reading 1. Root classification reads the live input topology when
+ * Progress is evaluated; an input linked after the wave began therefore
+ * withholds that in-flight wave too. These fail-closed rules keep the
+ * computenet-6ovpx first-edge-relay safety fix intact: no edge is excluded on
+ * emission history or unresolved reachability.
  */
 internal fun FanInlet<*>.relayAbsorbAcks(
     outputs: List<FanOutlet<*>>,
@@ -226,8 +228,8 @@ private class SettledAbsorbAckRelay(
         // used before: a sibling input edge only withholds settlement of wave
         // (s,t) when it can actually carry source s. Publish each output's own
         // resolved provenance — the union of this hop's currently open input
-        // edges' resolved source sets — so a chain of relay hops composes
-        // (civictech.cell.control.SourceProvenance).
+        // edges' resolved source sets, plus the output's own minted ids (added
+        // by SourceProvenance) — so a chain of relay hops composes.
         this.outputs.forEach { output ->
             SourceProvenance.publish(output) { resolvedInputSources() }
         }

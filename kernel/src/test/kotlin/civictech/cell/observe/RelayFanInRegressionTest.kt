@@ -92,6 +92,38 @@ class RelayFanInRegressionTest {
         }
     }
 
+    private class WaveEventProbe(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
+        val dataWaves = mutableListOf<Timestamp>()
+        val progressedWaves = mutableListOf<Timestamp>()
+
+        init {
+            inlet.onEach { dataWaves += CurrentContext.get()!!.timestamp }
+            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message ->
+                val progress = message as Progress
+                progressedWaves += Timestamp(progress.sourceId, progress.thru)
+            }
+        }
+
+        fun duplicateSettlements(): Set<Timestamp> = progressedWaves.toSet() intersect dataWaves.toSet()
+
+        fun clear() {
+            dataWaves.clear()
+            progressedWaves.clear()
+        }
+    }
+
+    private class MintThenForward(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<String>>>())
+
+        init {
+            inlet.onEach { outlet.call.propagate(it) }
+        }
+
+        fun send(delta: SetDelta<String>) = outlet.call.propagate(delta)
+    }
+
     private class SetProgressProbe(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Int>>>())
         val seen = mutableListOf<Progress>()
@@ -212,6 +244,59 @@ class RelayFanInRegressionTest {
         println("RELAY_FAN_IN_PROBE failures=${problems.size} first=${problems.take(4)}")
         withClue(problems.take(4).joinToString("\n")) {
             problems.size shouldBe 0
+        }
+    }
+
+    @Test
+    fun `a quorum-minted wave reaching a fan-in by two paths is not settled before its second path`() {
+        val host = ManagedHost()
+        val first = Source()
+        val closing = Source()
+        val publishing = QuorumSetCell<String>(threshold = { n -> n })
+        val relay = QuorumSetCell<String>(threshold = { 1 })
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        listOf(first, closing, publishing, relay, fanIn, probe).forEach(management::spawn)
+        management.connect(first.ref, "outlet", publishing.ref, "inlet")
+        management.connect(closing.ref, "outlet", publishing.ref, "inlet")
+        management.connect(publishing.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(publishing.ref, "outlet", relay.ref, "inlet")
+        management.connect(relay.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+        first.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        // Closing the other source lowers publishing's threshold. It therefore
+        // emits a fresh wave under its own source id, down both paths.
+        closing.outlet.linking.links.single().unlink()
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
+    fun `a mint-then-forward outlet is not treated as source-disjoint before its first forward`() {
+        val host = ManagedHost()
+        val source = Source()
+        val mixed = MintThenForward()
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        listOf(source, mixed, fanIn, probe).forEach(management::spawn)
+        management.connect(source.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(source.ref, "outlet", mixed.ref, "inlet")
+        management.connect(mixed.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+        // A spontaneous emission must not make a structurally reactive outlet
+        // look like a root before its first forwarded wave.
+        mixed.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        probe.clear()
+        source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.duplicateSettlements() shouldBe emptySet()
         }
     }
 

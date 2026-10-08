@@ -261,14 +261,13 @@ class OperatorAbsorbAckTest {
      * fans in source1+source2; `opArm2` fans in `opArm1`'s outlet (so its
      * resolved provenance must already be {source1, source2}, published by
      * `opArm1`'s own relay, not re-derived) PLUS a third, structurally
-     * independent source3 edge straight into `opArm2`. Every edge is warmed
-     * up with one real (non-absorbed) delivery first — an edge this resolver
-     * has never observed stays conservatively "unknown" rather than excluded
-     * (see [SourceProvenance]), so resolving source3's edge as disjoint from
-     * opArm1's needs both to have actually spoken at least once. Only then
-     * does source3's threshold-neutral wave settle without waiting on
-     * opArm1's edge, which structurally can never carry source3 even though
-     * it is two hops removed from a genuine root.
+     * independent source3 edge straight into `opArm2`. The roots are
+     * identified structurally from their lack of open Consume inputs, not from
+     * which traffic they happened to emit before this assertion. Each root's
+     * real warm-up below establishes distinct operator state; it is not a
+     * reachability-learning prerequisite. The final source3 wave therefore
+     * settles without waiting on opArm1's edge, which structurally can never
+     * carry source3 even though it is two hops removed from a root.
      */
     @Test
     fun `source provenance composes through a chain of fan-in relay hops`() {
@@ -300,9 +299,8 @@ class OperatorAbsorbAckTest {
         gf.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
         controller.runToIdle()
 
-        // Warm-up: a distinct key per root, each a REAL (non-absorbed) add,
-        // so every edge this test cares about has delivered at least once
-        // before the real assertion below relies on exclusion.
+        // Establish a distinct real value from every root. Provenance does not
+        // learn from this traffic: roots are classified from live topology.
         source3.send(SetDelta(adds = mapOf("warm3" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
         controller.runToIdle()
         source1.send(SetDelta(adds = mapOf("warm1" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
