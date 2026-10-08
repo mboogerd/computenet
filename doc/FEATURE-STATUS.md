@@ -19,7 +19,7 @@
 | Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | tiering | demos |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Typed ports / explicit links | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | 13 |
-| Deltas & data-cell operators | - | USED | USED | USED | USED | - | USED | USED | USED | USED | USED | USED | USED | 11 |
+| Deltas & data-cell operators | USED | USED | USED | USED | USED | - | USED | USED | USED | USED | USED | USED | USED | 12 |
 | Glitch-free observation | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | USED | USED | 11 |
 | Interest-driven execution | - | - | - | - | - | - | - | USED | - | - | - | USED | - | 2 |
 | Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
@@ -33,7 +33,7 @@
 | Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 | Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
 | Demograph | - | - | - | USED | - | - | - | - | - | - | - | - | - | 1 |
-| **headline count** | 4 | 5 | 3 | 6 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
+| **headline count** | 5 | 5 | 3 | 6 | 5 | 4 | 5 | 7 | 6 | 4 | 4 | 5 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
@@ -69,6 +69,7 @@
 - typed-links / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
 - typed-links / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
 - typed-links / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
+- delta-operators / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
 - delta-operators / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - delta-operators / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/declaration/DeclarationIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/ingest/SpendLogIngester.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/AllocatorReportViews.kt, demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/view/SessionLedger.kt
 - delta-operators / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
@@ -80,7 +81,7 @@
 - delta-operators / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
 - delta-operators / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/Queries.kt, demo/social/src/main/kotlin/civictech/demo/social/ShortReads.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
 - delta-operators / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
-- glitch-free-observe / agora: demo/agora/src/main/kotlin/civictech/agora/cell/CredenceView.kt
+- glitch-free-observe / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt, demo/agora/src/main/kotlin/civictech/agora/cell/CredenceView.kt
 - glitch-free-observe / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
 - glitch-free-observe / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - glitch-free-observe / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/Cells.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Sensitivity.kt
