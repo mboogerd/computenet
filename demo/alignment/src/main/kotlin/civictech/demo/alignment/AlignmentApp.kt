@@ -222,6 +222,15 @@ class AlignmentApp internal constructor(
     }
     private val aiRunning = java.util.concurrent.ConcurrentHashMap.newKeySet<TopicId>()
 
+    /**
+     * Abstentions, so the Board can say an AI rater DECLINED rather than show nothing: the slots a
+     * rater was asked about and left unrated, as AI-class [RatingKey]s (participant `ai:<model>`).
+     * Cleared with the AI ratings an edit invalidates ([clearAiRatings]) and whenever the slot gets
+     * rated. ponytail: in memory only — after a restart a decline reads as "not asked yet" and the
+     * next run re-asks; journal it if a decline must survive restarts.
+     */
+    private val aiDeclined = HashSet<RatingKey>()
+
     private val shell = DemoShell(port)
 
     internal val observationGroups: Map<String, String>
@@ -513,10 +522,15 @@ class AlignmentApp internal constructor(
         ratings.remove(key)
     }
 
-    /** Unrates every AI-class rating on [topic] that [which] selects: an edit invalidated the question it answered. */
-    private fun clearAiRatings(topic: TopicId, which: (RatingKey) -> Boolean) =
+    /**
+     * Unrates every AI-class rating on [topic] that [which] selects, and forgets the matching
+     * declines: an edit invalidated the question they answered.
+     */
+    private fun clearAiRatings(topic: TopicId, which: (RatingKey) -> Boolean) {
         ratings.keys.filter { it.topic == topic && it.raters == RaterClass.AI && which(it) }
             .sortedWith(RATING_ORDER).forEach { unrate(it) }
+        aiDeclined.removeIf { it.topic == topic && which(it) }
+    }
 
     /**
      * [count] is the participant's ABSOLUTE dot count on the idea (teu97-D3); `count == 0` removes
@@ -716,9 +730,11 @@ class AlignmentApp internal constructor(
                         for (dim in dims.keys) {
                             // only a dimension still described as the rater saw it
                             if (t.dims[dim] != dims[dim]) continue
-                            if (RatingKey(topic, idea.id, dim, answer.participant) in ratings) continue
+                            val key = RatingKey(topic, idea.id, dim, answer.participant)
+                            if (key in ratings) continue
                             val v = answer.ratings[dim]?.takeIf(RatingScale::valid)
                             seedAiRating(topic, idea.id, dim, answer.model, v)
+                            if (v == null) aiDeclined += key else aiDeclined -= key
                         }
                     }
                 }
@@ -1359,7 +1375,14 @@ class AlignmentApp internal constructor(
         // never ranked on. AI raters are models, not people, so — unlike the human side's bare count —
         // their model+version names are listed. `diverges` names each dimension where the two means
         // part by at least Alignment.DIVERGE_GAP
-        fun ai(id: String, human: Scored?): String {
+        // declines (aiDeclined): model → the dimensions it was asked about and left unrated
+        val declinedOf = aiDeclined.filter { it.topic == topic.id }
+            .groupBy({ it.idea }, { it.participant.removePrefix(RaterClass.AI_PREFIX) to it.dim })
+            .mapValues { (_, pairs) -> pairs.groupBy({ it.first }, { it.second }).toSortedMap() }
+        fun declined(id: String) = declinedOf[id].orEmpty().entries.joinToString(",", "{", "}") { (m, ds) ->
+            "${esc(m)}:${ds.sorted().joinToString(",", "[", "]") { esc(it) }}"
+        }
+        fun aiScore(id: String, human: Scored?): String {
             val a = scored[IdeaKey(topic.id, id, RaterClass.AI)] ?: return """"ai":null,"diverges":[]"""
             val models = aiModelsOf[id].orEmpty()
             val diverges = human?.byDim.orEmpty().keys.filter { d ->
@@ -1373,6 +1396,7 @@ class AlignmentApp internal constructor(
                 """"quadrant":${Eisenhower.quadrantOf(a.byDim)?.let { esc(it.wire) } ?: "null"}},""" +
                 """"diverges":${diverges.joinToString(",", "[", "]") { esc(it) }}"""
         }
+        fun ai(id: String, human: Scored?): String = aiScore(id, human) + ""","aiDeclined":${declined(id)}"""
         fun tail(id: String, s: Scored?): String {
             val quadrant = s?.byDim?.let(Eisenhower::quadrantOf)
             return """"value":${s?.value?.let(::num) ?: "null"},"cost":${s?.cost?.let(::num) ?: "null"},""" +

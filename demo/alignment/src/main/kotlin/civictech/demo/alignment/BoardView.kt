@@ -834,14 +834,26 @@ function renderRanking(t, ideas, participants, stagger) {
     // the AI score (AiRater): beside the human one, never ranked on; "≠ AI on <dims>" where the
     // human and AI means part by 2 or more. AI rater names never reach the Board, only a count.
     const aiEl = row.querySelector('.ai');
-    if (f.ai) {
+    const declined = Object.entries(f.aiDeclined || {});
+    if (f.ai || declined.length) {
       aiEl.hidden = false;
-      const aiScore = f.ai.score;
-      const apart = (f.diverges || []).map(id => (dims.find(d => d.id === id) || { name: id }).name);
-      aiEl.textContent = 'AI ' + (aiScore === null || aiScore === undefined ? '—' : aiScore.toFixed(1)) +
-        (apart.length ? ' · ≠ AI on ' + apart.join(', ') : '');
+      const parts = [];
+      let apart = [];
+      if (f.ai) {
+        const aiScore = f.ai.score;
+        apart = (f.diverges || []).map(id => (dims.find(d => d.id === id) || { name: id }).name);
+        parts.push('AI ' + (aiScore === null || aiScore === undefined ? '—' : aiScore.toFixed(1)) +
+          (apart.length ? ' · ≠ AI on ' + apart.join(', ') : ''));
+      }
+      // an abstention is an answer: "declined" (every dimension) or "declined on <dims>"
+      for (const [model, ids] of declined) {
+        const all = dims.every(d => ids.includes(d.id));
+        parts.push(model + ' declined' + (all ? '' : ' on ' + ids.map(id => (dims.find(d => d.id === id) || { name: id }).name).join(', ')));
+      }
+      aiEl.textContent = parts.join(' · ');
       aiEl.classList.toggle('diverges', apart.length > 0);
-      aiEl.title = 'AI score from ' + (f.ai.models || []).join(', ') + ', aggregated apart from the people\'s score';
+      aiEl.title = (f.ai ? 'AI score from ' + (f.ai.models || []).join(', ') + ', aggregated apart from the people\'s score. ' : '') +
+        (declined.length ? 'A decline means the model judged the idea outside its knowledge: give it more description, then ask again.' : '');
     } else {
       aiEl.hidden = true;
     }
