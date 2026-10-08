@@ -35,6 +35,35 @@ data class ApplyRequestDto(
     val confirmation: String? = null,
 )
 
+/** A promotion requested by a [DraftDto] (WKB2 F9, 8joqm-D8). */
+@Serializable
+data class PromotionRequestDto(
+    val incumbent: String,
+    val outletName: String = "outlet",
+    /** Encoded live traffic-light ref; required for the single-instance [candidate] form. */
+    val gate: String? = null,
+    /** A draft node handle whose `replaces` field names [incumbent]. */
+    val candidate: String? = null,
+    /** A rolling candidate factory; its constructed cell keeps [incumbent]'s ref. */
+    val replicaCandidate: ReplicaCandidateDto? = null,
+    /** The workbench supports only the strict, gate-free policy shape. */
+    val policy: PromotionPolicyDto? = null,
+)
+
+/** Catalogue-backed candidate construction for rolling promotion. */
+@Serializable
+data class ReplicaCandidateDto(
+    val catalogueId: String,
+    val params: JsonObject = JsonObject(emptyMap()),
+)
+
+/** The serializable subset of [civictech.cell.evolve.PromotionPolicy] accepted by the workbench. */
+@Serializable
+data class PromotionPolicyDto(
+    val windowWaves: Int,
+    val judge: String,
+)
+
 /** `202` from `POST /api/inspect/apply`: the id to read the apply back under (wczst-D3). */
 @Serializable
 data class ApplyAcceptedDto(val applyId: String)

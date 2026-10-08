@@ -135,6 +135,59 @@ object Evolve {
         return identity.owner == owner && identity.name == outletName
     }
 
+    /**
+     * Privileged direct primitive for a caller that holds the live cells but no [ApplyContext].
+     * The authority check is deliberately first; [Promotion] owns the synchronous four-phase
+     * swap and its PRECHECK/COMMIT failure semantics.
+     */
+    fun promoteDirect(
+        host: ManagedHost,
+        gate: Cell,
+        incumbent: Cell,
+        candidate: Cell,
+        outletName: String,
+        downstream: List<Use<*>>,
+        judge: PromotionJudge? = null,
+        authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly,
+    ) {
+        checkAuthority(authority)
+        Promotion.promote(
+            host = host,
+            gate = gate,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            downstream = downstream,
+            judge = judge,
+            journal = null,
+        )
+    }
+
+    /**
+     * Privileged direct primitive for the same-ref rolling swap of a replicated cell. The
+     * authority check is deliberately first; [Promotion] owns the replica rebind protocol.
+     */
+    fun promoteReplicaDirect(
+        host: ManagedHost,
+        replication: civictech.cell.replication.Replication,
+        incumbent: civictech.cell.data.Replicable<*>,
+        candidate: civictech.cell.data.Replicable<*>,
+        outletName: String = "outlet",
+        judge: PromotionJudge? = null,
+        authority: EvolutionAuthority = EvolutionAuthority.LocalTrustedOnly,
+    ) {
+        checkAuthority(authority)
+        Promotion.promoteReplica(
+            host = host,
+            replication = replication,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            judge = judge,
+            journal = null,
+        )
+    }
+
     /** Incumbent-side differential shadow and the gates that judge it. */
     data class Baseline(
         val twin: Cell,

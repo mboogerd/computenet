@@ -26,12 +26,9 @@ import kotlinx.serialization.Serializable
  * Wire names are kebab-case exactly as `[WKB2-39]` spells them, carried in the
  * sealed-class discriminator (`"type"` under the inspector's JSON config).
  *
- * The five arms other than [UnwoundWithResidue] are payload-free objects here:
- * this type fixes the *set of names*. The payload each carries (precheck
- * reasons, conflict detail, the kernel's rollback report) belongs to the
- * features that produce those outcomes, which turn the object into a data
- * class — an additive wire change, since a `data object` already serialises as
- * `{"type":"<name>"}`.
+ * Arms start payload-free and grow into data classes when the feature that
+ * produces them lands. Such a payload is additive because the discriminator
+ * name stays fixed; [RolledBackAtCommit] is the first such extension.
  *
  * Cites `[WKB2-39]`, `[WKB2-25]`, `[WKB2-16]`, `[WKB2-20]`, 95 §R4.
  */
@@ -73,10 +70,19 @@ sealed interface ApplyOutcome {
         }
     }
 
-    /** `Promotion.promote` aborted mid-COMMIT; the kernel retained and re-linked the incumbent (`[WKB2-23]`). */
+    /**
+     * The gated kernel swap aborted mid-COMMIT. [reason] is the kernel's
+     * message verbatim, [retained] is the encoded incumbent ref, and [residue]
+     * is only the staged-prefix cleanup residue. The write plane performs no
+     * second compensation of the kernel-owned swap (`[WKB2-23]`, 8joqm-D5).
+     */
     @Serializable
     @SerialName("rolled-back-at-commit")
-    data object RolledBackAtCommit : ApplyOutcome
+    data class RolledBackAtCommit(
+        val reason: String,
+        val retained: String,
+        val residue: List<Residue> = emptyList(),
+    ) : ApplyOutcome
 
     /** The swap set changed since the submitted base version; no step was executed (`[WKB2-33]`, `[WKB2-35]`). */
     @Serializable
