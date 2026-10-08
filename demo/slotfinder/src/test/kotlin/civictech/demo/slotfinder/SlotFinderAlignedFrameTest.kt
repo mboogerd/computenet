@@ -13,6 +13,12 @@ class SlotFinderAlignedFrameTest {
         val app = SlotFinderApp(port = 0).start()
         try {
             val probe = HttpProbe("http://localhost:${app.boundPort}")
+            // `view.onChange` queues an asynchronous late-join catch-up broadcast
+            // during startup. Its stateJson() read must happen before this window;
+            // there are no other broadcasts before the first /state request.
+            awaitUntil("slotfinder startup observation broadcast") {
+                app.observationCurrentReads.get() >= 1L
+            }
             val before = app.observationCurrentReads.get()
             val response = probe.get()
 
