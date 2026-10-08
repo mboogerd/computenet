@@ -85,7 +85,7 @@
 - glitch-free-observe / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt, demo/agora/src/main/kotlin/civictech/agora/cell/CredenceView.kt
 - glitch-free-observe / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
 - glitch-free-observe / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
-- glitch-free-observe / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/Cells.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Sensitivity.kt
+- glitch-free-observe / deliberate: demo/deliberate/src/main/kotlin/civictech/deliberate/CredenceGraph.kt, demo/deliberate/src/main/kotlin/civictech/deliberate/Durability.kt
 - glitch-free-observe / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt, demo/dialogue/src/main/kotlin/civictech/dialogue/apply/GraphApplier.kt
 - glitch-free-observe / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - glitch-free-observe / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
