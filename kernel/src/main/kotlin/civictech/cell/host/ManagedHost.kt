@@ -121,6 +121,14 @@ open class ManagedHost(
      * journal named for an outlet alone, or one disagreeing with the inlets',
      * is refused the same way — outlet-side journaling of spontaneous
      * emissions is undecided (spec 90 roadmap I-7 §8). See [cellJournal].
+     *
+     * Exception: this selector is never consulted for the authority companion
+     * [civictech.cell.replication.Replication.replicate] spawns beside an
+     * authority-bearing replica. The companion takes its owner's journal
+     * unconditionally ([spawnDurabilityCompanion]), so its outlet-only port set
+     * is not refused under a blanket selector, and no answer for the companion's
+     * ref can make it volatile or journal it apart from its owner
+     * (computenet-yx36a).
      */
     private val journalForPort: ((CellRef, String) -> Journal?)? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
