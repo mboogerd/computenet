@@ -171,7 +171,10 @@ class AuthorityGossip internal constructor(
                 }
                 state.apply(write, payload)
                 firstCrossing.putIfAbsent(WriteKey(write.author, write.counter), crossing)
-                if (payload !is TransferAuthority) withInbound(write) { root.propagate(payload) }
+                // A transfer has no data-cell emission to ride, so the adapter
+                // relays the admitted envelope itself, as it relays a data write.
+                if (payload is TransferAuthority) outlet.call.propagate(write)
+                else withInbound(write) { root.propagate(payload) }
             }
         }
     }

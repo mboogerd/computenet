@@ -290,15 +290,10 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         val target = authorityTarget(cellId)
         val payload = TransferAuthority(writeSigning.principal(to))
         val write = writeSigning.signed(actor, target.ref.id, payload)
+        // The target adapter relays an admitted transfer on its mesh outlet,
+        // as it relays a data write; every receiving adapter still verifies
+        // and authorizes it independently.
         driveSigned(target, write)
-
-        // Unlike a set delta, a transfer has no data-cell emission for the
-        // adapter to relay after admission. The Concord verb authors the
-        // envelope externally so it can name any scenario actor; publish that
-        // same envelope on the target adapter's mesh outlet as the live gossip
-        // half of the operation. Every receiving adapter still verifies and
-        // authorizes it independently.
-        checkNotNull(replicationFor(target.host).authorityOf(target.ref)).outlet.call.propagate(write)
     }
 
     /**
