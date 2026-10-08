@@ -30,6 +30,7 @@ import java.net.URLDecoder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.*
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
 /**
@@ -181,6 +182,8 @@ class AlignmentApp internal constructor(
     port: Int = 8080,
     journalPath: Path? = null,
     inspector: InspectorFlag.Options? = null,
+    private val ideaProposers: List<IdeaProposer> = emptyList(),
+    private val ideaJudge: IdeaJudge? = null,
     private val aiRaters: List<AiRater> = emptyList(),
 ) {
     private val inspectorOptions = inspector
@@ -206,6 +209,9 @@ class AlignmentApp internal constructor(
     private val dots = HashMap<DotKey, Int>() // absolute per-participant counts (teu97-D1), never in the dataflow
     // pairwise judgements (k6rrk-D2): per (topic, dim, participant), keyed by the unordered pair id "min|max"
     private val judgements = TreeMap<JudgeKey, TreeMap<String, Judgement>>(JUDGE_ORDER)
+
+    // ponytail: in memory only — a run's progress and its held-back ideas are lost on restart; journal them if that matters
+    private val ideation = HashMap<String, IdeationStatus>()
 
     // async read model, folded off the fusion outlet
     private var scored: Map<IdeaKey, Scored> = emptyMap()
@@ -625,6 +631,27 @@ class AlignmentApp internal constructor(
             if (value == null) unrate(key) else rate(key, RatingScale.toMilli(value))
         }
 
+    /**
+     * An ideation run's board write: [idea] under its title slug, attributed to the model that proposed
+     * it. Skips the facilitator-policy check (the run was started by the creator); false when the slug is taken.
+     */
+    internal fun addGeneratedIdea(topic: TopicId, idea: ProposedIdea, proposer: String): Boolean {
+        val added = synchronized(state) {
+            val id = slug(idea.title)
+            val t = topics[topic.value]
+            if (id.isEmpty() || t == null || id in t.ideas) return@synchronized false
+            addIdea(topic, Idea(id, idea.title.take(200), idea.description.take(4000), proposer))
+            true
+        }
+        if (added) broadcast()
+        return added
+    }
+
+    private fun ideationContext(topic: TopicId): IdeationContext = synchronized(state) {
+        val t = topics.getValue(topic.value)
+        IdeationContext(t.title, t.dims.values.toList(), t.ideas.values.map { ProposedIdea(it.title, it.description) })
+    }
+
     /** Unrates every human-side rating [participant] holds on [topic]; answers how many went. */
     internal fun dropHumanRatings(topic: TopicId, participant: String): Int = synchronized(state) {
         val gone = ratings.keys.filter { it.topic == topic && it.participant == participant }.sortedWith(RATING_ORDER)
@@ -755,6 +782,10 @@ class AlignmentApp internal constructor(
                 return meJson(topic, name(ex.query("participant"), "participant"))
             seg.size == 2 && seg[1] == "aggregate" && method == "GET" ->
                 return synchronized(state) { aggregateJson(topic) }
+            seg.size == 2 && seg[1] == "ideate" && method == "POST" -> postIdeate(topic, ex.jsonBody())
+            seg.size == 2 && seg[1] == "ideate" && method == "DELETE" -> deleteIdeate(topic, ex.query("creator"))
+            seg.size == 5 && seg[1] == "ideate" && seg[2] == "held" && seg[4] == "accept" && method == "POST" ->
+                acceptHeld(topic, seg[3], ex.jsonBody())
             else -> fail(if (seg.size <= 3) 405 else 404, "no such route or method")
         }
         broadcast() // write-side changes (topics, ideas) reach no hub; announce them here
@@ -1088,6 +1119,48 @@ class AlignmentApp internal constructor(
         }
     }
 
+    /** `{creator, max?}`: starts an ideation run in the background; its progress streams through `/state`. */
+    private fun postIdeate(topic: Topic, json: JsonObject): String {
+        requireCreator(topic, json.str("creator"))
+        val judge = ideaJudge ?: fail(503, "ideation needs TYPESAFE_API_KEY")
+        if (ideaProposers.isEmpty()) fail(503, "no idea proposers configured")
+        val max = intField(json, "max", 1..30, "max must be 1..30") ?: 12
+        val run = synchronized(state) {
+            if (ideation[topic.id.value]?.let { synchronized(it) { it.running } } == true) {
+                fail(409, "an ideation run is already active")
+            }
+            val status = IdeationStatus(max)
+            ideation[topic.id.value] = status
+            IdeationRun(
+                ideaProposers, judge,
+                context = { ideationContext(topic.id) },
+                add = { idea, proposer -> addGeneratedIdea(topic.id, idea, proposer) },
+                onChange = ::broadcast,
+                status = status,
+            )
+        }
+        Thread.ofVirtual().name("ideation-${topic.id.value}").start(run::run)
+        return """{"started":true}"""
+    }
+
+    /** Cancels the active run: calls in flight finish, nothing new starts. */
+    private fun deleteIdeate(topic: Topic, creator: String?): String {
+        requireCreator(topic, creator)
+        synchronized(state) { ideation[topic.id.value] }?.cancelled = true
+        return """{"ok":true}"""
+    }
+
+    /** `{creator}`: adds held-back idea [index] anyway, still attributed to its model, and drops it from the bucket. */
+    private fun acceptHeld(topic: Topic, index: String, json: JsonObject): String {
+        requireCreator(topic, json.str("creator"))
+        val status = synchronized(state) { ideation[topic.id.value] } ?: fail(404, "no such held idea")
+        val held = synchronized(status) { index.toIntOrNull()?.let { status.held.getOrNull(it) } }
+            ?: fail(404, "no such held idea")
+        if (!addGeneratedIdea(topic.id, ProposedIdea(held.title, held.description), held.proposer)) fail(409, "exists")
+        synchronized(status) { status.held.remove(held) }
+        return """{"id":${esc(slug(held.title))}}"""
+    }
+
     private fun requireCreator(topic: Topic, creator: String?) {
         if (creator == null || creator.trim() != topic.creator) fail(403, "only the topic creator may do this")
     }
@@ -1343,7 +1416,8 @@ class AlignmentApp internal constructor(
                     """"participant":${esc(k.participant)},"value":${RatingScale.format(v)}}"""
             }
         val aggregates = topics.values.joinToString(",", "{", "}") { "${esc(it.id.value)}:${aggregateJson(it)}" }
-        """{"topics":$topicList,"ideas":$ideaList,"ratings":$ratingList,"aggregates":$aggregates}"""
+        val ideationJson = ideation.entries.joinToString(",", "{", "}") { (t, s) -> "${esc(t)}:${s.json()}" }
+        """{"topics":$topicList,"ideas":$ideaList,"ratings":$ratingList,"aggregates":$aggregates,"ideation":$ideationJson}"""
     }
 
     private fun HttpExchange.jsonBody(): JsonObject = try {
@@ -1453,12 +1527,18 @@ fun main(args: Array<String>) {
     // this demo's own flag/positional reading runs over parsed.rest, so an
     // inspector flag's value is never mistaken for this demo's own.
     val parsed = InspectorFlag.parse(args)
+    // LLM ideation: Claude and Codex propose, Jev gates. Off without a Jev key — never unjudged ideas.
+    val jevKey = System.getenv("TYPESAFE_API_KEY")?.takeIf { it.isNotBlank() }
+    val cliGate = Semaphore(2, true)
     val app = AlignmentApp(
         demoPort(parsed.rest),
         journalPath = parsed.rest.flag("--journal")?.let { Path.of(it) },
         inspector = parsed.options,
+        ideaProposers = listOf(CliIdeaProposer.claude(cliGate), CliIdeaProposer.codex(cliGate)),
+        ideaJudge = jevKey?.let { JevIdeaJudge(it) },
         aiRaters = AiRater.defaults(),
     )
+    if (jevKey == null) println("computenet alignment: TYPESAFE_API_KEY not set, LLM ideation disabled")
     // Seed BEFORE the socket opens (computenet-1f8b4), the discipline
     // :demo:beadsmirror states for itself: "the socket opens after every
     // workspace's start-time baseline has swapped its projector in". A seed
