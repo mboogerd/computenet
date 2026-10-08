@@ -31,6 +31,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -233,14 +234,32 @@ class PromotionObservationWindowTest {
         val f = Fixture(seed = 54)
         val applier = f.applier()
         val attempts = AtomicInteger()
-        applier.beforePromotionAttempt = { attempts.incrementAndGet() }
+        val secondAttemptStarted = CountDownLatch(1)
+        val allowSecondAttempt = CountDownLatch(1)
+        applier.beforePromotionAttempt = {
+            if (attempts.incrementAndGet() == 2) {
+                secondAttemptStarted.countDown()
+                allowSecondAttempt.await()
+            }
+        }
         val running = startApply(applier, f.draft(f.policy(waves = 2)), "await-live")
         try {
             val firstAwaiting = awaitAwaiting(applier, "await-live")
             firstAwaiting.outcome.shouldBeNull()
 
             f.emit(1)
+            awaitUntil("the first wave was classified before another primitive attempt") {
+                val current = applier.record("await-live")
+                (current !== firstAwaiting && current?.awaiting == OBSERVATION_WINDOW) ||
+                    secondAttemptStarted.count == 0L
+            }
+            attempts.get() shouldBe 1
+
             f.emit(2)
+            awaitUntil("the accepted window reached its second primitive attempt") {
+                secondAttemptStarted.count == 0L
+            }
+            allowSecondAttempt.countDown()
             awaitUntil("the two-wave window completed") { applier.record("await-live")?.outcome != null }
 
             val record = running.awaitResult()
@@ -250,6 +269,8 @@ class PromotionObservationWindowTest {
             attempts.get() shouldBe 2
             f.collector.received shouldContainExactly listOf(1L, 3L)
         } finally {
+            allowSecondAttempt.countDown()
+            if (running.thread.isAlive) f.emit(2)
             stopIfRunning(applier, "await-live", running)
         }
     }
