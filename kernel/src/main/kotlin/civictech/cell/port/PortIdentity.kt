@@ -2,6 +2,7 @@ package civictech.cell.port
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.link.LinkRole
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -51,6 +52,27 @@ internal object PortIdentities {
     }
 
     fun of(port: Port): PortIdentity? = table[port]
+
+    /**
+     * Whether [port]'s owning cell currently has an open [LinkRole.Consume]
+     * edge on any registered [FanInlet], or `null` when [port] has no
+     * registered owner. This is a live structural query over the existing weak
+     * identity table: no parallel owner/port registry or emission history is
+     * involved, and an inlet linked after a wave began is visible when the
+     * query is evaluated.
+     *
+     * Iteration is synchronized explicitly, as required by
+     * [Collections.synchronizedMap]. [FanInlet.linking] contains only active
+     * links, so an unlinked edge stops counting immediately.
+     */
+    fun hasOpenConsumeInput(port: Port): Boolean? = synchronized(table) {
+        val owner = table[port]?.owner ?: return@synchronized null
+        table.entries.any { (candidate, identity) ->
+            identity.owner == owner &&
+                candidate is FanInlet<*> &&
+                candidate.linking.links.any { it.role == LinkRole.Consume }
+        }
+    }
 }
 
 /**

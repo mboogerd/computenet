@@ -2,6 +2,7 @@ package civictech.cell.control
 
 import civictech.cell.link.Link
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortIdentities
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -73,7 +74,10 @@ internal object SourceProvenance {
                 val relayedSources = resolvePublished() ?: return null
                 return relayedSources + outlet.mintedAsRoot
             }
-            return null
+            return when (PortIdentities.hasOpenConsumeInput(outlet)) {
+                false -> outlet.mintedAsRoot.takeIf { it.isNotEmpty() }
+                true, null -> null
+            }
         } finally {
             visiting.remove(outlet)
         }
