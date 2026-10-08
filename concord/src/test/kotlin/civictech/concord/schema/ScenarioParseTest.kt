@@ -1,5 +1,6 @@
 package civictech.concord.schema
 
+import civictech.concord.value.Value
 import civictech.concord.yaml.ConcordYaml
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -64,6 +65,7 @@ class ScenarioParseTest {
         // computenet-ermvz.5: deliberate security-vocabulary schema change.
         "corpus/43-security/43-FLOW-AUTH-01.yaml",
         "corpus/43-security/43-FLOW-AUTH-02.yaml",
+        "corpus/43-security/43-FLOW-INTEGRITY-01.yaml",
     )
 
     @TestFactory
@@ -267,6 +269,16 @@ class ScenarioParseTest {
         params["authority"] shouldBe civictech.concord.value.Value.MapVal(
             mapOf("principal" to civictech.concord.value.Value.StrVal("alice")),
         )
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `forged and replayed signed steps are typed`() {
+        val s = load("corpus/43-security/43-FLOW-INTEGRITY-01.yaml")
+
+        s.script.filterIsInstance<ForgeSignedApplyStep>().single() shouldBe
+            ForgeSignedApplyStep("r1", "alice", "add", Value.StrVal("forged"))
+        s.script.filterIsInstance<ReplaySignedApplyStep>().single() shouldBe
+            ReplaySignedApplyStep("r1", "alice", "add", Value.StrVal("x"))
     }
 
     @org.junit.jupiter.api.Test

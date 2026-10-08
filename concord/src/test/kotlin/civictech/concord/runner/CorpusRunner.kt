@@ -28,6 +28,7 @@ import civictech.concord.schema.ExpectFailure
 import civictech.concord.schema.FinalView
 import civictech.concord.schema.FamilyHolds
 import civictech.concord.schema.FamilySpec
+import civictech.concord.schema.ForgeSignedApplyStep
 import civictech.concord.schema.IncrementalEqualsBatch
 import civictech.concord.schema.InterestRefusals
 import civictech.concord.schema.Kind
@@ -41,6 +42,7 @@ import civictech.concord.schema.Profile
 import civictech.concord.schema.QuiesceStep
 import civictech.concord.schema.ReadStateStep
 import civictech.concord.schema.ReplicasConverge
+import civictech.concord.schema.ReplaySignedApplyStep
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
 import civictech.concord.schema.DriveContextlessStep
@@ -706,6 +708,8 @@ class CorpusRunner {
                 is ReadStateStep -> reads += walk(driver, step)
                 is ApplyStep -> repeat(step.times ?: 1) { driver.apply(step.on, step.op, step.value) }
                 is SignedApplyStep -> driver.signedApply(step.on, step.actor, step.op, step.value)
+                is ForgeSignedApplyStep -> driver.forgeSignedApply(step.on, step.actor, step.op, step.value)
+                is ReplaySignedApplyStep -> driver.replaySignedApply(step.on, step.actor, step.op, step.value)
                 is TransferAuthorityStep -> driver.transferAuthority(step.on, step.actor, step.to)
                 is QuiesceStep -> driver.quiesce(step.budget ?: QUIESCE_BUDGET)
                 is DeclareInterestStep -> driver.declareInterest(step.on, interestValue(step.interest))

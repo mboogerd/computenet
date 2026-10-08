@@ -107,6 +107,20 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     private val logicalIds = LinkedHashMap<String, UUID>()
     private val instanceCounters = LinkedHashMap<String, Long>()
 
+    /**
+     * Exact envelopes produced by ordinary `signed-apply` steps, keyed only by
+     * neutral scenario vocabulary. A replay reuses one of these objects rather
+     * than reconstructing its driver-owned author counter or merge tags.
+     */
+    private data class SignedApplyKey(
+        val logicalId: UUID,
+        val actor: String,
+        val op: String,
+        val value: Value,
+    )
+
+    private val signedApplies = LinkedHashMap<SignedApplyKey, SignedWrite>()
+
     /** The routed cross-host stream target: property `inlet` binds the target cell's `inlet` port. */
     private interface DeltaInletProxy {
         val inlet: Use<Propagate<SetDelta<Any?>>>
@@ -282,7 +296,28 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     fun signedApply(cellId: CellId, actor: String, op: String, value: Value) {
         val target = authorityTarget(cellId)
         val payload = signedSetDelta(target, actor, op, value)
-        driveSigned(target, writeSigning.signed(actor, target.ref.id, payload))
+        val write = writeSigning.signed(actor, target.ref.id, payload)
+        driveSigned(target, write)
+        signedApplies[SignedApplyKey(target.ref.id, actor, op, value)] = write
+    }
+
+    /** Drive an otherwise valid signed set delta after corrupting only its signature. */
+    fun forgeSignedApply(cellId: CellId, actor: String, op: String, value: Value) {
+        val target = authorityTarget(cellId)
+        val payload = signedSetDelta(target, actor, op, value)
+        driveSigned(target, writeSigning.forged(actor, target.ref.id, payload))
+    }
+
+    /** Re-drive the exact envelope from the most recent matching ordinary signed apply. */
+    fun replaySignedApply(cellId: CellId, actor: String, op: String, value: Value) {
+        val target = authorityTarget(cellId)
+        val key = SignedApplyKey(target.ref.id, actor, op, value)
+        val write = signedApplies[key]
+            ?: throw UnsupportedCatalogBinding(
+                "replay-signed-apply at '$cellId' has no prior matching signed-apply " +
+                    "for actor '$actor', op '$op' and value '$value'",
+            )
+        driveSigned(target, write)
     }
 
     /** Drive a signed principal-transfer operation through the same admission path as a write. */

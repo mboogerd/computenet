@@ -512,6 +512,12 @@ class KernelDriver private constructor(
     override fun signedApply(cellId: CellId, actor: String, op: String, value: Value) =
         dist.signedApply(cellId, actor, op, value)
 
+    override fun forgeSignedApply(cellId: CellId, actor: String, op: String, value: Value) =
+        dist.forgeSignedApply(cellId, actor, op, value)
+
+    override fun replaySignedApply(cellId: CellId, actor: String, op: String, value: Value) =
+        dist.replaySignedApply(cellId, actor, op, value)
+
     override fun transferAuthority(cellId: CellId, actor: String, to: String) =
         dist.transferAuthority(cellId, actor, to)
 

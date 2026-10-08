@@ -43,6 +43,8 @@ class FakeDriver(
     override fun disconnect(linkRef: LinkRef): LinkResult = LinkResult.Connected(linkRef)
     override fun apply(cellId: CellId, op: String, value: Value?) {}
     override fun signedApply(cellId: CellId, actor: String, op: String, value: Value) {}
+    override fun forgeSignedApply(cellId: CellId, actor: String, op: String, value: Value) {}
+    override fun replaySignedApply(cellId: CellId, actor: String, op: String, value: Value) {}
     override fun transferAuthority(cellId: CellId, actor: String, to: String) {}
     override fun quiesce(budget: Int): QuiesceReport = QuiesceReport(settled = true, steps = 0)
     override fun declareInterest(cellId: CellId, interest: Value) {}

@@ -71,6 +71,32 @@ class WriteAuthorityBindingTest {
     }
 
     @Test
+    fun `forged signature and retained replay are denied without changing converged views`() {
+        val d = mesh()
+        d.signedApply("r1", "alice", "add", s("x"))
+        d.quiesce(budget)
+
+        d.forgeSignedApply("r1", "alice", "add", s("forged"))
+        d.replaySignedApply("r1", "alice", "add", s("x"))
+        d.quiesce(budget)
+
+        d.readView("r1") shouldBe list(s("x"))
+        d.readView("r2") shouldBe list(s("x"))
+        d.writeDenials("r1") shouldBe 2L
+        d.writeDenials("r1", "alice") shouldBe 2L
+        d.writeDenials("r2") shouldBe 0L
+    }
+
+    @Test
+    fun `replay refuses loudly when no matching signed apply was recorded`() {
+        val d = mesh()
+
+        assertThrows<UnsupportedCatalogBinding> {
+            d.replaySignedApply("r1", "alice", "add", s("x"))
+        }.message!! shouldContain "no prior matching signed-apply"
+    }
+
+    @Test
     fun `write-denials and signed verbs refuse loudly without an authority adapter`() {
         val d = KernelDriver(0L).apply {
             createHost("h1")
@@ -80,6 +106,10 @@ class WriteAuthorityBindingTest {
         assertThrows<UnsupportedCatalogBinding> { d.writeDenials("r1") }
             .message!! shouldContain "pass vacuously"
         assertThrows<UnsupportedCatalogBinding> { d.signedApply("r1", "alice", "add", s("x")) }
+            .message!! shouldContain "no write-authority adapter"
+        assertThrows<UnsupportedCatalogBinding> { d.forgeSignedApply("r1", "alice", "add", s("x")) }
+            .message!! shouldContain "no write-authority adapter"
+        assertThrows<UnsupportedCatalogBinding> { d.replaySignedApply("r1", "alice", "add", s("x")) }
             .message!! shouldContain "no write-authority adapter"
     }
 }
