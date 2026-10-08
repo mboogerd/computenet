@@ -186,7 +186,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 43-FLOW-01 | — | gap |
 | 43-FLOW-02 | — | gap |
 | 43-FLOW-03 | — | gap |
-| 43-FLOW-04 | — | gap |
+| 43-FLOW-04 | 43-FLOW-AUTH-01, 43-FLOW-AUTH-02 | covered |
 | 43-HELLO-01 | — | gap |
 | 43-HELLO-02 | — | gap |
 | 43-LINK-01 | — | gap |
@@ -308,7 +308,6 @@ None.
 - Coverage gap: requirement '43-FLOW-01' (40-distribution/43-security.md) has no covering scenario
 - Coverage gap: requirement '43-FLOW-02' (40-distribution/43-security.md) has no covering scenario
 - Coverage gap: requirement '43-FLOW-03' (40-distribution/43-security.md) has no covering scenario
-- Coverage gap: requirement '43-FLOW-04' (40-distribution/43-security.md) has no covering scenario
 - Coverage gap: requirement '43-HELLO-01' (40-distribution/43-security.md) has no covering scenario
 - Coverage gap: requirement '43-HELLO-02' (40-distribution/43-security.md) has no covering scenario
 - Coverage gap: requirement '43-LINK-01' (40-distribution/43-security.md) has no covering scenario
