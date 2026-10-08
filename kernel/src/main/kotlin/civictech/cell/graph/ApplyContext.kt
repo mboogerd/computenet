@@ -22,6 +22,7 @@ import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.membrane.SignatureVerifier
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -31,6 +32,7 @@ import civictech.cell.port.identity
 import civictech.cell.replication.Replication
 import civictech.cell.replication.WriteAuthority
 import civictech.cell.replication.WriteSigner
+import civictech.cell.verify.InvariantCell
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -72,7 +74,7 @@ class ApplyContext(
     val journalDirs: Map<String, File> = emptyMap(),
     val topology: Journal? = null,
     val writeSigner: WriteSigner? = null,
-    val signatureVerifier: civictech.cell.membrane.SignatureVerifier? = null,
+    val signatureVerifier: SignatureVerifier? = null,
 ) : TopologyApplier {
     private val journalBindings = ConcurrentHashMap<CellRef, Journal>()
     private val fold = MutableTopologyFold()
@@ -562,7 +564,7 @@ class ApplyContext(
             candidate = prepared.candidate,
             policy = step.policy,
             gates = gates.map { (handle, cell) ->
-                cell as? civictech.cell.verify.InvariantCell<*, *>
+                cell as? InvariantCell<*, *>
                     ?: throw Promotion.PromotionAborted(
                         "PRECHECK",
                         "gate handle '$handle' (${cell.ref}) is not an InvariantCell",
