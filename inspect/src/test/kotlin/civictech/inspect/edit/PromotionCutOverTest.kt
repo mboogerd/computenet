@@ -405,14 +405,22 @@ class PromotionCutOverTest {
         val policyDraft = f.draft(request = policyRequest)
         shouldThrow<IllegalArgumentException> { applier.plan(policyDraft) }
         shouldThrow<IllegalArgumentException> { applier.apply(policyDraft, "policy", "operator", 1) }
+    }
 
+    @Test
+    fun `a valid rolling request reaches planning and is refused ROLLING_ONLY when unsupported`() {
+        val f = Fixture(seed = 54)
+        val applier = f.applier()
         val rollingRequest = PromotionRequest(
             incumbent = f.incumbent.ref,
             replicaCandidate = CellFactory(::SummerV2),
         )
         val rollingDraft = Draft(HOST, GraphSpec(emptyList()), promotions = listOf(rollingRequest))
-        shouldThrow<IllegalArgumentException> { applier.plan(rollingDraft) }
-        shouldThrow<IllegalArgumentException> { applier.apply(rollingDraft, "rolling", "operator", 1) }
+
+        val step = f.promotionStep(applier.plan(rollingDraft))
+        step.refusal.shouldNotBeNull().code shouldBe "ROLLING_ONLY"
+        step.refusal.shouldNotBeNull().reason shouldContain "not Replicable"
+        applier.apply(rollingDraft, "rolling", "operator", 1).outcome shouldBe ApplyOutcome.RefusedAtPrecheck
     }
 
     private companion object {
