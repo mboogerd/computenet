@@ -105,8 +105,9 @@ if [ "${1:-}" = --check ]; then
        [ $(( $(date +%s) - start_epoch )) -gt "${HOLDER_MAX_AGE_S:-43200}" ]; then
       # Unless the holder wrote recently: residue does not write. An orchestrator
       # writes its CHILDREN for hours, not the epic row, so the newest bead
-      # stamped with this token counts too (computenet-q8ksa).
-      kid=$(bd list --all --metadata-field "holder=$token" --json 2>/dev/null \
+      # stamped with this token counts too (computenet-q8ksa). --limit 0: bd's
+      # default 50 rows are sorted by priority, and can drop the newest write.
+      kid=$(bd list --all --limit 0 --metadata-field "holder=$token" --json 2>/dev/null \
             | sed -n '/^[[{]/,$p' \
             | jq -r '[(if type=="array" then . else (.issues // []) end)[].updated_at] | max // empty' 2>/dev/null)
       [ -n "$kid" ] && { [ -z "$updated" ] || [[ "$kid" > "$updated" ]]; } && updated=$kid

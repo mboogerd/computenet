@@ -77,8 +77,10 @@ out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "not-a-da
   || bad "unparseable updated-at — got '$out' rc=$rc, wanted 'STALE' rc=1"
 # computenet-q8ksa: an orchestrator writes its children, not the epic row. A stale
 # row plus a child stamped with the same holder and written just now reads LIVE.
+# Without --limit 0 the stub answers as bd's default 50-row, priority-sorted page
+# does when the newest write falls off it: only an old row.
 fb=$(mktemp -d)  # shadows the [] stub for this one case
-printf '#!/bin/sh\necho "[{\\"updated_at\\":\\"%s\\"}]"\n' "$recent" > "$fb/bd"; chmod +x "$fb/bd"
+printf '#!/bin/sh\ncase " $* " in *" --limit 0 "*) t=%s ;; *) t=2020-01-01T00:00:00Z ;; esac\necho "[{\\"updated_at\\":\\"$t\\"}]"\n' "$recent" > "$fb/bd"; chmod +x "$fb/bd"
 out=$(PATH="$fb:$PATH" HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "2020-01-01T00:00:00Z" 2>&1); rc=$?
 { [ "$out" = LIVE ] && [ "$rc" = 0 ]; } \
   && ok "an old token with a recently written child bead reads LIVE" \
