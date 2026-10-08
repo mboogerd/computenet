@@ -26,6 +26,10 @@ import kotlin.test.fail
  * two implementations meet (computenet-sigl0-D7). A failing seed stays
  * failing — never swap it out.
  *
+ * Participants mix people and `ai:` raters ([RaterClass]), so every idea can
+ * carry a human and an AI [Scored] at once; agreement over the class-keyed
+ * output is also the check that no rating crosses into the other class.
+ *
  * A second test pins the all-value case (k1d4g rule 1) against the v1 formula
  * itself, computed inline from the raw ratings, so a shared mistake in the
  * cell and [Alignment.rankBatch] cannot pass unseen.
@@ -39,13 +43,16 @@ class AlignmentBatchAgreementTest {
     private val topics = (0 until 3).map { TopicId("t$it") }
     private val ideas = (0 until 4).map { "i$it" }
     private val dims = (0 until 3).map { "d$it" }
-    private val participants = (0 until 4).map { "p$it" }
+    // two people and two AI raters (RaterClass): each class is its own scored population, so the
+    // fold must keep them apart exactly as rankBatch's grouping does
+    private val participants = listOf("p0", "p1", "ai:m-1", "ai:m-2")
 
     @Test
     fun `the folded fusion outlet equals the batch reference after every step, seeds 0 until 50`() {
         var nullScoreRows = 0L
         var hasCostFlips = 0
         var hasFactorFlips = 0
+        var bothClasses = 0L
         for (seed in 0 until 50) {
             val controller = SimulationController(seed.toLong())
             val host = ManagedHost(scheduler = controller.scheduler())
@@ -122,10 +129,12 @@ class AlignmentBatchAgreementTest {
                 val want = Alignment.rankBatch(ratings, configs)
                 assertAgrees(want, folded, "seed=$seed step=$step ($op)")
                 nullScoreRows += want.values.count { it.score == null }
+                bothClasses += want.keys.count { it.raters == RaterClass.AI && it.copy(raters = RaterClass.HUMAN) in want }
             }
         }
         // the churn must actually reach the cases it exists to check
         assertTrue(nullScoreRows > 0, "no step ever produced a null-score row")
+        assertTrue(bothClasses > 0, "no step ever scored one idea for both rater classes at once")
         assertTrue(hasCostFlips > 0, "no step ever flipped a topic's has-cost bit")
         assertTrue(hasFactorFlips > 0, "no step ever flipped a topic's has-factor bit")
         println("agreement coverage: nullScoreRows=$nullScoreRows hasCostFlips=$hasCostFlips hasFactorFlips=$hasFactorFlips")
@@ -166,7 +175,7 @@ class AlignmentBatchAgreementTest {
                 // v1, inline: per idea, per rated dim, the plain mean (thousandths → scale); then the weighted mean
                 val sums = HashMap<IdeaKey, HashMap<String, IntArray>>() // dim → [Σx, n]
                 for ((k, v) in ratings) {
-                    val acc = sums.getOrPut(IdeaKey(k.topic, k.idea)) { HashMap() }.getOrPut(k.dim) { IntArray(2) }
+                    val acc = sums.getOrPut(IdeaKey(k.topic, k.idea, if (k.participant.startsWith("ai:")) RaterClass.AI else RaterClass.HUMAN)) { HashMap() }.getOrPut(k.dim) { IntArray(2) }
                     acc[0] += v; acc[1] += 1
                 }
                 val batch = Alignment.rankBatch(ratings, weights.mapValues { DimConfig(it.value, Direction.VALUE) })
