@@ -12,7 +12,10 @@ import civictech.cell.host.DeadLetter
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.replication.SignedWrite
 import civictech.cell.replication.WriteAuthority
+import civictech.cell.replication.WriteAuthorityBytes
 import civictech.cell.wire.LoopbackPeerTransport
 import civictech.identity.FilePeerKeyStore
 import civictech.testkit.awaitUntil
@@ -64,7 +67,7 @@ class TwoNodesWriteAuthorityTest {
         val b = Runtime.boot(manifest, "b", spec, transport = transport)
         var restartedA: Runtime.Node? = null
         try {
-            val bDeadLetters = mutableListOf<DeadLetter>()
+            val bDeadLetters = java.util.concurrent.CopyOnWriteArrayList<DeadLetter>()
             b.mainHost.deadLetterOutlet.subscribe(
                 Use.fixed(
                     object : Propagate<DeadLetter> {
@@ -109,9 +112,21 @@ class TwoNodesWriteAuthorityTest {
                 "after-restart" in bCell.membership(),
                 "the restarted authority's first write was refused instead of advancing its counter incarnation",
             )
-            assertFalse(
-                bDeadLetters.any { it.denial?.reason == DenialReason.REPLAY },
-                "the restarted authority's first write was classified as REPLAY",
+            // Only a REPLAY of the restarted write counts. Catch-up can hand the
+            // first incarnation's write back to node b, which correctly refuses
+            // that echo as REPLAY of a retained pair.
+            val restartedWriteReplays = bDeadLetters.filter { letter ->
+                letter.denial?.reason == DenialReason.REPLAY &&
+                    letter.invocation?.invocation?.args.orEmpty().any { arg ->
+                        arg is SignedWrite &&
+                            (WriteAuthorityBytes.decodePayload(arg.payload) as? SetDelta<*>)
+                                ?.adds?.containsKey("after-restart") == true
+                    }
+            }
+            assertTrue(
+                restartedWriteReplays.isEmpty(),
+                "the restarted authority's first write was classified as REPLAY: " +
+                    restartedWriteReplays.map { it.denial?.detail },
             )
         } finally {
             restartedA?.close()
