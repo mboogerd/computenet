@@ -62,7 +62,7 @@ class WriteGateTest {
 
         response.statusCode() shouldBe 200
         response.body() shouldBe
-            """{"writePlane":true,"verbs":["spawn","connect","despawn"],"identity":"capability-holder"}"""
+            """{"writePlane":true,"verbs":["spawn","connect","despawn","promote"],"identity":"capability-holder"}"""
     }
 
     @Test

@@ -58,6 +58,8 @@ data class DraftDto(
      * (`"<uuid>:<instanceId>"`). Decoded by the route, not by the compiler.
      */
     val despawns: List<String> = emptyList(),
+    /** Promotion requests; decoded and mapped by the write-plane route, not by the compiler. */
+    val promotions: List<PromotionRequestDto> = emptyList(),
 )
 
 /**
@@ -119,8 +121,9 @@ object DraftCompiler {
      * duplicate handle, or a `parent` on an instance set. An edge naming a
      * handle no node declares is not a compile error: its `ConnectStep` or
      * `BoundaryLink` is emitted and precheck refuses it `UNRESOLVED_HANDLE`.
-     * [DraftDto.host] and [DraftDto.despawns] are ignored: the write-plane
-     * route maps them onto `Draft.host` / `Draft.despawns` (wczst-D1).
+     * [DraftDto.host], [DraftDto.despawns], and [DraftDto.promotions] are
+     * ignored: the write-plane route maps them onto [Draft.host],
+     * [Draft.despawns], and [Draft.promotions] (wczst-D1, 8joqm-D8).
      */
     fun compile(draft: DraftDto): Compiled {
         checkShape(draft)
@@ -157,6 +160,15 @@ object DraftCompiler {
         }
         return Compiled.Ok(GraphSpec(steps), boundary)
     }
+
+    /**
+     * Resolve a catalogue-backed rolling-promotion candidate using the same
+     * parameter decoder and catalogue validation as a draft node. The route
+     * supplies a field-shaped handle so compiler refusal text remains useful
+     * on the wire without manufacturing a plan step.
+     */
+    internal fun resolveFactory(catalogueId: String, params: JsonObject, handle: String): CatalogueFactory =
+        resolveFactory(DraftNodeDto(handle = handle, catalogueId = catalogueId, params = params))
 
     private sealed interface NodeResult {
         data class Lowered(val step: GraphStep) : NodeResult
@@ -211,15 +223,46 @@ object DraftCompiler {
 
     private fun unknownId(node: DraftNodeDto) = NodeResult.Faulty(
         RefusalCode.UNKNOWN_CATALOGUE_ID,
-        "draft node '${node.handle}': catalogue id '${node.catalogueId}' is not registered",
+        unknownReason(node),
     )
 
     private fun invalidParams(node: DraftNodeDto, detail: String) = NodeResult.Faulty(
         RefusalCode.INVALID_PARAMS,
-        "draft node '${node.handle}' (catalogue entry '${node.catalogueId}'): $detail",
+        invalidReason(node, detail),
     )
 
+    private fun unknownReason(node: DraftNodeDto) =
+        "draft node '${node.handle}': catalogue id '${node.catalogueId}' is not registered"
+
+    private fun invalidReason(node: DraftNodeDto, detail: String) =
+        "draft node '${node.handle}' (catalogue entry '${node.catalogueId}'): $detail"
+
     private fun enumValues(spec: ParamSpec) = if (spec.kind == ParamKind.ENUM) " (one of ${spec.values})" else ""
+
+    private fun resolveFactory(node: DraftNodeDto): CatalogueFactory {
+        val entry = Catalogue.entry(node.catalogueId)
+            ?: throw DraftException(unknownReason(node))
+        val faults = mutableListOf<String>()
+        val declared = entry.schema.params.associateBy { it.name }
+        val params = mutableMapOf<String, ParamValue>()
+        node.params.forEach { (name, json) ->
+            val spec = declared[name]
+            if (spec == null) {
+                faults += "unknown parameter '$name'"
+            } else {
+                decode(spec, json)?.let { params[name] = it }
+                    ?: run { faults += "parameter '$name' expects ${spec.kind}${enumValues(spec)}, got $json" }
+            }
+        }
+        if (faults.isNotEmpty()) {
+            throw DraftException(invalidReason(node, faults.joinToString("; ")))
+        }
+        return try {
+            Catalogue.resolve(node.catalogueId, params)
+        } catch (e: IllegalArgumentException) {
+            throw DraftException(invalidReason(node, e.message ?: e.toString()))
+        }
+    }
 
     /** va0c4-D6: a JSON value decoded by [spec]'s kind; null when it does not fit. */
     private fun decode(spec: ParamSpec, json: JsonElement): ParamValue? {

@@ -20,11 +20,10 @@ sealed interface WritePlane {
     /**
      * The management verbs a plan submitted to this plane may use — the
      * graph-building three of `HostManagementApi` (`spawn`, `connect`,
-     * `despawn`), and nothing when [Disabled].
+     * `despawn`) plus the evolution verb `promote`, and nothing when
+     * [Disabled].
      *
-     * `promote` is deliberately absent: it joins this list when WKB2 F9 (graph
-     * evolution through the write plane) merges, not before, so a client never
-     * sees a verb this server cannot yet apply.
+     * `promote` is the graph-evolution step added by WKB2 F9.
      */
     val verbs: List<String>
 
@@ -54,8 +53,8 @@ sealed interface WritePlane {
         /** [Enabled.identityLabel]'s default: the caller is known only as the holder of the capability. */
         const val DEFAULT_IDENTITY = "capability-holder"
 
-        /** [Enabled.verbs] — see [verbs] for why `promote` is not here yet. */
-        val STEP_VERBS: List<String> = listOf("spawn", "connect", "despawn")
+        /** [Enabled.verbs], including WKB2 F9's promotion step. */
+        val STEP_VERBS: List<String> = listOf("spawn", "connect", "despawn", "promote")
     }
 }
 
