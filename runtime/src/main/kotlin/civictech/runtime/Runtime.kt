@@ -45,12 +45,14 @@ import civictech.cell.wire.bridgeTo
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
 import civictech.identity.Ed25519SignatureVerifier
+import civictech.identity.FilePeerIncarnationStore
 import civictech.identity.FilePeerKeyStore
 import civictech.identity.PeerIdentity
 import civictech.identity.fingerprint
 import civictech.inspect.InspectorFlag
 import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
+import civictech.wire.durableIncarnation
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.security.PublicKey
@@ -304,15 +306,17 @@ object Runtime {
         require(transport == null || transport.scheme == nodeSpec.transport) {
             "transport override scheme '${transport?.scheme}' does not match node '$node' scheme '${nodeSpec.transport}'"
         }
-        val identity = nodeSpec.keyStore?.let { keyStore ->
-            FilePeerKeyStore(File(keyStore).toPath()).loadOrGenerate()
+        val keyStorePath = nodeSpec.keyStore?.let { keyStore -> File(keyStore).toPath() }
+        val identity = keyStorePath?.let { keyStore ->
+            FilePeerKeyStore(keyStore).loadOrGenerate()
         }
-        // ApplyContext carries the raw identity signer. The landed kernel replication wrapper currently
-        // supplies its own zero-based counter floor; durable incarnation wiring therefore remains outside this
-        // runtime-only claim until that wrapper accepts the incarnation source.
         val writeSigner = identity?.let { loaded ->
+            val counterIncarnationSource = durableIncarnation(
+                FilePeerIncarnationStore(checkNotNull(keyStorePath)),
+            )
             object : WriteSigner {
                 override val peerId: PeerId = loaded.peerId
+                override val counterIncarnation: () -> Long = counterIncarnationSource
                 override fun sign(input: ByteArray): ByteArray = loaded.sign(input)
             }
         }
