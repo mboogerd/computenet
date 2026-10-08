@@ -259,7 +259,7 @@ class WritePlaneRoutesTest {
         val plan = inspectorJson.decodeFromString(PlanDto.serializer(), response.body())
         val promote = plan.steps.single { it.action == "PROMOTE" }
         promote.key shouldBe "promote ${enc(incumbent.ref)}"
-        promote.touches shouldContainExactly listOf(enc(gate.ref), enc(incumbent.ref))
+        promote.touches shouldContainExactly listOf(enc(gate.ref), enc(incumbent.ref)).sorted()
         promote.refusal shouldBe null
     }
 
