@@ -282,6 +282,9 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      */
     override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<E>>>())
 
+    /** Optional authority check, evaluated before any local tag is minted. */
+    internal var localWriteGate: LocalWriteGate? = null
+
     // Full OR-set (M7.3): adds = every add-tag ever seen, dels = tombstones.
     // An element is present iff it has an add-tag without a matching del-tag.
     // Tombstones are what make multi-path gossip safe: a removed tag arriving
@@ -519,6 +522,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // methods read subclass state later, at message time.
     override fun inletHandler(): SetOps<E> = object : SetOps<E> {
         override fun add(element: E) {
+            if (localWriteGate?.admits("add", element) == false) return
             // the fold happens under `stateLock`; the listener notification and
             // the propagation after it, never under (see stateLock's KDoc).
             val (tag, advanced) = synchronized(stateLock) {
@@ -532,6 +536,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }
 
         override fun remove(element: E) {
+            if (localWriteGate?.admits("remove", element) == false) return
             // THE DEL-DOT (`[24-TAG-04]`, computenet-v2ka). The remove mints its
             // OWN dot from this cell's source counter — the same counter space
             // add-tags are drawn from — and ships it inside the `dels` entry

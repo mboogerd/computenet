@@ -103,6 +103,18 @@
       "file": "payloads/WV-PAYLOAD-ASSIGNMENT-01.json"
     },
     {
+      "id": "WV-PAYLOAD-SIGNEDWRITE-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-SIGNEDWRITE-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-SIGNEDWRITEBATCH-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-SIGNEDWRITEBATCH-01.json"
+    },
+    {
       "id": "WV-INTEREST-TOTAL-01",
       "category": "payloads",
       "kind": "frame",

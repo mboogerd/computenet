@@ -42,6 +42,7 @@ import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.SnapshotStep
 import civictech.concord.schema.ViewsConverge
 import civictech.concord.schema.WavePlaneUnchanged
+import civictech.concord.schema.WriteDenials
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -1886,6 +1887,38 @@ class ChecksTest {
     @Test
     fun `refusal-count fails on a negative reading, which no ascending tally can produce`() {
         fail(Checks.refusalCount(RefusalCount("r1", exactly = 0), refusalCtx(observed = -1L)))
+            .message shouldContain "only ascends"
+    }
+
+    // --- write-denials (computenet-ermvz.5) --------------------------------
+
+    private fun writeDenialCtx(observed: Long?, principal: String? = null) = FakeContext(
+        FakeDriver(
+            writeDenials = if (observed == null) emptyMap() else mapOf(("r1" to principal) to observed),
+        ),
+        refusalScenario,
+    )
+
+    @Test
+    fun `write-denials compares the adapter total and a principal-filtered reading`() {
+        pass(Checks.writeDenials(WriteDenials("r1", exactly = 2), writeDenialCtx(2L)))
+        pass(
+            Checks.writeDenials(
+                WriteDenials("r1", exactly = 1, principal = "bob"),
+                writeDenialCtx(1L, principal = "bob"),
+            ),
+        )
+    }
+
+    @Test
+    fun `write-denials fails loudly when no authority adapter is observable`() {
+        fail(Checks.writeDenials(WriteDenials("r1", exactly = 0), writeDenialCtx(null)))
+            .message shouldContain "refused to observe write-authority denials"
+    }
+
+    @Test
+    fun `write-denials rejects a negative tally`() {
+        fail(Checks.writeDenials(WriteDenials("r1", exactly = 0), writeDenialCtx(-1L)))
             .message shouldContain "only ascends"
     }
 

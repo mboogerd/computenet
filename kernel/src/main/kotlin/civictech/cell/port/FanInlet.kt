@@ -333,6 +333,22 @@ class FanInlet<Api : Any>(
     }
 
     /**
+     * Wrap the currently active root without changing this inlet's buffered
+     * state. Replication's write-authority adapter uses this seam to inspect an
+     * inbound envelope before delegating the admitted payload to the original
+     * `deltaInlet` implementation. A cold inlet has no root to wrap and is
+     * rejected; unlike [serve] and [delegate], interposition never replays the
+     * parked tail.
+     */
+    fun interpose(wrap: (Api) -> Api) {
+        val current = requireNotNull(activeImplementation) {
+            "FanInlet.interpose requires an existing active root"
+        }
+        val wrapped = wrap(current.call)
+        activeImplementation = Use.fixed(wrapped, ref)
+    }
+
+    /**
      * Sets the origin to a new Use, clearing any prior origin.
      */
     override fun delegate(port: Use<Api>) {

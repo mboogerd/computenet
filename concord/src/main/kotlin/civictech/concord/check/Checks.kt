@@ -36,6 +36,7 @@ import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.ViewsConverge
+import civictech.concord.schema.WriteDenials
 import civictech.concord.value.Value
 
 /**
@@ -71,6 +72,7 @@ object Checks {
         is PagesEqualView -> pagesEqualView(check, ctx)
         is EmissionCount -> emissionCount(check, ctx)
         is RefusalCount -> refusalCount(check, ctx)
+        is WriteDenials -> writeDenials(check, ctx)
     }
 
     /** At quiescence, `readView(view)` equals the golden value. */
@@ -1122,6 +1124,33 @@ object Checks {
             CheckResult.Passed
         } else {
             CheckResult.Failed("$where: expected exactly ${check.exactly} refusal(s) but observed $observed")
+        }
+    }
+
+    /** An authority adapter denied exactly the declared number of writes. */
+    fun writeDenials(check: WriteDenials, ctx: CheckContext): CheckResult {
+        val principal = check.principal?.let { ", principal=$it" }.orEmpty()
+        val where = "write-denials(${check.cell}$principal)"
+        val observed = try {
+            ctx.driver.writeDenials(check.cell, check.principal)
+        } catch (e: Exception) {
+            return CheckResult.Failed(
+                "$where: the driver refused to observe write-authority denials at '${check.cell}' — " +
+                    "${e.message}. A count of 0 would have been a passing answer for `exactly: 0`, so an " +
+                    "unobserved authority adapter is reported here rather than counted as zero",
+            )
+        }
+        if (observed < 0L) {
+            return CheckResult.Failed(
+                "$where: the driver reported $observed denials — a write-authority denial tally only ascends",
+            )
+        }
+        return if (observed == check.exactly.toLong()) {
+            CheckResult.Passed
+        } else {
+            CheckResult.Failed(
+                "$where: expected exactly ${check.exactly} denial(s) but observed $observed",
+            )
         }
     }
 
