@@ -100,7 +100,7 @@ class InspectorFlowTest {
 
         drive(busy, 7)
         awaitUntil("the driven deltas reached the sink") {
-            host.lookup<SetApi<String>>(busySink.ref) != null && sampleReady(busy, 7)
+            host.lookup<SetApi<String>>(busySink.ref) != null && flowSampleReady(busy, 7)
         }
 
         val batch = sample()
@@ -121,7 +121,7 @@ class InspectorFlowTest {
         bindAll()
 
         drive(source, 3)
-        awaitUntil("deltas observed") { sampleReady(source, 3) }
+        awaitUntil("deltas observed by the flow tap") { flowSampleReady(source, 3) }
         sample().edges.single().rate shouldBe 3.0
 
         // counters reset with the window: a quiet second is an empty batch,
@@ -142,7 +142,7 @@ class InspectorFlowTest {
         flow.tappedOutlets.size shouldBe 1
 
         drive(source, 4)
-        awaitUntil("deltas observed") { sampleReady(source, 4) }
+        awaitUntil("deltas observed by the flow tap") { flowSampleReady(source, 4) }
 
         val rates = sample().edges.associate { it.id to it.rate }
         rates shouldBe mapOf(toLeft.id.toString() to 4.0, toRight.id.toString() to 4.0)
