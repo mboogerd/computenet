@@ -2,7 +2,6 @@ package civictech.cell.port
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.link.Linked
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
@@ -65,35 +64,30 @@ internal object PortIdentities {
     fun of(port: Port): PortIdentity? = table[port]?.identity
 
     /**
-     * Whether [port]'s owning cell currently has any open inbound link, of
-     * either [civictech.cell.link.LinkRole], on any registered [Linked] port —
-     * a [FanInlet], a cycle-head [FeedbackPort], or any other link target — or
-     * `null` when [port] has no registered owner. Any such link lets the cell
-     * emit reactively under another source's wave (a feedback lap runs under
-     * its head's own epoch; an Observe tap fires under the producer's wave), so
-     * only a cell with none is structurally a root. This is a live structural
-     * query over the owning cell's existing [PortRegistry]: no parallel
-     * owner/port registry or emission history is involved, and an inlet linked
-     * after a wave began is visible when the query is evaluated. The registry
-     * reference is weak, so a released owner degrades to `null` (unknown)
-     * rather than being kept alive or misclassified as a root.
+     * Whether [port]'s owning cell has any registered input-capable port — a
+     * [FanInlet], cycle-head [FeedbackPort], or another [LinkFrom] that is not
+     * itself a [Subscribe] output — or `null` when [port] has no registered
+     * owner. Such a cell can emit reactively under another source's wave even
+     * when the delivery bypasses linking entirely (`Use.fixed`, an
+     * un-negotiated tap) or its ordinary links are momentarily closed. Only a
+     * cell with no input surface at all is therefore structurally a root.
      *
-     * [Linked.linking] contains only active links, so an unlinked edge stops
-     * counting immediately. A link is inbound when its `to` is the candidate
-     * port's own ref (an outlet's registered links point away from it). Work is
-     * bounded by this one owner's registered ports rather than every port
-     * created during the JVM's lifetime. Deliveries that bypass linking
-     * entirely (a `Use.fixed` subscription, an un-negotiated tap on a
-     * non-[Linked] target) leave no record here and are not seen.
+     * This is a structural query over the owning cell's existing
+     * [PortRegistry]: no JVM-wide port scan or emission history is involved.
+     * The registry reference is weak, so a released owner degrades to `null`
+     * (unknown) rather than being kept alive or misclassified as a root.
      */
-    fun hasOpenInboundLink(port: Port): Boolean? {
+    fun hasRegisteredInputPort(port: Port): Boolean? {
         val registry = table[port]?.registry?.get() ?: return null
         return registry.names().toList().any { name ->
             val candidate = registry[name]
-            candidate is Linked &&
-                candidate.linking.links.any { it.to == candidate.ref }
+            candidate is LinkFrom<*> && candidate !is Subscribe<*>
         }
     }
+
+    /** Compatibility name for the root-classification seam's former, narrower rule. */
+    @Deprecated("Root classification must include link-bypassing inputs")
+    fun hasOpenInboundLink(port: Port): Boolean? = hasRegisteredInputPort(port)
 }
 
 /**
