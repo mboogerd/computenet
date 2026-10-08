@@ -235,11 +235,17 @@ private class SettledAbsorbAckRelay(
         }
     }
 
-    /** The union of this hop's currently open Consume input edges' resolved source sets. */
+    /**
+     * The union of the resolved source sets of every link currently open into
+     * this hop's inlets, of either [LinkRole]: an Observe tap delivers under the
+     * producer's wave exactly as a Consume edge does, so omitting it would
+     * publish a set that misses a source the hop can emit (the same rule
+     * [civictech.cell.port.PortIdentities.hasOpenInboundLink] applies to roots).
+     */
     private fun resolvedInputSources(): Set<UUID>? {
-        val openEdges = synchronized(lock) { edges.values.filter { it.open && it.link.role == LinkRole.Consume }.map { it.link } }
+        val openLinks = inlets.flatMap { it.linking.links }
         val result = mutableSetOf<UUID>()
-        for (link in openEdges) {
+        for (link in openLinks) {
             val sources = SourceProvenance.resolve(link) ?: return null
             result += sources
         }

@@ -340,6 +340,32 @@ class RelayFanInRegressionTest {
     }
 
     @Test
+    fun `a publishing relay hop fed through an Observe link publishes that link's source`() {
+        val host = ManagedHost()
+        val source = Source()
+        val pass = MintThenForward()
+        val publishing = QuorumSetCell<String>(threshold = { 1 })
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        listOf(source, pass, publishing, fanIn, probe).forEach(management::spawn)
+        management.connect(source.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(source.ref, "outlet", pass.ref, "inlet")
+        management.connect(pass.ref, "outlet", publishing.ref, "inlet", LinkOptions(role = LinkRole.Observe))
+        management.connect(publishing.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+        // The publishing hop's only input is an Observe link, yet it re-emits
+        // the source's wave: its published provenance must include that source.
+        source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.dataWaves.size shouldBe 1
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
     fun `an outlet whose cell is fed only by a feedback inlet is not a structural root`() {
         val host = ManagedHost()
         val source = Source()
