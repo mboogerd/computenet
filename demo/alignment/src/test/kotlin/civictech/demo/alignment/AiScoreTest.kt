@@ -137,6 +137,9 @@ class AiScoreTest {
             val b = probe.awaitRow("b") { it.aiMean("impact") != null }
             assertEquals(null, b.aiMean("effort"), "$b")
             assertEquals(JsonNull, b.ai()!!["score"], "a cost topic with no cost rating has no score: $b")
+            // ...and the decline is reported, so the Board can say so rather than show nothing
+            assertEquals(listOf("effort"), b["aiDeclined"]!!.jsonObject["fake-1"]!!.jsonArray.map { it.jsonPrimitive.content }, "$b")
+            assertEquals(emptyMap(), a["aiDeclined"]!!.jsonObject, "a rated everything: $a")
 
             assertEquals(listOf("fake-1"), a.ai()!!["models"]!!.jsonArray.map { it.jsonPrimitive.content })
             val state = parse(probe.get("/state").body())
@@ -248,6 +251,30 @@ class AiScoreTest {
             assertEquals(listOf("fake-1", "fake-2"), a.ai()!!["models"]!!.jsonArray.map { it.jsonPrimitive.content })
             assertEquals(2L, a.ai()!!["byDim"]!!.jsonObject["impact"]!!.jsonObject["n"]!!.jsonPrimitive.content.toLong(), "(8 + 4) / 2")
             probe.awaitRow("b") { it.aiMean("impact") == 6.0 }
+        }
+    }
+
+    /** A decline lasts until the question changes: an idea edit clears it, and a rating replaces it. */
+    @Test
+    fun `a decline is reported until an edit or a rating replaces it`() {
+        val rater = FakeRater { idea, dims -> if (idea.description.isEmpty()) emptyMap() else dims.keys.associateWith { 5.0 } }
+        withApp(raters = listOf(rater)) { probe ->
+            seed(probe)
+            aiRate(probe)
+            val a = probe.awaitRow("a") { it["aiDeclined"]!!.jsonObject.isNotEmpty() }
+            assertEquals(
+                listOf("effort", "impact"),
+                a["aiDeclined"]!!.jsonObject["fake-1"]!!.jsonArray.map { it.jsonPrimitive.content },
+            )
+            assertEquals(JsonNull, a["ai"], "a decline is not a rating: $a")
+            probe.awaitIdle()
+
+            assertEquals(200, probe.putJson("""{"creator":"cat","description":"now with detail"}""", "/topics/t/ideas/a").statusCode())
+            probe.awaitRow("a") { it["aiDeclined"]!!.jsonObject.isEmpty() }
+            assertTrue(row(probe.get("/topics/t/aggregate").body(), "b")!!["aiDeclined"]!!.jsonObject.isNotEmpty(), "b was not edited")
+
+            aiRate(probe)
+            probe.awaitRow("a") { it.aiMean("impact") == 5.0 && it["aiDeclined"]!!.jsonObject.isEmpty() }
         }
     }
 }
