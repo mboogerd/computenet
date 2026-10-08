@@ -420,6 +420,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
             .firstOrNull { it.replicated && context.replication == null }
             ?.let { throw missingReplication(it.handle) }
         lowered.filterIsInstance<SpawnStep>()
+            .firstOrNull { it.authority != WriteAuthority.Open && !context.hasAuthoritySeams() }
+            ?.let { throw missingAuthoritySeams(it.handle) }
+        lowered.filterIsInstance<SpawnStep>()
             .firstOrNull { step ->
                 step.journalId != null && step.journalId !in context.journals
             }
@@ -892,6 +895,10 @@ internal fun missingReplication(handle: String): IllegalStateException = Illegal
     "spawn step '$handle': parameter 'replicated' requires ApplyContext.replication",
 )
 
+internal fun missingAuthoritySeams(handle: String): IllegalStateException = IllegalStateException(
+    "spawn step '$handle': parameter 'authority' requires a WriteSigner and a SignatureVerifier on the ApplyContext",
+)
+
 private fun unsupportedReplication(handle: String, path: String): IllegalStateException = IllegalStateException(
     "spawn step '$handle': parameter 'replicated' cannot be applied by $path; use apply(ApplyContext)",
 )
@@ -1007,6 +1014,7 @@ class GraphBuilder private constructor(
             if (authority != WriteAuthority.Open) throw unsupportedAuthority(name, "graph(Use<HostManagementApi>)")
         } else {
             if (replicated && context.replication == null) throw missingReplication(name)
+            if (authority != WriteAuthority.Open && !context.hasAuthoritySeams()) throw missingAuthoritySeams(name)
             if (journalId != null && journalId !in context.journals) throw missingJournal(name, journalId)
         }
         val ref = identity.resolve()

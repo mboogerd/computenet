@@ -223,15 +223,13 @@ class ApplyContext(
         }
     }
 
+    /** Both write-authority seams are present; checked before journaling so a refusal leaves no record. */
+    internal fun hasAuthoritySeams(): Boolean = writeSigner != null && signatureVerifier != null
+
     internal fun applySpawn(event: TopoEvent.Spawn, prepared: Cell? = null): CellRef {
         check(!fold.containsHandle(event.handle)) { "duplicate handle '${event.handle}'" }
         val authority = event.authority ?: WriteAuthority.Open
-        if (authority != WriteAuthority.Open && (writeSigner == null || signatureVerifier == null)) {
-            throw IllegalStateException(
-                "spawn step '${event.handle}': parameter 'authority' requires a WriteSigner and a " +
-                    "SignatureVerifier on the ApplyContext",
-            )
-        }
+        if (authority != WriteAuthority.Open && !hasAuthoritySeams()) throw missingAuthoritySeams(event.handle)
         event.journalId?.let { journalId ->
             bind(event.ref, journals[journalId] ?: throw missingJournal(event.handle, journalId))
         }

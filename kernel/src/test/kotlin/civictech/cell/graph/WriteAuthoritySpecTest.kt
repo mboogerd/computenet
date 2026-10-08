@@ -112,6 +112,57 @@ class WriteAuthoritySpecTest {
     }
 
     @Test
+    fun `missing authority seams refuse spec and builder applies before journaling or building`() {
+        for (viaBuilder in listOf(false, true)) {
+            val controller = SimulationController(seed = 75)
+            val registry = LocationRegistry()
+            val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+            val topology = InMemoryJournal()
+            val context = ApplyContext(host = host, replication = Replication(registry), topology = topology)
+            val ref = CellRef(UUID.randomUUID(), 1)
+            var factoryCalls = 0
+            val factory = CellFactory {
+                factoryCalls++
+                SetCell<String>(it)
+            }
+
+            val failure = shouldThrow<IllegalStateException> {
+                if (viaBuilder) {
+                    graph(context) {
+                        spawn(
+                            "owned",
+                            identity = IdentityBinding.Exact(ref),
+                            replicated = true,
+                            authority = WriteAuthority.Principal(principal),
+                        ) {
+                            factoryCalls++
+                            SetCell<String>(it)
+                        }
+                    }
+                } else {
+                    GraphSpec(
+                        listOf(
+                            SpawnStep(
+                                handle = "owned",
+                                factory = factory,
+                                identity = IdentityBinding.Exact(ref),
+                                replicated = true,
+                                authority = WriteAuthority.Principal(principal),
+                            ),
+                        ),
+                    ).apply(context)
+                }
+            }
+            failure.message shouldBe
+                "spawn step 'owned': parameter 'authority' requires a WriteSigner and a " +
+                "SignatureVerifier on the ApplyContext"
+            factoryCalls shouldBe 0
+            topology.replay().size shouldBe 0
+            host.portAt(ref, "outlet") shouldBe null
+        }
+    }
+
+    @Test
     fun `remote authority spawn is refused by parameter and use builders refuse it too`() {
         val ref = CellRef(UUID.randomUUID(), 1)
         val authority = WriteAuthority.Principal(principal)
