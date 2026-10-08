@@ -5,9 +5,10 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Textual guardrail for `[WKB2-01]`: every call that mutates a host's live
- * cell graph — `spawn`, `spawnBound`, `despawn`, `connect`, `applyRemote`,
- * `applyTo`, `resume`, `resumeHost` — or references `Promotion.` lives inside
+ * Textual guardrail for `[WKB2-01]`: every call that mutates host state or its
+ * live cell graph — `spawn`, `spawnBound`, `despawn`, `connect`, `applyRemote`,
+ * `applyTo`, `resume`, `resumeHost`, `supervise`, `suspend`, `drainHost`,
+ * `migrate`, `declareWrite` — or references `Promotion.` lives inside
  * `civictech.inspect.edit`, with exactly two named, per-verb exceptions:
  *
  * - `Observations.kt` × {`spawn`, `connect`, `despawn`} — the inspector's own
@@ -15,6 +16,17 @@ import java.io.File
  *   write plane.
  * - `Cold.kt` × {`resume`, `resumeHost`} — the `Waker` behind
  *   `POST /graph/{id}/wake` (M5-COLD), likewise pre-existing.
+ *
+ * The verb list is hand-maintained, not derived: it is wczst-D7's decided list
+ * plus the host-state mutators `HostManagementApi` (kernel `Host.kt`) declares
+ * beyond it (`supervise`, `suspend`, `drainHost`, `migrate`, `declareWrite`). It is NOT
+ * guaranteed complete against that interface: a new mutating member must be
+ * added to [verbRegex] by hand. Read-only members (`lookup`, `inspectTopology`,
+ * `declaredWrite`, `upstreamConsumeAncestors`) are deliberately absent.
+ * `HostRoutingApi.route` is not a `HostManagementApi` member and is not
+ * read-only: it dispatches an `Invocation` to a hosted inlet. It is deliberately
+ * not in this textual regex because `.route(` would also match DemoShell's HTTP
+ * route declarations.
  *
  * The check is deliberately textual and cheap: it answers "which files can
  * mutate host state?" with one directory plus two named exceptions, not a
@@ -36,7 +48,7 @@ class WritePlaneBoundaryTest {
 
         private val inspectMainDir = File(repoRoot, "inspect/src/main/kotlin/civictech/inspect")
 
-        private val verbRegex = Regex("""\.(spawn|spawnBound|despawn|connect|applyRemote|applyTo|resume|resumeHost)\(""")
+        private val verbRegex = Regex("""\.(spawn|spawnBound|despawn|connect|applyRemote|applyTo|resume|resumeHost|supervise|suspend|drainHost|migrate|declareWrite)\(""")
         private val promotionRegex = Regex("""\bPromotion\.""")
 
         /** file name (not path) -> allowed verbs for that file, exactly. */

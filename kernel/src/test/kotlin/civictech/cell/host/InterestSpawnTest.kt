@@ -71,7 +71,17 @@ class InterestSpawnTest {
     private class FamilyKeyFailingJournal(
         private val delegate: InMemoryJournal = InMemoryJournal(),
         private var failuresRemaining: Int = Int.MAX_VALUE,
+        private var resetFailuresRemaining: Int = 0,
     ) : Journal by delegate {
+        @Synchronized
+        override fun reset(records: List<ByteArray>) {
+            if (resetFailuresRemaining > 0) {
+                resetFailuresRemaining--
+                throw IllegalStateException("journal reset failed")
+            }
+            delegate.reset(records)
+        }
+
         @Synchronized
         override fun append(record: ByteArray) {
             val decoded = JournalRecords.decode(record)
@@ -203,14 +213,60 @@ class InterestSpawnTest {
         admitted.ref shouldBe admittedRef
         registry.location(admitted.ref).shouldNotBeNull()
         family.keys() shouldBe setOf(11L)
-        familyKeys(journal) shouldBe emptyList()
+        familyKeys(journal) shouldBe listOf(TopoEvent.FamilyKey("authored", "11"))
     }
 
     @Test
-    fun `an adopted member whose family key append failed loses its journaled state on recovery`() {
-        val firstController = SimulationController(seed = 11)
+    fun `an adopted member whose family key append failed recovers without an explicit checkpoint`() {
+        val firstScheduler = VirtualThreadScheduler("interest-adoption-repair")
+        try {
+            val firstRegistry = LocationRegistry()
+            val journal = FamilyKeyFailingJournal(failuresRemaining = 1)
+            val firstHost = ManagedHost(
+                scheduler = firstScheduler,
+                registry = firstRegistry,
+                journal = journal,
+            )
+            val firstFamily = longFamily(firstHost)
+            val declaringRef = CellRef(UUID.randomUUID())
+            val interest = Interest.Ranges(listOf(Interest.Ranges.Range(11, 12)))
+
+            val failedAdmission = firstRegistry.setInterest(declaringRef, interest)
+            failed(failedAdmission.spawned).message shouldBe "FamilyKey append failed"
+
+            val adopted = firstFamily.getOrSpawn(11L)
+            opsFor(firstRegistry, adopted).add("kept")
+            firstHost.quiescence().await()
+            val retry = firstRegistry.setInterest(declaringRef, interest)
+            retry.spawned.get(5, TimeUnit.SECONDS) shouldBe setOf(adopted.ref)
+
+            val recoveredScheduler = VirtualThreadScheduler("interest-adoption-recovery")
+            try {
+                val recoveredRegistry = LocationRegistry()
+                val recoveredHost = ManagedHost(
+                    scheduler = recoveredScheduler,
+                    registry = recoveredRegistry,
+                    journal = journal,
+                )
+                val recoveredFamily = longFamily(recoveredHost)
+                recoveredHost.recoverFrom(journal).awaitApplied()
+
+                recoveredFamily.keys() shouldBe setOf(11L)
+                membership(recoveredFamily.getOrSpawn(11L)) shouldBe setOf("kept")
+                recoveredHost.supervisionAccounting().deadLetters shouldBe 0L
+            } finally {
+                recoveredScheduler.shutdown()
+            }
+        } finally {
+            firstScheduler.shutdown()
+        }
+    }
+
+    @Test
+    fun `a failed recovery compaction is reported and a later checkpoint still makes the adopted member durable`() {
+        val firstController = SimulationController(seed = 15)
         val firstRegistry = LocationRegistry()
-        val journal = FamilyKeyFailingJournal(failuresRemaining = 1)
+        val journal = FamilyKeyFailingJournal(failuresRemaining = 1, resetFailuresRemaining = 1)
         val firstHost = ManagedHost(
             scheduler = firstController.scheduler(),
             registry = firstRegistry,
@@ -222,17 +278,18 @@ class InterestSpawnTest {
 
         val failedAdmission = firstRegistry.setInterest(declaringRef, interest)
         firstController.runToIdle()
-        failed(failedAdmission.spawned).message shouldBe "FamilyKey append failed"
+        val failure = failed(failedAdmission.spawned)
+        failure.message shouldBe "FamilyKey append failed"
+        failure.suppressed.map { it.message } shouldBe listOf("journal reset failed")
+        familyKeys(journal) shouldBe emptyList()
 
         val adopted = firstFamily.getOrSpawn(11L)
         opsFor(firstRegistry, adopted).add("kept")
         firstController.runToIdle()
-        val retry = firstRegistry.setInterest(declaringRef, interest)
-        firstController.runToIdle()
-        retry.spawned.get(5, TimeUnit.SECONDS) shouldBe setOf(adopted.ref)
-        familyKeys(journal) shouldBe emptyList()
+        firstHost.checkpoint(journal)
+        familyKeys(journal) shouldBe listOf(TopoEvent.FamilyKey("authored", "11"))
 
-        val recoveredController = SimulationController(seed = 12)
+        val recoveredController = SimulationController(seed = 16)
         val recoveredRegistry = LocationRegistry()
         val recoveredHost = ManagedHost(
             scheduler = recoveredController.scheduler(),
@@ -243,9 +300,9 @@ class InterestSpawnTest {
         recoveredHost.recoverFrom(journal)
         recoveredController.runToIdle()
 
-        recoveredFamily.keys() shouldBe emptySet()
-        recoveredHost.supervisionAccounting().deadLetters shouldBe 1L
-        membership(recoveredFamily.getOrSpawn(11L)) shouldBe emptySet()
+        recoveredFamily.keys() shouldBe setOf(11L)
+        membership(recoveredFamily.getOrSpawn(11L)) shouldBe setOf("kept")
+        recoveredHost.supervisionAccounting().deadLetters shouldBe 0L
     }
 
     @Test
@@ -269,7 +326,7 @@ class InterestSpawnTest {
         val adopted = firstFamily.getOrSpawn(11L)
         opsFor(firstRegistry, adopted).add("kept")
         firstController.runToIdle()
-        familyKeys(journal) shouldBe emptyList()
+        familyKeys(journal) shouldBe listOf(TopoEvent.FamilyKey("authored", "11"))
 
         firstHost.checkpoint(journal)
         val checkpointRecords = journal.replay().map(JournalRecords::decode)

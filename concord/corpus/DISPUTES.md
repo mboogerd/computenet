@@ -3813,50 +3813,64 @@ Filed 2026-09-27 by `computenet-t4od7.9` (feature `computenet-t4od7` = KE4.7,
 epic `computenet-lxo` = KE4), over `feature/computenet-t4od7` at `15fd3e46`.
 Every other `[24-WL-nn]` id reads `covered` in `doc/spec/CONCORDANCE.md`
 (the `24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
-`[24-WL-11]`). The four ids below stay `gap` rows, and the fifth entry
+`[24-WL-11]`). `24-WL-04` now reads covered (only its structural residual stays disputed below), and so does `24-WL-09` (covered by the narrower implemented rule; its general `[KE4-30]` residual is disputed below); the other ids below stay `gap` rows, and the last entry
 records a scenario that was designed and deliberately not authored. Kernel
 test names below were checked with `git grep -n` at that commit.
 
-## `24-WL-04` — the floor is a value, not a wave: only its settlement consequence is observable, and that half is checkable but not yet authored (`check-vocabulary-gap`)
+## `24-WL-04` (residual) — the floor is not a wave position and is in no completeness set: no neutral observable (`check-vocabulary-gap`)
 
 - **Requirement**: `[24-WL-04]` (`20-dataflow-semantics/24-data-cells.md`
   §Lateness and waterlines; stated in `22-consistency.md` §Interaction with
   other parts): the floor SHALL NOT be a wave position and SHALL NOT be a
-  member of any completeness set or glitch-free frontier. 22 names the
-  observable consequence: a wave that reaches the waterline without moving the
-  floor emits nothing and is absorb-acked (CP-A3), so a glitch-free consumer
-  downstream of both the data and the waterline settles that wave normally.
-- **Corrected premise.** The breakdown (t4od7-D10) disputed the whole id on
-  the grounds that no catalog cell accepts a waterline arm into a wave-aligned
-  fan-in. That is false. `aligned-view` accepts a `value-view` member
-  (`KernelCatalog.alignedView`, `"value-view" -> scalarView()`), and
-  `scalarView()` (`KernelAdapters.kt`) folds `WaterlineDelta`. A probe was
-  run and not committed: `a -> c.d`, `a -> wl (lateness 5)`, `wl -> c.f`,
-  adds `[10,x]`, `[3,y]`, `[8,z]`, each followed by a `quiesce`, the last two
-  leaving the floor at 5. It passed `final-view c == {d: [[3,y],[8,z],[10,x]],
-  f: 5}` and `composite-whole-waves` on `d` on all 20 schedule runs
-  (`CorpusRunner`, core profile, Darwin arm64). **The settlement consequence
-  is checkable with no schema change.** Nobody has yet shown that the probe
-  DISCRIMINATES: that needs a kernel mutation that stops the no-rise
-  absorb-ack, and the close-out's claim held no kernel file.
-- **Missing capability (for the half that stays disputed)**: the literal
+  member of any completeness set or glitch-free frontier.
+- **Covered half.** The settlement consequence (a wave that reaches the
+  waterline without moving the floor emits nothing and is absorb-acked, so a
+  wave-aligned consumer of data and waterline settles it) is authored as
+  `24-WL-SETTLE-01` (`computenet-tcovt`), through an `aligned-view` with a
+  `set-view` data member and a `value-view` waterline member. It discriminates:
+  with `WaterlineCell` no longer absorb-acking a no-rise wave
+  (`kernel/.../data/Waterline.kt`, the `outlet.absorbAck()` after a failed
+  `raiseTo`), it fails on 20 of 20 runs with `final-view(c): expected
+  {d=[[3,y],[8,z],[10,x]],f=5} but read {d=[[10,x]],f=5}`.
+- **Missing capability (the half that stays disputed)**: the literal
   statement, that the floor is not a wave position and is in no completeness
   set, has no neutral observable. No check reads a cell's completeness set or
-  a frontier's members. The only observable consequence is the settlement
-  above. A broken implementation that made the floor a frontier member but
-  still acked every no-rise wave would pass every check this vocabulary can
-  state.
-- **What was NOT done instead**: the close-out authored no scenario (its
-  non-goal), so the probe is not in the corpus. No scenario covers
-  `[24-WL-04]` with a stand-in, such as an `observations-monotone` on the
-  floor, which is `[24-WL-03]`'s property and not this one.
-- **Check to restore**: the settlement scenario above, with the discriminating
-  kernel mutation, filed as `computenet-tcovt` (under `computenet-lxo`). When
-  it lands, shrink this entry to the "not a wave position" half.
+  a frontier's members. A broken implementation that made the floor a
+  frontier member but still acked every no-rise wave would pass every check
+  this vocabulary can state, including `24-WL-SETTLE-01`.
 - **Kernel pin**: `WaterlineCellTest` `a wave that does not move the floor is
   absorb-acked so a downstream glitch-free join settles it`.
-- **Revisit trigger**: `computenet-tcovt` landing. For the structural half, a
-  check that can read frontier membership.
+- **Revisit trigger**: a check that can read frontier or completeness-set
+  membership.
+
+## `24-WL-09` (residual) — `[KE4-30]`'s general safety condition has no clean formulation; the implemented rule is narrower (`proof-gap`)
+
+- **Requirement**: `[24-WL-09]` (`20-dataflow-semantics/24-data-cells.md`
+  §Lateness and waterlines): IF evicting a piece of state would leave a
+  subsequently admissible del unable to retract it, THEN the cell SHALL NOT
+  evict that state; the eviction units of `[24-WL-06]` together with the
+  liveness del guard `[24-WL-08]` SHALL be the implemented form of this
+  condition. The general condition it narrows is `[KE4-30]` of epic
+  `computenet-lxo`: evict only what no admissible del can reference. The
+  epic's acceptance allows closing with a narrower implemented rule only
+  alongside this entry.
+- **Covered half.** The implemented rule: `24-WL-DEL-01` (group-by: a del for an
+  evicted window's element is a no-op) and `24-WL-JOIN-01` (join family: a del
+  for an evicted row is a no-op and no pair exits twice), both `covered` for
+  `24-WL-09` in `doc/spec/CONCORDANCE.md`. Kernel pins: `GroupByEvictionTest`
+  `B4 - a del in flight for an evicted element is a no-op, never a negative
+  count`, and the `B5 - ...` tests of `JoinFamilyEvictionTest`,
+  `SemiJoinEvictionTest` and `IntersectEvictionTest`.
+- **Missing capability (the half that stays disputed)**: the general condition,
+  that no admissible del can reference any evicted state, has no clean
+  formulation for arbitrary state — the join family's minted pairs in
+  particular, which `[24-WL-09]` itself says are never an eviction unit.
+  No scenario or check can state "for every state shape" the way it can for the
+  two eviction units, so the property is checked per unit, not in general. Any
+  state shape outside the `[24-WL-06]` eviction units is not evicted rather
+  than evicted under a broadened rule.
+- **Revisit trigger**: a new state shape that wants eviction and does not fit
+  the `[24-WL-06]` units.
 
 ## `24-WL-15` — `retire(sourceId)` is a management verb with no script step (`schema-gap`)
 
@@ -4057,3 +4071,53 @@ test names below were checked with `git grep -n` at that commit.
 - **Resolves**: a named-inlet cross-host link binding in `KernelDriverDist`,
   together with the `[22-GF-03]`-shaped corpus check that exercises its
   `EdgeOpen`/`EdgeClose`/`Progress` ordering and aligned-view completeness.
+
+---
+
+## 43-security authority coverage boundaries (computenet-ermvz.5)
+
+### `[43-ADMIT-01]` — deny-by-default peer admission is not reachable in the dist driver (`driver-binding-gap`)
+
+- **Requirement**: `[43-ADMIT-01]` says deny-by-default is a boundary control at
+  peer admission (`Peering.Side.allow` / transport hello refusal).
+- **Why it stays `gap`**: the Concord dist binding models N managed hosts over
+  one `LocationRegistry` by default. It constructs replication links, but no
+  scenario declares a `Peering.Side`, a hello, an allowlist or an admitted peer
+  identity. Its optional real-transport mode builds an open full mesh chosen by
+  a test property, not scenario vocabulary; it still exposes no hello policy or
+  admission result to a check. A replica write denial is a flow-time data
+  admission and cannot stand in for peer admission.
+- **What was not done instead**: neither `authority:` nor `write-denials` is
+  claimed as coverage of this id. They exercise `[43-FLOW-04]` after a replica
+  already exists and say nothing about whether an unlisted peer could join.
+- **Existing evidence**: kernel `TrustBoundaryTest` pins the deny-by-default
+  allowlist and open-mode control. It is implementation-level evidence, not a
+  cross-implementation Concord obligation.
+- **Resolves**: scenario-declarable peers and allowlists, a hello/admission step,
+  and a check reading the typed admission refusal from a transport-capable
+  driver. Until all three exist, `[43-ADMIT-01]` remains a concordance gap.
+
+### `[43-PRIN-01]` — a signed write's author is not the crossing `Principal` (`requirement-mismatch` + `driver-binding-gap`)
+
+- **Requirement**: `[43-PRIN-01]` requires *every crossing* to carry
+  `Principal.LocalTrusted` or `Principal.Peer(id, auth)`. The identity belongs
+  to the crossing and includes authentication strength.
+- **Why it stays `gap`**: the new authority scenarios observe the author inside
+  a `SignedWrite` and the author copied into `BoundaryDenial.principal`. That is
+  deliberately relay-independent data attribution: a write authored by Bob may
+  cross a link carried by Alice's host. Treating Bob as the crossing principal
+  would conflate the two identities and weaken the requirement. The dist driver
+  also has no check that reads `currentPrincipal()` at a crossing or its
+  `AuthLevel`.
+- **What was not done instead**: no three-replica scenario claims that an author
+  name surviving relay proves the relay crossing carried a `Principal`. Such a
+  scenario could pass while every crossing was unstamped, exactly the defect
+  `[43-PRIN-01]` forbids.
+- **What is covered nearby**: `43-FLOW-AUTH-01` and `43-FLOW-AUTH-02` cover
+  `[43-FLOW-04]`: signed-author admission, attributable refusal,
+  drop-and-reconverge, and ownership transfer. They make no crossing-principal
+  claim.
+- **Resolves**: a transport/peering scenario surface plus an observation made by
+  a boundary predicate at the crossing, reporting the full neutral principal
+  classification including authentication strength. Until then,
+  `[43-PRIN-01]` remains a concordance gap.

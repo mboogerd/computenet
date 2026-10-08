@@ -4427,7 +4427,7 @@ SlotFinderPipelineTest.
 | 27 | WL-14 | WCh `B12 - an idle contributing source freezes the floor, retire raises it in one emission`, `B12 - an idle source joined below the floor freezes it entirely, ...` |
 | 28 | WL-18 (lxo-D3) | GBE `B17 - the eviction seam refuses a Replicable host and leaves its state untouched`; JFE `B17 - the grown seam still refuses ...` |
 | 29 | WL-11 | GBE `without lateness the cell is today's operator and its lateness ports sit unlinked` (+ JFE/SJE/IE same name); WT `tumbling window sums update on late elements and retractions` |
-| 30 | WL-09 (narrower rule) | GBE B4; JFE/SJE/IE `B5 - ...` (cite). **Narrower implemented rule**: windows (group-by) and rows at the late-drop threshold (join family) plus the liveness del guard, stated normatively in `[24-WL-09]` — no DISPUTES entry, by 3vd7k-D8 |
+| 30 | WL-09 (narrower rule) | GBE B4; JFE/SJE/IE `B5 - ...` (cite). **Narrower implemented rule**: windows (group-by) and rows at the late-drop threshold (join family) plus the liveness del guard, stated normatively in `[24-WL-09]`. The general condition has no clean formulation; DISPUTES entry `24-WL-09` (residual) records it (`computenet-lxo.4`, superseding 3vd7k-D8's "no entry") |
 | 31 | WL-05 | GBE B3 + its mutation control (below); LHT `B3 control - evict without retract diverges the two subscribers` (cite); GBG `a late-linked subscriber's catch-up fold equals the early observer's, after every wave` |
 | 32 | WL-16 | LHT `B14 control - exit without tags leaves the consumer holding dead pairs`; IE `a floor rise past the last support removes the element from the tombstone-folding consumer` (cite) |
 | 33 | WL-02 (as corrected, #8) | WCT `B8 control - max over sources fails the oracle` (cite) |
@@ -4458,7 +4458,7 @@ scenario carries it.
 | B2 | GBE `an add at or above the floor, or under a null floor, is an ordinary add and late stays silent` (as amended, #10) | `24-WL-LATE-01` (t4od7.3) |
 | B3 | GBE `B3 - ...`; LHT `B3 control - ...`; GBG late-linked catch-up test | `21-propagation/24-WL-CATCHUP-01` (t4od7.6) |
 | B4 | GBE `B4 - ...` | `24-WL-DEL-01` (t4od7.3) |
-| B5 | JFE/SJE/IE `B5 - ...` | join form only: `24-WL-JOIN-01` (t4od7.7) dels an evicted row as a no-op; no semi-join/intersect scenario, no DISPUTES (3vd7k-D8) |
+| B5 | JFE/SJE/IE `B5 - ...` | join form only: `24-WL-JOIN-01` (t4od7.7) dels an evicted row as a no-op; no semi-join/intersect scenario; the general condition is DISPUTES entry `24-WL-09` (residual) (`computenet-lxo.4`) |
 | B6 | LHT four `B6` tests; SFP seeded test; `SlotFinderQueryAgreementTest` `hand-wired SlotPipeline agrees with the compiled query's BatchEvaluator reference on every seed` | `incremental-equals-batch` over the `BatchOracle` lateness model (t4od7.2) on `24-WL-LATE-01`, `-DEL-01`, `-BOUND-01`, `-JOIN-01`; `[24-WL-10]` covered by LATE-01 and JOIN-01 |
 | B7 | LHT `B7 - ...`, `B7 join - ...` | none, by the epic (soak, not semantics); `24-WL-BOUND-01` (t4od7.3) states `[24-WL-19]`'s bound at example scale |
 | B8 | WCT B8 + two controls | `24-WL-FLOOR-01`, `24-WL-JOINLOW-01` (t4od7.4) |

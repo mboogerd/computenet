@@ -219,6 +219,32 @@ class FanOutlet<Api : Any>(
     private var sourceId: UUID = UUID.randomUUID()
 
     /**
+     * Every `sourceId` this outlet has minted for a **spontaneous** emission
+     * (`CurrentContext` was null — a true wave origination under this outlet's
+     * own epoch, [originate] or an external call). [mintFreshEpoch] and
+     * [adoptWaveState] can rotate more than one epoch into the set over the
+     * outlet's life, so this is a set rather than a single id.
+     *
+     * This is source-id inventory, not evidence that the outlet is a root.
+     * [civictech.cell.control.SourceProvenance] decides that structurally from
+     * the owning cell's open inbound links at evaluation time; emission
+     * history must never make an edge look source-disjoint. A relay-aware cell
+     * additionally publishes the sources resolved through its inputs.
+     */
+    internal val mintedAsRoot: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Live, outlet-owned source-provenance publisher installed by a transparent
+     * fan-in relay. Keeping the resolver on the outlet makes its lifetime match
+     * the graph: the resolver may capture the relay (and therefore this outlet),
+     * but that self-contained cycle is collectible once the graph is no longer
+     * reachable. A JVM-global publisher map would instead root every retired
+     * graph and make structural root scans grow for the life of the process.
+     */
+    @Volatile
+    internal var sourceProvenanceResolver: (() -> Set<UUID>?)? = null
+
+    /**
      * SPSC rule (spec 23, G-21 phase 2): a contract carrying `Owned`/`Leased`
      * payloads gets exactly one subscriber. Read from generated metadata —
      * no runtime reflection; un-annotated contracts are never exclusive.
@@ -232,8 +258,13 @@ class FanOutlet<Api : Any>(
         // inherits the baseline the replayed frame already carries (the copy
         // below); a *spontaneous* emission (a cell that originates mid-replay)
         // reads it from [ReplayScope], the exact analogue of [PendingReBaseline].
-        val ctx = CurrentContext.get()?.let { it.copy(sourcePort = ref, hop = it.hop + 1, baseline = it.baseline ?: ReplayScope.get()) }
+        val reactive = CurrentContext.get()
+        val ctx = reactive?.let { it.copy(sourcePort = ref, hop = it.hop + 1, baseline = it.baseline ?: ReplayScope.get()) }
             ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get(), baseline = ReplayScope.get())
+        // Keep every locally minted epoch available to structural provenance.
+        // Reactive history is deliberately not recorded: whether this outlet
+        // is a root is a live topology fact, not an inference from past traffic.
+        if (reactive == null) mintedAsRoot += ctx.timestamp.sourceId
         CurrentContext.with(ctx) {
             // snapshot: link/unlink during a wave must not fail the broadcast
             // Taps fire first, in emission order (spec 20/23 "taps-fire-first"),
@@ -562,6 +593,16 @@ class FanOutlet<Api : Any>(
         val effective = (StagedSubscription.current()?.takeIf { it.ref == port.ref } ?: port) as Use<Api>
         putConsumer(keyOf(port.ref), effective)
     }
+
+    /**
+     * Read-only snapshot of the APIs currently attached through the Consume
+     * funnel. This is a structural-discovery seam, not a delivery path: callers
+     * can classify a source-side-only attachment without exposing or mutating
+     * [consumers]. Detached and superseded targets disappear synchronously via
+     * the same [consumerOrder]/[consumers] pair emission uses.
+     */
+    internal fun attachedConsumerApis(): List<Api> =
+        consumerOrder.mapNotNull { key -> consumers[key]?.call }
 
     /**
      * Observe-role attachment (spec 20/23 §Taps, 10/12 §Cardinality rule 2

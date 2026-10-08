@@ -34,6 +34,58 @@ data class ApplyStep(
 ) : Step
 
 /**
+ * Apply one author-signed set operation at authority-bearing replica [on]
+ * (`[43-FLOW-04]`). [actor] is a scenario-local principal handle; the driver
+ * owns its signing key, replay counter and merge tag source.
+ */
+@Serializable
+@SerialName("signed-apply")
+data class SignedApplyStep(
+    val on: String,
+    val actor: String,
+    val op: String,
+    @Contextual val value: Value,
+) : Step
+
+/**
+ * Apply one author-signed set operation whose signature has been forged without
+ * changing its author, counter or payload (`[43-FLOW-04]`).
+ */
+@Serializable
+@SerialName("forge-signed-apply")
+data class ForgeSignedApplyStep(
+    val on: String,
+    val actor: String,
+    val op: String,
+    @Contextual val value: Value,
+) : Step
+
+/**
+ * Re-deliver the exact envelope from the most recent prior matching
+ * [SignedApplyStep] in this run (`[43-FLOW-04]`).
+ */
+@Serializable
+@SerialName("replay-signed-apply")
+data class ReplaySignedApplyStep(
+    val on: String,
+    val actor: String,
+    val op: String,
+    @Contextual val value: Value,
+) : Step
+
+/**
+ * Submit an author-signed principal transfer at authority-bearing replica [on].
+ * Both [actor] and [to] are scenario-local principal handles.
+ */
+@Serializable
+@SerialName("transfer-authority")
+data class TransferAuthorityStep(
+    val on: String,
+    val actor: String,
+    val to: String,
+) : Step
+
+/**
  * A quiescence barrier: everything before it settles (driver `quiesce(budget)`)
  * before anything after it starts. [budget] overrides the harness default.
  */

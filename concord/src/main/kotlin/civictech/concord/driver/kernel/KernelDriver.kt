@@ -233,7 +233,12 @@ class KernelDriver private constructor(
                 host.deadLetterOutlet.subscribe(
                     Use.fixed(
                         Propagate<civictech.cell.host.DeadLetter> { dl ->
-                            deadLetters += DeadLetter(host = key, cell = null, reason = dl.description)
+                            deadLetters += DeadLetter(
+                                host = key,
+                                cell = null,
+                                reason = dl.description,
+                                principal = dl.denial?.principal?.name,
+                            )
                         },
                         PortRef.generate(),
                     ),
@@ -359,7 +364,7 @@ class KernelDriver private constructor(
         // dist capability owns turning it into a real `Interest` and staging it on
         // the registry before the replica joins the mesh.
         (params["replica-of"] as? Value.StrVal)?.value?.let { logical ->
-            dist.spawnReplica(hostId, cellId, type, logical, params["interest"])
+            dist.spawnReplica(hostId, cellId, type, logical, params["interest"], params["authority"])
             distReplicas += cellId
             return
         }
@@ -503,6 +508,18 @@ class KernelDriver private constructor(
         val invocation = Invocation(call.methodName, call.parameterTypes, call.args)
         bound.host.routerInlet.call.route(bound.ref, "inlet", invocation)
     }
+
+    override fun signedApply(cellId: CellId, actor: String, op: String, value: Value) =
+        dist.signedApply(cellId, actor, op, value)
+
+    override fun forgeSignedApply(cellId: CellId, actor: String, op: String, value: Value) =
+        dist.forgeSignedApply(cellId, actor, op, value)
+
+    override fun replaySignedApply(cellId: CellId, actor: String, op: String, value: Value) =
+        dist.replaySignedApply(cellId, actor, op, value)
+
+    override fun transferAuthority(cellId: CellId, actor: String, to: String) =
+        dist.transferAuthority(cellId, actor, to)
 
     /**
      * How long [quiesce] waits for each aligned view's listener dispatcher to
@@ -973,6 +990,9 @@ class KernelDriver private constructor(
                 "was watching",
         )
     }
+
+    override fun writeDenials(cellId: CellId, principal: String?): Long =
+        dist.writeDenials(cellId, principal)
 
     private companion object {
         /** Scheduler steps one page of a bounded read may take before it is declared wedged. */

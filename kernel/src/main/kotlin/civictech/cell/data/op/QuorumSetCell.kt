@@ -10,8 +10,6 @@ import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeOpen
-import civictech.cell.protocol.ProtocolSupport
-import civictech.cell.protocol.Protocols
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
@@ -104,12 +102,15 @@ class QuorumSetCell<E>(
     private val ledger: JoinLedger<E> = MintedLedger(ref, "quorum")
 
     init {
-        // An upstream Progress carries no lane delta to fold. Forward its exact
-        // source/counter only when this QuorumSetCell has one input edge. With
-        // fan-in, one lane's ack cannot settle the other lanes; this cell's own
-        // absorbed data waves still use emitOrAbsorb below.
-        inlet.relayAbsorbAcks()
-        ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
+        // An upstream Progress carries no lane delta to fold. The fan-in relay
+        // keeps one watermark per open input edge and forwards only after every
+        // lane has settled the wave; data handled below participates in the same
+        // fold, and an emitted quorum delta suppresses the ack.
+        inlet.relayAbsorbAcks(listOf(outlet))
+        // Share the inlet's one TopologyOrder handler with the Progress
+        // settlement fold above; registering a second raw protocol handler
+        // would overwrite its EdgeOpen/EdgeClose observer.
+        inlet.onEdgeEvent { link, event ->
             when (event) {
                 // n changed → the threshold shifted; re-evaluate the whole
                 // working set, not just an incoming delta's elements.

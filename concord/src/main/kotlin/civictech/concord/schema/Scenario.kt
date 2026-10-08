@@ -145,6 +145,13 @@ data class CellSpec(
     /** Logical replica group this cell is a member of (dist profile). */
     @SerialName("replica-of") val replicaOf: String? = null,
     /**
+     * Per-principal write authority for a replicated slice (dist profile,
+     * `[43-FLOW-04]`). Present only with [replicaOf]: the driver installs the
+     * authority adapter on that replica and resolves the scenario-local actor
+     * name to its deterministic signing identity.
+     */
+    val authority: AuthoritySpec? = null,
+    /**
      * Interest-scoped instance-set assignment (dist profile, spec 40/42
      * §Interest-scoped instance sets, `42-INTEREST-01`). Optional and additive
      * (W4-A followup): absent ⇒ the kernel's own default (total interest —
@@ -195,6 +202,13 @@ data class CellSpec(
      * explicit waterline wiring: `concord/schema/scenario.md` §`lateness`.
      */
     val lateness: Long? = null,
+)
+
+/** The closed write-authority descriptor admitted by the Concord dist binding. */
+@Serializable
+data class AuthoritySpec(
+    /** Scenario-local actor handle naming the slice's initial principal. */
+    val principal: String,
 )
 
 /**

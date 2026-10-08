@@ -124,12 +124,16 @@ class AlignedDrainBarrier internal constructor(
  * `max`). Completed waves are applied in per-source counter order, and each
  * publishes **one** composite snapshot — effective-only: a completed wave in
  * which no view's [View.apply] reported a change publishes nothing.
- * Transparent unary operators between an absorber and this sink forward that
- * exact watermark through [civictech.cell.control.relayAbsorbAcks]; the relay
+ * Transparent operators between an absorber and this sink forward that exact
+ * watermark through [civictech.cell.control.relayAbsorbAcks]; the relay
  * preserves source/counter identity and stops when an intermediate frontier
- * consumes the acknowledgement. It is deliberately limited to a hop with one
- * open `Consume` input edge: a multi-input hop needs its own per-edge watermark
- * fold before it can safely claim that every in-edge settled the wave.
+ * consumes the acknowledgement. `FilterCell`/`FlatMapSetCell` use its bounded
+ * unary form. `QuorumSetCell` and `GroupByCell` use its fan-in form, which
+ * mirrors this per-edge watermark condition across their open input edges —
+ * narrowed, where the edge's source is resolvable
+ * ([civictech.cell.control.SourceProvenance]), to the edges that can actually
+ * carry the wave's source — and relays only after all of those settle the
+ * wave by data or `Progress`.
  *
  * The condition is [civictech.cell.consistency.WaveFrontier]'s, *mirrored at
  * cell scope* rather than installed as an inlet policy — the same structural
@@ -1172,10 +1176,10 @@ class AlignedObserveBuilder internal constructor() {
  * current local Consume ancestry. It rejects ungated non-monotone contributors
  * and re-origination points that split shared provenance; remote producers are
  * opaque and admitted. [AlignedObserveBuilder.unchecked] opts one view out of
- * the ungated rule only. This is a synchronous build-time check over links
- * visible at the call: later links are not rechecked, bypass wiring the host
- * cannot see reads as a root, and graph construction must not mutate links
- * concurrently with admission.
+ * the ungated rule only. The complete build-time check runs as one awaited
+ * host-executor turn, so a concurrent topology mutation orders before or after
+ * its verdict. Later links are not rechecked, and bypass wiring the host cannot
+ * see reads as a root.
  */
 fun Use<HostManagementApi>.observeAligned(
     maxOutstandingHandles: Int = 1024,

@@ -37,9 +37,9 @@ import kotlin.test.assertTrue
  * `manage.spawn(edge)` — genuinely, through `enqueueAwaiting`'s
  * `scheduler.await`, not merely simulated.
  *
- * The service is spawned with a budget that exactly covers its own hub cell
- * plus the two claims this test creates, so the edge's `manage.spawn` is the
- * first call that exceeds it.
+ * The service is spawned with a budget that exactly covers its credence source,
+ * canonical observation group, and the two claims this test creates, so the
+ * edge's `manage.spawn` is the first call that exceeds it.
  */
 class CreateEdgeSpawnFailureTest {
 
@@ -48,9 +48,9 @@ class CreateEdgeSpawnFailureTest {
         val registry = LocationRegistry()
         val scheduler = VirtualThreadScheduler("create-edge-spawn-failure-test")
         val topology = InMemoryJournal()
-        // Budget: 1 (hub, spawned in AgoraService's init) + 2 (the claims
-        // below) = 3. The edge's manage.spawn is the 4th call and exceeds it.
-        val host = ManagedHost(scheduler = scheduler, registry = registry, quota = 3)
+        // Budget: 2 (source + observation, spawned in AgoraService's init) +
+        // 2 (the claims below) = 4. The edge's manage.spawn is the 5th call.
+        val host = ManagedHost(scheduler = scheduler, registry = registry, quota = 4)
         val context = ApplyContext(host, topology = topology)
         val service = AgoraService(host, registry, context = context)
         try {

@@ -270,7 +270,25 @@ object DialoguePipeline {
      * lookup (`ManagedHost`) finds a live cell instead of dead-lettering.
      * Callers that never recover a journal (every test today) omit it.
      */
-    fun build(host: ManagedHost, extractor: Extractor, namespace: String? = null): Built {
+    fun build(host: ManagedHost, extractor: Extractor, namespace: String? = null): Built =
+        buildGraph(host, extractor, namespace, relationSemijoinsEmitOnFrontier = true)
+
+    /**
+     * Test control for the pre-computenet-13dby ungated relation leg. Production
+     * callers always use [build], whose two relation semijoins are gated.
+     */
+    internal fun buildWithRelationGatingForTest(
+        host: ManagedHost,
+        extractor: Extractor,
+        relationSemijoinsEmitOnFrontier: Boolean,
+    ): Built = buildGraph(host, extractor, namespace = null, relationSemijoinsEmitOnFrontier)
+
+    private fun buildGraph(
+        host: ManagedHost,
+        extractor: Extractor,
+        namespace: String?,
+        relationSemijoinsEmitOnFrontier: Boolean,
+    ): Built {
         val gate = ExtractionGate(extractor)
         // One seam for every spawn below: null namespace reproduces today's
         // FreshLogical default byte-for-byte; a namespace makes every handle's
@@ -376,64 +394,27 @@ object DialoguePipeline {
             // mints output tags per entry by design), so nothing re-invokes
             // extraction to resolve it.
             //
-            // emitOnFrontier stays at its ungated DEFAULT (false), against the
-            // task's provisional direction, because this topology hits
-            // WaveGate's phantom-expected-edge caveat (G-13) after all —
-            // MEASURED, not argued.
-            //
-            // The shared-source premise does hold structurally: every inlet
-            // here descends from `utterances` (left: extractedItems ->
-            // extractedRelations -> relationCandidates -> nonSelfRelations;
-            // right: extractedItems -> extractedClaims -> claimKeys), so this
-            // reads like the shared-source diamond SemiJoinCell's KDoc scopes
-            // the gate to. What the KDoc's diamond additionally assumes, and
-            // this graph breaks, is that both arms CARRY the root's waves. The
-            // item-kind split partitions each utterance's items across the two
-            // arms: a claim-only utterance is a real delta on the right arm and
-            // nothing at all on the left, a relation-only utterance the mirror
-            // image. Each arm is therefore an expected edge for waves it
-            // structurally never delivers — G-13's phantom expected edge,
-            // arising here from the item-kind split rather than from two
-            // independent roots.
-            //
-            // The kernel would normally rescue that with CP-A3's absorb-ack.
-            // The ack remains EDGE-LOCAL, but computenet-6ovpx added a bounded
-            // relay: a pure transparent hop with exactly one open
-            // LinkRole.Consume input forwards Progress unchanged. The
-            // extractedRelations/extractedClaims absorbers and their
-            // relationCandidates/nonSelfRelations/claimKeys unary hops are
-            // therefore no longer a current example of an ack dying before
-            // the semijoin. A hop with multiple open Consume inputs remains a
-            // relay terminal; per-edge settlement is the open fan-in question
-            // in computenet-t6vex. :kernel's FrontierGatedEmissionTest two-hop
-            // disjoint-wave case now asserts that relay; the pre-6ovpx failure
-            // is recorded in doc/demo-findings.md F-15, while GatingEvidenceTest
-            // records the present two-Filter over-refusal of the conservative
-            // depth rule.
-            //
-            // Observed (task computenet-2aw.3.2, RelationMintTest): with
-            // `emitOnFrontier = true` on BOTH semijoins, or on the first alone,
-            // 4 of that test's 5 cases fail with an EMPTY canonical set at
-            // quiescence — the gate holds the waves and the resolvable stream
-            // never emits. (REL-04 asserts that nothing is minted, so a wedged
-            // pipeline satisfies it vacuously.) Re-measured at 915d574a9 by
-            // computenet-23bf. All five pass ungated. A gate that
-            // withholds output at rest is disqualifying, so the default stands.
-            // That measurement predates computenet-6ovpx: with both semijoins
-            // gated, RelationMintTest now passes 5/5 (computenet-25gh4 feature
-            // review). Whether to gate 5d/5e now is computenet-13dby; the
-            // default is unchanged here.
-            //
-            // What the ungated default leaves open is the transient the gate
-            // exists for: admitting the utterance that mints a relation's last
-            // endpoint can flicker the relation into and out of the canonical
-            // fold within one wave, and F4's applier sits downstream of exactly
-            // that. Filed as its own item rather than papered over here.
+            // Both semijoins reconcile on frontier completeness. Their inlets
+            // descend from the one `utterances` root, while computenet-6ovpx's
+            // single-input relay carries a structurally silent arm's absorb-ack
+            // through extractedClaims/extractedRelations and their unary hops.
+            // The pre-relay measurement at 915d574a9 therefore no longer
+            // describes this graph: at d1bb2291 the 170 dialogue tests that
+            // predated the flicker regression pass with both gates on and with
+            // either gate on alone; no canonical relation is withheld at
+            // quiescence. The later RelationMintTest flicker case independently
+            // discriminates only the source-endpoint gate (5d), because its
+            // missing endpoint is the relation source. It still pins the reason
+            // to keep frontier gating on: an ungated same-wave
+            // endpoint-add/relation-remove reaches the canonical fold as an add
+            // then a remove, whereas the gated graph coalesces that net-neutral
+            // transition before emission.
             val sourceResolvedRelations = spawn("sourceResolvedRelations", identity = identityFor("sourceResolvedRelations")) { ref ->
                 SemiJoinCell<RelationCandidate, ClaimKey, ClaimKey>(
                     ref = ref,
                     leftKey = { it.sourceKey },
                     rightKey = { it },
+                    emitOnFrontier = relationSemijoinsEmitOnFrontier,
                 )
             }
             val resolvableRelations = spawn("resolvableRelations", identity = identityFor("resolvableRelations")) { ref ->
@@ -441,6 +422,7 @@ object DialoguePipeline {
                     ref = ref,
                     leftKey = { it.targetKey },
                     rightKey = { it },
+                    emitOnFrontier = relationSemijoinsEmitOnFrontier,
                 )
             }
             // Stage 5f (RelationMint fold): one aggregate per distinct

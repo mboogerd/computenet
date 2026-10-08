@@ -7,10 +7,14 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.DespawnStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.HostLiveView
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.PlannedAction
 import civictech.cell.graph.RefusalCode
+import civictech.cell.graph.SpawnStep
 import civictech.cell.graph.StepCheck
 import civictech.cell.graph.StepResult
 import civictech.cell.graph.TypedRef
@@ -24,8 +28,10 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
+import civictech.cell.proxy.InvocationSink
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -35,6 +41,7 @@ import org.junit.jupiter.api.assertThrows
 import java.nio.charset.StandardCharsets.UTF_8
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Exit criterion for the declared multi-cell write boundary (axcyk-D11). */
 class MultiCellWriteTest {
@@ -153,6 +160,151 @@ class MultiCellWriteTest {
         assertThrows<IllegalArgumentException> {
             management.declareWrite("foreign", setOf(a.ref, CellRef(UUID.randomUUID())))
         }
+    }
+
+    @Test
+    fun `a conflicting WriteStep refuses the whole GraphSpec before spawning`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 96).scheduler())
+        val existing = SetCell<String>()
+        host.managementInlet.call.spawn(existing)
+        host.managementInlet.call.declareWrite("update", setOf(existing.ref))
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("spawned")),
+            ),
+        )
+        val context = ApplyContext(host)
+
+        val failure = assertThrows<IllegalStateException> { spec.apply(context) }
+
+        failure.message shouldContain "update"
+        context.live().handles shouldBe emptyMap()
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep for a non-hosted adopted cell refuses before spawning`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 97).scheduler())
+        val context = ApplyContext(host)
+        val foreignRef = CellRef(UUID.randomUUID())
+        context.adopt("foreign", foreignRef)
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("foreign")),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("foreign" to foreignRef)
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep for a remote-published adopted cell refuses before spawning`() {
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = SimulationController(seed = 98).scheduler(), registry = registry)
+        val context = ApplyContext(host)
+        val foreignRef = CellRef(UUID.randomUUID())
+        // lookup() answers a remote proxy for this ref; declareWrite still refuses it.
+        registry.publish(foreignRef, InvocationSink { })
+        context.adopt("foreign", foreignRef)
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("foreign")),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("foreign" to foreignRef)
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep before a later despawn refuses before spawning`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 99).scheduler())
+        val context = ApplyContext(host)
+        val spawnedRef = CellRef(UUID.randomUUID())
+        val built = AtomicInteger()
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "spawned",
+                    factory = CellFactory { ref -> built.incrementAndGet(); SetCell<String>(ref) },
+                    identity = IdentityBinding.Exact(spawnedRef),
+                ),
+                WriteStep("update", listOf("spawned")),
+                DespawnStep("spawned"),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        // The spawn+despawn pair leaves nothing live either way; the factory count is
+        // what shows the refusal came before the first host operation.
+        built.get() shouldBe 0
+        context.live().handles shouldBe emptyMap()
+        host.lookup(TypedRef<SetApi<String>>(spawnedRef)) shouldBe null
+    }
+
+    @Test
+    fun `a WriteStep before a later despawn through an aliased handle preserves the cell`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 101).scheduler())
+        val existing = SetCell<String>()
+        host.managementInlet.call.spawn(existing)
+        val context = ApplyContext(host)
+        context.adopt("x", existing.ref)
+        context.adopt("y", existing.ref)
+        val spec = GraphSpec(
+            listOf(
+                WriteStep("update", listOf("x")),
+                DespawnStep("y"),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("x" to existing.ref, "y" to existing.ref)
+        host.lookup(TypedRef<SetApi<String>>(existing.ref)).shouldNotBeNull()
+    }
+
+    @Test
+    fun `a WriteStep before a later despawn preserves an already-hosted cell`() {
+        val host = ManagedHost(scheduler = SimulationController(seed = 100).scheduler())
+        val existing = SetCell<String>()
+        host.managementInlet.call.spawn(existing)
+        val context = ApplyContext(host)
+        context.adopt("existing", existing.ref)
+        val spec = GraphSpec(
+            listOf(
+                WriteStep("update", listOf("existing")),
+                DespawnStep("existing"),
+            ),
+        )
+
+        assertThrows<IllegalArgumentException> { spec.apply(context) }
+
+        context.live().handles shouldBe mapOf("existing" to existing.ref)
+        host.lookup(TypedRef<SetApi<String>>(existing.ref)).shouldNotBeNull()
     }
 
     @Test

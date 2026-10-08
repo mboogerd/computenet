@@ -124,6 +124,23 @@ class ObservationBuilder internal constructor() {
     internal val specs: Map<String, AlignedObserveBuilder.Spec> get() = aligned.specs
     internal val unchecked: Set<String> get() = aligned.unchecked
     internal val writes = linkedMapOf<String, Set<CellRef>>()
+    internal val declaredOpaqueRoots = linkedMapOf<CellRef, LinkedHashSet<PortRef>>()
+
+    /**
+     * Declares the stable structural [root] of an unmanaged feed into [target].
+     *
+     * A live `streamTo` whose destination names a hosted port is discovered
+     * automatically. So is a `RoutedPropagate` attached to an outlet hosted by
+     * the observing host: its target cell and port identify a stable opaque
+     * ingress family even when `streamTo` generated an anonymous attachment ref.
+     * This declaration remains necessary for a bare anonymous endpoint, a feed
+     * produced outside the observing host, or a feed that may be linked only
+     * after this observation is built. Descendant views inherit the root through
+     * the ordinary managed ancestry walk.
+     */
+    fun unmanagedFeed(target: CellRef, root: PortRef) {
+        declaredOpaqueRoots.getOrPut(target) { linkedSetOf() } += root
+    }
 
     /** Declares one named multi-cell write alongside this observation. */
     fun write(name: String, cells: Set<CellRef>) {
@@ -200,16 +217,21 @@ private fun rootsOf(
     api: HostManagementApi,
     spec: AlignedObserveBuilder.Spec,
     walks: MutableMap<CellRef, UpstreamAncestry>,
+    declaredOpaqueRoots: Map<CellRef, Set<PortRef>>,
 ): RootSet {
     val ancestry = walks.getOrPut(spec.source) { api.upstreamConsumeAncestors(spec.source) }
     val candidates = linkedSetOf<CellRef>()
     if (ancestry.self != null) candidates += spec.source
     candidates += ancestry.local.keys
+    val declared = candidates.flatMapTo(linkedSetOf()) { declaredOpaqueRoots[it].orEmpty() }
     val localRoots = candidates.filterTo(linkedSetOf()) { candidate ->
         val candidateAncestry = walks.getOrPut(candidate) { api.upstreamConsumeAncestors(candidate) }
-        candidateAncestry.self != null && candidateAncestry.local.isEmpty() && candidateAncestry.opaque.isEmpty()
+        candidateAncestry.self != null &&
+            candidateAncestry.local.isEmpty() &&
+            candidateAncestry.opaque.isEmpty() &&
+            declaredOpaqueRoots[candidate].isNullOrEmpty()
     }
-    return RootSet(localRoots, ancestry.opaque.toSet())
+    return RootSet(localRoots, ancestry.opaque + declared)
 }
 
 private class ObservationCoordinator(
@@ -369,9 +391,34 @@ private class ObservationCoordinator(
  * each group a stable sink identity; its argument is the group's registered
  * view names, in order, joined by `+`.
  *
+ * **Unmanaged-inbound decision (computenet-b7c8t, computenet-5rb3a).** A
+ * `streamTo`/routed feed remains a supported kernel path, so observation does
+ * not reject a view merely because the feed was not host-admitted. When the
+ * source-side link names a hosted destination port, its producer [PortRef] is
+ * retained as an opaque root. When `streamTo` instead uses its default anonymous
+ * attachment ref, an attached `RoutedPropagate` resolves the destination
+ * cell/port; observation derives a replay-stable opaque ingress-family root
+ * from that pair. Discovery scans only current Consume attachments on producer
+ * outlets hosted by the observing host. A never-linked or unlinked handle is
+ * therefore not topology, and an equal [CellRef] on another host cannot leak a
+ * root into this host's partition. A bare anonymous endpoint, a feed from a
+ * non-hosted producer, or a feed linked only after construction must still be
+ * represented up front with [ObservationBuilder.unmanagedFeed].
+ *
+ * **Hosted bypass producers stay opaque; they are not traversed.** A bypass has
+ * no target-side admitted topology record, so discovering that its producer is
+ * hosted is insufficient evidence to merge its managed ancestry into the
+ * target's structural roots. Consequently, in a managed `S -> W` plus bypass
+ * `W -> U` plus managed `S -> U` diamond, `U` has roots `{S, W.outlet}` while
+ * `S` has `{S}`: they form separate groups even when one carried wave reaches
+ * both. This intentional under-alignment can publish the groups at different
+ * frontiers, but cannot make an independent feed hold another view; traversing
+ * the bypass would risk the silent over-alignment `[22-LIVE-01]` forbids.
+ *
  * Admission for every group completes before any group cell is spawned. The
- * topology read has [observeAligned]'s live-link caveat: later links are not
- * rechecked and graph construction must not mutate the link set concurrently.
+ * topology read has [observeAligned]'s live-link caveat: later managed links and
+ * undeclared later unmanaged feeds are not rechecked, and graph construction
+ * must not mutate the link set concurrently.
  */
 fun Use<HostManagementApi>.observation(
     mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
@@ -389,7 +436,18 @@ fun Use<HostManagementApi>.observation(
     val walks = mutableMapOf<CellRef, UpstreamAncestry>()
     val byRoots = LinkedHashMap<RootSet, LinkedHashMap<String, AlignedObserveBuilder.Spec>>()
     builder.specs.forEach { (name, spec) ->
-        byRoots.getOrPut(rootsOf(call, spec, walks)) { linkedMapOf() }[name] = spec
+        byRoots.getOrPut(rootsOf(call, spec, walks, builder.declaredOpaqueRoots)) { linkedMapOf() }[name] = spec
+    }
+    val observedAncestry = builder.specs.values.flatMapTo(linkedSetOf()) { spec ->
+        val ancestry = walks.getValue(spec.source)
+        buildList {
+            if (ancestry.self != null) add(spec.source)
+            addAll(ancestry.local.keys)
+        }
+    }
+    val unusedDeclarations = builder.declaredOpaqueRoots.keys - observedAncestry
+    require(unusedDeclarations.isEmpty()) {
+        "observation: unmanaged feed targets must be a registered view or its managed ancestor: $unusedDeclarations"
     }
     val definitions = byRoots.values.map { specs -> GroupDefinition(specs.keys.joinToString("+"), specs) }
 

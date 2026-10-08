@@ -1,5 +1,7 @@
 # observe() — a first-class, glitch-free observation edge for app state
 
+> **Status: ABSORBED** — computenet-axcyk (`civictech.cell.observe.observation`), 2026-10.
+
 ## Origin
 
 Every demo hand-rolls the same "fold one outlet into app state and notify the UI"

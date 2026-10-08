@@ -13,6 +13,7 @@ import java.net.URLEncoder
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -278,29 +279,46 @@ class DeliberateAppTest {
 
     @Test
     fun `a question is paused and resumed over HTTP (CTL-05)`() {
-        val (_, probe) = app(delayMs = 200)
-        val root = probe.ask("Pause me?")
-        assertEquals(200, probe.postForm("root=$root&paused=true", "/question/pause").statusCode())
-        val paused = probe.awaitGraph { g -> g.questions.single().paused }
-        assertTrue(paused.questions.single().paused)
-        // The round in flight attaches and finishes; its children remain queued.
-        val held = probe.awaitGraph { g ->
-            val rootNode = g.nodes.single { it.ref == root }
-            val children = g.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }
-            rootNode.rounds == 1 && children.size == 4 && children.all { it.status == Status.QUEUED }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val judge = object : Judge by FixedJudge() {
+            override fun plausibility(question: String, claim: String): Double {
+                entered.countDown()
+                release.await(20, TimeUnit.SECONDS)
+                return 0.6
+            }
         }
-        assertTrue(held.questions.single().active, "queued work keeps a paused question active")
-        assertEquals(200, probe.postForm("root=$root&paused=false", "/question/pause").statusCode())
-        val done = probe.awaitGraph { g -> !g.questions.single().paused && g.idle(root) }
-        assertTrue(done.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.isDone(Reason.ROUND_LIMIT) })
-        // Bad input.
-        assertEquals(405, probe.get("/question/pause").statusCode())
-        assertEquals(400, probe.postForm("root=nope&paused=true", "/question/pause").statusCode())
-        assertEquals(400, probe.postForm("root=$root&paused=maybe", "/question/pause").statusCode())
-        assertEquals(400, probe.postForm("root=$root", "/question/pause").statusCode())
-        val claim = done.nodes.first { it.kind == "CLAIM" && it.depth == 1 }.ref
-        assertEquals(404, probe.postForm("root=$claim&paused=true", "/question/pause").statusCode(), "a claim is not a question")
-        assertEquals(404, probe.postForm("root=00000000-0000-0000-0000-000000000000&paused=true", "/question/pause").statusCode())
+        val (_, probe) = app(judge = judge)
+        val root = probe.ask("Pause me?")
+        try {
+            assertTrue(entered.await(20, TimeUnit.SECONDS), "root plausibility call did not start")
+            assertEquals(200, probe.postForm("root=$root&paused=true", "/question/pause").statusCode())
+            val paused = probe.awaitGraph { g -> g.questions.single().paused }
+            assertTrue(paused.questions.single().paused)
+            // CTL-05 also permits a pause before the first round starts: the root stays queued,
+            // with no children, until resume. The held plausibility call makes that ordering
+            // deterministic instead of relying on delayMs to win a scheduler race.
+            release.countDown()
+            val held = probe.awaitGraph { g ->
+                val rootNode = g.nodes.single { it.ref == root }
+                val children = g.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }
+                rootNode.status == Status.QUEUED && rootNode.rounds == 0 && children.isEmpty()
+            }
+            assertTrue(held.questions.single().active, "queued work keeps a paused question active")
+            assertEquals(200, probe.postForm("root=$root&paused=false", "/question/pause").statusCode())
+            val done = probe.awaitGraph { g -> !g.questions.single().paused && g.idle(root) }
+            assertTrue(done.nodes.filter { it.kind == "CLAIM" && it.depth == 1 }.all { it.isDone(Reason.ROUND_LIMIT) })
+            // Bad input.
+            assertEquals(405, probe.get("/question/pause").statusCode())
+            assertEquals(400, probe.postForm("root=nope&paused=true", "/question/pause").statusCode())
+            assertEquals(400, probe.postForm("root=$root&paused=maybe", "/question/pause").statusCode())
+            assertEquals(400, probe.postForm("root=$root", "/question/pause").statusCode())
+            val claim = done.nodes.first { it.kind == "CLAIM" && it.depth == 1 }.ref
+            assertEquals(404, probe.postForm("root=$claim&paused=true", "/question/pause").statusCode(), "a claim is not a question")
+            assertEquals(404, probe.postForm("root=00000000-0000-0000-0000-000000000000&paused=true", "/question/pause").statusCode())
+        } finally {
+            release.countDown()
+        }
     }
 
     @Test

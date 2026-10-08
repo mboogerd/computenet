@@ -3,6 +3,7 @@ package civictech.runtime
 import civictech.cell.BudgetLedger
 import civictech.cell.CellRef
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.EvolutionAuthority
 import civictech.cell.evolve.PromotionJudge
 import civictech.cell.graph.AppliedGraph
 import civictech.cell.graph.ApplyContext
@@ -15,8 +16,11 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RoutedPropagate
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.LinkResult
+import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.link.PeerId
+import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
@@ -25,6 +29,8 @@ import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.StateRequest
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.replication.Replication
+import civictech.cell.replication.WriteAuthorityBytes
+import civictech.cell.replication.WriteSigner
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.BridgeInstallMode
 import civictech.cell.wire.PeerConnection
@@ -38,13 +44,28 @@ import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
+import civictech.identity.Ed25519SignatureVerifier
+import civictech.identity.FilePeerIncarnationStore
+import civictech.identity.FilePeerKeyStore
+import civictech.identity.PeerIdentity
+import civictech.identity.fingerprint
 import civictech.inspect.InspectorFlag
 import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
+import civictech.wire.durableIncarnation
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.security.PublicKey
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+
+private fun peerIdForKey(publicKey: PublicKey): PeerId =
+    when (val resolution = PeerIdentityBinding.Interim.resolve(fingerprint(publicKey), emptyList())) {
+        is IdentityResolution.Bound -> resolution.peer
+        is IdentityResolution.Unbound -> error(
+            "PeerIdentityBinding.Interim refused the manifest principal key: ${resolution.reason}",
+        )
+    }
 
 /** Builds one manifest node without exposing host, journal or transport construction to its caller. */
 object Runtime {
@@ -285,6 +306,29 @@ object Runtime {
         require(transport == null || transport.scheme == nodeSpec.transport) {
             "transport override scheme '${transport?.scheme}' does not match node '$node' scheme '${nodeSpec.transport}'"
         }
+        val keyStorePath = nodeSpec.keyStore?.let { keyStore -> File(keyStore).toPath() }
+        val identity = keyStorePath?.let { keyStore ->
+            FilePeerKeyStore(keyStore).loadOrGenerate()
+        }
+        val writeSigner = identity?.let { loaded ->
+            val counterIncarnationSource = durableIncarnation(
+                FilePeerIncarnationStore(checkNotNull(keyStorePath)),
+            )
+            object : WriteSigner {
+                override val peerId: PeerId = loaded.peerId
+                override val counterIncarnation: () -> Long = counterIncarnationSource
+                override fun sign(input: ByteArray): ByteArray = loaded.sign(input)
+            }
+        }
+        val signatureVerifier = identity?.let { loaded ->
+            val publicKeys = buildMap {
+                nodeSpec.principals
+                    .map(::decodePrincipalPublicKey)
+                    .forEach { key -> put(peerIdForKey(key), key) }
+                put(loaded.peerId, loaded.publicKey)
+            }
+            Ed25519SignatureVerifier(publicKeys::get, WriteAuthorityBytes.canonicalBytes)
+        }
         val registry = LocationRegistry()
         val budget = nodeSpec.budget?.let { policyFile ->
             val policy = Json.decodeFromString(EconomicPolicy.serializer(), File(policyFile).readText())
@@ -317,6 +361,8 @@ object Runtime {
                 journals = nodeJournals,
                 journalDirs = journalDirs.toMap(),
                 topology = topology,
+                writeSigner = writeSigner,
+                signatureVerifier = signatureVerifier,
             )
             val placement = PlacementPlan.of(spec, manifest, node)
             val recovered = topology?.replay()?.isNotEmpty() == true
@@ -381,6 +427,7 @@ object Runtime {
                 replication = replication,
                 replica = nodeSpec.replica,
                 budget = budget,
+                identity = identity,
                 overrides = overrides.toMap(),
                 inspectorOptions = inspector,
                 transportOverride = transport,
@@ -424,6 +471,8 @@ object Runtime {
         val replication: Replication,
         val replica: Long?,
         val budget: BudgetLedger,
+        /** The node's key-store identity, or null when this manifest node is unsigned. */
+        val identity: PeerIdentity?,
         private val overrides: Map<String, String>,
         private val inspectorOptions: InspectorFlag.Options?,
         private val transportOverride: PeerTransport?,
@@ -514,6 +563,25 @@ object Runtime {
             outletName: String,
             downstream: List<Pair<String, String>>,
             judge: PromotionJudge? = null,
+        ) = promote(
+            gate = gate,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            downstream = downstream,
+            authority = EvolutionAuthority.LocalTrustedOnly,
+            judge = judge,
+        )
+
+        /** Direct promotion under an explicit per-runtime authority policy. */
+        fun promote(
+            gate: String,
+            incumbent: String,
+            candidate: String,
+            outletName: String,
+            downstream: List<Pair<String, String>>,
+            authority: EvolutionAuthority,
+            judge: PromotionJudge? = null,
         ) {
             applyContext.promote(
                 gate = handleRef(gate),
@@ -521,6 +589,7 @@ object Runtime {
                 candidate = handleRef(candidate),
                 outletName = outletName,
                 downstream = downstream.map { (handle, inlet) -> handleRef(handle) to inlet },
+                authorityRefusal = { authority.refuse(currentPrincipal()) },
                 judge = judge,
             )
         }
@@ -535,8 +604,29 @@ object Runtime {
             candidate: CellFactory,
             outletName: String = "outlet",
             judge: PromotionJudge? = null,
+        ) = promoteReplica(
+            handle = handle,
+            candidate = candidate,
+            authority = EvolutionAuthority.LocalTrustedOnly,
+            outletName = outletName,
+            judge = judge,
+        )
+
+        /** Direct rolling promotion under an explicit per-runtime authority policy. */
+        fun promoteReplica(
+            handle: String,
+            candidate: CellFactory,
+            authority: EvolutionAuthority,
+            outletName: String = "outlet",
+            judge: PromotionJudge? = null,
         ) {
-            applyContext.promoteReplica(handleRef(handle), candidate, outletName, judge)
+            applyContext.promoteReplica(
+                ref = handleRef(handle),
+                candidateFactory = candidate,
+                authorityRefusal = { authority.refuse(currentPrincipal()) },
+                outletName = outletName,
+                judge = judge,
+            )
         }
 
         private fun handleRef(handle: String): CellRef =
