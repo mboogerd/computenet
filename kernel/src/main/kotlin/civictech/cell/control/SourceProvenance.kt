@@ -24,12 +24,12 @@ import java.util.UUID
  *    explicitly [publish]ed its outlet's resolved provenance (the relay hops
  *    in [AbsorbAck.kt], which compose this recursively through their own
  *    input edges), or the outlet's owning cell is structurally a root — it has
- *    no currently open Consume input. A published set includes both its
+ *    no currently open inbound link (Consume, Observe or feedback). A published set includes both its
  *    resolved input sources and every id the outlet minted itself;
  *  - `null` ("unknown") for everything else — a bridged edge
  *    ([Link.fromPort] is `null` across the wire, matching the existing
  *    cross-host residual in 20/22 §Bridged frontier), an unpublished outlet
- *    whose owning cell has an open Consume input, an unregistered outlet, or
+ *    whose owning cell has an open inbound link, an unregistered outlet, or
  *    a graph cycle this resolver has already entered (guarded below so a
  *    cycle degrades to "unknown" instead of looping).
  *
@@ -37,8 +37,8 @@ import java.util.UUID
  * exactly as it treats "this edge might carry that source" today — the
  * existing, safe, over-aligning behavior this mechanism only ever narrows
  * from, never widens past. Root classification is evaluated from live
- * topology on every resolution; emission history never excludes an edge. A
- * Consume inlet linked to an otherwise-root cell after a wave is in flight is
+ * topology on every resolution; emission history never excludes an edge. An
+ * inlet linked to an otherwise-root cell after a wave is in flight is
  * therefore counted when that wave's Progress is evaluated, matching the
  * dynamic completeness rule.
  */
@@ -70,7 +70,7 @@ internal object SourceProvenance {
                 val relayedSources = resolvePublished() ?: return null
                 return relayedSources + outlet.mintedAsRoot
             }
-            return when (PortIdentities.hasOpenConsumeInput(outlet)) {
+            return when (PortIdentities.hasOpenInboundLink(outlet)) {
                 false -> outlet.mintedAsRoot.takeIf { it.isNotEmpty() }
                 true, null -> null
             }

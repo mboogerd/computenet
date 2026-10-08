@@ -119,9 +119,9 @@ internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
  * spec names as undesigned (G-13's declined multiplex-port traversal form,
  * G-39's hop-by-hop source-set propagation gap) — so it is precise only
  * through two decided shapes: an outlet whose owning cell structurally has no
- * open Consume input, and a chain of [relayAbsorbAcks] fan-in hops that each
+ * open inbound link, and a chain of [relayAbsorbAcks] fan-in hops that each
  * republish their resolved input provenance plus their outlet's own minted
- * ids. An unpublished outlet on a cell with an open Consume input is
+ * ids. An unpublished outlet on a cell with an open inbound link is
  * "unknown", whatever it emitted before, so its edge remains expected exactly
  * as in Reading 1. Root classification reads the live input topology when
  * Progress is evaluated; an input linked after the wave began therefore

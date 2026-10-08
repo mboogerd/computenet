@@ -2,7 +2,7 @@ package civictech.cell.port
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.link.LinkRole
+import civictech.cell.link.Linked
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
@@ -65,25 +65,33 @@ internal object PortIdentities {
     fun of(port: Port): PortIdentity? = table[port]?.identity
 
     /**
-     * Whether [port]'s owning cell currently has an open [LinkRole.Consume]
-     * edge on any registered [FanInlet], or `null` when [port] has no
-     * registered owner. This is a live structural query over the owning cell's
-     * existing [PortRegistry]: no parallel owner/port registry or emission
-     * history is involved, and an inlet linked after a wave began is visible
-     * when the query is evaluated. The registry reference is weak, so a released
-     * owner degrades to `null` (unknown) rather than being kept alive or
-     * misclassified as a root.
+     * Whether [port]'s owning cell currently has any open inbound link, of
+     * either [civictech.cell.link.LinkRole], on any registered [Linked] port —
+     * a [FanInlet], a cycle-head [FeedbackPort], or any other link target — or
+     * `null` when [port] has no registered owner. Any such link lets the cell
+     * emit reactively under another source's wave (a feedback lap runs under
+     * its head's own epoch; an Observe tap fires under the producer's wave), so
+     * only a cell with none is structurally a root. This is a live structural
+     * query over the owning cell's existing [PortRegistry]: no parallel
+     * owner/port registry or emission history is involved, and an inlet linked
+     * after a wave began is visible when the query is evaluated. The registry
+     * reference is weak, so a released owner degrades to `null` (unknown)
+     * rather than being kept alive or misclassified as a root.
      *
-     * [FanInlet.linking] contains only active links, so an unlinked edge stops
-     * counting immediately. Work is bounded by this one owner's registered
-     * ports rather than every port created during the JVM's lifetime.
+     * [Linked.linking] contains only active links, so an unlinked edge stops
+     * counting immediately. A link is inbound when its `to` is the candidate
+     * port's own ref (an outlet's registered links point away from it). Work is
+     * bounded by this one owner's registered ports rather than every port
+     * created during the JVM's lifetime. Deliveries that bypass linking
+     * entirely (a `Use.fixed` subscription, an un-negotiated tap on a
+     * non-[Linked] target) leave no record here and are not seen.
      */
-    fun hasOpenConsumeInput(port: Port): Boolean? {
+    fun hasOpenInboundLink(port: Port): Boolean? {
         val registry = table[port]?.registry?.get() ?: return null
-        return registry.names().any { name ->
+        return registry.names().toList().any { name ->
             val candidate = registry[name]
-            candidate is FanInlet<*> &&
-                candidate.linking.links.any { it.role == LinkRole.Consume }
+            candidate is Linked &&
+                candidate.linking.links.any { it.to == candidate.ref }
         }
     }
 }

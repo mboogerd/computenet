@@ -18,12 +18,16 @@ import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkRole
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.output
+import civictech.cell.port.propagateFeedbackInlet
 import civictech.cell.port.registerPort
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
@@ -120,6 +124,13 @@ class RelayFanInRegressionTest {
         init {
             inlet.onEach { outlet.call.propagate(it) }
         }
+
+        fun send(delta: SetDelta<String>) = outlet.call.propagate(delta)
+    }
+
+    private class FeedbackForwarder(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet by output<Propagate<SetDelta<String>>>()
+        val feedbackInput by propagateFeedbackInlet<SetDelta<String>> { outlet.call.propagate(it) }
 
         fun send(delta: SetDelta<String>) = outlet.call.propagate(delta)
     }
@@ -296,6 +307,62 @@ class RelayFanInRegressionTest {
         source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
+    fun `an outlet whose cell is fed only by an Observe link is not a structural root`() {
+        val host = ManagedHost()
+        val source = Source()
+        val pass = MintThenForward()
+        val observer = MintThenForward()
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        listOf(source, pass, observer, fanIn, probe).forEach(management::spawn)
+        management.connect(source.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(source.ref, "outlet", pass.ref, "inlet")
+        management.connect(pass.ref, "outlet", observer.ref, "inlet", LinkOptions(role = LinkRole.Observe))
+        management.connect(observer.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+        // The observer has minted once and has no Consume input, yet its tap
+        // forwards the source's wave: an Observe input still makes it reactive.
+        observer.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        probe.clear()
+        source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.dataWaves.size shouldBe 1
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
+    fun `an outlet whose cell is fed only by a feedback inlet is not a structural root`() {
+        val host = ManagedHost()
+        val source = Source()
+        val head = FeedbackForwarder()
+        val relay = MintThenForward()
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        listOf(source, head, relay, fanIn, probe).forEach(management::spawn)
+        management.connect(source.ref, "outlet", head.ref, "feedbackInput")
+        management.connect(head.ref, "outlet", relay.ref, "inlet")
+        management.connect(relay.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(head.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+        // A feedback lap runs under the head's own epoch, which is never in its
+        // outlet's minted set; its only input is a feedback (not FanInlet) port.
+        head.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        probe.clear()
+        source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.dataWaves.size shouldBe 1
             probe.duplicateSettlements() shouldBe emptySet()
         }
     }
