@@ -327,6 +327,8 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 |---|---|---|
 | apply | `{type: apply, on: a, op: add, value: apple}` (also `times: N`) | `apply(cell, op)` |
 | signed-apply | `{type: signed-apply, on: r1, actor: alice, op: add, value: apple}` | `signedApply(cell, actor, op, value)` (dist) |
+| forge-signed-apply | `{type: forge-signed-apply, on: r1, actor: alice, op: add, value: apple}` | `forgeSignedApply(cell, actor, op, value)` (dist) |
+| replay-signed-apply | `{type: replay-signed-apply, on: r1, actor: alice, op: add, value: apple}` | `replaySignedApply(cell, actor, op, value)` (dist) |
 | transfer-authority | `{type: transfer-authority, on: r1, actor: alice, to: bob}` | `transferAuthority(cell, actor, to)` (dist) |
 | quiesce | `{type: quiesce}` (also `budget: N`) | `quiesce(budget)` barrier |
 | declare-interest | `{type: declare-interest, on: f, interest: {ranges: [[2, 4]]}}` | `declareInterest(family, interest)` and await induced spawns |
@@ -385,6 +387,43 @@ Neither verb is an ordinary local `apply`. An ordinary `apply` reaches the
 cell's local app inlet and is signed by the adapter's configured local signer;
 these verbs deliberately let a scenario author as any actor, including one the
 slice must refuse.
+
+#### `forge-signed-apply` and `replay-signed-apply` (computenet-8m179, `[43-FLOW-04]`)
+
+**Status.** Landed. This subsection is the single-writer,
+schema-change-gated review of the extension; the matching
+`@SerialName("forge-signed-apply")` and `@SerialName("replay-signed-apply")`
+`Step`s, the two `Driver` SPI verbs, the `civictech.concord.driver.kernel`
+binding and the `CorpusRunner` dispatch arms moved with it in the same ticket,
+per D-C12's rule that a step verb's seams move together or the module does not
+compile. `43-FLOW-INTEGRITY-01` drives both verbs and covers the signature and
+replay arms of `[43-FLOW-04]`.
+
+Both verbs are **dist profile only**, target an authority-bearing `set-source`
+replica, and accept the same `on`, `actor`, `op` (`add` or `remove`) and `value`
+fields as `signed-apply`.
+
+**A forged apply changes only the signature.** The driver builds the same set
+delta and `SignedWrite` tuple an ordinary `signed-apply` would build, then
+corrupts only the signature before driving the envelope through the target's
+real gossip inlet. The author, per-logical-cell counter, serialized payload and
+merge tags remain the signer's own. It is therefore a test of signature
+verification, not of malformed decoding or missing key material.
+
+**A replay names its prior write in neutral vocabulary.** The driver
+re-delivers the exact envelope produced by the most recent prior
+`signed-apply` in the same run whose logical replica group, `actor`, `op` and
+`value` match. It does not sign again, advance a counter, rebuild a set delta or
+mint a merge tag. `on` may name another authority-bearing replica in the same
+logical group; the logical id, rather than the receiving instance, is the
+match key. With no matching prior `signed-apply`, the driver fails loudly. A
+scenario testing replay admission puts a `quiesce` after the original apply so
+that envelope is retained before its exact copy arrives.
+
+Neither verb accepts `times:`. Repeat the explicit step when separate forged
+or replayed arrivals are the behavior under test. Their refusals use the same
+`write-denials` observation as every other authority-boundary refusal; no new
+check vocabulary is needed.
 
 #### `declare-interest` (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
 

@@ -48,6 +48,32 @@ data class SignedApplyStep(
 ) : Step
 
 /**
+ * Apply one author-signed set operation whose signature has been forged without
+ * changing its author, counter or payload (`[43-FLOW-04]`).
+ */
+@Serializable
+@SerialName("forge-signed-apply")
+data class ForgeSignedApplyStep(
+    val on: String,
+    val actor: String,
+    val op: String,
+    @Contextual val value: Value,
+) : Step
+
+/**
+ * Re-deliver the exact envelope from the most recent prior matching
+ * [SignedApplyStep] in this run (`[43-FLOW-04]`).
+ */
+@Serializable
+@SerialName("replay-signed-apply")
+data class ReplaySignedApplyStep(
+    val on: String,
+    val actor: String,
+    val op: String,
+    @Contextual val value: Value,
+) : Step
+
+/**
  * Submit an author-signed principal transfer at authority-bearing replica [on].
  * Both [actor] and [to] are scenario-local principal handles.
  */

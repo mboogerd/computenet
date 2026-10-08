@@ -49,6 +49,12 @@ interface Driver {
     /** Apply one signed set operation as scenario-local [actor] at an authority-bearing replica. */
     fun signedApply(cellId: CellId, actor: String, op: String, value: Value)
 
+    /** Apply an otherwise valid signed set operation after corrupting only its signature. */
+    fun forgeSignedApply(cellId: CellId, actor: String, op: String, value: Value)
+
+    /** Re-deliver the exact envelope from the most recent prior matching [signedApply]. */
+    fun replaySignedApply(cellId: CellId, actor: String, op: String, value: Value)
+
     /** Submit an authority transfer signed by [actor], naming scenario-local principal [to]. */
     fun transferAuthority(cellId: CellId, actor: String, to: String)
 

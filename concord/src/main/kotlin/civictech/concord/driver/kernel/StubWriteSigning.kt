@@ -61,6 +61,10 @@ internal class StubWriteSigning {
     fun signed(actor: String, logicalId: UUID, payload: Any?): SignedWrite =
         actor(actor).writes.sign(logicalId, WriteAuthorityBytes.encodePayload(payload))
 
+    /** Preserve the signed tuple and corrupt only its signature. */
+    fun forged(actor: String, logicalId: UUID, payload: Any?): SignedWrite =
+        signed(actor, logicalId, payload).copy(signature = byteArrayOf(0))
+
     fun freshTag(actor: String, logicalId: UUID): Timestamp = actor(actor).freshTag(logicalId)
 
     private fun actor(name: String): Actor {

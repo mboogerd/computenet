@@ -35,4 +35,14 @@ class StubWriteSigningTest {
         one.sourceId shouldBe two.sourceId
         two.counter shouldBe one.counter + 1L
     }
+
+    @Test
+    fun `forged write preserves the signed tuple but fails verification`() {
+        val logical = UUID.fromString("00000000-0000-0000-0000-000000000045")
+        val signing = StubWriteSigning()
+        val forged = signing.forged("alice", logical, "payload")
+
+        forged.author shouldBe signing.principal("alice")
+        signing.verifier.verify(forged.author, forged.counter, forged, forged.signature) shouldBe false
+    }
 }
