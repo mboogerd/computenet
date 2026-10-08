@@ -429,6 +429,86 @@ class OwnershipTransferTest {
     }
 
     @Test
+    fun `failed live write-ahead append refuses the envelope and later local signing until recovery`() {
+        // Fails the write-ahead SignedWrite frame of exactly one local write; the
+        // operation frame that precedes it in the same journal still lands.
+        class OneFailingAppendJournal : civictech.cell.durability.Journal {
+            val inner = InMemoryJournal()
+            var failAppend = -1
+            var appends = 0
+            override val durability get() = inner.durability
+            override fun append(record: ByteArray) {
+                appends += 1
+                if (appends == failAppend) throw java.io.IOException("append refused by test")
+                inner.append(record)
+            }
+            override fun replay(): List<ByteArray> = inner.replay()
+            override fun reset(records: List<ByteArray>) = inner.reset(records)
+        }
+
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val journal = OneFailingAppendJournal()
+        val ref = CellRef(UUID.randomUUID(), 0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journalFor = { selected -> if (selected == ref) journal else null },
+        )
+        val deadLetters = mutableListOf<DeadLetter>()
+        host.deadLetterOutlet.subscribe(Use.fixed(Propagate { deadLetters += it }, PortRef.generate()))
+        val replication = Replication(registry)
+        SetCell<String>(ref).also {
+            replication.replicate(it, host, WriteAuthority.Principal(pA), signing.signer(pA), signing.verifier)
+        }
+        controller.runToIdle()
+        val ops = (HostedCellProxy.create(ref, registry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+
+        ops.add("x1")
+        controller.runToIdle()
+        replication.authorityOf(ref)!!.retained().size shouldBe 1
+
+        journal.failAppend = journal.appends + 2 // x2's operation frame lands; its envelope frame does not
+        ops.add("x2")
+        controller.runToIdle()
+        replication.authorityOf(ref)!!.retained().size shouldBe 1
+        deadLetters.mapNotNull { it.denial?.reason } shouldBe listOf(DenialReason.UNSIGNED)
+
+        ops.add("x3") // the append path works again, but the adapter stays latched
+        controller.runToIdle()
+        replication.authorityOf(ref)!!.retained().size shouldBe 1
+        deadLetters.mapNotNull { it.denial?.reason } shouldBe listOf(DenialReason.UNSIGNED, DenialReason.UNSIGNED)
+
+        val recoveredController = SimulationController()
+        val recoveredRegistry = LocationRegistry()
+        val recoveredHost = ManagedHost(
+            scheduler = recoveredController.scheduler(),
+            registry = recoveredRegistry,
+            journalFor = { selected -> if (selected == ref) journal else null },
+        )
+        val recoveredReplication = Replication(recoveredRegistry)
+        val recovered = SetCell<String>(ref).also {
+            recoveredReplication.replicate(
+                it,
+                recoveredHost,
+                WriteAuthority.Principal(pA),
+                signing.signer(pA),
+                signing.verifier,
+            )
+        }
+        recoveredController.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        recoveredController.runToIdle()
+
+        recovered.membership() shouldBe setOf("x1", "x2", "x3")
+        val retained = recoveredReplication.authorityOf(ref)!!.retained()
+        retained.size shouldBe 3
+        retained.map { it.author to it.counter }.distinct().size shouldBe 3
+    }
+
+    @Test
     fun `failed durability companion spawn rolls back the data replica and authority registration`() {
         val controller = SimulationController()
         val signing = StubWriteSigning(pA)
