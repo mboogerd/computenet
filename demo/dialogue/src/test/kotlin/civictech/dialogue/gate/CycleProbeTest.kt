@@ -3,7 +3,6 @@ package civictech.dialogue.gate
 import civictech.agora.AgoraService
 import civictech.agora.BatchReference
 import civictech.agora.cell.Polarity
-import civictech.agora.cell.credenceOf
 import civictech.cell.CellRef
 import civictech.cell.data.SetOps
 import civictech.cell.graph.ApplyContext
