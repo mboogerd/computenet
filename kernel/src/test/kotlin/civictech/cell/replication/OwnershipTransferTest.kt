@@ -1,21 +1,98 @@
 package civictech.cell.replication
 
+import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Timestamp
+import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.SimulationController
 import civictech.cell.link.PeerId
+import civictech.cell.port.Use
 import civictech.cell.wire.Peering
-import io.kotest.matchers.types.shouldBeInstanceOf
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
+import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+
+internal interface RacingAuthoritySetInletProxy {
+    val inlet: Use<SetOps<RacingHashElement>>
+}
+
+internal class RacingHashElement(
+    private val value: String,
+    @Transient private val beforeFirstHash: (() -> Unit)? = null,
+) : Serializable {
+    @Transient
+    private var firstHash = true
+
+    override fun hashCode(): Int {
+        if (firstHash) {
+            firstHash = false
+            beforeFirstHash?.invoke()
+        }
+        return value.hashCode()
+    }
+
+    override fun equals(other: Any?): Boolean = other is RacingHashElement && value == other.value
+
+    override fun toString(): String = value
+}
 
 class OwnershipTransferTest {
     private val pA = PeerId("owner-a")
     private val pB = PeerId("owner-b")
     private val pC = PeerId("owner-c")
     private val pD = PeerId("late-d")
+
+    @Test
+    fun `transfer racing an accepted local write cannot leave a local-only element`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val a = AuthorityTestPeer(controller, pA, signing)
+        val b = AuthorityTestPeer(controller, pB, signing)
+        Peering.loopback(a.side, b.side)
+        val logicalId = UUID.randomUUID()
+        val authority = WriteAuthority.Principal(pA)
+        val onA = SetCell<RacingHashElement>(CellRef(logicalId, 0)).also {
+            a.replication.replicate(it, a.host, authority, a.signer, signing.verifier)
+        }
+        val onB = SetCell<RacingHashElement>(CellRef(logicalId, 1)).also {
+            b.replication.replicate(it, b.host, authority, b.signer, signing.verifier)
+        }
+        controller.runToIdle()
+
+        val writeInsideCell = CountDownLatch(1)
+        val releaseWrite = CountDownLatch(1)
+        val element = RacingHashElement("accepted-before-transfer") {
+            writeInsideCell.countDown()
+            check(releaseWrite.await(5, TimeUnit.SECONDS)) { "timed out releasing the paused local write" }
+        }
+        val ops = (HostedCellProxy.create(onA.ref, a.registry, RacingAuthoritySetInletProxy::class.java)
+            as RacingAuthoritySetInletProxy).inlet.call
+        ops.add(element)
+
+        val writeStep = FutureTask<Boolean> { controller.step() }
+        Thread.ofVirtual().start(writeStep)
+        try {
+            writeInsideCell.await(5, TimeUnit.SECONDS) shouldBe true
+            a.replication.authorityOf(onA.ref)!!.transfer(pB)
+        } finally {
+            releaseWrite.countDown()
+        }
+        writeStep.get(5, TimeUnit.SECONDS) shouldBe true
+        controller.runToIdle()
+
+        listOf(onA.membership(), onB.membership()) shouldBe List(2) { setOf(element) }
+        a.denialReasons().shouldBeEmpty()
+        b.denialReasons().shouldBeEmpty()
+    }
 
     @Test
     fun `transfer changes the writer on every replica and late join catch-up teaches the chain`() {
