@@ -79,7 +79,7 @@ data class SignedWrite(
     val counter: Long,
     val payload: ByteArray,
     val signature: ByteArray,
-) {
+) : java.io.Serializable {
     fun signingInput(): ByteArray = signingInput(logicalId, author, counter, payload)
 
     override fun equals(other: Any?): Boolean =
@@ -101,6 +101,8 @@ data class SignedWrite(
     }
 
     companion object {
+        private const val serialVersionUID: Long = 1L
+
         fun signingInput(
             logicalId: UUID,
             author: PeerId,
@@ -195,7 +197,43 @@ class CountingWriteSigner(
 
     /** Assign the next counter for [logicalId], sign, and return its envelope. */
     @Synchronized
-    fun sign(logicalId: UUID, payload: ByteArray): SignedWrite {
+    fun sign(logicalId: UUID, payload: ByteArray): SignedWrite = nextWrite(logicalId, payload)
+
+    /**
+     * Assign and sign, then complete [writeAhead] before returning the envelope.
+     *
+     * The sequence is reserved before either signing or persistence. If either
+     * fails, this signer leaves a harmless counter gap rather than risking a
+     * retry that reuses a pair whose append may actually have reached storage.
+     */
+    @Synchronized
+    internal fun signWriteAhead(
+        logicalId: UUID,
+        payload: ByteArray,
+        writeAhead: (SignedWrite) -> Unit,
+    ): SignedWrite = nextWrite(logicalId, payload).also(writeAhead)
+
+    /**
+     * Continue [logicalId]'s lane strictly after [observedCounter].
+     *
+     * Recovery calls this after all retained/journaled envelopes have applied,
+     * before signing an accepted local operation whose envelope was absent at
+     * the crash. A counter from an older incarnation already lies below
+     * [counterFloor]; one above this incarnation's ceiling is a fail-closed
+     * incarnation rollback rather than a pair we can safely continue past.
+     */
+    @Synchronized
+    internal fun continueAfter(logicalId: UUID, observedCounter: Long) {
+        if (observedCounter < counterFloor) return
+        val ceiling = counterFloor or WRITE_COUNTER_SEQUENCE_MASK
+        require(observedCounter <= ceiling) {
+            "retained write counter $observedCounter is above this signer's incarnation ceiling $ceiling"
+        }
+        val observedSequence = observedCounter - counterFloor
+        sequences[logicalId] = maxOf(sequences[logicalId] ?: 0L, observedSequence)
+    }
+
+    private fun nextWrite(logicalId: UUID, payload: ByteArray): SignedWrite {
         val sequence = (sequences[logicalId] ?: 0L) + 1L
         require(sequence <= WRITE_COUNTER_SEQUENCE_MASK) {
             "write counter sequence exhausted for logical cell $logicalId in this incarnation"
@@ -242,9 +280,10 @@ sealed interface Admission {
  * The in-process local gate prevents this equivocation, but a restarted author
  * without a durable chain can still produce it.
  *
- * Retention is deliberately unbounded and in-memory. Compaction requires an
- * author-signed folded checkpoint (a relay cannot mint one), and restart does
- * not snapshot this state; a restarted adapter rebuilds it from peer catch-up.
+ * Retention is deliberately unbounded. A journaled [AuthorityGossip] snapshots
+ * these original author envelopes and derives this chain again on restore; a
+ * volatile adapter rebuilds it from peer catch-up. Folding the retained history
+ * itself still requires an author-signed checkpoint a relay cannot mint.
  */
 class AuthorityState(private val authority: WriteAuthority) {
     private data class Retained(val author: PeerId, val counter: Long)
