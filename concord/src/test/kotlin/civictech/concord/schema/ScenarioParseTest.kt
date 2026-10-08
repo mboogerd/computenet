@@ -258,8 +258,10 @@ class ScenarioParseTest {
             listOf("alice", "bob", "alice")
         s.script.filterIsInstance<TransferAuthorityStep>().single() shouldBe
             TransferAuthorityStep("r1", "alice", "bob")
-        s.checks.filterIsInstance<WriteDenials>().single() shouldBe
-            WriteDenials("r1", exactly = 1, principal = "alice")
+        s.checks.filterIsInstance<WriteDenials>() shouldContainExactly listOf(
+            WriteDenials("r1", exactly = 1, principal = "alice"),
+            WriteDenials("r2", exactly = 0),
+        )
 
         val params = civictech.concord.runner.CorpusRunner().params(replicas.first())
         params["authority"] shouldBe civictech.concord.value.Value.MapVal(
