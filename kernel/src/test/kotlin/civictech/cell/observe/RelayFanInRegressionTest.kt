@@ -367,7 +367,8 @@ class RelayFanInRegressionTest {
 
     @Test
     fun `an outlet whose cell is fed only by a feedback inlet is not a structural root`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val source = Source()
         val head = FeedbackForwarder()
         val relay = MintThenForward()
@@ -384,8 +385,10 @@ class RelayFanInRegressionTest {
         // A feedback lap runs under the head's own epoch, which is never in its
         // outlet's minted set; its only input is a feedback (not FanInlet) port.
         head.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
         probe.clear()
         source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
             probe.dataWaves.size shouldBe 1
