@@ -1,0 +1,31 @@
+# Concord corpus scenario (computenet-ermvz.5, profile: dist). Canonical schema — see concord/schema/scenario.md.
+# Deliberate schema extension: an expected authority denial is reported as a dead letter, so this scenario intentionally omits no-dead-letters.
+id: 43-FLOW-AUTH-01
+title: A principal-owned replicated slice admits its author and refuses another author
+covers: [43-FLOW-04]
+profile: dist
+kind: example
+narrative:
+  given: two replicas of one principal-owned set slice, one per host, with a local view on each
+  when: alice submits a signed add at one replica and bob submits a signed add at the other
+  then: alice's value converges, bob's value remains absent, and bob's receiving boundary records exactly one attributable denial
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: slice, authority: {principal: alice}}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: slice, authority: {principal: alice}}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: signed-apply, on: r1, actor: alice, op: add, value: x}
+  - {type: signed-apply, on: r2, actor: bob, op: add, value: y}
+checks:
+  - {type: replicas-converge, logical: slice}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: final-view, view: v1, equals: [x]}
+  - {type: final-view, view: v2, equals: [x]}
+  - {type: write-denials, cell: r2, exactly: 1, principal: bob}
+  - {type: write-denials, cell: r1, exactly: 0}
