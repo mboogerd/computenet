@@ -2,13 +2,19 @@ package civictech.cell.replication
 
 import civictech.cell.CellRef
 import civictech.cell.DenialReason
+import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.host.DeadLetter
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.PeerId
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.wire.Peering
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -92,6 +98,118 @@ class OwnershipTransferTest {
         listOf(onA.membership(), onB.membership()) shouldBe List(2) { setOf(element) }
         a.denialReasons().shouldBeEmpty()
         b.denialReasons().shouldBeEmpty()
+    }
+
+    @Test
+    fun `checkpoint recovery retains replay defense and authority before peer catch-up`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val journal = InMemoryJournal()
+        val logicalId = UUID.randomUUID()
+        val recoveredRef = CellRef(logicalId, 0)
+        val donorRef = CellRef(logicalId, 1)
+        val authority = WriteAuthority.Principal(pA)
+
+        val originalRegistry = LocationRegistry()
+        val originalHost = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = originalRegistry,
+            journalFor = { ref -> if (ref == recoveredRef) journal else null },
+        )
+        val originalReplication = Replication(originalRegistry)
+        val original = SetCell<String>(recoveredRef).also {
+            originalReplication.replicate(it, originalHost, authority, signing.signer(pA), signing.verifier)
+        }
+
+        val donorRegistry = LocationRegistry()
+        val donorHost = ManagedHost(scheduler = controller.scheduler(), registry = donorRegistry)
+        val donorBridge = ManagedHost(scheduler = controller.scheduler(), registry = donorRegistry)
+        val donorSide = Peering.Side(donorRegistry, donorBridge, peer = pB)
+        val donorReplication = Replication(donorRegistry)
+        val donor = SetCell<String>(donorRef).also {
+            donorReplication.replicate(it, donorHost, authority, signing.signer(pB), signing.verifier)
+        }
+
+        val beforeTransfer = signing.signed(logicalId, pA, 9, add("before", 9))
+        val transfer = signing.signed(logicalId, pA, 10, TransferAuthority(pB))
+        val afterTransfer = signing.signed(logicalId, pB, 11, add("after", 11))
+        listOf(originalRegistry to recoveredRef, donorRegistry to donorRef).forEach { (registry, ref) ->
+            val delta = (HostedCellProxy.create(ref, registry, Replication.ReplicaDeltaInlet::class.java)
+                as Replication.ReplicaDeltaInlet).deltaInlet.call
+            delta.propagate(beforeTransfer)
+            delta.propagate(transfer)
+            delta.propagate(afterTransfer)
+        }
+        controller.runToIdle()
+        original.membership() shouldBe setOf("before", "after")
+        donor.membership() shouldBe original.membership()
+        originalReplication.authorityOf(recoveredRef)!!.retained().size shouldBe 3
+
+        // Compaction removes the admitted envelopes from the frame tail. Recovery can
+        // preserve replay defense only if the authority companion shares this exact
+        // per-cell journal and contributes its own Stateful snapshot.
+        originalHost.checkpoint(journal)
+
+        val recoveredRegistry = LocationRegistry()
+        val recoveredHost = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = recoveredRegistry,
+            journalFor = { ref -> if (ref == recoveredRef) journal else null },
+        )
+        val recoveredBridge = ManagedHost(scheduler = controller.scheduler(), registry = recoveredRegistry)
+        val recoveredSide = Peering.Side(recoveredRegistry, recoveredBridge, peer = pA)
+        val recoveredReplication = Replication(recoveredRegistry)
+        val recoveredDeadLetters = mutableListOf<DeadLetter>()
+        recoveredHost.deadLetterOutlet.subscribe(
+            Use.fixed(Propagate { recoveredDeadLetters += it }, PortRef.generate()),
+        )
+        val recovered = SetCell<String>(recoveredRef).also {
+            recoveredReplication.replicate(it, recoveredHost, authority, signing.signer(pA), signing.verifier)
+        }
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+
+        val recoveredAuthority = recoveredReplication.authorityOf(recoveredRef)!!
+        recovered.membership() shouldBe setOf("before", "after")
+        recoveredAuthority.retained().size shouldBe 3
+
+        val recoveredDelta = (HostedCellProxy.create(
+            recoveredRef,
+            recoveredRegistry,
+            Replication.ReplicaDeltaInlet::class.java,
+        ) as Replication.ReplicaDeltaInlet).deltaInlet.call
+        recoveredDelta.propagate(beforeTransfer)
+        controller.runToIdle()
+        recoveredDeadLetters.last().denial!!.reason shouldBe DenialReason.REPLAY
+        recoveredAuthority.retained().size shouldBe 3
+
+        val recoveredOps = (HostedCellProxy.create(
+            recoveredRef,
+            recoveredRegistry,
+            AuthoritySetInletProxy::class.java,
+        ) as AuthoritySetInletProxy).inlet.call
+        recoveredOps.add("former-owner")
+        controller.runToIdle()
+        recovered.membership() shouldBe setOf("before", "after")
+        recoveredDeadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+            principal shouldBe pA
+        }
+
+        Peering.loopback(recoveredSide, donorSide)
+        controller.runToIdle()
+        recoveredAuthority.retained().size shouldBe 3
+        donorReplication.authorityOf(donorRef)!!.retained().size shouldBe 3
+
+        val donorOps = (HostedCellProxy.create(donorRef, donorRegistry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+        donorOps.add("later-by-b")
+        controller.runToIdle()
+        recovered.membership() shouldBe setOf("before", "after", "later-by-b")
+        donor.membership() shouldBe recovered.membership()
+        recoveredAuthority.retained().size shouldBe 4
+        donorReplication.authorityOf(donorRef)!!.retained().size shouldBe 4
     }
 
     @Test

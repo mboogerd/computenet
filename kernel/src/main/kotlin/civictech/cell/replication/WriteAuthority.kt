@@ -79,7 +79,7 @@ data class SignedWrite(
     val counter: Long,
     val payload: ByteArray,
     val signature: ByteArray,
-) {
+) : java.io.Serializable {
     fun signingInput(): ByteArray = signingInput(logicalId, author, counter, payload)
 
     override fun equals(other: Any?): Boolean =
@@ -101,6 +101,8 @@ data class SignedWrite(
     }
 
     companion object {
+        private const val serialVersionUID: Long = 1L
+
         fun signingInput(
             logicalId: UUID,
             author: PeerId,
@@ -242,9 +244,10 @@ sealed interface Admission {
  * The in-process local gate prevents this equivocation, but a restarted author
  * without a durable chain can still produce it.
  *
- * Retention is deliberately unbounded and in-memory. Compaction requires an
- * author-signed folded checkpoint (a relay cannot mint one), and restart does
- * not snapshot this state; a restarted adapter rebuilds it from peer catch-up.
+ * Retention is deliberately unbounded. A journaled [AuthorityGossip] snapshots
+ * these original author envelopes and derives this chain again on restore; a
+ * volatile adapter rebuilds it from peer catch-up. Folding the retained history
+ * itself still requires an author-signed checkpoint a relay cannot mint.
  */
 class AuthorityState(private val authority: WriteAuthority) {
     private data class Retained(val author: PeerId, val counter: Long)

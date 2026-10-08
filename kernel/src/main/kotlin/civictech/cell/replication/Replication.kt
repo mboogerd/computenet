@@ -542,7 +542,7 @@ class Replication(
             authorityBindings[cell.ref] = AuthorityBinding(authority, signer!!, verifier!!)
         }
         host.managementInlet.call.spawn(cell)
-        adapter?.let { host.managementInlet.call.spawn(it) }
+        adapter?.let { host.spawnDurabilityCompanion(it, cell.ref) }
         registry.instances.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
         trackDeliveries(cell, host, rehome = superseded)
     }

@@ -9,6 +9,7 @@ import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
+import civictech.cell.Stateful
 import civictech.cell.data.LocalWriteGate
 import civictech.cell.data.OrMapCell
 import civictech.cell.data.Replicable
@@ -24,7 +25,9 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import java.io.Serializable
 import java.nio.charset.StandardCharsets
+import java.util.ArrayList
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -45,10 +48,12 @@ import java.util.concurrent.ConcurrentHashMap
  * admitted envelope is retained so a relay's catch-up preserves the original
  * author's signature.
  *
- * The retained log is intentionally unbounded and in-memory. Compaction needs
- * an author-signed folded checkpoint (a relay cannot create one), and rebind or
- * restart does not carry the log in the data cell's `Stateful` snapshot; a new
- * adapter rebuilds it from peers' catch-up.
+ * The retained log is intentionally unbounded. When the guarded replica is
+ * journaled, this adapter inherits that journal and snapshots every retained
+ * author envelope verbatim; journal compaction therefore compacts the record
+ * stream, not this security history. Folding the retained history itself would
+ * still need an author-signed checkpoint (a relay cannot create one). A
+ * volatile adapter has no snapshot and rebuilds from peers' catch-up.
  *
  * A new owner's write that reaches a replica before the signed transfer is
  * refused there. The next catch-up/anti-entropy re-fire carries both envelopes
@@ -61,7 +66,7 @@ class AuthorityGossip internal constructor(
     private val signer: CountingWriteSigner,
     private val verifier: SignatureVerifier,
     override val ref: CellRef = adapterRef(cell.ref),
-) : Cell, BoundaryDenialAccounting {
+) : Cell, Stateful, BoundaryDenialAccounting {
     private data class WriteKey(val author: PeerId, val counter: Long)
     private sealed interface FirstCrossing {
         data object Local : FirstCrossing
@@ -128,6 +133,36 @@ class AuthorityGossip internal constructor(
     }
 
     internal fun retained(): List<SignedWrite> = state.retained()
+
+    override fun snapshot(): Serializable = ArrayList(state.retained())
+
+    override fun restore(snapshot: Serializable) {
+        val writes = (snapshot as? List<*>)?.mapIndexed { index, value ->
+            requireNotNull(value as? SignedWrite) {
+                "write-authority snapshot entry $index is not a SignedWrite"
+            }
+        } ?: throw IllegalArgumentException(
+            "write-authority snapshot for ${cell.ref} is not a retained-write list",
+        )
+        writes.forEach { write ->
+            require(write.logicalId == cell.ref.id) {
+                "write-authority snapshot for ${cell.ref} contains write for ${write.logicalId}"
+            }
+            when (val admission = state.admit(write, verifier)) {
+                is Admission.Admitted -> {
+                    require(acceptsPayload(admission.payload)) {
+                        "write-authority snapshot payload type " +
+                            "${admission.payload?.javaClass?.name ?: "null"} does not match ${cell.javaClass.name}"
+                    }
+                    state.apply(write, admission.payload)
+                }
+                is Admission.Denied -> require(admission.reason == DenialReason.REPLAY) {
+                    "write-authority snapshot for ${cell.ref} contains refused write: " +
+                        "${admission.reason}${admission.detail?.let { ": $it" } ?: ""}"
+                }
+            }
+        }
+    }
 
     private fun installLocalGate() {
         val gate = LocalWriteGate { op, element ->

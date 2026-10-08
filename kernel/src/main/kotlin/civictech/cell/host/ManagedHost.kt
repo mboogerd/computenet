@@ -1642,6 +1642,33 @@ open class ManagedHost(
      */
     fun recoverFrom(journal: Journal): Recovery = recoverFrom(journal, ApplyContext(this))
 
+    /**
+     * Spawn [companion] with the same per-cell journal already selected for
+     * [ownerRef].
+     *
+     * A lifecycle companion has its own ref so it is not a replica-set member,
+     * while its checkpoint state is part of the guarded cell's durability
+     * boundary. An exact selector such as `ApplyContext.journalFor` cannot infer
+     * that relationship from the companion's derived ref, so the owner journal
+     * is copied into the spawn-time cache before the ordinary spawn path asks
+     * [cellJournal]. The direct selector may be absent or name that same journal;
+     * a conflicting journal is refused rather than splitting one logical state
+     * across two recovery streams.
+     */
+    internal fun spawnDurabilityCompanion(companion: Cell, ownerRef: CellRef) {
+        require(cells.containsKey(ownerRef)) {
+            "durability companion ${companion.ref} requires live owner $ownerRef"
+        }
+        val ownerJournal = journalSelector(ownerRef)
+        val directlySelected = cellJournal(companion.ref, companion)
+        require(directlySelected == null || directlySelected === ownerJournal) {
+            "durability companion ${companion.ref} and owner $ownerRef name different journals"
+        }
+        if (ownerJournal == null) cellJournals.remove(companion.ref)
+        else cellJournals[companion.ref] = ownerJournal
+        managementInlet.call.spawn(companion)
+    }
+
     /** Recover with the services and cumulative topology fold supplied by [context]. */
     fun recoverFrom(journal: Journal, context: ApplyContext): Recovery {
         require(context.host === this) { "recovery ApplyContext belongs to a different ManagedHost" }
