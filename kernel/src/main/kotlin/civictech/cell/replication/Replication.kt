@@ -526,6 +526,10 @@ class Replication(
                 },
                 verifier = requiredVerifier,
                 writeAhead = localDelta::propagate,
+                afterRecoveryApplied = { block ->
+                    host.recoveryAwareQuiescence().asFuture().thenRun(block)
+                    Unit
+                },
             )
         }
         val superseded = supersedeLocalInstance(cell)

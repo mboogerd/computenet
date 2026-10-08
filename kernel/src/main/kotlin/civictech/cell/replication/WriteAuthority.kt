@@ -213,6 +213,26 @@ class CountingWriteSigner(
         writeAhead: (SignedWrite) -> Unit,
     ): SignedWrite = nextWrite(logicalId, payload).also(writeAhead)
 
+    /**
+     * Continue [logicalId]'s lane strictly after [observedCounter].
+     *
+     * Recovery calls this after all retained/journaled envelopes have applied,
+     * before signing an accepted local operation whose envelope was absent at
+     * the crash. A counter from an older incarnation already lies below
+     * [counterFloor]; one above this incarnation's ceiling is a fail-closed
+     * incarnation rollback rather than a pair we can safely continue past.
+     */
+    @Synchronized
+    internal fun continueAfter(logicalId: UUID, observedCounter: Long) {
+        if (observedCounter < counterFloor) return
+        val ceiling = counterFloor or WRITE_COUNTER_SEQUENCE_MASK
+        require(observedCounter <= ceiling) {
+            "retained write counter $observedCounter is above this signer's incarnation ceiling $ceiling"
+        }
+        val observedSequence = observedCounter - counterFloor
+        sequences[logicalId] = maxOf(sequences[logicalId] ?: 0L, observedSequence)
+    }
+
     private fun nextWrite(logicalId: UUID, payload: ByteArray): SignedWrite {
         val sequence = (sequences[logicalId] ?: 0L) + 1L
         require(sequence <= WRITE_COUNTER_SEQUENCE_MASK) {
