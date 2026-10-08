@@ -188,13 +188,21 @@ class PromotionObservationWindowTest {
         val f = Fixture(seed = 52)
         val applier = f.applier()
         applier.beforePromotion = { f.emit(1, 2, 3) }
+        val running = startApply(applier, f.draft(f.policy(waves = 3)), "filled")
+        try {
+            awaitUntil("the pre-filled promotion either commits or incorrectly awaits") {
+                applier.record("filled")?.let { it.outcome != null || it.awaiting != null } == true
+            }
+            if (applier.record("filled")?.awaiting != null) applier.abort("filled")
+            val record = running.awaitResult()
+            f.emit(4)
 
-        val record = applier.apply(f.draft(f.policy(waves = 3)), "filled", "operator", 1)
-        f.emit(4)
-
-        record.outcome shouldBe ApplyOutcome.Committed
-        record.promotions.single().status shouldBe PromotionRecord.Status.COMMITTED
-        f.collector.received shouldContainExactly listOf(1L, 3L, 6L, 10L)
+            record.outcome shouldBe ApplyOutcome.Committed
+            record.promotions.single().status shouldBe PromotionRecord.Status.COMMITTED
+            f.collector.received shouldContainExactly listOf(1L, 3L, 6L, 10L)
+        } finally {
+            stopIfRunning(applier, "filled", running)
+        }
     }
 
     @Test
@@ -222,10 +230,12 @@ class PromotionObservationWindowTest {
             firstAwaiting.outcome.shouldBeNull()
 
             f.emit(1)
-            awaitUntil("the first wave was re-judged as still Pending") {
-                val current = applier.record("await-live")
-                current !== firstAwaiting && current?.awaiting == OBSERVATION_WINDOW && current.outcome == null
+            awaitUntil("the first wave produced a fresh policy decision record") {
+                applier.record("await-live") !== firstAwaiting
             }
+            val afterOne = applier.record("await-live").shouldNotBeNull()
+            afterOne.awaiting shouldBe OBSERVATION_WINDOW
+            afterOne.outcome.shouldBeNull()
 
             f.emit(2)
             awaitUntil("the two-wave window completed") { applier.record("await-live")?.outcome != null }
