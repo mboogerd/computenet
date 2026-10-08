@@ -21,7 +21,9 @@ package civictech.demo.alignment
  * ideas?, boardVisibility?, gutCheck?, dotBudget?}` (the last two are the experimental Gut check
  * round's settings, teu97-D2/D10); `POST /topics/{t}/reveal {creator}`; `POST /topics/{t}/ideas
  * {participant, title, description?}`; `PUT /topics/{t}/ideas/{i} {creator, title?,
- * description?}`; `DELETE /topics/{t}/ideas/{i}?creator=`.
+ * description?}`; `DELETE /topics/{t}/ideas/{i}?creator=`; LLM ideation ([IdeationRun]): `POST
+ * /topics/{t}/ideate {creator}`, `DELETE /topics/{t}/ideate?creator=`, `POST
+ * /topics/{t}/ideate/held/{i}/accept {creator}`.
  *
  * The progress block (D15) reads `state.ratings` (amends 0dvra-D8): rows are `{topic, idea, dim,
  * participant, value}` and only participant names and counts are used, never a value. It is one
@@ -58,6 +60,13 @@ internal const val SETUP_VIEW = """
   #setupDotBudget { width: 4.5rem; }
   #setupLinkFallback { width: 100%; margin-top: .5rem; }
   #setupCopied { margin-left: .5rem; }
+  #setupIdeate { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-top: .7rem; }
+  #setupIdeateStatus { font-size: var(--fs-1); }
+  #setupHeld { margin-top: .5rem; font-size: var(--fs-2); }
+  #setupHeld .held-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem; align-items: center;
+    padding: .35rem 0; border-bottom: 1px solid var(--line); }
+  #setupHeld .held-row:last-child { border-bottom: none; }
+  #setupHeld .held-why { font-size: var(--fs-1); }
 </style>
 <section id="setup" class="pane view" hidden>
 </section>
@@ -81,6 +90,7 @@ function renderSetup() {
   paintDimensions(t);
   paintPolicyAndVisibility(t);
   paintIdeas(t);
+  paintIdeation(t);
   setupPaintProgress(t);
 }
 
@@ -127,6 +137,12 @@ function ensureSetupSkeleton() {
         '<input id="setupIdeaDesc" placeholder="description (optional)" aria-label="new idea description">' +
         '<button>add</button>' +
       '</form>' +
+      '<div id="setupIdeate">' +
+        '<button type="button" id="setupIdeateGo">Ask Claude + Codex for ideas</button>' +
+        '<button type="button" id="setupIdeateStop" hidden>stop</button>' +
+        '<span id="setupIdeateStatus" class="muted num"></span>' +
+      '</div>' +
+      '<details id="setupHeld" hidden><summary class="muted"></summary><div id="setupHeldRows"></div></details>' +
     '</div>' +
     '<div class="card"><h3>Who has rated</h3><div id="setupProgress"></div></div>' +
     '<div class="card">' +
@@ -178,6 +194,17 @@ function ensureSetupSkeleton() {
     if (!title) { alert('give the idea a title'); return; }
     send('POST', '/topics/' + t.id + '/ideas', { participant: me(), title: title, description: el('setupIdeaDesc').value })
       .then(() => { el('setupIdeaTitle').value = ''; el('setupIdeaDesc').value = ''; renderSetup(); }, () => {});
+  };
+
+  el('setupIdeateGo').onclick = () => {
+    const t = currentTopic();
+    if (!t) return;
+    send('POST', '/topics/' + t.id + '/ideate', { creator: me() }).then(renderSetup, () => {});
+  };
+  el('setupIdeateStop').onclick = () => {
+    const t = currentTopic();
+    if (!t) return;
+    send('DELETE', '/topics/' + t.id + '/ideate?creator=' + encodeURIComponent(me())).then(renderSetup, () => {});
   };
 
   el('setupCopyLink').onclick = () => {
@@ -312,6 +339,40 @@ function paintIdeas(t) {
     row.querySelector('.idea-desc').value = idea.description || '';
   }
   for (const [id, row] of setupIdeaRows) if (!seen.has(id)) { setupIdeaRows.delete(id); row.remove(); }
+}
+
+// LLM ideation: reads state.ideation[t.id] ({running, round, added, budget, stopped, error, held:[{title,
+// description, proposer, verdict, reason}]}); absent until the creator first starts a run.
+function paintIdeation(t) {
+  const run = (state.ideation || {})[t.id];
+  const running = !!(run && run.running);
+  el('setupIdeateGo').disabled = running;
+  el('setupIdeateStop').hidden = !running;
+  const parts = [];
+  if (run) {
+    parts.push('round ' + run.round, run.added + ' of ' + run.budget + ' added', run.held.length + ' held back');
+    parts.push(running ? 'running…' : 'stopped: ' + run.stopped);
+    if (run.error) parts.push('last error: ' + run.error);
+  }
+  el('setupIdeateStatus').textContent = parts.join(' · ');
+  const held = run ? run.held : [];
+  const box = el('setupHeld');
+  box.hidden = !held.length;
+  box.querySelector('summary').textContent = 'Held back by Jev (' + held.length + ')';
+  const rows = el('setupHeldRows');
+  rows.innerHTML = '';
+  held.forEach((h, i) => {
+    const row = document.createElement('div');
+    row.className = 'held-row';
+    row.innerHTML = '<div><div class="held-title"></div><div class="held-why muted"></div></div>' +
+      '<button type="button" class="link">add anyway</button>';
+    row.querySelector('.held-title').textContent = h.title;
+    row.querySelector('.held-title').title = h.description;
+    row.querySelector('.held-why').textContent = h.proposer + ' · ' + h.verdict + ': ' + h.reason;
+    row.querySelector('button').onclick = () =>
+      send('POST', '/topics/' + t.id + '/ideate/held/' + i + '/accept', { creator: me() }).then(renderSetup, () => {});
+    rows.appendChild(row);
+  });
 }
 
 // R4 (0dvra-D15): reads state.ratings for participant names and counts only, never a value.

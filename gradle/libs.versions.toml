@@ -9,6 +9,8 @@ kotlinxSerializationJSON = "1.9.0"
 ksp = "2.1.21-2.0.1"
 kotlinCompileTesting = "0.7.1"
 javaWebsocket = "1.6.0"
+# HTTP client for outbound API calls (alignment's Jev judge): retry/backoff is the HttpRequestRetry plugin's config.
+ktor = "3.1.3"
 # JMH: the harness itself and the me.champeau.jmh Gradle plugin that drives it.
 # Pinned, never floating ("latest.release" and version ranges are forbidden here) —
 # a benchmark harness that silently changes version changes every number it produces.
@@ -24,6 +26,8 @@ kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", v
 kotlinx-serialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJSON" }
 kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 java-websocket = { module = "org.java-websocket:Java-WebSocket", version.ref = "javaWebsocket" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-java = { module = "io.ktor:ktor-client-java", version.ref = "ktor" }
 jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
 jmh-generator-annprocess = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }
 kotlin-poet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinPoet"}
