@@ -41,6 +41,14 @@ import java.util.UUID
  * inlet linked to an otherwise-root cell after a wave is in flight is
  * therefore counted when that wave's Progress is evaluated, matching the
  * dynamic completeness rule.
+ *
+ * Known limit (computenet-2e2g9): the classification sees only waves that
+ * enter a cell over an open inbound link. A delivery that bypasses linking
+ * (a `Use.fixed` subscription, an un-negotiated tap) or a topology event
+ * delivered under another wave's context (an unlink performed inside a
+ * handler, re-evaluated by a quorum hop) can make a cell emit a source this
+ * resolver does not report, and the downstream fan-in may then settle that
+ * wave before its data arrives.
  */
 internal object SourceProvenance {
     /**
