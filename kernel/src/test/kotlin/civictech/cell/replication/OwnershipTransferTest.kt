@@ -60,6 +60,32 @@ class OwnershipTransferTest {
     private val pD = PeerId("late-d")
 
     @Test
+    fun `blanket per-port journal can replicate an authority-bearing cell`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA)
+        val journal = InMemoryJournal()
+        val registry = LocationRegistry()
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journalForPort = { _, _ -> journal },
+        )
+        val replication = Replication(registry)
+        val replica = SetCell<String>(CellRef(UUID.randomUUID(), 0))
+
+        replication.replicate(
+            replica,
+            host,
+            WriteAuthority.Principal(pA),
+            signing.signer(pA),
+            signing.verifier,
+        )
+
+        host.hosts(replica.ref) shouldBe true
+        host.hosts(replication.authorityOf(replica.ref)!!.ref) shouldBe true
+    }
+
+    @Test
     fun `transfer racing an accepted local write cannot leave a local-only element`() {
         val controller = SimulationController()
         val signing = StubWriteSigning(pA, pB)
