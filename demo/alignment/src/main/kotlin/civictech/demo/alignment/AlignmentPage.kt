@@ -257,8 +257,12 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
  * myProgress(tid)  {rated, total} summed over meCache[tid].ideas, or null if uncached.
  * boardGate(t)     {open, reason, rated, total, pending} (0dvra-D10): done = every
  *                  cached idea has rated === total (vacuously true with no ideas);
- *                  open = done && (t.boardVisibility !== 'after-reveal' || t.revealed);
- *                  reason 'rate' (not done) | 'reveal' (done, unrevealed) | null (open).
+ *                  open = after-reveal ? t.revealed : done — the Board unlocks on own
+ *                  completion OR the facilitator's reveal (epic computenet-9y79n R5),
+ *                  never on both: in after-reveal mode the reveal alone opens it, for
+ *                  everyone, finished rating or not (planning poker).
+ *                  reason 'reveal' (after-reveal, unrevealed) | 'rate' (not done) |
+ *                  null (open).
  *                  Until meCache has the topic: {open:false, reason:'rate', rated:0,
  *                  total:0, pending:true}; otherwise pending is false. Applies to the
  *                  creator too.
@@ -347,8 +351,9 @@ function boardGate(t) {
   const p = t ? myProgress(t.id) : null;
   if (!p) return { open: false, reason: 'rate', rated: 0, total: 0, pending: true };
   const done = meCache[t.id].ideas.every(i => i.rated === i.total);
-  const open = done && (t.boardVisibility !== 'after-reveal' || t.revealed === true);
-  return { open: open, reason: open ? null : (done ? 'reveal' : 'rate'), rated: p.rated, total: p.total, pending: false };
+  const byReveal = t.boardVisibility === 'after-reveal';
+  const open = byReveal ? t.revealed === true : done;
+  return { open: open, reason: open ? null : (byReveal ? 'reveal' : 'rate'), rated: p.rated, total: p.total, pending: false };
 }
 
 // three-way partition (design contract 2026-09-22): a factor dim draws from its own
