@@ -1,17 +1,22 @@
 package civictech.runtime
 
+import civictech.cell.DenialReason
+import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.SpawnStep
-import civictech.cell.Propagate
 import civictech.cell.host.DeadLetter
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.replication.SignedWrite
 import civictech.cell.replication.WriteAuthority
+import civictech.cell.replication.WriteAuthorityBytes
+import civictech.cell.wire.LoopbackPeerTransport
 import civictech.identity.FilePeerKeyStore
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -29,6 +34,106 @@ class TwoNodesWriteAuthorityTest {
 
     @TempDir
     lateinit var tempDir: Path
+
+    @Test
+    @Timeout(60)
+    fun `restarted authority advances its durable counter incarnation`() {
+        val aKeyDirectory = tempDir.resolve("restart-a-keys")
+        val bKeyDirectory = tempDir.resolve("restart-b-keys")
+        val aIdentity = FilePeerKeyStore(aKeyDirectory).loadOrGenerate()
+        val bIdentity = FilePeerKeyStore(bKeyDirectory).loadOrGenerate()
+        val cells = mutableListOf<SetCell<String>>()
+        val spec = authoritySpec(aIdentity.peerId, cells)
+        val manifest = Manifest(
+            mapOf(
+                "a" to NodeSpec(
+                    transport = "loopback",
+                    listen = "loopback://authority-a",
+                    keyStore = aKeyDirectory.toString(),
+                    principals = listOf(encoded(bIdentity.publicKey.encoded)),
+                    peerName = "a",
+                ),
+                "b" to NodeSpec(
+                    transport = "loopback",
+                    dial = listOf("a"),
+                    keyStore = bKeyDirectory.toString(),
+                    principals = listOf(encoded(aIdentity.publicKey.encoded)),
+                    peerName = "b",
+                ),
+            ),
+        )
+        val transport = LoopbackPeerTransport(backoff = { 0L })
+        val firstA = Runtime.boot(manifest, "a", spec, transport = transport)
+        val b = Runtime.boot(manifest, "b", spec, transport = transport)
+        var restartedA: Runtime.Node? = null
+        try {
+            val bDeadLetters = java.util.concurrent.CopyOnWriteArrayList<DeadLetter>()
+            b.mainHost.deadLetterOutlet.subscribe(
+                Use.fixed(
+                    object : Propagate<DeadLetter> {
+                        override fun propagate(value: DeadLetter) {
+                            bDeadLetters += value
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+            firstA.open()
+            b.open()
+
+            val firstACell = cells[0]
+            val bCell = cells[1]
+            ops(firstA, firstACell).add("before-restart")
+            awaitUntil("node b retains the first incarnation's write", 15_000) {
+                "before-restart" in bCell.membership()
+            }
+
+            firstA.close()
+            restartedA = Runtime.boot(manifest, "a", spec, transport = transport)
+            restartedA.open()
+            val restartedACell = cells[2]
+            awaitUntil("restarted node a reconnects and receives peer catch-up", 15_000) {
+                b.connections.single().isCarrying && "before-restart" in restartedACell.membership()
+            }
+
+            val framesBeforeRestartedWrite = b.connections.single().stats.framesEnqueued
+            ops(restartedA, restartedACell).add("after-restart")
+            awaitUntil("the restarted authority's write crosses the transport", 15_000) {
+                "after-restart" in restartedACell.membership() &&
+                    b.connections.single().stats.framesEnqueued > framesBeforeRestartedWrite
+            }
+            requireNotNull(b.bridgeHost).quiescence().await(15_000, "draining node b's peering bridge")
+            b.mainHost.quiescence().await(15_000, "draining node b after the restarted write")
+            awaitUntil("node b admits the restarted authority's write", 15_000) {
+                "after-restart" in bCell.membership()
+            }
+
+            assertTrue(
+                "after-restart" in bCell.membership(),
+                "the restarted authority's first write was refused instead of advancing its counter incarnation",
+            )
+            // Only a REPLAY of the restarted write counts. Catch-up can hand the
+            // first incarnation's write back to node b, which correctly refuses
+            // that echo as REPLAY of a retained pair.
+            val restartedWriteReplays = bDeadLetters.filter { letter ->
+                letter.denial?.reason == DenialReason.REPLAY &&
+                    letter.invocation?.invocation?.args.orEmpty().any { arg ->
+                        arg is SignedWrite &&
+                            (WriteAuthorityBytes.decodePayload(arg.payload) as? SetDelta<*>)
+                                ?.adds?.containsKey("after-restart") == true
+                    }
+            }
+            assertTrue(
+                restartedWriteReplays.isEmpty(),
+                "the restarted authority's first write was classified as REPLAY: " +
+                    restartedWriteReplays.map { it.denial?.detail },
+            )
+        } finally {
+            restartedA?.close()
+            b.close()
+            firstA.close()
+        }
+    }
 
     @Test
     @Timeout(60)

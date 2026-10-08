@@ -34,9 +34,21 @@ fun interface OwnerOf : java.io.Serializable {
     fun ownerOf(element: Any?): PeerId?
 }
 
+private val ZERO_WRITE_COUNTER_INCARNATION: () -> Long = { 0L }
+
 /** Kernel seam implemented by the runtime's identity-backed signer. */
 interface WriteSigner {
     val peerId: PeerId
+
+    /**
+     * This signing identity's durable process incarnation, read once when its
+     * [CountingWriteSigner] is constructed. The zero default preserves the
+     * deterministic kernel-test and embedding seam; a runtime backed by a
+     * persistent identity must override it so process restart cannot re-mint
+     * retained `(author, counter)` pairs.
+     */
+    val counterIncarnation: () -> Long get() = ZERO_WRITE_COUNTER_INCARNATION
+
     fun sign(input: ByteArray): ByteArray
 }
 
@@ -169,7 +181,7 @@ private const val WRITE_COUNTER_SEQUENCE_MASK: Long = (1L shl WRITE_COUNTER_INCA
  */
 class CountingWriteSigner(
     private val delegate: WriteSigner,
-    incarnation: () -> Long,
+    incarnation: () -> Long = delegate.counterIncarnation,
 ) {
     val peerId: PeerId get() = delegate.peerId
 

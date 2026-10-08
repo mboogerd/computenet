@@ -520,7 +520,7 @@ class Replication(
                 cell = cell,
                 authority = authority,
                 signer = countingSigners.getOrPut(requiredSigner.peerId) {
-                    CountingWriteSigner(requiredSigner) { 0L }
+                    CountingWriteSigner(requiredSigner)
                 },
                 verifier = requiredVerifier,
             )
