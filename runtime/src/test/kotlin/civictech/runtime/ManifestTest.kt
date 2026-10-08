@@ -10,6 +10,8 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.KeyPairGenerator
+import java.util.Base64
 
 class ManifestTest {
 
@@ -55,6 +57,40 @@ class ManifestTest {
             File(tempDir.toFile(), "policy.json").path,
             loaded.nodes.getValue("a").budget,
         )
+    }
+
+    @Test
+    fun `a relative key store path resolves against the manifest directory`() {
+        val manifestFile = tempDir.resolve("manifest.json")
+        Files.writeString(manifestFile, """{"nodes":{"a":{"keyStore":"keys/a"}}}""")
+
+        val loaded = Manifest.load(manifestFile.toFile())
+
+        assertEquals(
+            tempDir.resolve("keys/a").toFile().path,
+            loaded.nodes.getValue("a").keyStore,
+        )
+    }
+
+    @Test
+    fun `an undecodable principal is refused with its field path`() {
+        val failure = invalid(
+            """{"nodes":{"a":{"principals":["not-base64!"]}}}""",
+        )
+
+        assertViolation(failure, "nodes[a].principals[0]", "Base64")
+    }
+
+    @Test
+    fun `a non Ed25519 principal is refused with its field path`() {
+        val rsa = KeyPairGenerator.getInstance("RSA").generateKeyPair()
+        val encoded = Base64.getEncoder().encodeToString(rsa.public.encoded)
+
+        val failure = invalid(
+            """{"nodes":{"a":{"principals":["$encoded"]}}}""",
+        )
+
+        assertViolation(failure, "nodes[a].principals[0]", "Ed25519")
     }
 
     @Test
