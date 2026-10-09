@@ -30,18 +30,36 @@ data class PortIdentity(val owner: CellRef, val name: String)
  * [Port] stays a pure structural contract.
  */
 internal object PortIdentities {
-    private class Registration(
-        val identity: PortIdentity,
-        val registry: WeakReference<PortRegistry>,
-    ) {
+    internal class EntryObservation {
         @Volatile
         var externalEntryObserved: Boolean = false
+            private set
 
         @Volatile
         var reactiveEntryObserved: Boolean = false
+            private set
+
+        /** Monotone entry classification: settled kinds need no further shared write. */
+        fun observe(reactive: Boolean) {
+            if (reactive) {
+                if (!reactiveEntryObserved) reactiveEntryObserved = true
+            } else {
+                if (!externalEntryObserved) externalEntryObserved = true
+            }
+        }
     }
 
+    private class Registration(
+        val identity: PortIdentity,
+        val registry: WeakReference<PortRegistry>,
+        val entryObservation: EntryObservation = EntryObservation(),
+    )
+
     private val table = Collections.synchronizedMap(WeakHashMap<Port, Registration>())
+
+    /** Test diagnostic for proving whether inlet entry observation reaches [table]. */
+    @Volatile
+    internal var onEntryObservationLookup: ((Port) -> Unit)? = null
 
     /**
      * Identity-keyed weak reference: contract APIs may be JDK proxies whose
@@ -106,12 +124,12 @@ internal object PortIdentities {
      *
      * The identity marker directly recognises an attachment whose API object
      * is a registered port's own `call`. A wrapper delegating into another
-     * cell's inlet is instead covered by [observeEntry]: an unobserved inlet is
-     * already conservative before its first call, and the reactive call keeps
-     * it conservative thereafter. If that inlet was previously observed as an
-     * external entry, its first opaque delegated call cannot be identified
-     * before delivery; only an identity-visible attachment can close that
-     * irreducible first-call ambiguity.
+     * cell's inlet is instead covered by [EntryObservation.observe]: an
+     * unobserved inlet is already conservative before its first call, and the
+     * reactive call keeps it conservative thereafter. If that inlet was
+     * previously observed as an external entry, its first opaque delegated
+     * call cannot be identified before delivery; only an identity-visible
+     * attachment can close that irreducible first-call ambiguity.
      */
     fun markBypassTarget(api: Any) {
         reapBypassTargets()
@@ -132,15 +150,14 @@ internal object PortIdentities {
     }
 
     /**
-     * Records whether a registered input [port] was invoked externally or
-     * while carrying another outlet's wave. This observation lives on the
-     * existing weak registration: it neither retains the port nor infers a
-     * target by reflecting into an opaque wrapper API.
+     * Resolves the entry observation attached to a registered input [port].
+     * The inlet caches this handle after its first invocation, keeping the
+     * weak table lookup off every subsequent dispatch while the handle's
+     * monotone, volatile flags remain visible to provenance resolution.
      */
-    fun observeEntry(port: Port, reactive: Boolean) {
-        val registration = table[port] ?: return
-        if (reactive) registration.reactiveEntryObserved = true
-        else registration.externalEntryObserved = true
+    fun entryObservation(port: Port): EntryObservation? {
+        onEntryObservationLookup?.invoke(port)
+        return table[port]?.entryObservation
     }
 
     /**
@@ -172,11 +189,11 @@ internal object PortIdentities {
             val openInbound = candidate is Linked &&
                 candidate.linking.links.any { it.to == candidate.ref }
             val bypassFed = candidate is Use<*> && isBypassTarget(candidate.call)
-            val reactiveEntry = table[candidate]?.reactiveEntryObserved == true
+            val reactiveEntry = table[candidate]?.entryObservation?.reactiveEntryObserved == true
             if (openInbound || bypassFed || reactiveEntry) return true
         }
         if (inputs.isEmpty()) return false
-        return inputs.none { table[it]?.externalEntryObserved == true }
+        return inputs.none { table[it]?.entryObservation?.externalEntryObserved == true }
     }
 }
 
