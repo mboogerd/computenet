@@ -424,6 +424,36 @@ class WriteAuthorityGossipTest {
     }
 
     @Test
+    fun `a retained transfer inside checkpoint coverage reports same-crossing replay`() {
+        val mesh = threePeerMesh(WriteAuthority.Principal(pA))
+        val cAuthority = mesh.c.replication.authorityOf(mesh.onC.ref)!!
+        val cSink = mesh.sink(mesh.c, mesh.onC.ref)
+        val checkpoint = mesh.signing.signed(
+            mesh.onC.ref.id,
+            pA,
+            102,
+            AuthorCheckpoint(101, add("checkpointed", 100)),
+        )
+        val transfer = mesh.signing.signed(mesh.onC.ref.id, pA, 101, TransferAuthority(pB))
+
+        mesh.b.delta(mesh.onC.ref).propagate(checkpoint)
+        mesh.controller.runToIdle()
+        mesh.b.delta(mesh.onC.ref).propagate(transfer)
+        mesh.controller.runToIdle()
+
+        cAuthority.retained().map { WriteAuthorityBytes.decodePayload(it.payload) }.run {
+            count { it is AuthorCheckpoint } shouldBe 1
+            count { it is TransferAuthority } shouldBe 1
+        }
+        val beforeReplay = cSink.denialCount
+        mesh.b.delta(mesh.onC.ref).propagate(transfer)
+        mesh.controller.runToIdle()
+
+        cSink.denialCount shouldBe beforeReplay + 1
+        mesh.c.deadLetters.last().denial!!.reason shouldBe DenialReason.REPLAY
+    }
+
+    @Test
     fun `a forging relay cannot fold or drop another author's history`() {
         val mesh = threePeerMesh(WriteAuthority.Principal(pA))
         val cAuthority = mesh.c.replication.authorityOf(mesh.onC.ref)!!

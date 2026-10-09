@@ -182,7 +182,7 @@ object WriteAuthorityBytes {
     }
 }
 
-private const val WRITE_COUNTER_INCARNATION_SHIFT: Int = 20
+internal const val WRITE_COUNTER_INCARNATION_SHIFT: Int = 20
 private const val WRITE_COUNTER_SEQUENCE_MASK: Long = (1L shl WRITE_COUNTER_INCARNATION_SHIFT) - 1L
 
 /**
@@ -295,8 +295,9 @@ sealed interface Admission {
  * that checkpoint records per-author, per-incarnation-lane coverage and drops
  * only the covered author's data envelopes; authority transfers remain
  * retained so the canonical chain can always be rebuilt. Later verified
- * arrivals inside a covered range are replay, while other authors and lanes
- * remain independent.
+ * non-transfer arrivals inside a covered range are replay, while transfers
+ * still enter ordinary chain admission and other authors and lanes remain
+ * independent.
  */
 class AuthorityState(private val authority: WriteAuthority) {
     data class Fold(val coversThrough: Long, val folded: Any?)
@@ -336,17 +337,6 @@ class AuthorityState(private val authority: WriteAuthority) {
             )
         }
 
-        covered[CoverageKey(write.author, laneOf(write.counter))]?.let { coversThrough ->
-            if (write.counter <= coversThrough) {
-                return Admission.Denied(
-                    DenialReason.REPLAY,
-                    write.author,
-                    "write-authority pair (${write.author.name}, ${write.counter}) " +
-                        "is covered by that author's checkpoint through $coversThrough",
-                )
-            }
-        }
-
         val payload = try {
             WriteAuthorityBytes.decodePayload(write.payload)
         } catch (failure: PayloadUndecodable) {
@@ -355,6 +345,19 @@ class AuthorityState(private val authority: WriteAuthority) {
                 write.author,
                 failure.message,
             )
+        }
+
+        if (payload !is TransferAuthority) {
+            covered[CoverageKey(write.author, laneOf(write.counter))]?.let { coversThrough ->
+                if (write.counter <= coversThrough) {
+                    return Admission.Denied(
+                        DenialReason.REPLAY,
+                        write.author,
+                        "write-authority pair (${write.author.name}, ${write.counter}) " +
+                            "is covered by that author's checkpoint through $coversThrough",
+                    )
+                }
+            }
         }
 
         if (payload is AuthorCheckpoint) {
@@ -422,6 +425,12 @@ class AuthorityState(private val authority: WriteAuthority) {
     @Synchronized
     fun isCovered(author: PeerId, counter: Long): Boolean =
         coveredThrough(author, laneOf(counter))?.let { counter <= it } == true
+
+    /** Whether checkpoint coverage supersedes this absent pair. */
+    @Synchronized
+    fun isCompactedPair(author: PeerId, counter: Long): Boolean =
+        RetainedKey(author, counter) !in retained &&
+            coveredThrough(author, laneOf(counter))?.let { counter <= it } == true
 
     /** The greatest admitted coverage in [author]'s exact incarnation [lane]. */
     @Synchronized

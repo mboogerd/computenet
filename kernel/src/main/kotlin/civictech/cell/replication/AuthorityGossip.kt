@@ -56,10 +56,11 @@ import java.util.concurrent.ConcurrentHashMap
  * from that author and lane; [TransferAuthority] envelopes are always retained.
  * A late joiner therefore verifies the author's retained checkpoint, applies
  * its folded delta, and rebuilds the unchanged transfer chain rather than
- * trusting a relay-produced fold. Verified arrivals covered by a checkpoint are
- * silently deduplicated, while uncovered same-crossing replays remain denials.
- * Retention is bounded per author per incarnation lane, without changing the
- * [SignedWrite] or [SignedWriteBatch] wire frames.
+ * trusting a relay-produced fold. Verified non-transfer arrivals superseded by
+ * checkpoint compaction are silently deduplicated, while retained transfers
+ * and uncovered same-crossing replays remain denials. Retention is bounded per
+ * author per incarnation lane, without changing the [SignedWrite] or
+ * [SignedWriteBatch] wire frames.
  *
  * When the guarded replica is journaled, this adapter inherits that journal and
  * snapshots every retained author envelope verbatim. A volatile adapter has no
@@ -299,7 +300,7 @@ class AuthorityGossip internal constructor(
                     completePendingReplay(write)
                     return
                 }
-                if (admission.reason == DenialReason.REPLAY && state.isCovered(write.author, write.counter)) {
+                if (admission.reason == DenialReason.REPLAY && state.isCompactedPair(write.author, write.counter)) {
                     return
                 }
                 val first = firstCrossing[WriteKey(write.author, write.counter)]
@@ -466,7 +467,7 @@ class AuthorityGossip internal constructor(
             .asSequence()
             .filter { it.author == signer.peerId }
             .maxOfOrNull { it.counter }
-        val lane = signer.counterFloor ushr WRITE_COUNTER_LANE_SHIFT
+        val lane = signer.counterFloor ushr WRITE_COUNTER_INCARNATION_SHIFT
         val coveredThrough = state.coveredThrough(signer.peerId, lane)
         return listOfNotNull(highestRetained, coveredThrough).maxOrNull()
     }
@@ -521,7 +522,6 @@ class AuthorityGossip internal constructor(
 
     companion object {
         internal const val DEFAULT_COMPACT_EVERY: Int = 64
-        private const val WRITE_COUNTER_LANE_SHIFT: Int = 20
 
         private fun adapterRef(cellRef: CellRef): CellRef = CellRef(
             UUID.nameUUIDFromBytes(
