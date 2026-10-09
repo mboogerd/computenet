@@ -97,6 +97,12 @@ internal object PortIdentities {
      * It remains for the API's lifetime: an unlinked bypass has no target-side
      * topology record from which to prove that every such feed disappeared,
      * so retaining `unknown` is the conservative disposition.
+     *
+     * Known limit (computenet-8txv7): the marker is keyed by [api]'s identity,
+     * so it recognises only an attachment whose API object is a registered
+     * port's own `call`. A wrapper delegating into another cell's inlet
+     * (`Use.fixed(Propagate { inlet.call.propagate(it) }, ref)`) leaves that
+     * cell unmarked.
      */
     fun markBypassTarget(api: Any) {
         reapBypassTargets()
