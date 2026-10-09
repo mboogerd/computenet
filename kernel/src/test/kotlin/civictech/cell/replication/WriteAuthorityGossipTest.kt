@@ -1,13 +1,22 @@
 package civictech.cell.replication
 
 import civictech.cell.BoundarySeam
+import civictech.cell.CellRef
 import civictech.cell.DenialReason
+import civictech.cell.Propagate
 import civictech.cell.Timestamp
-import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.OrMapCell
 import civictech.cell.data.SetCell
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.host.DeadLetter
+import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.PeerId
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import civictech.cell.wire.Peering
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -194,6 +203,416 @@ class WriteAuthorityGossipTest {
         candidate.membership() shouldBe setOf("before-rebind", "after-rebind")
         onB.membership() shouldBe setOf("before-rebind", "after-rebind")
         b.denialReasons().shouldBeEmpty()
+    }
+
+    @Test
+    fun `an author checkpoint bounds every replica's retained log through a current relay`() {
+        run {
+            val controller = SimulationController()
+            val signing = StubWriteSigning(pA, pB, pC)
+            val a = AuthorityTestPeer(controller, pA, signing)
+            val b = AuthorityTestPeer(controller, pB, signing)
+            val c = AuthorityTestPeer(controller, pC, signing)
+            Peering.loopback(a.side, b.side)
+            val ac = Peering.loopback(a.side, c.side)
+            Peering.loopback(b.side, c.side)
+            val logicalId = UUID.randomUUID()
+            val authority = WriteAuthority.Principal(pA)
+            val onA = a.replica(logicalId, 0, authority)
+            val onB = b.replica(logicalId, 1, authority)
+            val onC = c.replica(logicalId, 2, authority)
+            controller.runToIdle()
+
+            repeat(3) { a.ops(onA).add("manual-$it") }
+            controller.runToIdle()
+            listOf(onA, onB, onC).map { it.membership() } shouldBe
+                List(3) { setOf("manual-0", "manual-1", "manual-2") }
+            listOf(a to onA, b to onB, c to onC).map { (peer, cell) ->
+                peer.replication.authorityOf(cell.ref)!!.retained().size
+            } shouldBe listOf(3, 3, 3)
+
+            ac.partition()
+            a.replication.authorityOf(onA.ref)!!.compact()
+            controller.runToIdle()
+
+            listOf(a to onA, b to onB, c to onC).map { (peer, cell) ->
+                peer.replication.authorityOf(cell.ref)!!.retained().size
+            } shouldBe listOf(1, 1, 1)
+            listOf(onA, onB, onC).map { it.membership() } shouldBe
+                List(3) { setOf("manual-0", "manual-1", "manual-2") }
+            val onceCompacted = listOf(a to onA, b to onB, c to onC).map { (peer, cell) ->
+                peer.replication.authorityOf(cell.ref)!!.retained()
+            }
+            a.replication.authorityOf(onA.ref)!!.compact()
+            controller.runToIdle()
+            listOf(a to onA, b to onB, c to onC).map { (peer, cell) ->
+                peer.replication.authorityOf(cell.ref)!!.retained()
+            } shouldBe onceCompacted
+            listOf(a, b, c).flatMap { it.denialReasons() }.shouldBeEmpty()
+        }
+
+        run {
+            val controller = SimulationController()
+            val signing = StubWriteSigning(pA, pB, pC)
+            val a = AuthorityTestPeer(controller, pA, signing)
+            val b = AuthorityTestPeer(controller, pB, signing)
+            val c = AuthorityTestPeer(controller, pC, signing)
+            Peering.loopback(a.side, b.side)
+            val ac = Peering.loopback(a.side, c.side)
+            Peering.loopback(b.side, c.side)
+            val logicalId = UUID.randomUUID()
+            val authority = WriteAuthority.Principal(pA)
+            val onA = a.replica(logicalId, 0, authority)
+            val onB = b.replica(logicalId, 1, authority)
+            val onC = c.replica(logicalId, 2, authority)
+            controller.runToIdle()
+
+            repeat(AuthorityGossip.DEFAULT_COMPACT_EVERY - 1) { a.ops(onA).add("auto-$it") }
+            controller.runToIdle()
+            listOf(a to onA, b to onB, c to onC).map { (peer, cell) ->
+                peer.replication.authorityOf(cell.ref)!!.retained().size
+            } shouldBe List(3) { AuthorityGossip.DEFAULT_COMPACT_EVERY - 1 }
+
+            ac.partition()
+            a.ops(onA).add("auto-trigger")
+            controller.runToIdle()
+            a.ops(onA).add("auto-after")
+            controller.runToIdle()
+
+            val expectedMembership = buildSet {
+                repeat(AuthorityGossip.DEFAULT_COMPACT_EVERY - 1) { add("auto-$it") }
+                add("auto-trigger")
+                add("auto-after")
+            }
+            listOf(onA, onB, onC).map { it.membership() } shouldBe List(3) { expectedMembership }
+            listOf(a to onA, b to onB, c to onC).forEach { (peer, cell) ->
+                val retained = peer.replication.authorityOf(cell.ref)!!.retained()
+                retained.size shouldBe 2
+                retained.all { it.author == pA } shouldBe true
+                retained.map { WriteAuthorityBytes.decodePayload(it.payload) }.run {
+                    count { it is AuthorCheckpoint } shouldBe 1
+                    count { it is SetDelta<*> } shouldBe 1
+                }
+            }
+            listOf(a, b, c).flatMap { it.denialReasons() }.shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `a late joiner rebuilds data and authority chain from a compacted catch-up`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB, pC)
+        val a = AuthorityTestPeer(controller, pA, signing)
+        val b = AuthorityTestPeer(controller, pB, signing)
+        val c = AuthorityTestPeer(controller, pC, signing)
+        Peering.loopback(a.side, b.side)
+        val logicalId = UUID.randomUUID()
+        val authority = WriteAuthority.Principal(pA)
+        val onA = a.replica(logicalId, 0, authority)
+        val onB = b.replica(logicalId, 1, authority)
+        val onC = c.replica(logicalId, 2, authority)
+        controller.runToIdle()
+
+        a.ops(onA).add("before-one")
+        a.ops(onA).add("before-two")
+        controller.runToIdle()
+        a.replication.authorityOf(onA.ref)!!.compact()
+        controller.runToIdle()
+        // The transfer precedes the new principal's compaction, so the joiner
+        // must rebuild the chain from the retained transfer in the catch-up.
+        a.replication.authorityOf(onA.ref)!!.transfer(pB)
+        controller.runToIdle()
+        b.ops(onB).add("after-transfer")
+        controller.runToIdle()
+        b.replication.authorityOf(onB.ref)!!.compact()
+        controller.runToIdle()
+        onC.membership().shouldBeEmpty()
+        val transfer = b.replication.authorityOf(onB.ref)!!.retained()
+            .single { WriteAuthorityBytes.decodePayload(it.payload) is TransferAuthority }
+
+        Peering.loopback(b.side, c.side)
+        controller.runToIdle()
+
+        onC.membership() shouldBe onB.membership()
+        val onBRetained = b.replication.authorityOf(onB.ref)!!.retained()
+        val onCRetained = c.replication.authorityOf(onC.ref)!!.retained()
+        onCRetained.map { it.author to it.counter }.toSet() shouldBe
+            onBRetained.map { it.author to it.counter }.toSet()
+        onCRetained.map { WriteAuthorityBytes.decodePayload(it.payload)?.javaClass } shouldBe listOf(
+            AuthorCheckpoint::class.java,
+            TransferAuthority::class.java,
+            AuthorCheckpoint::class.java,
+        )
+        c.denialReasons().shouldBeEmpty()
+
+        b.ops(onB).add("new-principal")
+        a.ops(onA).add("former-principal")
+        controller.runToIdle()
+        val formerPrincipal = signing.signed(
+            onC.ref.id,
+            pA,
+            transfer.counter + 1,
+            add("former-principal-signed", transfer.counter + 1),
+        )
+        b.delta(onC.ref).propagate(formerPrincipal)
+        controller.runToIdle()
+
+        listOf(onA, onB, onC).map { it.membership() } shouldBe
+            List(3) { setOf("before-one", "before-two", "after-transfer", "new-principal") }
+        a.deadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+            principal shouldBe pA
+        }
+        c.deadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+            principal shouldBe pA
+        }
+        c.denialReasons() shouldBe listOf(DenialReason.UNAUTHORIZED_WRITER)
+        b.denialReasons().shouldBeEmpty()
+    }
+
+    @Test
+    fun `covered replays are silently deduplicated while uncovered replays stay reported`() {
+        val mesh = threePeerMesh(WriteAuthority.Principal(pA))
+        val cAuthority = mesh.c.replication.authorityOf(mesh.onC.ref)!!
+        val cSink = mesh.sink(mesh.c, mesh.onC.ref)
+
+        mesh.a.ops(mesh.onA).add("covered")
+        mesh.controller.runToIdle()
+        val covered = mesh.a.replication.authorityOf(mesh.onA.ref)!!.retained().single()
+        mesh.a.replication.authorityOf(mesh.onA.ref)!!.compact()
+        mesh.controller.runToIdle()
+        val compacted = cAuthority.retained()
+        val membership = mesh.onC.membership()
+        val beforeCoveredReplay = cSink.denialCount
+
+        mesh.b.delta(mesh.onC.ref).propagate(covered)
+        mesh.controller.runToIdle()
+
+        cAuthority.retained() shouldBe compacted
+        mesh.onC.membership() shouldBe membership
+        cSink.denialCount shouldBe beforeCoveredReplay
+
+        val checkpointCounter = compacted.single().counter
+        val uncovered = mesh.signing.signed(
+            mesh.onC.ref.id,
+            pA,
+            checkpointCounter + 1,
+            add("uncovered", checkpointCounter + 1),
+        )
+        mesh.b.delta(mesh.onC.ref).propagate(uncovered)
+        mesh.controller.runToIdle()
+        val beforeUncoveredReplay = cSink.denialCount
+        mesh.b.delta(mesh.onC.ref).propagate(uncovered)
+        mesh.controller.runToIdle()
+        cSink.denialCount shouldBe beforeUncoveredReplay + 1
+        mesh.c.deadLetters.last().denial!!.reason shouldBe DenialReason.REPLAY
+
+        val forgedCovered = mesh.signing.signed(
+            mesh.onC.ref.id,
+            pA,
+            covered.counter,
+            add("forged-covered", covered.counter),
+            signedBy = pB,
+        )
+        mesh.b.delta(mesh.onC.ref).propagate(forgedCovered)
+        mesh.controller.runToIdle()
+        mesh.c.deadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.BAD_SIGNATURE
+            principal shouldBe pA
+        }
+    }
+
+    @Test
+    fun `a forging relay cannot fold or drop another author's history`() {
+        val mesh = threePeerMesh(WriteAuthority.Principal(pA))
+        val cAuthority = mesh.c.replication.authorityOf(mesh.onC.ref)!!
+        val forged = mesh.signing.signed(
+            mesh.onC.ref.id,
+            pA,
+            200,
+            AuthorCheckpoint(199, add("forged-a", 199)),
+            signedBy = pB,
+        )
+        val beforeForged = cAuthority.retained()
+        val beforeForgedMembership = mesh.onC.membership()
+        mesh.b.delta(mesh.onC.ref).propagate(forged)
+        mesh.controller.runToIdle()
+        cAuthority.retained() shouldBe beforeForged
+        mesh.onC.membership() shouldBe beforeForgedMembership
+        mesh.c.deadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.BAD_SIGNATURE
+            principal shouldBe pA
+        }
+
+        // The forged checkpoint did not establish coverage through 199.
+        val afterForgedProbe = mesh.signing.signed(mesh.onC.ref.id, pA, 199, add("a-probe", 199))
+        mesh.b.delta(mesh.onC.ref).propagate(afterForgedProbe)
+        mesh.controller.runToIdle()
+        mesh.onC.membership() shouldBe setOf("a-probe")
+
+        val unauthorized = mesh.signing.signed(
+            mesh.onC.ref.id,
+            pB,
+            300,
+            AuthorCheckpoint(299, add("unauthorized-b", 299)),
+        )
+        val beforeUnauthorized = cAuthority.retained()
+        val beforeUnauthorizedMembership = mesh.onC.membership()
+        mesh.b.delta(mesh.onC.ref).propagate(unauthorized)
+        mesh.controller.runToIdle()
+        cAuthority.retained() shouldBe beforeUnauthorized
+        mesh.onC.membership() shouldBe beforeUnauthorizedMembership
+        mesh.c.deadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+            principal shouldBe pB
+        }
+
+        // Once B legitimately becomes principal, its counter 299 is still live.
+        val transfer = mesh.signing.signed(mesh.onC.ref.id, pA, 250, TransferAuthority(pB))
+        mesh.b.delta(mesh.onC.ref).propagate(transfer)
+        mesh.controller.runToIdle()
+        val afterUnauthorizedProbe = mesh.signing.signed(
+            mesh.onC.ref.id,
+            pB,
+            299,
+            add("b-probe", 299),
+        )
+        mesh.b.delta(mesh.onC.ref).propagate(afterUnauthorizedProbe)
+        mesh.controller.runToIdle()
+        mesh.onC.membership() shouldBe setOf("a-probe", "b-probe")
+
+        val perElement = WriteAuthority.PerElementOwner(OwnerOf { element ->
+            when ((element as? String)?.substringBefore(':')) {
+                "a" -> pA
+                "b" -> pB
+                else -> null
+            }
+        })
+        val owned = threePeerMesh(perElement)
+        owned.a.ops(owned.onA).add("a:kept")
+        owned.b.ops(owned.onB).add("b:folded")
+        owned.controller.runToIdle()
+        val aEnvelopes = owned.a.replication.authorityOf(owned.onA.ref)!!.retained()
+            .filter { it.author == pA }
+        owned.b.replication.authorityOf(owned.onB.ref)!!.compact()
+        owned.controller.runToIdle()
+
+        listOf(owned.a to owned.onA, owned.b to owned.onB, owned.c to owned.onC).forEach { (peer, cell) ->
+            val retained = peer.replication.authorityOf(cell.ref)!!.retained()
+            retained.filter { it.author == pA } shouldBe aEnvelopes
+            retained.count { it.author == pB } shouldBe 1
+            WriteAuthorityBytes.decodePayload(retained.single { it.author == pB }.payload)
+                .let { it is AuthorCheckpoint } shouldBe true
+        }
+        owned.memberships() shouldBe List(3) { setOf("a:kept", "b:folded") }
+        listOf(owned.a, owned.b, owned.c).flatMap { it.denialReasons() }.shouldBeEmpty()
+    }
+
+    @Test
+    fun `compact after transfer-out is refused like any local op`() {
+        val mesh = threePeerMesh(WriteAuthority.Principal(pA))
+        mesh.a.ops(mesh.onA).add("before-transfer")
+        mesh.controller.runToIdle()
+        mesh.a.replication.authorityOf(mesh.onA.ref)!!.transfer(pB)
+        mesh.controller.runToIdle()
+        val before = listOf(mesh.a to mesh.onA, mesh.b to mesh.onB, mesh.c to mesh.onC).map { (peer, cell) ->
+            peer.replication.authorityOf(cell.ref)!!.retained()
+        }
+        val beforeRemoteDenials = listOf(mesh.b, mesh.c).map { it.denialReasons() }
+
+        mesh.a.replication.authorityOf(mesh.onA.ref)!!.compact()
+        mesh.controller.runToIdle()
+
+        listOf(mesh.a to mesh.onA, mesh.b to mesh.onB, mesh.c to mesh.onC).map { (peer, cell) ->
+            peer.replication.authorityOf(cell.ref)!!.retained()
+        } shouldBe before
+        listOf(mesh.b, mesh.c).map { it.denialReasons() } shouldBe beforeRemoteDenials
+        mesh.a.deadLetters.last().denial!!.run {
+            seam shouldBe BoundarySeam.INTEGRITY
+            reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+            principal shouldBe pA
+            subject shouldBe "SetCell#compact"
+        }
+    }
+
+    @Test
+    fun `compaction survives journal checkpoint and recovery`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA)
+        val journal = InMemoryJournal()
+        val defaultJournal = InMemoryJournal()
+        val ref = CellRef(UUID.randomUUID(), 0)
+        val authority = WriteAuthority.Principal(pA)
+
+        val originalRegistry = LocationRegistry()
+        val originalHost = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = originalRegistry,
+            journalFor = { selected -> if (selected == ref) journal else defaultJournal },
+        )
+        val originalReplication = Replication(originalRegistry)
+        val original = SetCell<String>(ref).also {
+            originalReplication.replicate(it, originalHost, authority, signing.signer(pA), signing.verifier)
+        }
+        val originalOps = (HostedCellProxy.create(ref, originalRegistry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+        originalOps.add("before-checkpoint")
+        controller.runToIdle()
+        val originalAuthority = originalReplication.authorityOf(ref)!!
+        val covered = originalAuthority.retained().single()
+        originalAuthority.compact()
+        controller.runToIdle()
+        val beforeCrash = originalAuthority.retained()
+        beforeCrash.size shouldBe 1
+        originalHost.checkpoint(journal)
+
+        val recoveredRegistry = LocationRegistry()
+        val recoveredHost = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = recoveredRegistry,
+            journalFor = { selected -> if (selected == ref) journal else defaultJournal },
+        )
+        val recoveredReplication = Replication(recoveredRegistry)
+        val recoveredDeadLetters = mutableListOf<DeadLetter>()
+        recoveredHost.deadLetterOutlet.subscribe(
+            Use.fixed(Propagate { recoveredDeadLetters += it }, PortRef.generate()),
+        )
+        val recovered = SetCell<String>(ref).also {
+            recoveredReplication.replicate(it, recoveredHost, authority, signing.signer(pA), signing.verifier)
+        }
+        controller.runToIdle()
+        recoveredHost.recoverFrom(journal)
+        controller.runToIdle()
+
+        val recoveredAuthority = recoveredReplication.authorityOf(ref)!!
+        recovered.membership() shouldBe setOf("before-checkpoint")
+        recoveredAuthority.retained() shouldBe beforeCrash
+        val recoveredDelta = (HostedCellProxy.create(
+            ref,
+            recoveredRegistry,
+            Replication.ReplicaDeltaInlet::class.java,
+        ) as Replication.ReplicaDeltaInlet).deltaInlet.call
+        val beforeReplayDenials = recoveredDeadLetters.size
+        recoveredDelta.propagate(covered)
+        controller.runToIdle()
+        recoveredAuthority.retained() shouldBe beforeCrash
+        recoveredDeadLetters.size shouldBe beforeReplayDenials
+
+        val recoveredOps = (HostedCellProxy.create(ref, recoveredRegistry, AuthoritySetInletProxy::class.java)
+            as AuthoritySetInletProxy).inlet.call
+        recoveredOps.add("after-recovery")
+        controller.runToIdle()
+
+        recovered.membership() shouldBe setOf("before-checkpoint", "after-recovery")
+        val recoveredWrites = recoveredAuthority.retained()
+        recoveredWrites.size shouldBe 2
+        val checkpointCounter = beforeCrash.single().counter
+        (
+            recoveredWrites.single {
+                WriteAuthorityBytes.decodePayload(it.payload) is SetDelta<*>
+            }.counter > checkpointCounter
+        ) shouldBe true
     }
 
     /**
