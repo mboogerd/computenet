@@ -8,6 +8,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.InletPolicy
 import civictech.cell.port.PolicyTier
+import civictech.cell.port.PortIdentities
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeOpen
 import civictech.cell.protocol.ProtocolSupport
@@ -67,10 +68,14 @@ private fun FanOutlet<*>.sendAbsorbAck(progress: Progress) {
  * relay decision, this hop publishes [output]'s live source provenance: the
  * union of every resolved link open into this inlet frontier, of either role,
  * plus [output]'s own minted ids. Unknown input provenance publishes unknown,
- * preserving Reading 1's fail-closed behavior downstream. An empty linked
- * frontier is also unknown here: an un-negotiated `Use.fixed` path can still
- * invoke a unary hop, so known-empty would recreate the first-edge relay
- * hazard. [ProtocolSupport]
+ * as does an input with a recorded link-bypassing wave path, preserving
+ * Reading 1's fail-closed behavior downstream. An empty linked frontier is
+ * also unknown here: an un-negotiated `Use.fixed` path can still invoke a
+ * unary hop, so known-empty would recreate the first-edge relay hazard. An
+ * opaque delegating wrapper remains a known limit when the same inlet also
+ * has an open link: the wrapper exposes no target marker, and the inlet's
+ * reactive-entry observation cannot distinguish that wrapper from the linked
+ * feed. [ProtocolSupport]
  * evaluates this overload's predicate for every arriving acknowledgement, and
  * [FanInlet.linking] exposes only the currently active links, so links added
  * after construction count and an unlinked edge stops counting before the next
@@ -86,7 +91,10 @@ internal fun FanInlet<*>.relayAbsorbAcks(
     vararg otherInlets: FanInlet<*>,
 ) {
     val inlets = listOf(this) + otherInlets
-    SourceProvenance.publish(output) { resolvedInputSources(inlets, emptyIsUnknown = true) }
+    SourceProvenance.publish(output) {
+        if (inlets.any { PortIdentities.hasUnlinkedWaveEntry(it) }) null
+        else resolvedInputSources(inlets, emptyIsUnknown = true)
+    }
     val support = ProtocolSupport.of(this)
     support.relay(Protocols.Progress) {
         support.handles(Protocols.Progress) ||

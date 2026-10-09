@@ -15,6 +15,7 @@ import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.data.op.SemiJoinCell
@@ -136,6 +137,12 @@ class RelayFanInRegressionTest {
 
         fun send(delta: SetDelta<String>) = outlet.call.propagate(delta)
     }
+
+    private data class UnarySetRelay(
+        val cell: Cell,
+        val inlet: FanInlet<Propagate<SetDelta<String>>>,
+        val outlet: FanOutlet<Propagate<SetDelta<String>>>,
+    )
 
     private class Unlinker(
         private val unlink: () -> Unit,
@@ -421,6 +428,44 @@ class RelayFanInRegressionTest {
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
             probe.dataWaves.size shouldBe 1
             probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
+    fun `a Use-fixed feed keeps a unary published relay unknown beside one linked source`() {
+        val relays = listOf<Pair<String, () -> UnarySetRelay>>(
+            "filter" to {
+                FilterCell<String> { true }.let { UnarySetRelay(it, it.inlet, it.outlet) }
+            },
+            "flatMap" to {
+                FlatMapSetCell<String, String>(f = { listOf(it) })
+                    .let { UnarySetRelay(it, it.inlet, it.outlet) }
+            },
+        )
+
+        relays.forEach { (kind, createRelay) ->
+            val host = ManagedHost()
+            val bypassSource = Source()
+            val linkedSource = Source()
+            val relay = createRelay()
+            val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+            val probe = WaveEventProbe()
+            val management = host.managementInlet.call
+            listOf(bypassSource, linkedSource, relay.cell, fanIn, probe).forEach(management::spawn)
+            management.connect(bypassSource.ref, "outlet", fanIn.ref, "inlet")
+            bypassSource.outlet.subscribe(Use.fixed(relay.inlet.call, PortRef.generate()))
+            management.connect(linkedSource.ref, "outlet", relay.cell.ref, "inlet")
+            management.connect(relay.cell.ref, "outlet", fanIn.ref, "inlet")
+            management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+            linkedSource.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+            probe.clear()
+            bypassSource.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+
+            withClue("$kind progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+                probe.dataWaves.shouldNotBeEmpty()
+                probe.duplicateSettlements() shouldBe emptySet()
+            }
         }
     }
 

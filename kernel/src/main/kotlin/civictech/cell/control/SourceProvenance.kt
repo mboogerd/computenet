@@ -44,8 +44,10 @@ import java.util.UUID
  * existing, safe, over-aligning behavior this mechanism only ever narrows
  * from, never widens past. Published provenance is evaluated from live
  * topology on every resolution; direct link-bypass targets are stamped before
- * their attachment becomes visible, while unobserved registered inputs fail
- * closed until their invocation establishes external or reactive entry.
+ * their attachment becomes visible, and unary relay publishers consult that
+ * stamp before publishing their linked frontier, while unobserved registered
+ * inputs fail closed until their invocation establishes external or reactive
+ * entry.
  * Emission history never excludes an edge. Thus an externally-fed
  * inlet-bearing source stays a root, while direct bypass targets and a
  * never-externally-entered wrapper target are unknown before their first
@@ -56,7 +58,9 @@ import java.util.UUID
  * attributed to that inlet before it happens. Its reactive invocation makes
  * subsequent resolution conservative, but attachment-time precision would
  * require the wrapper to expose its target or the inlet to declare that it is
- * external-only.
+ * external-only. For a published unary relay whose inlet also has an open link,
+ * the reactive observation cannot be attributed to the wrapper rather than the
+ * link, so that wrapper-plus-link shape remains a classification limit.
  *
  * Known limit (computenet-2e2g9): a topology event delivered under another
  * wave's context (an unlink performed inside a handler, re-evaluated by a
