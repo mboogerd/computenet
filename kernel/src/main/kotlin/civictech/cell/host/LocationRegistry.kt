@@ -657,15 +657,18 @@ class LocationRegistry {
      * hook change. The caller owns typed boundary accounting because it knows
      * the announcing connection's principal.
      *
-     * Two limits of this rule. **Anonymous peers are one owner**: [peer] is
-     * compared by equality, so two connections that both announce with a null
-     * [PeerId] can still re-aim each other's refs (a named peer can neither
-     * capture an anonymous one's ref nor be captured by it). **A cross-peer
-     * handover is ordered**: a ref moving from peer q to peer r is admitted
-     * here only once q's retraction ([unpublishFromPeer]) or q's disconnect
-     * ([unpublishRemotes]) has removed q's binding; an announcement by r that
-     * arrives first is refused and not retried, so the ref stays unlocated
-     * here until r announces again.
+     * Two limits of this rule. **Anonymous announcements are not ownership-
+     * protected from one another**: [peer] is compared by equality, so every
+     * connection that announces with a null [PeerId] is the same owner and may
+     * re-aim or retract another anonymous connection's refs. A named peer can
+     * neither capture an anonymous one's ref nor be captured by it; a peer that
+     * needs that protection names its [PeerId]. Stronger anonymous ownership is
+     * future opt-in boundary-policy work, not a change to the Open path.
+     * **A cross-peer handover is ordered**: a ref moving from peer q to peer r
+     * is admitted here only once q's retraction ([unpublishFromPeer]) or q's
+     * disconnect ([unpublishRemotes]) has removed q's binding; an announcement
+     * by r that arrives first is refused and not retried, so the ref stays
+     * unlocated here until r announces again.
      */
     internal fun publishFromPeer(
         ref: CellRef,
@@ -940,6 +943,13 @@ class LocationRegistry {
      * host still [ManagedHost.hosts] the ref. Without this half the publish
      * guard is bypassed in two announcements: unpublish the incumbent, then
      * publish the now-fresh ref.
+     *
+     * Ownership is the same nullable-[PeerId] equality as [publishFromPeer].
+     * Consequently, one anonymous connection may retract another anonymous
+     * connection's binding; named and anonymous peers cannot retract each
+     * other's bindings. Anonymous capture protection requires naming the peer
+     * today and remains future opt-in boundary-policy work for unnamed peers;
+     * the Open path deliberately keeps this behavior.
      *
      * Returns the incumbent on refusal and changes nothing; otherwise removes
      * the binding under the ref's queue lock and fires [onUnpublish] as
