@@ -141,6 +141,17 @@ data class SignedWriteBatch(val writes: List<SignedWrite>)
 /** A write by the current principal that transfers the slice to [newPrincipal]. */
 data class TransferAuthority(val newPrincipal: PeerId) : java.io.Serializable
 
+/**
+ * An author's signed fold of only its own data through [coversThrough].
+ *
+ * Per 7n5g2-D1, a relay may discard only that author's covered envelopes;
+ * authority transfers are never part of [folded] and are never discarded.
+ */
+data class AuthorCheckpoint(
+    val coversThrough: Long,
+    val folded: Any?,
+) : java.io.Serializable
+
 /** The one failure shape exposed by [WriteAuthorityBytes.decodePayload]. */
 class PayloadUndecodable(message: String, cause: Throwable) : IllegalArgumentException(message, cause)
 
@@ -280,23 +291,30 @@ sealed interface Admission {
  * The in-process local gate prevents this equivocation, but a restarted author
  * without a durable chain can still produce it.
  *
- * Retention is deliberately unbounded. A journaled [AuthorityGossip] snapshots
- * these original author envelopes and derives this chain again on restore; a
- * volatile adapter rebuilds it from peer catch-up. Folding the retained history
- * itself still requires an author-signed checkpoint a relay cannot mint.
+ * Per 7n5g2-D1/D2, only an author may sign a fold of its own data. Applying
+ * that checkpoint records per-author, per-incarnation-lane coverage and drops
+ * only the covered author's data envelopes; authority transfers remain
+ * retained so the canonical chain can always be rebuilt. Later verified
+ * arrivals inside a covered range are replay, while other authors and lanes
+ * remain independent.
  */
 class AuthorityState(private val authority: WriteAuthority) {
-    private data class Retained(val author: PeerId, val counter: Long)
+    data class Fold(val coversThrough: Long, val folded: Any?)
+
+    private data class RetainedKey(val author: PeerId, val counter: Long)
+    private data class Retained(val write: SignedWrite, val payload: Any?)
+    private data class CoverageKey(val author: PeerId, val lane: Long)
     private data class Transfer(val from: PeerId, val atCounter: Long, val to: PeerId)
 
-    private val retained = linkedMapOf<Retained, SignedWrite>()
+    private val retained = linkedMapOf<RetainedKey, Retained>()
+    private val covered = mutableMapOf<CoverageKey, Long>()
     private val transfers = mutableListOf<Transfer>()
     private val initialPrincipal: PeerId? = (authority as? WriteAuthority.Principal)?.id
     private var currentPrincipal: PeerId? = initialPrincipal
 
     @Synchronized
     fun admit(write: SignedWrite, verifier: SignatureVerifier): Admission {
-        val retainedKey = Retained(write.author, write.counter)
+        val retainedKey = RetainedKey(write.author, write.counter)
         if (retainedKey in retained) {
             return Admission.Denied(
                 DenialReason.REPLAY,
@@ -318,6 +336,17 @@ class AuthorityState(private val authority: WriteAuthority) {
             )
         }
 
+        covered[CoverageKey(write.author, laneOf(write.counter))]?.let { coversThrough ->
+            if (write.counter <= coversThrough) {
+                return Admission.Denied(
+                    DenialReason.REPLAY,
+                    write.author,
+                    "write-authority pair (${write.author.name}, ${write.counter}) " +
+                        "is covered by that author's checkpoint through $coversThrough",
+                )
+            }
+        }
+
         val payload = try {
             WriteAuthorityBytes.decodePayload(write.payload)
         } catch (failure: PayloadUndecodable) {
@@ -328,27 +357,101 @@ class AuthorityState(private val authority: WriteAuthority) {
             )
         }
 
+        if (payload is AuthorCheckpoint) {
+            malformedCheckpoint(write, payload)?.let { detail ->
+                return Admission.Denied(DenialReason.UNSIGNED, write.author, detail)
+            }
+        }
+
         return when (authority) {
             WriteAuthority.Open -> Admission.Admitted(payload)
             is WriteAuthority.Principal -> admitPrincipal(write, payload)
-            is WriteAuthority.PerElementOwner -> admitElements(write, payload, authority.ownerOf)
+            is WriteAuthority.PerElementOwner ->
+                admitElements(write, (payload as? AuthorCheckpoint)?.folded ?: payload, authority.ownerOf)
         }
     }
 
-    /** Record an admission and recompute the order-independent principal chain. */
+    /**
+     * Record an admission, compact any author-covered data, and return the
+     * envelopes removed by that compaction.
+     */
     @Synchronized
-    fun apply(write: SignedWrite, payload: Any?) {
-        val key = Retained(write.author, write.counter)
-        if (retained.putIfAbsent(key, write) != null) return
+    fun apply(write: SignedWrite, payload: Any?): List<SignedWrite> {
+        val key = RetainedKey(write.author, write.counter)
+        if (retained.putIfAbsent(key, Retained(write, payload)) != null) return emptyList()
         if (authority is WriteAuthority.Principal && payload is TransferAuthority) {
             transfers += Transfer(write.author, write.counter, payload.newPrincipal)
             currentPrincipal = canonicalTransfers().lastOrNull()?.to ?: initialPrincipal
         }
+        if (payload !is AuthorCheckpoint) return emptyList()
+
+        val lane = laneOf(write.counter)
+        val coverageKey = CoverageKey(write.author, lane)
+        covered[coverageKey] = maxOf(covered[coverageKey] ?: Long.MIN_VALUE, payload.coversThrough)
+
+        val dropped = mutableListOf<SignedWrite>()
+        val entries = retained.entries.iterator()
+        while (entries.hasNext()) {
+            val entry = entries.next()
+            val retainedWrite = entry.value.write
+            if (
+                retainedWrite.author == write.author &&
+                laneOf(retainedWrite.counter) == lane &&
+                retainedWrite.counter <= payload.coversThrough &&
+                entry.value.payload !is TransferAuthority
+            ) {
+                dropped += retainedWrite
+                entries.remove()
+            }
+        }
+        return dropped
     }
 
     /** The author-signed log carried in a late-join catch-up batch. */
     @Synchronized
-    fun retained(): List<SignedWrite> = retained.values.toList()
+    fun retained(): List<SignedWrite> = retained.values.map { it.write }
+
+    /** Whether [counter] lies in an admitted checkpoint range for [author]. */
+    @Synchronized
+    fun isCovered(author: PeerId, counter: Long): Boolean =
+        coveredThrough(author, laneOf(counter))?.let { counter <= it } == true
+
+    /** The greatest admitted coverage in [author]'s exact incarnation [lane]. */
+    @Synchronized
+    fun coveredThrough(author: PeerId, lane: Long): Long? = covered[CoverageKey(author, lane)]
+
+    /** Count retained, uncovered data envelopes by [author] at or above [laneFloor]. */
+    @Synchronized
+    fun uncoveredOwnDataCount(author: PeerId, laneFloor: Long): Int = retained.values.count { entry ->
+        entry.write.author == author &&
+            entry.write.counter >= laneFloor &&
+            entry.payload !is TransferAuthority &&
+            entry.payload !is AuthorCheckpoint
+    }
+
+    /**
+     * Join [author]'s retained data and prior checkpoint folds at or above
+     * [laneFloor]. Transfers are chain evidence, never fold input.
+     */
+    @Synchronized
+    fun foldOwn(author: PeerId, laneFloor: Long): Fold? {
+        val candidates = retained.values.mapNotNull { entry ->
+            if (entry.write.author != author || entry.write.counter < laneFloor) return@mapNotNull null
+            val payload = when (val retainedPayload = entry.payload) {
+                is TransferAuthority -> return@mapNotNull null
+                is AuthorCheckpoint -> retainedPayload.folded
+                else -> retainedPayload
+            }
+            entry.write.counter to payload
+        }
+        if (candidates.isEmpty()) return null
+        require(candidates.all { (_, payload) -> payload is SetDelta<*> || payload is TaggedMapDelta<*, *> }) {
+            "write-authority fold requires SetDelta or TaggedMapDelta payloads"
+        }
+
+        val folded = candidates.map { it.second }.reduce(::mergeFolded)
+        return Fold(candidates.maxOf { it.first }, folded)
+    }
 
     /** Pure local-author check used before a cell mutates and again before signing. */
     @Synchronized
@@ -358,11 +461,39 @@ class AuthorityState(private val authority: WriteAuthority) {
             peerId == currentPrincipal &&
                 (payloadOrElement !is TransferAuthority || transferTargetAllowed(peerId, Long.MAX_VALUE, payloadOrElement))
         is WriteAuthority.PerElementOwner -> {
-            if (payloadOrElement is TransferAuthority) false
-            else touchedElements(payloadOrElement)?.all { authority.ownerOf.ownerOf(it) == peerId }
-                ?: (authority.ownerOf.ownerOf(payloadOrElement) == peerId)
+            when (payloadOrElement) {
+                is TransferAuthority -> false
+                is AuthorCheckpoint ->
+                    touchedElements(payloadOrElement.folded)?.all { authority.ownerOf.ownerOf(it) == peerId } == true
+                else -> touchedElements(payloadOrElement)?.all { authority.ownerOf.ownerOf(it) == peerId }
+                    ?: (authority.ownerOf.ownerOf(payloadOrElement) == peerId)
+            }
         }
     }
+
+    private fun malformedCheckpoint(write: SignedWrite, checkpoint: AuthorCheckpoint): String? = when {
+        checkpoint.coversThrough >= write.counter ->
+            "malformed author checkpoint: coversThrough ${checkpoint.coversThrough} must precede counter ${write.counter}"
+        laneOf(checkpoint.coversThrough) != laneOf(write.counter) ->
+            "malformed author checkpoint: coversThrough ${checkpoint.coversThrough} is outside counter ${write.counter}'s lane"
+        checkpoint.folded !is SetDelta<*> && checkpoint.folded !is TaggedMapDelta<*, *> ->
+            "malformed author checkpoint: folded payload must be SetDelta or TaggedMapDelta"
+        else -> null
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun mergeFolded(left: Any?, right: Any?): Any? = when {
+        left is SetDelta<*> && right is SetDelta<*> ->
+            (left as SetDelta<Any?>).merge(right as SetDelta<Any?>)
+        left is TaggedMapDelta<*, *> && right is TaggedMapDelta<*, *> ->
+            (left as TaggedMapDelta<Any?, Any?>).merge(right as TaggedMapDelta<Any?, Any?>)
+        else -> throw IllegalArgumentException(
+            "write-authority fold requires one delta family, got " +
+                "${left?.javaClass?.name ?: "null"} and ${right?.javaClass?.name ?: "null"}",
+        )
+    }
+
+    private fun laneOf(counter: Long): Long = counter ushr WRITE_COUNTER_INCARNATION_SHIFT
 
     private fun admitPrincipal(write: SignedWrite, payload: Any?): Admission {
         val current = currentPrincipal

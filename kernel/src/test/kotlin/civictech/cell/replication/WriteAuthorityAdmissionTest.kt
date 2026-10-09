@@ -4,6 +4,8 @@ import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
+import civictech.cell.data.OrMapCell
+import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.link.PeerId
@@ -13,6 +15,7 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.wire.ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
 import civictech.cell.wire.WireCodec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.security.MessageDigest
@@ -130,6 +133,214 @@ class WriteAuthorityAdmissionTest {
     }
 
     @Test
+    fun `checkpoint compaction drops only the author's covered data envelopes and keeps transfers`() {
+        val verifier = verifier(known)
+        val state = AuthorityState(WriteAuthority.Open)
+        val dot = Timestamp(logicalId, 1)
+        val dataOne = write(p, 1, SetDelta(adds = mapOf("one" to setOf(dot))))
+        val transfer = write(p, 2, TransferAuthority(q))
+        admitAndApply(state, dataOne, verifier)
+        admitAndApply(state, transfer, verifier)
+
+        val firstFold = SetDelta(adds = mapOf("one" to setOf(dot)))
+        val firstCheckpoint = write(p, 3, AuthorCheckpoint(coversThrough = 1, folded = firstFold))
+        admitAndApply(state, firstCheckpoint, verifier) shouldBe listOf(dataOne)
+
+        val dataFour = write(p, 4, SetDelta(adds = mapOf("four" to setOf(Timestamp(logicalId, 4)))))
+        val dataFive = write(p, 5, SetDelta(adds = mapOf("five" to setOf(Timestamp(logicalId, 5)))))
+        val otherAuthor = write(q, 1, SetDelta(adds = mapOf("q" to setOf(Timestamp(logicalId, 6)))))
+        val otherLane = write(
+            p,
+            (1L shl ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT) or 1L,
+            SetDelta(adds = mapOf("next-lane" to setOf(Timestamp(logicalId, 7)))),
+        )
+        listOf(dataFour, dataFive, otherAuthor, otherLane).forEach { admitAndApply(state, it, verifier) }
+
+        val finalCheckpoint = write(
+            p,
+            6,
+            AuthorCheckpoint(coversThrough = 4, folded = firstFold.merge(decodeSet(dataFour))),
+        )
+        admitAndApply(state, finalCheckpoint, verifier) shouldBe listOf(firstCheckpoint, dataFour)
+        state.retained() shouldBe listOf(transfer, dataFive, otherAuthor, otherLane, finalCheckpoint)
+
+        val principalState = AuthorityState(WriteAuthority.Principal(p))
+        val principalTransfer = write(p, 10, TransferAuthority(q))
+        admitAndApply(principalState, principalTransfer, verifier)
+        val qData = write(q, 1, SetDelta(adds = mapOf("new-owner" to setOf(dot))))
+        admitAndApply(principalState, qData, verifier)
+        val qCheckpoint = write(q, 2, AuthorCheckpoint(coversThrough = 1, folded = decodeSet(qData)))
+        admitAndApply(principalState, qCheckpoint, verifier) shouldBe listOf(qData)
+
+        principalState.retained() shouldBe listOf(principalTransfer, qCheckpoint)
+        principalState.admit(write(q, 3, SetDelta(adds = mapOf("still-current" to setOf(dot)))), verifier)
+            .shouldBeInstanceOf<Admission.Admitted>()
+        principalState.admit(write(p, 11, SetDelta(adds = mapOf("retired" to setOf(dot)))), verifier)
+            .denied().reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+    }
+
+    @Test
+    fun `a covered counter is refused as replay and an uncovered one is admitted`() {
+        val verifier = verifier(known)
+        val state = AuthorityState(WriteAuthority.Principal(p))
+        val covered = write(p, 2, SetDelta(adds = mapOf("covered" to emptySet())))
+        admitAndApply(state, covered, verifier)
+        val checkpoint = write(
+            p,
+            5,
+            AuthorCheckpoint(coversThrough = 3, folded = decodeSet(covered)),
+        )
+        admitAndApply(state, checkpoint, verifier) shouldBe listOf(covered)
+
+        state.isCovered(p, 2) shouldBe true
+        state.isCovered(p, 3) shouldBe true
+        state.isCovered(p, 4) shouldBe false
+        state.coveredThrough(p, 0) shouldBe 3
+
+        val replay = state.admit(covered, verifier).denied()
+        replay.reason shouldBe DenialReason.REPLAY
+        replay.detail.orEmpty() shouldContain "checkpoint through 3"
+
+        val forgedCovered = covered.copy(
+            signature = covered.signature.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() },
+        )
+        state.admit(forgedCovered, verifier).denied().reason shouldBe DenialReason.BAD_SIGNATURE
+        state.admit(write(p, 4, SetDelta(adds = mapOf("uncovered" to emptySet()))), verifier)
+            .shouldBeInstanceOf<Admission.Admitted>()
+
+        val nextLaneCounter = (1L shl ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT) or 2L
+        state.isCovered(p, nextLaneCounter) shouldBe false
+        state.admit(write(p, nextLaneCounter, SetDelta(adds = mapOf("next-lane" to emptySet()))), verifier)
+            .shouldBeInstanceOf<Admission.Admitted>()
+    }
+
+    @Test
+    fun `forged unauthorized and malformed checkpoints are refused without compacting`() {
+        val verifier = verifier(known)
+        val state = AuthorityState(WriteAuthority.Principal(p))
+        val seed = write(p, 1, SetDelta(adds = mapOf("owned" to emptySet())))
+        admitAndApply(state, seed, verifier)
+        val retainedBefore = state.retained()
+
+        val forged = signedBytes(
+            p,
+            8,
+            WriteAuthorityBytes.encodePayload(
+                AuthorCheckpoint(coversThrough = 7, folded = SetDelta(adds = mapOf("owned" to emptySet()))),
+            ),
+            qSecret,
+        )
+        state.admit(forged, verifier).denied().reason shouldBe DenialReason.BAD_SIGNATURE
+
+        val unauthorized = write(
+            q,
+            8,
+            AuthorCheckpoint(coversThrough = 7, folded = SetDelta(adds = mapOf("owned" to emptySet()))),
+        )
+        state.admit(unauthorized, verifier).denied().reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+
+        val selfCovering = write(
+            p,
+            9,
+            AuthorCheckpoint(coversThrough = 9, folded = SetDelta(adds = mapOf("owned" to emptySet()))),
+        )
+        val wrongLane = write(
+            p,
+            (1L shl ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT) or 2L,
+            AuthorCheckpoint(coversThrough = 1, folded = SetDelta(adds = mapOf("owned" to emptySet()))),
+        )
+        val nonDelta = write(p, 10, AuthorCheckpoint(coversThrough = 9, folded = "not a delta"))
+        listOf(selfCovering, wrongLane, nonDelta).forEach { malformed ->
+            val denial = state.admit(malformed, verifier).denied()
+            denial.reason shouldBe DenialReason.UNSIGNED
+            denial.detail.orEmpty() shouldContain "author checkpoint"
+        }
+
+        state.retained() shouldBe retainedBefore
+        state.coveredThrough(p, 0) shouldBe null
+        state.coveredThrough(p, 1) shouldBe null
+        state.authorizesLocal(p, AuthorCheckpoint(0, SetDelta(adds = mapOf("owned" to emptySet())))) shouldBe true
+        state.authorizesLocal(q, AuthorCheckpoint(0, SetDelta(adds = mapOf("owned" to emptySet())))) shouldBe false
+
+        val owners = mapOf<Any?, PeerId>("owned" to p, "foreign" to q)
+        val perElement = AuthorityState(WriteAuthority.PerElementOwner(OwnerOf(owners::get)))
+        val ownedCheckpoint = AuthorCheckpoint(4, SetDelta(adds = mapOf("owned" to emptySet())))
+        val foreignCheckpoint = AuthorCheckpoint(5, SetDelta(adds = mapOf("foreign" to emptySet())))
+        perElement.admit(write(p, 5, ownedCheckpoint), verifier).shouldBeInstanceOf<Admission.Admitted>()
+        perElement.admit(write(p, 6, foreignCheckpoint), verifier).denied().reason shouldBe
+            DenialReason.UNAUTHORIZED_WRITER
+        perElement.authorizesLocal(p, ownedCheckpoint) shouldBe true
+        perElement.authorizesLocal(p, foreignCheckpoint) shouldBe false
+        perElement.retained() shouldBe emptyList()
+    }
+
+    @Test
+    fun `foldOwn joins the author's lane and equals applying its envelopes individually`() {
+        val verifier = verifier(known)
+        val setState = AuthorityState(WriteAuthority.Open)
+        val one = Timestamp(logicalId, 1)
+        val two = Timestamp(logicalId, 2)
+        val three = Timestamp(logicalId, 3)
+        val setOne = SetDelta(adds = mapOf("removed" to setOf(one), "kept" to setOf(two)))
+        val setTwo = SetDelta(dels = mapOf("removed" to setOf(one)))
+        admitAndApply(setState, write(p, 1, setOne), verifier)
+        admitAndApply(setState, write(p, 2, setTwo), verifier)
+        val checkpointFold = setOne.merge(setTwo)
+        admitAndApply(setState, write(p, 3, AuthorCheckpoint(2, checkpointFold)), verifier)
+        val setFour = SetDelta(adds = mapOf("later" to setOf(three)))
+        admitAndApply(setState, write(p, 4, setFour), verifier)
+        admitAndApply(setState, write(p, 5, TransferAuthority(q)), verifier)
+        admitAndApply(setState, write(q, 6, SetDelta(adds = mapOf("other" to setOf(three)))), verifier)
+
+        setState.uncoveredOwnDataCount(p, 0) shouldBe 1
+        val setFold = setState.foldOwn(p, 0).shouldBeInstanceOf<AuthorityState.Fold>()
+        setFold.coversThrough shouldBe 4
+        setFold.folded shouldBe checkpointFold.merge(setFour)
+        setState.foldOwn(PeerId("absent"), 0) shouldBe null
+
+        val individualSet = SetCell<String>()
+        individualSet.deltaInlet.call.propagate(setFour)
+        individualSet.deltaInlet.call.propagate(checkpointFold)
+        val foldedSet = SetCell<String>()
+        foldedSet.deltaInlet.call.propagate(setFold.folded.shouldBeInstanceOf<SetDelta<String>>())
+        foldedSet.membership() shouldBe individualSet.membership()
+        individualSet.deltaInlet.call.propagate(setOne)
+        foldedSet.deltaInlet.call.propagate(setOne)
+        foldedSet.membership() shouldBe individualSet.membership()
+
+        val mapState = AuthorityState(WriteAuthority.Open)
+        val mapOne = TaggedMapDelta(
+            puts = mapOf("removed" to mapOf(one to "old"), "kept" to mapOf(two to "value")),
+        )
+        val mapTwo = TaggedMapDelta<String, String>(dels = mapOf("removed" to setOf(one)))
+        admitAndApply(mapState, write(p, 1, mapOne), verifier)
+        admitAndApply(mapState, write(p, 2, mapTwo), verifier)
+        val mapCheckpointFold = mapOne.merge(mapTwo)
+        admitAndApply(mapState, write(p, 3, AuthorCheckpoint(2, mapCheckpointFold)), verifier)
+        val mapFour = TaggedMapDelta(puts = mapOf("later" to mapOf(three to "new")))
+        admitAndApply(mapState, write(p, 4, mapFour), verifier)
+
+        mapState.uncoveredOwnDataCount(p, 0) shouldBe 1
+        val mapFold = mapState.foldOwn(p, 0).shouldBeInstanceOf<AuthorityState.Fold>()
+        mapFold.coversThrough shouldBe 4
+        mapFold.folded shouldBe mapCheckpointFold.merge(mapFour)
+
+        val individualMap = OrMapCell<String, String>()
+        individualMap.deltaInlet.call.propagate(mapFour)
+        individualMap.deltaInlet.call.propagate(mapCheckpointFold)
+        val foldedMap = OrMapCell<String, String>()
+        foldedMap.deltaInlet.call.propagate(mapFold.folded.shouldBeInstanceOf<TaggedMapDelta<String, String>>())
+        foldedMap.membership() shouldBe individualMap.membership()
+        listOf("removed", "kept", "later").forEach { key ->
+            foldedMap.value(key) shouldBe individualMap.value(key)
+        }
+        individualMap.deltaInlet.call.propagate(mapOne)
+        foldedMap.deltaInlet.call.propagate(mapOne)
+        foldedMap.membership() shouldBe individualMap.membership()
+        foldedMap.value("removed") shouldBe individualMap.value("removed")
+    }
+
+    @Test
     fun `counting signer assigns per-logical-id incarnation counters and reads incarnation once`() {
         val signedInputs = mutableListOf<ByteArray>()
         val delegate = object : WriteSigner {
@@ -179,11 +390,27 @@ class WriteAuthorityAdmissionTest {
     private fun write(author: PeerId, counter: Long, payload: Any?): SignedWrite =
         signedBytes(author, counter, WriteAuthorityBytes.encodePayload(payload))
 
-    private fun signedBytes(author: PeerId, counter: Long, payload: ByteArray): SignedWrite {
+    private fun signedBytes(
+        author: PeerId,
+        counter: Long,
+        payload: ByteArray,
+        signingSecret: ByteArray = known.getValue(author),
+    ): SignedWrite {
         val unsigned = SignedWrite(logicalId, author, counter, payload, ByteArray(0))
-        val secret = known.getValue(author)
-        return unsigned.copy(signature = digest(secret, unsigned.signingInput()))
+        return unsigned.copy(signature = digest(signingSecret, unsigned.signingInput()))
     }
+
+    private fun admitAndApply(
+        state: AuthorityState,
+        write: SignedWrite,
+        verifier: SignatureVerifier,
+    ): List<SignedWrite> {
+        val admitted = state.admit(write, verifier).shouldBeInstanceOf<Admission.Admitted>()
+        return state.apply(write, admitted.payload)
+    }
+
+    private fun decodeSet(write: SignedWrite): SetDelta<String> =
+        WriteAuthorityBytes.decodePayload(write.payload).shouldBeInstanceOf()
 
     private fun verifier(directory: Map<PeerId, ByteArray>): SignatureVerifier =
         SignatureVerifier { author, counter, payload, signature ->
