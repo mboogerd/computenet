@@ -21,10 +21,11 @@ import java.util.UUID
  * [resolve] on a [Link] answers "which sourceIds can ever arrive on this
  * edge?" with:
  *  - a concrete, non-null [Set] when the answer is **known** — either a cell
- *    explicitly [publish]ed its outlet's resolved provenance (the relay hops
- *    in [AbsorbAck.kt], which compose this recursively through their own
- *    input edges), or the outlet's owning cell is structurally a root — it has
- *    no open inbound link, no registered API targeted by a link-bypassing
+ *    explicitly [publish]ed its outlet's resolved provenance (the unary and
+ *    fan-in relay hops in [AbsorbAck.kt], which compose this recursively
+ *    through their own input edges), or the outlet's owning cell is
+ *    structurally a root — it has no open inbound link, no registered API
+ *    targeted by a link-bypassing
  *    attachment, and either no registered input or a registered input has
  *    actually been entered externally. An owner whose input entry mode has
  *    not yet been observed is conservatively reactive; this keeps an opaque
@@ -43,8 +44,10 @@ import java.util.UUID
  * existing, safe, over-aligning behavior this mechanism only ever narrows
  * from, never widens past. Published provenance is evaluated from live
  * topology on every resolution; direct link-bypass targets are stamped before
- * their attachment becomes visible, while unobserved registered inputs fail
- * closed until their invocation establishes external or reactive entry.
+ * their attachment becomes visible, and unary relay publishers consult that
+ * stamp before publishing their linked frontier, while unobserved registered
+ * inputs fail closed until their invocation establishes external or reactive
+ * entry.
  * Emission history never excludes an edge. Thus an externally-fed
  * inlet-bearing source stays a root, while direct bypass targets and a
  * never-externally-entered wrapper target are unknown before their first
@@ -55,7 +58,9 @@ import java.util.UUID
  * attributed to that inlet before it happens. Its reactive invocation makes
  * subsequent resolution conservative, but attachment-time precision would
  * require the wrapper to expose its target or the inlet to declare that it is
- * external-only.
+ * external-only. For a published unary relay whose inlet also has an open link,
+ * the reactive observation cannot be attributed to the wrapper rather than the
+ * link, so that wrapper-plus-link shape remains a classification limit.
  *
  * Known limit (computenet-2e2g9): a topology event delivered under another
  * wave's context (an unlink performed inside a handler, re-evaluated by a
@@ -70,7 +75,7 @@ internal object SourceProvenance {
      * fresh on every call (no snapshot, so a later topology change — an edge
      * opening or closing on the publishing hop's own inputs — is reflected
      * immediately, with no separate invalidation step). A relay hop
-     * ([civictech.cell.control.relayAbsorbAcks]'s fan-in overload) calls this
+     * ([civictech.cell.control.relayAbsorbAcks]) calls this
      * once per output at construction, publishing the union of its own open
      * input edges' resolved sets. [resolve] adds the publishing outlet's own
      * locally minted ids to a successfully resolved set.

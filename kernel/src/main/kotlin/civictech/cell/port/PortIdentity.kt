@@ -151,6 +151,22 @@ internal object PortIdentities {
         return bypassTargets.containsKey(ApiReference(api))
     }
 
+    /**
+     * Whether [port] has received a reactive wave through a path that is not
+     * represented by one of its currently open inbound links. A direct bypass
+     * marker is authoritative even when linked feeds coexist. Without that
+     * marker, a reactive entry only proves an unlinked path when no open link
+     * could explain it; entry observations deliberately do not guess which of
+     * several possible paths delivered a call.
+     */
+    fun hasUnlinkedWaveEntry(port: Use<*>): Boolean {
+        if (isBypassTarget(port.call)) return true
+        val reactiveEntry = registration(port)?.entryObservation?.reactiveEntryObserved == true
+        if (!reactiveEntry) return false
+        val hasOpenInbound = (port as? Linked)?.linking?.links?.any { it.to == port.ref } == true
+        return !hasOpenInbound
+    }
+
     private fun reapBypassTargets() {
         while (true) {
             val stale = bypassQueue.poll() as? ApiReference ?: return

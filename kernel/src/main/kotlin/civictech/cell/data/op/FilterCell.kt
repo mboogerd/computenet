@@ -40,7 +40,7 @@ class FilterCell<E>(
         // With exactly one input edge, Progress means the upstream wave
         // produced no input delta anywhere in this hop. A fan-in FilterCell
         // conservatively stops the relay until it owns a per-edge fold.
-        inlet.relayAbsorbAcks()
+        inlet.relayAbsorbAcks(outlet)
         outlet.catchUpOnLinked { if (op.state.size > 0) op.state.asDelta() else null }
     }
 
