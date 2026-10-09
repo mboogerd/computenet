@@ -8,6 +8,7 @@ import civictech.cell.Timestamp
 import civictech.cell.control.Progress
 import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.LinkResult
@@ -20,6 +21,8 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
+import civictech.cell.observe.AdmissionVerdict
+import civictech.cell.observe.AlignedAdmissionException
 import civictech.cell.observe.observeAligned
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -27,6 +30,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.util.Random
 import java.util.UUID
 
@@ -102,10 +106,10 @@ class QuorumFanInSettlementTest {
         val outlet: FanOutlet<Propagate<SetDelta<String>>>,
     )
 
-    private fun fanIn(kind: FanInKind): FanInPorts = when (kind) {
-        FanInKind.QUORUM -> QuorumSetCell.union<String>(emitOnFrontier = true)
+    private fun fanIn(kind: FanInKind, gated: Boolean = true): FanInPorts = when (kind) {
+        FanInKind.QUORUM -> QuorumSetCell.union<String>(emitOnFrontier = gated)
             .let { FanInPorts(it, it.inlet, it.outlet) }
-        FanInKind.UNION -> UnionSetCell<String>(emitOnFrontier = true)
+        FanInKind.UNION -> UnionSetCell<String>(emitOnFrontier = gated)
             .let { FanInPorts(it, it.inlet, it.outlet) }
     }
 
@@ -243,5 +247,92 @@ class QuorumFanInSettlementTest {
 
         sinkHost.observeAligned { set("quorum", quorum.ref) }
         quorum.inlet.linking.links.count { it.to == quorum.inlet.ref } shouldBe 1
+    }
+
+    /**
+     * Aligned admission over the two-lane cross-host fan-in: an ungated
+     * instance is rejected naming its operator (computenet-xas2g's rule for
+     * Quorum, extended to Union here), a gated instance is admitted.
+     */
+    private fun admitTwoLaneFanIn(kind: FanInKind, gated: Boolean) {
+        val controller = SimulationController(0)
+        val sourceHost = ManagedHost(scheduler = controller.scheduler())
+        val xHost = ManagedHost(scheduler = controller.scheduler())
+        val mirrorHost = ManagedHost(scheduler = controller.scheduler())
+        val sinkRegistry = LocationRegistry()
+        val sinkHost = ManagedHost(registry = sinkRegistry, scheduler = controller.scheduler())
+        val events = mutableListOf<Event>()
+
+        val source = SetSource()
+        val xOnly = SetArm(setApi, name = "fan-x", events = events) { it.startsWith("x") }
+        val mirror = SetArm(setApi, name = "mirror", events = events) { true }
+        val fanIn = fanIn(kind, gated)
+
+        sourceHost.managementInlet.call.spawn(source)
+        xHost.managementInlet.call.spawn(xOnly)
+        mirrorHost.managementInlet.call.spawn(mirror)
+        sinkHost.managementInlet.call.spawn(fanIn.cell)
+        listOf(xHost to xOnly, mirrorHost to mirror).forEach { (host, arm) ->
+            source.outlet.subscribe(
+                Use.fixed(host.lookup<SetArmProxy>(arm.ref)!!.inlet.call, PortRef.generate()),
+            )
+        }
+        @Suppress("UNCHECKED_CAST")
+        xOnly.outlet.linkTo(fanIn.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        @Suppress("UNCHECKED_CAST")
+        mirror.outlet.linkTo(fanIn.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        controller.runToIdle()
+
+        if (gated) {
+            sinkHost.observeAligned { set("fanIn", fanIn.cell.ref) }
+            return
+        }
+        val refsBefore = sinkRegistry.localRefs().size
+        val linksBefore = fanIn.outlet.linking.links.size
+        val error = assertThrows<AlignedAdmissionException> {
+            sinkHost.observeAligned { set("fanIn", fanIn.cell.ref) }
+        }
+        val verdict = error.verdict.shouldBeInstanceOf<AdmissionVerdict.Rejected.UngatedAncestor>()
+        verdict.cell shouldBe fanIn.cell.ref
+        verdict.cellClass shouldBe fanIn.cell::class.java
+        error.message!! shouldContain fanIn.cell::class.java.simpleName
+        sinkRegistry.localRefs().size shouldBe refsBefore
+        fanIn.outlet.linking.links.size shouldBe linksBefore
+    }
+
+    @Test
+    fun `aligned observation rejects an ungated two-lane cross-host fan-in naming the operator`() {
+        FanInKind.entries.forEach { kind -> withClue(kind.name) { admitTwoLaneFanIn(kind, gated = false) } }
+    }
+
+    @Test
+    fun `aligned observation admits a frontier-settled two-lane cross-host fan-in`() {
+        FanInKind.entries.forEach { kind -> withClue(kind.name) { admitTwoLaneFanIn(kind, gated = true) } }
+    }
+
+    @Test
+    fun `eager QuorumSetCell absorb-acks a live delivery whose lane fold is empty`() {
+        val controller = SimulationController(0)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val events = mutableListOf<Event>()
+        val source = SetSource()
+        val quorum = QuorumSetCell.union<String>()
+        val probe = AckProbe(setApi, events)
+        listOf(source, quorum, probe).forEach(host.managementInlet.call::spawn)
+        @Suppress("UNCHECKED_CAST")
+        source.outlet.linkTo(quorum.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        @Suppress("UNCHECKED_CAST")
+        quorum.outlet.linkTo(probe.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+        controller.runToIdle()
+
+        val tag = Timestamp(UUID.randomUUID(), 1)
+        source.send(SetDelta(adds = mapOf("a" to setOf(tag))))
+        controller.runToIdle()
+        events.shouldBeEmpty()
+        // The same tag again: the lane fold is empty, so the default (eager)
+        // path must absorb-ack the wave rather than swallow it silently.
+        source.send(SetDelta(adds = mapOf("a" to setOf(tag))))
+        controller.runToIdle()
+        events.filterIsInstance<Event.Ack>().size shouldBe 1
     }
 }
