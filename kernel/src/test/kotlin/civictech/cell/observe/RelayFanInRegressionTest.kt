@@ -9,6 +9,7 @@ import civictech.cell.Timestamp
 import civictech.cell.control.Progress
 import civictech.cell.data.Aggregators
 import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
@@ -22,6 +23,7 @@ import civictech.cell.host.SimulationController
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkRole
 import civictech.cell.onEach
+import civictech.cell.port.Admit
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
@@ -40,6 +42,10 @@ import java.util.UUID
 
 private interface RelaySetInletProxy {
     val inlet: Use<Propagate<SetDelta<String>>>
+}
+
+private interface RelaySetOpsInletProxy {
+    val inlet: Use<SetOps<String>>
 }
 
 class RelayFanInRegressionTest {
@@ -354,6 +360,34 @@ class RelayFanInRegressionTest {
             // enter through their registered inlet: no upstream link carries
             // these waves, so each source settles independently at the fan-in.
             source.inlet.call.add("shared")
+            controller.runToIdle()
+        }
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.progressedWaves.size shouldBe 2
+            probe.dataWaves.size shouldBe 1
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
+    fun `externally host-fed policy inlets settle independently through a quorum fan-in`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val sources = List(3) { SetCell<String>() }
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        sources.forEach { source -> source.inlet.install(Admit(admits = { true })) }
+        (sources + listOf(fanIn, probe)).forEach(management::spawn)
+        sources.forEach { source ->
+            management.connect(source.ref, "outlet", fanIn.ref, "inlet")
+        }
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+        controller.runToIdle()
+
+        sources.forEach { source ->
+            host.lookup<RelaySetOpsInletProxy>(source.ref)!!.inlet.call.add("shared")
             controller.runToIdle()
         }
 
