@@ -24,31 +24,34 @@ import java.util.UUID
  *    explicitly [publish]ed its outlet's resolved provenance (the relay hops
  *    in [AbsorbAck.kt], which compose this recursively through their own
  *    input edges), or the outlet's owning cell is structurally a root — it has
- *    no currently open inbound link (Consume, Observe or feedback). A published set includes both its
- *    resolved input sources and every id the outlet minted itself;
+ *    no open inbound link and no registered API targeted by a link-bypassing
+ *    attachment. Merely having an inlet does not disqualify a root: an
+ *    external call arrives without a reactive context and mints this outlet's
+ *    own wave. A published set includes both its resolved input sources and
+ *    every id the outlet minted itself;
  *  - `null` ("unknown") for everything else — a bridged edge
  *    ([Link.fromPort] is `null` across the wire, matching the existing
  *    cross-host residual in 20/22 §Bridged frontier), an unpublished outlet
- *    whose owning cell has an open inbound link, an unregistered outlet, or
- *    a graph cycle this resolver has already entered (guarded below so a
+ *    whose owning cell has an open or bypass-fed input, an unregistered outlet,
+ *    or a graph cycle this resolver has already entered (guarded below so a
  *    cycle degrades to "unknown" instead of looping).
  *
  * `null` is the fail-closed default throughout: every caller treats "unknown"
  * exactly as it treats "this edge might carry that source" today — the
  * existing, safe, over-aligning behavior this mechanism only ever narrows
- * from, never widens past. Root classification is evaluated from live
- * topology on every resolution; emission history never excludes an edge. An
- * inlet linked to an otherwise-root cell after a wave is in flight is
- * therefore counted when that wave's Progress is evaluated, matching the
- * dynamic completeness rule.
+ * from, never widens past. Published provenance is evaluated from live
+ * topology on every resolution; link-bypass targets are stamped before their
+ * attachment becomes visible and remain conservative for that target API's
+ * lifetime. Emission history never excludes an edge. Thus an externally-fed
+ * inlet-bearing source stays a root, while a bypass-fed forwarder is unknown
+ * before its first forwarded wave.
  *
- * Known limit (computenet-2e2g9): the classification sees only waves that
- * enter a cell over an open inbound link. A delivery that bypasses linking
- * (a `Use.fixed` subscription, an un-negotiated tap) or a topology event
- * delivered under another wave's context (an unlink performed inside a
- * handler, re-evaluated by a quorum hop) can make a cell emit a source this
- * resolver does not report, and the downstream fan-in may then settle that
- * wave before its data arrives.
+ * Known limit (computenet-2e2g9): a topology event delivered under another
+ * wave's context (an unlink performed inside a handler, re-evaluated by a
+ * quorum hop) can make a published relay emit a source its input-edge resolver
+ * does not report. Topology delivery must clear that context; provenance cannot
+ * predict a future side effect without discarding independent-source
+ * narrowing for every published relay.
  */
 internal object SourceProvenance {
     /**
@@ -78,7 +81,7 @@ internal object SourceProvenance {
                 val relayedSources = resolvePublished() ?: return null
                 return relayedSources + outlet.mintedAsRoot
             }
-            return when (PortIdentities.hasOpenInboundLink(outlet)) {
+            return when (PortIdentities.hasInboundWavePath(outlet)) {
                 false -> outlet.mintedAsRoot.takeIf { it.isNotEmpty() }
                 true, null -> null
             }
