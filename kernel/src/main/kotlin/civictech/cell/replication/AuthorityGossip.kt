@@ -50,15 +50,24 @@ import java.util.concurrent.ConcurrentHashMap
  * admitted envelope is retained so a relay's catch-up preserves the original
  * author's signature.
  *
- * The retained log is intentionally unbounded. When the guarded replica is
- * journaled, this adapter inherits that journal and snapshots every retained
- * author envelope verbatim; journal compaction therefore compacts the record
- * stream, not this security history. Folding the retained history itself would
- * still need an author-signed checkpoint (a relay cannot create one). A
- * volatile adapter has no snapshot and rebuilds from peers' catch-up.
- * Following the repository's additive-`Stateful` precedent, this did not bump
- * the journal format: an older build cannot decode a new checkpoint containing
- * [SignedWrite], so downgrade across that checkpoint is unsupported.
+ * Only an author folds its own current counter lane, by signing an
+ * [AuthorCheckpoint] through the ordinary write-ahead path. Once that envelope
+ * is admitted, a relay may drop only the covered data and older checkpoints
+ * from that author and lane; [TransferAuthority] envelopes are always retained.
+ * A late joiner therefore verifies the author's retained checkpoint, applies
+ * its folded delta, and rebuilds the unchanged transfer chain rather than
+ * trusting a relay-produced fold. Verified arrivals covered by a checkpoint are
+ * silently deduplicated, while uncovered same-crossing replays remain denials.
+ * Retention is bounded per author per incarnation lane, without changing the
+ * [SignedWrite] or [SignedWriteBatch] wire frames.
+ *
+ * When the guarded replica is journaled, this adapter inherits that journal and
+ * snapshots every retained author envelope verbatim. A volatile adapter has no
+ * snapshot and rebuilds from peers' catch-up. Following the repository's
+ * additive-`Stateful` precedent, this did not bump the journal format: an older
+ * build cannot decode a new checkpoint containing [SignedWrite] or an
+ * [AuthorCheckpoint] envelope, so downgrade across that checkpoint is
+ * unsupported.
  *
  * A locally signed envelope is also written ahead as an ordinary frame through
  * the guarded cell's journaled `deltaInlet` before [CountingWriteSigner] returns
@@ -90,6 +99,7 @@ class AuthorityGossip internal constructor(
     private val verifier: SignatureVerifier,
     private val writeAhead: (SignedWrite) -> Unit,
     private val afterRecoveryApplied: (() -> Unit) -> Unit,
+    private val compactEvery: Int = DEFAULT_COMPACT_EVERY,
     override val ref: CellRef = adapterRef(cell.ref),
 ) : Cell, Stateful, BoundaryDenialAccounting {
     private data class WriteKey(val author: PeerId, val counter: Long)
@@ -102,11 +112,15 @@ class AuthorityGossip internal constructor(
         val pending: MutableList<PendingReplay> = mutableListOf(),
         var flushScheduled: Boolean = false,
     )
+    private data class InboundDelivery(
+        val write: SignedWrite,
+        val relayOnEmission: Boolean,
+    )
 
     override val boundaryDenials: BoundaryDenials = BoundaryDenials()
     private val sink = boundaryDenials.sinkFor("write-authority")
     private val state = AuthorityState(authority)
-    private val inbound = ThreadLocal<SignedWrite?>()
+    private val inbound = ThreadLocal<InboundDelivery?>()
     private val firstCrossing = ConcurrentHashMap<WriteKey, FirstCrossing>()
     private val localWriteAheadPort = cell.outlet.ref
     private val replayBatches = java.util.IdentityHashMap<Any, ReplayBatch>()
@@ -158,6 +172,14 @@ class AuthorityGossip internal constructor(
         context.enqueueBarrier { applyTransfer(to) }
     }
 
+    /** Fold and sign this adapter's uncovered data on its host task. */
+    fun compact() {
+        val context = checkNotNull(hostContext) {
+            "write-authority adapter $ref is not active"
+        }
+        context.enqueueBarrier { applyCompact() }
+    }
+
     private fun applyTransfer(to: PeerId) {
         val payload = TransferAuthority(to)
         writeAheadFailure?.let { failure ->
@@ -169,6 +191,21 @@ class AuthorityGossip internal constructor(
             return
         }
         signApplyAndForward(payload)
+    }
+
+    private fun applyCompact() {
+        writeAheadFailure?.let { failure ->
+            denyDurabilityFailure("compact", cell.ref, cell.ref, failure)
+            return
+        }
+        if (state.uncoveredOwnDataCount(signer.peerId, signer.counterFloor) == 0) return
+        val fold = state.foldOwn(signer.peerId, signer.counterFloor) ?: return
+        val checkpoint = AuthorCheckpoint(fold.coversThrough, fold.folded)
+        if (!state.authorizesLocal(signer.peerId, checkpoint)) {
+            denyLocal("compact", checkpoint, checkpoint)
+            return
+        }
+        signApplyAndForward(checkpoint)
     }
 
     internal fun retained(): List<SignedWrite> = state.retained()
@@ -193,7 +230,7 @@ class AuthorityGossip internal constructor(
                         "write-authority snapshot payload type " +
                             "${admission.payload?.javaClass?.name ?: "null"} does not match ${cell.javaClass.name}"
                     }
-                    state.apply(write, admission.payload)
+                    applyAndPrune(write, admission.payload)
                 }
                 is Admission.Denied -> require(admission.reason == DenialReason.REPLAY) {
                     "write-authority snapshot for ${cell.ref} contains refused write: " +
@@ -201,6 +238,7 @@ class AuthorityGossip internal constructor(
                 }
             }
         }
+        continueSignerAfterOwnHistory()
     }
 
     private fun installLocalGate() {
@@ -261,6 +299,9 @@ class AuthorityGossip internal constructor(
                     completePendingReplay(write)
                     return
                 }
+                if (admission.reason == DenialReason.REPLAY && state.isCovered(write.author, write.counter)) {
+                    return
+                }
                 val first = firstCrossing[WriteKey(write.author, write.counter)]
                 if (admission.reason != DenialReason.REPLAY || first == null || first == crossing) {
                     deny(write, admission.reason, admission.principal, admission.detail)
@@ -278,31 +319,46 @@ class AuthorityGossip internal constructor(
                     )
                     return
                 }
-                state.apply(write, payload)
+                applyAndPrune(write, payload)
                 firstCrossing.putIfAbsent(WriteKey(write.author, write.counter), crossing)
                 if (crossing == FirstCrossing.Local) {
                     completePendingReplay(write)
                     CurrentContext.with(null) { outlet.call.propagate(write) }
                     return
                 }
-                // A transfer has no data-cell emission to ride, so the adapter
-                // relays the admitted envelope itself, as it relays a data write.
-                if (payload is TransferAuthority) outlet.call.propagate(write)
-                else withInbound(write) { root.propagate(payload) }
+                when (payload) {
+                    // These envelopes cannot ride an effective data-cell emission:
+                    // transfers carry no data, while a current relay may emit
+                    // nothing for a checkpoint fold it already holds.
+                    is TransferAuthority -> outlet.call.propagate(write)
+                    is AuthorCheckpoint -> {
+                        withInbound(write, relayOnEmission = false) {
+                            root.propagate(payload.folded)
+                        }
+                        outlet.call.propagate(write)
+                    }
+                    else -> withInbound(write) { root.propagate(payload) }
+                }
             }
         }
     }
 
-    private fun acceptsPayload(payload: Any?): Boolean = payload is TransferAuthority || when (cell) {
+    private fun acceptsPayload(payload: Any?): Boolean = when (payload) {
+        is TransferAuthority -> true
+        is AuthorCheckpoint -> acceptsDataPayload(payload.folded)
+        else -> acceptsDataPayload(payload)
+    }
+
+    private fun acceptsDataPayload(payload: Any?): Boolean = when (cell) {
         is SetCell<*> -> payload is SetDelta<*>
         is OrMapCell<*, *> -> payload is TaggedMapDelta<*, *>
         else -> false
     }
 
     private fun onCellEmission(delta: Any?) {
-        val relayed = inbound.get()
-        if (relayed != null) {
-            outlet.call.propagate(relayed)
+        val delivery = inbound.get()
+        if (delivery != null) {
+            if (delivery.relayOnEmission) outlet.call.propagate(delivery.write)
             return
         }
         ReplayProvenance.get()?.let { replay ->
@@ -340,13 +396,10 @@ class AuthorityGossip internal constructor(
         val batch = replayBatches.remove(replay) ?: return
         if (batch.pending.isEmpty()) return
 
-        val highestRetained = state.retained()
-            .asSequence()
-            .filter { it.author == signer.peerId }
-            .maxOfOrNull { it.counter }
-        if (highestRetained != null) {
+        val highestOwn = highestOwnCounter()
+        if (highestOwn != null) {
             try {
-                signer.continueAfter(cell.ref.id, highestRetained)
+                signer.continueAfter(cell.ref.id, highestOwn)
             } catch (failure: Throwable) {
                 if (failure is VirtualMachineError) throw failure
                 writeAheadFailure = failure
@@ -386,9 +439,36 @@ class AuthorityGossip internal constructor(
             denyDurabilityFailure("write-ahead", payload, payload, failure)
             return
         }
-        state.apply(write, payload)
+        applyAndPrune(write, payload)
         firstCrossing.putIfAbsent(WriteKey(write.author, write.counter), FirstCrossing.Local)
         outlet.call.propagate(write)
+        if (
+            payload !is TransferAuthority &&
+            payload !is AuthorCheckpoint &&
+            state.uncoveredOwnDataCount(signer.peerId, signer.counterFloor) >= compactEvery
+        ) {
+            applyCompact()
+        }
+    }
+
+    private fun applyAndPrune(write: SignedWrite, payload: Any?) {
+        state.apply(write, payload).forEach { dropped ->
+            firstCrossing.remove(WriteKey(dropped.author, dropped.counter))
+        }
+    }
+
+    private fun continueSignerAfterOwnHistory() {
+        highestOwnCounter()?.let { signer.continueAfter(cell.ref.id, it) }
+    }
+
+    private fun highestOwnCounter(): Long? {
+        val highestRetained = state.retained()
+            .asSequence()
+            .filter { it.author == signer.peerId }
+            .maxOfOrNull { it.counter }
+        val lane = signer.counterFloor ushr WRITE_COUNTER_LANE_SHIFT
+        val coveredThrough = state.coveredThrough(signer.peerId, lane)
+        return listOfNotNull(highestRetained, coveredThrough).maxOrNull()
     }
 
     private fun denyLocal(op: String, element: Any?, denied: Any?) {
@@ -425,9 +505,13 @@ class AuthorityGossip internal constructor(
         )
     }
 
-    private inline fun withInbound(write: SignedWrite, block: () -> Unit) {
+    private inline fun withInbound(
+        write: SignedWrite,
+        relayOnEmission: Boolean = true,
+        block: () -> Unit,
+    ) {
         val previous = inbound.get()
-        inbound.set(write)
+        inbound.set(InboundDelivery(write, relayOnEmission))
         try {
             block()
         } finally {
@@ -436,6 +520,9 @@ class AuthorityGossip internal constructor(
     }
 
     companion object {
+        internal const val DEFAULT_COMPACT_EVERY: Int = 64
+        private const val WRITE_COUNTER_LANE_SHIFT: Int = 20
+
         private fun adapterRef(cellRef: CellRef): CellRef = CellRef(
             UUID.nameUUIDFromBytes(
                 "write-authority:${cellRef.id}".toByteArray(StandardCharsets.UTF_8),
