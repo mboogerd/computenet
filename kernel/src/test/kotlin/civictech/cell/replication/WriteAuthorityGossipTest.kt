@@ -240,6 +240,14 @@ class WriteAuthorityGossipTest {
             } shouldBe listOf(1, 1, 1)
             listOf(onA, onB, onC).map { it.membership() } shouldBe
                 List(3) { setOf("manual-0", "manual-1", "manual-2") }
+            val onceCompacted = listOf(a to onA, b to onB, c to onC).map { (peer, cell) ->
+                peer.replication.authorityOf(cell.ref)!!.retained()
+            }
+            a.replication.authorityOf(onA.ref)!!.compact()
+            controller.runToIdle()
+            listOf(a to onA, b to onB, c to onC).map { (peer, cell) ->
+                peer.replication.authorityOf(cell.ref)!!.retained()
+            } shouldBe onceCompacted
             listOf(a, b, c).flatMap { it.denialReasons() }.shouldBeEmpty()
         }
 

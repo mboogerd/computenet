@@ -198,6 +198,7 @@ class AuthorityGossip internal constructor(
             denyDurabilityFailure("compact", cell.ref, cell.ref, failure)
             return
         }
+        if (state.uncoveredOwnDataCount(signer.peerId, signer.counterFloor) == 0) return
         val fold = state.foldOwn(signer.peerId, signer.counterFloor) ?: return
         val checkpoint = AuthorCheckpoint(fold.coversThrough, fold.folded)
         if (!state.authorizesLocal(signer.peerId, checkpoint)) {
