@@ -575,9 +575,11 @@ class WriteAuthorityGossipTest {
         val recoveredWrites = recoveredAuthority.retained()
         recoveredWrites.size shouldBe 2
         val checkpointCounter = beforeCrash.single().counter
-        recoveredWrites.single {
-            WriteAuthorityBytes.decodePayload(it.payload) is SetDelta<*>
-        }.counter > checkpointCounter shouldBe true
+        (
+            recoveredWrites.single {
+                WriteAuthorityBytes.decodePayload(it.payload) is SetDelta<*>
+            }.counter > checkpointCounter
+        ) shouldBe true
     }
 
     /**
