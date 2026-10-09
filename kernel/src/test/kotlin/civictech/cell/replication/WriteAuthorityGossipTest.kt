@@ -318,7 +318,17 @@ class WriteAuthorityGossipTest {
         controller.runToIdle()
         a.replication.authorityOf(onA.ref)!!.compact()
         controller.runToIdle()
+        // The transfer precedes the new principal's compaction, so the joiner
+        // must rebuild the chain from the retained transfer in the catch-up.
+        a.replication.authorityOf(onA.ref)!!.transfer(pB)
+        controller.runToIdle()
+        b.ops(onB).add("after-transfer")
+        controller.runToIdle()
+        b.replication.authorityOf(onB.ref)!!.compact()
+        controller.runToIdle()
         onC.membership().shouldBeEmpty()
+        val transfer = b.replication.authorityOf(onB.ref)!!.retained()
+            .single { WriteAuthorityBytes.decodePayload(it.payload) is TransferAuthority }
 
         Peering.loopback(b.side, c.side)
         controller.runToIdle()
@@ -328,22 +338,37 @@ class WriteAuthorityGossipTest {
         val onCRetained = c.replication.authorityOf(onC.ref)!!.retained()
         onCRetained.map { it.author to it.counter }.toSet() shouldBe
             onBRetained.map { it.author to it.counter }.toSet()
+        onCRetained.map { WriteAuthorityBytes.decodePayload(it.payload)?.javaClass } shouldBe listOf(
+            AuthorCheckpoint::class.java,
+            TransferAuthority::class.java,
+            AuthorCheckpoint::class.java,
+        )
         c.denialReasons().shouldBeEmpty()
 
-        a.replication.authorityOf(onA.ref)!!.transfer(pB)
-        controller.runToIdle()
         b.ops(onB).add("new-principal")
         a.ops(onA).add("former-principal")
         controller.runToIdle()
+        val formerPrincipal = signing.signed(
+            onC.ref.id,
+            pA,
+            transfer.counter + 1,
+            add("former-principal-signed", transfer.counter + 1),
+        )
+        b.delta(onC.ref).propagate(formerPrincipal)
+        controller.runToIdle()
 
         listOf(onA, onB, onC).map { it.membership() } shouldBe
-            List(3) { setOf("before-one", "before-two", "new-principal") }
+            List(3) { setOf("before-one", "before-two", "after-transfer", "new-principal") }
         a.deadLetters.last().denial!!.run {
             reason shouldBe DenialReason.UNAUTHORIZED_WRITER
             principal shouldBe pA
         }
+        c.deadLetters.last().denial!!.run {
+            reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+            principal shouldBe pA
+        }
+        c.denialReasons() shouldBe listOf(DenialReason.UNAUTHORIZED_WRITER)
         b.denialReasons().shouldBeEmpty()
-        c.denialReasons().shouldBeEmpty()
     }
 
     @Test
