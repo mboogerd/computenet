@@ -133,6 +133,35 @@ class WriteAuthorityAdmissionTest {
     }
 
     @Test
+    fun `a covered lower transfer converges the canonical chain in either delivery order`() {
+        val verifier = verifier(known)
+        val checkpoint = write(
+            p,
+            102,
+            AuthorCheckpoint(
+                coversThrough = 101,
+                folded = SetDelta(adds = mapOf("checkpointed" to emptySet())),
+            ),
+        )
+        val transfer = write(p, 101, TransferAuthority(q))
+
+        val checkpointFirst = AuthorityState(WriteAuthority.Principal(p))
+        admitAndApply(checkpointFirst, checkpoint, verifier)
+        admitAndApply(checkpointFirst, transfer, verifier)
+
+        val transferFirst = AuthorityState(WriteAuthority.Principal(p))
+        admitAndApply(transferFirst, transfer, verifier)
+        transferFirst.admit(checkpoint, verifier).denied().reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+
+        val newOwnerWrite = write(q, 300, SetDelta(adds = mapOf("new-owner" to emptySet())))
+        listOf(checkpointFirst, transferFirst).forEach { state ->
+            state.admit(newOwnerWrite, verifier).shouldBeInstanceOf<Admission.Admitted>()
+            state.authorizesLocal(q, SetDelta(adds = mapOf("local" to emptySet()))) shouldBe true
+            state.authorizesLocal(p, SetDelta(adds = mapOf("former" to emptySet()))) shouldBe false
+        }
+    }
+
+    @Test
     fun `checkpoint compaction drops only the author's covered data envelopes and keeps transfers`() {
         val verifier = verifier(known)
         val state = AuthorityState(WriteAuthority.Open)
