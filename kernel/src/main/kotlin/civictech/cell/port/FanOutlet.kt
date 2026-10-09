@@ -227,9 +227,10 @@ class FanOutlet<Api : Any>(
      *
      * This is source-id inventory, not evidence that the outlet is a root.
      * [civictech.cell.control.SourceProvenance] decides that structurally from
-     * the owning cell's registered input ports at evaluation time; emission
-     * history must never make an edge look source-disjoint. A relay-aware cell
-     * additionally publishes the sources resolved through its inputs.
+     * the owning cell's open inbound links and recorded link-bypass targets at
+     * evaluation time; emission history must never make an edge look
+     * source-disjoint. A relay-aware cell additionally publishes the sources
+     * resolved through its inputs.
      */
     internal val mintedAsRoot: MutableSet<UUID> = ConcurrentHashMap.newKeySet()
 
@@ -586,12 +587,17 @@ class FanOutlet<Api : Any>(
         // cross-host and bridge links alike — "rejectable everywhere". SPSC
         // (spec 23) counts Consume links only — taps are a separate, always-
         // admitted funnel (see [tap]).
-        check(!(exclusive && consumers.isNotEmpty() && keyOf(port.ref) !in consumers)) {
+        val key = keyOf(port.ref)
+        check(!(exclusive && consumers.isNotEmpty() && key !in consumers)) {
             "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; a second subscriber is not allowed"
+        }
+        if (!NegotiatedSubscription.active || port is FixedUse<*>) {
+            val targetApi = (port as? FixedUse<*>)?.fixedApi ?: port.call
+            PortIdentities.markBypassTarget(targetApi)
         }
         @Suppress("UNCHECKED_CAST")
         val effective = (StagedSubscription.current()?.takeIf { it.ref == port.ref } ?: port) as Use<Api>
-        putConsumer(keyOf(port.ref), effective)
+        putConsumer(key, effective)
     }
 
     /**
@@ -645,6 +651,8 @@ class FanOutlet<Api : Any>(
                 uninstall = { removeTap(keyOf(port.ref)) },
             )
         }
+        val targetApi = (port as? FixedUse<*>)?.fixedApi ?: port.call
+        PortIdentities.markBypassTarget(targetApi)
         putTap(keyOf(port.ref), TapTarget.Typed(port))
         return LinkResult.Connected(
             PortLink(ref, port.ref, this, port as? Port, LinkRole.Observe) { removeTap(keyOf(port.ref)) },
@@ -739,13 +747,13 @@ class FanOutlet<Api : Any>(
     }
 
     /** Source-side rejection for the handshake path (mirrors Outlet's cardinality style). */
-    override fun linkTo(linkFrom: LinkFrom<Api>): LinkResult {
+    override fun linkTo(linkFrom: LinkFrom<Api>): LinkResult = NegotiatedSubscription.within {
         if (exclusive && consumers.isNotEmpty()) {
-            return LinkResult.Rejected(
+            return@within LinkResult.Rejected(
                 "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; outlet already has a subscriber"
             )
         }
-        return super.linkTo(linkFrom)
+        linkFrom.linkFrom(this) ?: LinkResult.Deferred
     }
 
     override fun unsubscribe(portRef: PortRef) {
@@ -800,6 +808,23 @@ class FanOutlet<Api : Any>(
      */
     @Suppress("SENSELESS_COMPARISON", "USELESS_ELVIS")
     private fun keyOf(candidate: PortRef): PortRef = candidate ?: NULL_PORT_REF
+}
+
+/** Distinguishes a target-side handshake from the ad-hoc [LinkTo.linkTo] overload. */
+private object NegotiatedSubscription {
+    private val depth = ThreadLocal.withInitial { 0 }
+
+    val active: Boolean get() = depth.get() > 0
+
+    fun <T> within(block: () -> T): T {
+        depth.set(depth.get() + 1)
+        try {
+            return block()
+        } finally {
+            val remaining = depth.get() - 1
+            if (remaining == 0) depth.remove() else depth.set(remaining)
+        }
+    }
 }
 
 /**

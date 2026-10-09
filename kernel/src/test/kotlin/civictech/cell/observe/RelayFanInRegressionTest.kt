@@ -8,6 +8,7 @@ import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.control.Progress
 import civictech.cell.data.Aggregators
+import civictech.cell.data.SetCell
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
@@ -307,6 +308,36 @@ class RelayFanInRegressionTest {
         source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
+    fun `externally-fed inlet-bearing sources settle independently through a quorum fan-in`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val sources = List(3) { SetCell<String>() }
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        (sources + listOf(fanIn, probe)).forEach(management::spawn)
+        sources.forEach { source ->
+            management.connect(source.ref, "outlet", fanIn.ref, "inlet")
+        }
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+        controller.runToIdle()
+
+        sources.forEach { source ->
+            // Slotfinder's participant sets are true roots even though callers
+            // enter through their registered inlet: no upstream link carries
+            // these waves, so each source settles independently at the fan-in.
+            source.inlet.call.add("shared")
+            controller.runToIdle()
+        }
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.progressedWaves.size shouldBe 2
+            probe.dataWaves.size shouldBe 1
             probe.duplicateSettlements() shouldBe emptySet()
         }
     }

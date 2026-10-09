@@ -2,9 +2,12 @@ package civictech.cell.port
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.link.Linked
+import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The `(ownerRef, registeredName)` a port was registered under — the
@@ -33,6 +36,30 @@ internal object PortIdentities {
     )
 
     private val table = Collections.synchronizedMap(WeakHashMap<Port, Registration>())
+
+    /**
+     * Identity-keyed weak reference: contract APIs may be JDK proxies whose
+     * `equals`/`hashCode` dispatch into cell code, so ordinary [WeakHashMap]
+     * keys are not safe for this reverse marker.
+     */
+    private class ApiReference(
+        api: Any,
+        queue: ReferenceQueue<Any>? = null,
+    ) : WeakReference<Any>(api, queue) {
+        private val identityHash = System.identityHashCode(api)
+
+        override fun hashCode(): Int = identityHash
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is ApiReference) return false
+            val api = get() ?: return false
+            return api === other.get()
+        }
+    }
+
+    private val bypassQueue = ReferenceQueue<Any>()
+    private val bypassTargets = ConcurrentHashMap<ApiReference, Unit>()
 
     /**
      * Records [identity] for [port] when it is registered on a [Cell]. Ports
@@ -64,24 +91,61 @@ internal object PortIdentities {
     fun of(port: Port): PortIdentity? = table[port]?.identity
 
     /**
-     * Whether [port]'s owning cell has any registered input-capable port — a
-     * [FanInlet], cycle-head [FeedbackPort], or another [LinkFrom] that is not
-     * itself a [Subscribe] output — or `null` when [port] has no registered
-     * owner. Such a cell can emit reactively under another source's wave even
-     * when the delivery bypasses linking entirely (`Use.fixed`, an
-     * un-negotiated tap) or its ordinary links are momentarily closed. Only a
-     * cell with no input surface at all is therefore structurally a root.
+     * Records that [api] was attached to an outlet without a target-side link
+     * handshake. The marker is installed before the attachment becomes
+     * visible, so the first bypass delivery cannot race root classification.
+     * It remains for the API's lifetime: an unlinked bypass has no target-side
+     * topology record from which to prove that every such feed disappeared,
+     * so retaining `unknown` is the conservative disposition.
+     *
+     * Known limit (computenet-8txv7): the marker is keyed by [api]'s identity,
+     * so it recognises only an attachment whose API object is a registered
+     * port's own `call`. A wrapper delegating into another cell's inlet
+     * (`Use.fixed(Propagate { inlet.call.propagate(it) }, ref)`) leaves that
+     * cell unmarked.
+     */
+    fun markBypassTarget(api: Any) {
+        reapBypassTargets()
+        bypassTargets[ApiReference(api, bypassQueue)] = Unit
+    }
+
+    private fun isBypassTarget(api: Any?): Boolean {
+        api ?: return false
+        reapBypassTargets()
+        return bypassTargets.containsKey(ApiReference(api))
+    }
+
+    private fun reapBypassTargets() {
+        while (true) {
+            val stale = bypassQueue.poll() as? ApiReference ?: return
+            bypassTargets.remove(stale)
+        }
+    }
+
+    /**
+     * Whether [port]'s owning cell can receive another source's wave through
+     * an open inbound link or a link-bypassing attachment, or `null` when
+     * [port] has no registered owner. A registered inlet alone is not enough:
+     * an external call into it has no [civictech.cell.CurrentContext] and the
+     * cell's outlet genuinely originates its own wave. By contrast, an open
+     * link or a `Use.fixed`/un-negotiated attachment preserves the producer's
+     * context and makes every unpublished outlet on the target owner
+     * conservatively non-root.
      *
      * This is a structural query over the owning cell's existing
-     * [PortRegistry]: no JVM-wide port scan or emission history is involved.
-     * The registry reference is weak, so a released owner degrades to `null`
-     * (unknown) rather than being kept alive or misclassified as a root.
+     * [PortRegistry], plus an identity-keyed weak marker for APIs actually
+     * attached through bypass paths: no JVM-wide port scan or emission history
+     * is involved. The registry and API references are weak, so released graph
+     * objects are not retained and an absent owner degrades to `null`.
      */
-    fun hasRegisteredInputPort(port: Port): Boolean? {
+    fun hasInboundWavePath(port: Port): Boolean? {
         val registry = table[port]?.registry?.get() ?: return null
         return registry.names().toList().any { name ->
             val candidate = registry[name]
-            candidate is LinkFrom<*> && candidate !is Subscribe<*>
+            val openInbound = candidate is Linked &&
+                candidate.linking.links.any { it.to == candidate.ref }
+            val bypassFed = candidate is Use<*> && isBypassTarget(candidate.call)
+            openInbound || bypassFed
         }
     }
 }
