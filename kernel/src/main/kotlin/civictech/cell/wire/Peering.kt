@@ -80,9 +80,10 @@ interface RegistryAnnounce {
  * [RegistryAnnounce.published] enters the registry through
  * [LocationRegistry.publishFromPeer], which keeps
  * the first live peer attribution (or an actively hosted local cell) and lets
- * only that same peer refresh its sink; [RegistryAnnounce.unpublished] enters
- * through [LocationRegistry.unpublishFromPeer] under the same rule, so a peer
- * cannot first retract the incumbent and then claim the fresh ref. A
+ * only that same owner refresh its sink (stable [PeerId] when named,
+ * connection-sink identity when anonymous); [RegistryAnnounce.unpublished]
+ * enters through [LocationRegistry.unpublishFromPeer] under the same rule, so
+ * a peer cannot first retract the incumbent and then claim the fresh ref. A
  * collision on either path is reported through this
  * cell's typed `"announcement-admission"` denial sink, naming [peer]; it never
  * throws and therefore never becomes a supervision fault.
@@ -229,7 +230,7 @@ class RegistryMirrorCell(
 
             override fun unpublished(ref: CellRef) = synchronized(gate) {
                 if (attached) {
-                    registry.unpublishFromPeer(ref, peer)?.let {
+                    registry.unpublishFromPeer(ref, toPeer, peer)?.let {
                         refuseCollision(ref, it, "RegistryAnnounce.unpublished")
                     }
                 } else {

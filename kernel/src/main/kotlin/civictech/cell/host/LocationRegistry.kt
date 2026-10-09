@@ -63,13 +63,23 @@ class LocationRegistry {
      * anonymous, which is every peering that never names a `Peering.Side`, so
      * omitting it is exactly the pre-V4-PEERID shape.
      *
-     * It exists because [sink] is per-*connection*, not per-peer: a reconnect
-     * builds a new bridge egress, so anything identifying a peer by its sink
-     * renames it on every reconnect. [peer] is the peer's own claim and
-     * survives. It is **transport-vouched, not authenticated** ([PeerId]) —
-     * a stable label, never a verified principal.
+     * [peer] is the ownership identity when present because [sink] is
+     * per-*connection*, not per-peer: a reconnect builds a new bridge egress,
+     * while the peer's own claim survives. When [peer] is null there is no
+     * stable peer identity to use, so referential identity of [sink] owns the
+     * announcement for the lifetime of that anonymous connection. [peer] is
+     * **transport-vouched, not authenticated** ([PeerId]) — a stable label,
+     * never a verified principal.
      */
-    data class Remote(val sink: InvocationSink, val peer: PeerId? = null) : Location
+    data class Remote(val sink: InvocationSink, val peer: PeerId? = null) : Location {
+        /** Stable peer ownership when named; connection ownership when anonymous. */
+        internal fun isOwnedBy(candidateSink: InvocationSink, candidatePeer: PeerId?): Boolean =
+            if (candidatePeer != null) {
+                peer == candidatePeer
+            } else {
+                peer == null && sink === candidateSink
+            }
+    }
 
     /**
      * Why a peer-originated remote publication or retraction was refused. The incumbent is
@@ -657,12 +667,12 @@ class LocationRegistry {
      * hook change. The caller owns typed boundary accounting because it knows
      * the announcing connection's principal.
      *
-     * Two limits of this rule. **Anonymous peers are one owner**: [peer] is
-     * compared by equality, so two connections that both announce with a null
-     * [PeerId] can still re-aim each other's refs (a named peer can neither
-     * capture an anonymous one's ref nor be captured by it). **A cross-peer
-     * handover is ordered**: a ref moving from peer q to peer r is admitted
-     * here only once q's retraction ([unpublishFromPeer]) or q's disconnect
+     * Ownership follows the strongest identity this path has: a non-null
+     * [PeerId] survives reconnects, while an anonymous announcement belongs
+     * to the referential identity of its [sink] connection. Two anonymous
+     * connections therefore cannot re-aim each other's refs. **A cross-owner
+     * handover is ordered**: a ref moving from q to r is admitted here only
+     * once q's retraction ([unpublishFromPeer]) or q's disconnect
      * ([unpublishRemotes]) has removed q's binding; an announcement by r that
      * arrives first is refused and not retried, so the ref stays unlocated
      * here until r announces again.
@@ -678,7 +688,7 @@ class LocationRegistry {
             val incumbent = locations[ref]
             val conflicts = when (incumbent) {
                 is Local -> incumbent.host.hosts(ref)
-                is Remote -> incumbent.peer != peer
+                is Remote -> !incumbent.isOwnedBy(sink, peer)
                 null -> false
             }
             if (conflicts) {
@@ -936,22 +946,27 @@ class LocationRegistry {
      * The retraction half of [publishFromPeer]'s admission rule
      * (computenet-zlm2): a peer may retract only a binding it may also
      * (re)publish — an absent ref, or a [Remote] attributed to the same
-     * [peer]. It may not drop another peer's attribution, nor a [Local] whose
-     * host still [ManagedHost.hosts] the ref. Without this half the publish
-     * guard is bypassed in two announcements: unpublish the incumbent, then
-     * publish the now-fresh ref.
+     * [peer], or by the same [sink] when [peer] is null. It may not drop
+     * another owner's attribution, nor a [Local] whose host still
+     * [ManagedHost.hosts] the ref. Without this half the publish guard is
+     * bypassed in two announcements: unpublish the incumbent, then publish
+     * the now-fresh ref.
      *
      * Returns the incumbent on refusal and changes nothing; otherwise removes
      * the binding under the ref's queue lock and fires [onUnpublish] as
      * [mirrorUnpublish] does.
      */
-    internal fun unpublishFromPeer(ref: CellRef, peer: PeerId?): RemotePublishRefusal? {
+    internal fun unpublishFromPeer(
+        ref: CellRef,
+        sink: InvocationSink,
+        peer: PeerId?,
+    ): RemotePublishRefusal? {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         val refusal = synchronized(queue) {
             val incumbent = locations[ref]
             val conflicts = when (incumbent) {
                 is Local -> incumbent.host.hosts(ref)
-                is Remote -> incumbent.peer != peer
+                is Remote -> !incumbent.isOwnedBy(sink, peer)
                 null -> false
             }
             if (conflicts) {
