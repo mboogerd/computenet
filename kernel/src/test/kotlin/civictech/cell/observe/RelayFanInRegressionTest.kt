@@ -129,6 +129,17 @@ class RelayFanInRegressionTest {
         fun send(delta: SetDelta<String>) = outlet.call.propagate(delta)
     }
 
+    private class Unlinker(
+        private val unlink: () -> Unit,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
+
+        init {
+            inlet.onEach { unlink() }
+        }
+    }
+
     private class FeedbackForwarder(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val outlet by output<Propagate<SetDelta<String>>>()
         val feedbackInput by propagateFeedbackInlet<SetDelta<String>> { outlet.call.propagate(it) }
@@ -388,6 +399,42 @@ class RelayFanInRegressionTest {
         forwarder.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
         probe.clear()
         source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.dataWaves.size shouldBe 1
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
+    fun `unlink inside a wave handler does not settle and emit the caller wave`() {
+        val host = ManagedHost()
+        val first = Source()
+        val closing = Source()
+        val trigger = Source()
+        val publishing = QuorumSetCell<String>(threshold = { n -> n })
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val unlinker = Unlinker(unlink = { closing.outlet.linking.links.single().unlink() })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        listOf(first, closing, trigger, publishing, fanIn, unlinker, probe).forEach(management::spawn)
+        management.connect(first.ref, "outlet", publishing.ref, "inlet")
+        management.connect(closing.ref, "outlet", publishing.ref, "inlet")
+        // The direct arm must receive the trigger first: it absorb-acks the
+        // wave before the sibling handler closes publishing's second source.
+        management.connect(trigger.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(trigger.ref, "outlet", unlinker.ref, "inlet")
+        management.connect(publishing.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+        closing.send(SetDelta(adds = mapOf("z" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        first.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        probe.clear()
+
+        // Closing the "z" lane lowers publishing's threshold, so its retained
+        // "e" becomes data. EdgeClose is metadata-plane traffic: that emission
+        // must mint publishing's wave, not inherit this trigger's wave.
+        trigger.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
             probe.dataWaves.size shouldBe 1

@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.data.op.FrontierGateable
 import civictech.cell.data.op.QuorumSetCell
+import civictech.cell.data.op.UnionSetCell
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.HostTopologyView
 import civictech.cell.host.UpstreamAncestry
@@ -67,10 +68,10 @@ private class ViewAncestry(
  *
  * Two rules apply, in order. First, every checked view's inclusive ancestry
  * must contain no operator whose output is not wave-complete. That includes an
- * ungated [FrontierGateable] and a multi-input [QuorumSetCell] whose ancestry
- * crosses an opaque host boundary: its fan-in Progress relay settles absorb-acks
- * across its input edges but does not hold a real later-wave delta behind an
- * earlier unsettled lane. Second, a [CycleHead] or a
+ * ungated [FrontierGateable] and a multi-input [QuorumSetCell] or [UnionSetCell]
+ * whose ancestry crosses an opaque host boundary: their eager path can advance
+ * one output edge before every input edge has settled. Their opt-in fan-in gate
+ * makes the output a valid frontier edge. Second, a [CycleHead] or a
  * [Replicable] whose `deltaInlet` is linked as a Consume re-origination point
  * may not sit on only one branch of shared upstream provenance. [unchecked]
  * exempts its named view from the first rule only.
@@ -150,16 +151,17 @@ private fun admitAlignedInTurn(
 /**
  * Whether [this] can expose a partial input wave on its outlet.
  *
- * [QuorumSetCell] has no `emitOnFrontier` mode. Its fan-in relay makes a
- * swallowed wave positive only after every eligible input edge settles, but a
- * real delta still emits eagerly and can monotonically settle earlier counters
- * on the single output edge. Fully local inputs share the inspected host's
- * serialized execution context and remain admissible. A multi-input quorum with
- * opaque upstream ancestry does not provide that ordering guarantee, so aligned
- * observation fails closed until the operator gains a coalescing output gate.
+ * The set fan-ins' eager mode can advance their single output edge on a real
+ * delta before another input edge settles an earlier wave. Fully local inputs
+ * share the inspected host's serialized execution context, and a single input
+ * has no sibling to outrun, so both stay admissible. A multi-input fan-in with
+ * opaque upstream ancestry must enable its coalescing output gate.
  */
 private fun Cell.isUngatedAlignedAncestor(api: HostTopologyView, ref: CellRef): Boolean = when (this) {
-    is QuorumSetCell<*> -> hasMultipleConsumeInputs() && api.upstreamConsumeAncestors(ref).opaque.isNotEmpty()
+    is QuorumSetCell<*> ->
+        !frontierGated && hasMultipleConsumeInputs() && api.upstreamConsumeAncestors(ref).opaque.isNotEmpty()
+    is UnionSetCell<*> ->
+        !frontierGated && hasMultipleConsumeInputs() && api.upstreamConsumeAncestors(ref).opaque.isNotEmpty()
     is FrontierGateable -> !frontierGated
     else -> false
 }
