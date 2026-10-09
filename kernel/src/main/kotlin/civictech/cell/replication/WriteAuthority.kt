@@ -366,8 +366,15 @@ class AuthorityState(private val authority: WriteAuthority) {
         return when (authority) {
             WriteAuthority.Open -> Admission.Admitted(payload)
             is WriteAuthority.Principal -> admitPrincipal(write, payload)
-            is WriteAuthority.PerElementOwner ->
-                admitElements(write, (payload as? AuthorCheckpoint)?.folded ?: payload, authority.ownerOf)
+            is WriteAuthority.PerElementOwner -> if (payload is AuthorCheckpoint) {
+                // Authorize the folded elements, but admit the checkpoint itself so apply compacts.
+                when (val admission = admitElements(write, payload.folded, authority.ownerOf)) {
+                    is Admission.Admitted -> Admission.Admitted(payload)
+                    is Admission.Denied -> admission
+                }
+            } else {
+                admitElements(write, payload, authority.ownerOf)
+            }
         }
     }
 

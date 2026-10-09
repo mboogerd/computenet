@@ -177,6 +177,18 @@ class WriteAuthorityAdmissionTest {
             .shouldBeInstanceOf<Admission.Admitted>()
         principalState.admit(write(p, 11, SetDelta(adds = mapOf("retired" to setOf(dot)))), verifier)
             .denied().reason shouldBe DenialReason.UNAUTHORIZED_WRITER
+
+        // PerElementOwner admits the checkpoint itself (not its folded delta),
+        // so apply compacts and records coverage under that authority too.
+        val owners = mapOf<Any?, PeerId>("owned" to p)
+        val perElement = AuthorityState(WriteAuthority.PerElementOwner(OwnerOf(owners::get)))
+        val ownedData = write(p, 1, SetDelta(adds = mapOf("owned" to setOf(dot))))
+        admitAndApply(perElement, ownedData, verifier)
+        val ownedCheckpoint = AuthorCheckpoint(coversThrough = 1, folded = decodeSet(ownedData))
+        perElement.admit(write(p, 2, ownedCheckpoint), verifier)
+            .shouldBeInstanceOf<Admission.Admitted>().payload shouldBe ownedCheckpoint
+        admitAndApply(perElement, write(p, 2, ownedCheckpoint), verifier) shouldBe listOf(ownedData)
+        perElement.isCovered(p, 1) shouldBe true
     }
 
     @Test
