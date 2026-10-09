@@ -33,7 +33,13 @@ internal object PortIdentities {
     private class Registration(
         val identity: PortIdentity,
         val registry: WeakReference<PortRegistry>,
-    )
+    ) {
+        @Volatile
+        var externalEntryObserved: Boolean = false
+
+        @Volatile
+        var reactiveEntryObserved: Boolean = false
+    }
 
     private val table = Collections.synchronizedMap(WeakHashMap<Port, Registration>())
 
@@ -98,11 +104,14 @@ internal object PortIdentities {
      * topology record from which to prove that every such feed disappeared,
      * so retaining `unknown` is the conservative disposition.
      *
-     * Known limit (computenet-8txv7): the marker is keyed by [api]'s identity,
-     * so it recognises only an attachment whose API object is a registered
-     * port's own `call`. A wrapper delegating into another cell's inlet
-     * (`Use.fixed(Propagate { inlet.call.propagate(it) }, ref)`) leaves that
-     * cell unmarked.
+     * The identity marker directly recognises an attachment whose API object
+     * is a registered port's own `call`. A wrapper delegating into another
+     * cell's inlet is instead covered by [observeEntry]: an unobserved inlet is
+     * already conservative before its first call, and the reactive call keeps
+     * it conservative thereafter. If that inlet was previously observed as an
+     * external entry, its first opaque delegated call cannot be identified
+     * before delivery; only an identity-visible attachment can close that
+     * irreducible first-call ambiguity.
      */
     fun markBypassTarget(api: Any) {
         reapBypassTargets()
@@ -123,30 +132,51 @@ internal object PortIdentities {
     }
 
     /**
+     * Records whether a registered input [port] was invoked externally or
+     * while carrying another outlet's wave. This observation lives on the
+     * existing weak registration: it neither retains the port nor infers a
+     * target by reflecting into an opaque wrapper API.
+     */
+    fun observeEntry(port: Port, reactive: Boolean) {
+        val registration = table[port] ?: return
+        if (reactive) registration.reactiveEntryObserved = true
+        else registration.externalEntryObserved = true
+    }
+
+    /**
      * Whether [port]'s owning cell can receive another source's wave through
-     * an open inbound link or a link-bypassing attachment, or `null` when
-     * [port] has no registered owner. A registered inlet alone is not enough:
-     * an external call into it has no [civictech.cell.CurrentContext] and the
-     * cell's outlet genuinely originates its own wave. By contrast, an open
-     * link or a `Use.fixed`/un-negotiated attachment preserves the producer's
-     * context and makes every unpublished outlet on the target owner
-     * conservatively non-root.
+     * an open inbound link, a link-bypassing attachment, or an input whose
+     * entry mode has not yet been observed; or `null` when [port] has no
+     * registered owner. An external call into a registered input proves that
+     * an input-bearing source can originate its own outlet wave. Until
+     * then the input is conservatively reactive, which covers an opaque
+     * `Use.fixed` wrapper before its first delegated delivery. A reactive
+     * invocation observed later keeps the owner non-root even if it also has
+     * an external entry path. An opaque wrapper first attached after an
+     * external entry remains ambiguous until that first reactive invocation;
+     * the wrapper object exposes no target identity to classify earlier.
      *
      * This is a structural query over the owning cell's existing
-     * [PortRegistry], plus an identity-keyed weak marker for APIs actually
-     * attached through bypass paths: no JVM-wide port scan or emission history
-     * is involved. The registry and API references are weak, so released graph
-     * objects are not retained and an absent owner degrades to `null`.
+     * [PortRegistry], plus identity-keyed weak markers for APIs actually
+     * attached through bypass paths and entry observations on the same weak
+     * registrations: no JVM-wide port scan or emission history is involved.
+     * Released graph objects are not retained and an absent owner degrades to
+     * `null`.
      */
     fun hasInboundWavePath(port: Port): Boolean? {
         val registry = table[port]?.registry?.get() ?: return null
-        return registry.names().toList().any { name ->
-            val candidate = registry[name]
+        val inputs = mutableListOf<Port>()
+        registry.names().forEach { name ->
+            val candidate = registry[name] ?: return@forEach
+            if (candidate is LinkFrom<*> && candidate !is Subscribe<*>) inputs += candidate
             val openInbound = candidate is Linked &&
                 candidate.linking.links.any { it.to == candidate.ref }
             val bypassFed = candidate is Use<*> && isBypassTarget(candidate.call)
-            openInbound || bypassFed
+            val reactiveEntry = table[candidate]?.reactiveEntryObserved == true
+            if (openInbound || bypassFed || reactiveEntry) return true
         }
+        if (inputs.isEmpty()) return false
+        return inputs.none { table[it]?.externalEntryObserved == true }
     }
 }
 

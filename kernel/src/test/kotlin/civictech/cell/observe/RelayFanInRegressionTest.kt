@@ -367,6 +367,35 @@ class RelayFanInRegressionTest {
     }
 
     @Test
+    fun `a delegating Use-fixed-fed forwarder is not treated as a structural root`() {
+        val host = ManagedHost()
+        val source = Source()
+        val forwarder = MintThenForward()
+        val fanIn = QuorumSetCell<String>(threshold = { n -> n })
+        val probe = WaveEventProbe()
+        val management = host.managementInlet.call
+        listOf(source, forwarder, fanIn, probe).forEach(management::spawn)
+        management.connect(source.ref, "outlet", fanIn.ref, "inlet")
+        source.outlet.subscribe(
+            Use.fixed(
+                Propagate { delta -> forwarder.inlet.call.propagate(delta) },
+                PortRef.generate(),
+            ),
+        )
+        management.connect(forwarder.ref, "outlet", fanIn.ref, "inlet")
+        management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+
+        forwarder.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        probe.clear()
+        source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+
+        withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.dataWaves.size shouldBe 1
+            probe.duplicateSettlements() shouldBe emptySet()
+        }
+    }
+
+    @Test
     fun `an outlet whose cell is fed only by an Observe link is not a structural root`() {
         val host = ManagedHost()
         val source = Source()

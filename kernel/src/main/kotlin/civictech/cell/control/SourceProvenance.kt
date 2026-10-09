@@ -24,11 +24,13 @@ import java.util.UUID
  *    explicitly [publish]ed its outlet's resolved provenance (the relay hops
  *    in [AbsorbAck.kt], which compose this recursively through their own
  *    input edges), or the outlet's owning cell is structurally a root — it has
- *    no open inbound link and no registered API targeted by a link-bypassing
- *    attachment. Merely having an inlet does not disqualify a root: an
- *    external call arrives without a reactive context and mints this outlet's
- *    own wave. A published set includes both its resolved input sources and
- *    every id the outlet minted itself;
+ *    no open inbound link, no registered API targeted by a link-bypassing
+ *    attachment, and either no registered input or a registered input has
+ *    actually been entered externally. An owner whose input entry mode has
+ *    not yet been observed is conservatively reactive; this keeps an opaque
+ *    delegating wrapper unknown before its first delivery. A published set
+ *    includes both its resolved input sources and every id the outlet minted
+ *    itself;
  *  - `null` ("unknown") for everything else — a bridged edge
  *    ([Link.fromPort] is `null` across the wire, matching the existing
  *    cross-host residual in 20/22 §Bridged frontier), an unpublished outlet
@@ -40,11 +42,20 @@ import java.util.UUID
  * exactly as it treats "this edge might carry that source" today — the
  * existing, safe, over-aligning behavior this mechanism only ever narrows
  * from, never widens past. Published provenance is evaluated from live
- * topology on every resolution; link-bypass targets are stamped before their
- * attachment becomes visible and remain conservative for that target API's
- * lifetime. Emission history never excludes an edge. Thus an externally-fed
- * inlet-bearing source stays a root, while a bypass-fed forwarder is unknown
- * before its first forwarded wave.
+ * topology on every resolution; direct link-bypass targets are stamped before
+ * their attachment becomes visible, while unobserved registered inputs fail
+ * closed until their invocation establishes external or reactive entry.
+ * Emission history never excludes an edge. Thus an externally-fed
+ * inlet-bearing source stays a root, while direct bypass targets and a
+ * never-externally-entered wrapper target are unknown before their first
+ * forwarded wave.
+ *
+ * Known limit (computenet-8txv7): after an inlet has established a genuine
+ * external entry path, an opaque wrapper's first later delivery cannot be
+ * attributed to that inlet before it happens. Its reactive invocation makes
+ * subsequent resolution conservative, but attachment-time precision would
+ * require the wrapper to expose its target or the inlet to declare that it is
+ * external-only.
  *
  * Known limit (computenet-2e2g9): a topology event delivered under another
  * wave's context (an unlink performed inside a handler, re-evaluated by a

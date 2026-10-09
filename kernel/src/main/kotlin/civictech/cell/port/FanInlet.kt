@@ -305,6 +305,11 @@ class FanInlet<Api : Any>(
     }
 
     override val call: Api = Proxy.delegating(clazz) {
+        // Source provenance must distinguish true external ingress from an
+        // opaque wrapper that delegates a producer's live wave into this
+        // inlet. Record the distinction before dispatch: downstream emissions
+        // can synchronously ask whether this owner is a structural root.
+        PortIdentities.observeEntry(this, reactive = CurrentContext.get() != null)
         if (chainEntry != null) frontierGate else (activeImplementation?.call ?: parkingImplementation)
     }
 
