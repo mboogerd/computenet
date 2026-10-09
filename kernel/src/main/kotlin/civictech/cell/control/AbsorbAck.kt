@@ -150,13 +150,12 @@ private fun resolvedInputSources(
  * spec names as undesigned (G-13's declined multiplex-port traversal form,
  * G-39's hop-by-hop source-set propagation gap) — so it is precise only
  * through two decided shapes: an outlet whose owning cell structurally has no
- * open inbound link, and a chain of [relayAbsorbAcks] fan-in hops that each
- * republish their resolved input provenance plus their outlet's own minted
- * ids. An unpublished outlet on a cell with an open inbound link is
- * "unknown", whatever it emitted before, so its edge remains expected exactly
- * as in Reading 1. Root classification reads the live input topology when
- * Progress is evaluated; an input linked after the wave began therefore
- * withholds that in-flight wave too. These fail-closed rules keep the
+ * open inbound link or recorded link-bypass target, and a chain of
+ * [relayAbsorbAcks] fan-in hops that each republish their resolved input
+ * provenance plus their outlet's own minted ids. A registered inlet invoked
+ * externally does not make a source reactive; a bypass attachment is stamped
+ * before it can deliver, so an unpublished bypass-fed outlet is "unknown"
+ * from its first forwarded wave. These fail-closed rules keep the
  * computenet-6ovpx first-edge-relay safety fix intact: no edge is excluded on
  * emission history or unresolved reachability.
  */

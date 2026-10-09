@@ -4,8 +4,35 @@ import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class SlotFinderAlignedFrameTest {
+
+    @Test
+    fun `state payload reads every panel from one observation frame`() {
+        val app = SlotFinderApp(port = 0).start()
+        try {
+            val probe = HttpProbe("http://localhost:${app.boundPort}")
+            // `view.onChange` queues an asynchronous late-join catch-up broadcast
+            // during startup. Its stateJson() read must happen before this window;
+            // there are no other broadcasts before the first /state request.
+            awaitUntil("slotfinder startup observation broadcast") {
+                app.observationCurrentReads.get() >= 1L
+            }
+            val before = app.observationCurrentReads.get()
+            val response = probe.get()
+
+            assertEquals(200, response.statusCode())
+            assertTrue(response.body().contains("\"byDay\":"))
+            assertEquals(
+                before + 1,
+                app.observationCurrentReads.get(),
+                "one /state payload must read one Observation.current() frame",
+            )
+        } finally {
+            app.stop()
+        }
+    }
 
     @Test
     fun `canonical observation partitions slotfinder views and drains every group at idle`() {

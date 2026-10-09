@@ -58,7 +58,8 @@ under an existing key retracts the previous element) or `GroupByCell` over map s
 
 ## F-5 — Edge-of-graph view composition is not glitch-free
 
-> **Status: addressed** — `E2-ALIGN` (99-defects-engines-plan wave C1) shipped
+> **Status: addressed** — landed in `computenet-axcyk`: `observation {}` is now
+> the one app-edge API. `E2-ALIGN` (99-defects-engines-plan wave C1) shipped
 > exactly the proposed idiom: `Use<HostManagementApi>.observeAligned` +
 > `AlignedCompositeCell`, a named-inlet mirror of `WaveFrontier`'s completeness
 > fold that delivers one composite snapshot per settled wave across N named
@@ -972,6 +973,9 @@ swapped for a friendlier seed or transcript.
 
 ## F-19 — a `SetCell` fed element-by-element has no batch-as-one-wave path, so a batch-atomic consumer needs a caller-supplied boundary
 
+> **Status: landed in `computenet-axcyk`** — `DeclaredWrite`/`WriteStep` are the
+> kernel's batch-as-one-wave boundary.
+
 **Observation**: `:demo:allocator-observe`'s R5/R6 report (feature
 `computenet-fpml.3`) has to satisfy "given a batch of 3 records applied at
 once, when any reader observes mid-application, then it sees either the
@@ -1186,6 +1190,9 @@ demo/social/src/main/kotlin/` is empty), no widening of the demo allowlist.
 This entry records findings only.
 
 ## F-22 — one `SocialGraph.addPost` is three waves, one per contributing outlet: extending F-19 from "no batch-as-one-wave path" to "no batch-as-one-wave path across CELLS"
+
+> **Status: landed in `computenet-axcyk`** — `DeclaredWrite`/`WriteStep` are the
+> kernel's batch-as-one-wave boundary; social adopts it in `3ylve`.
 
 **Observation**: `:demo:social`'s `SocialGraph.addPost(m)` writes three cells
 in one logical operation — the author's `snb-authored` cell (the `Message` itself),
@@ -1817,6 +1824,9 @@ recorded as observations only —
   risk 6.
 
 ## F-27 — Independent-root composite cannot be wave-aligned (shopping `wanted`)
+
+> **Status: landed in `computenet-axcyk`** — observations group by equal root sets
+> and disclose `crossRoot`; upstream traversal remains unbuilt per PN-16.
 
 **Observation**: 96-plan §E2.6 proposed one `observeAligned` sink spanning
 *all* of a demo's outlets; feature `computenet-sozzn` (E2.6 re-scoped) exists

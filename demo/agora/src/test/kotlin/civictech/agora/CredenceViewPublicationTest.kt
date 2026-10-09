@@ -6,12 +6,10 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * computenet-ecso: `CredenceView.credences` is written by `apply()` (the
- * kernel scheduler thread, via `ObserveCell.propagate`) and, in normal use,
- * only ever read back by `ObserveCell` itself on that same thread — but
- * `View.current()`/`apply()` are public, so a future direct caller (bypassing
- * the `ObservationSink`'s own `latest` field) would depend on `credences`
- * being safely published on its own.
+ * computenet-ecso: `CredenceView.credences` is written by `apply()` from
+ * agora's source inlet handler and, in normal use, read through the canonical
+ * observation frame — but `View.current()`/`apply()` are public, so a future
+ * direct caller would depend on `credences` being safely published on its own.
  *
  * A timing-based reproduction cannot pin a JMM visibility defect: the bug is
  * "the JVM is *permitted* to show a reader a stale reference", not "it
@@ -39,9 +37,9 @@ class CredenceViewPublicationTest {
             Modifier.isVolatile(field.modifiers),
             "CredenceView.credences must be @Volatile so a reader on another thread " +
                 "is guaranteed to see a fully constructed, up-to-date map " +
-                "(computenet-ecso), whether it reads via ObserveCell's own " +
-                "@Volatile latest (already safe today) or, in the future, via " +
-                "CredenceView.current() directly.",
+                "(computenet-ecso), whether it reads via the canonical observation " +
+                "frame (already safe today) or, in the future, via CredenceView.current() " +
+                "directly.",
         )
     }
 }
