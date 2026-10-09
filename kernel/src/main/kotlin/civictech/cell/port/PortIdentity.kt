@@ -30,18 +30,41 @@ data class PortIdentity(val owner: CellRef, val name: String)
  * [Port] stays a pure structural contract.
  */
 internal object PortIdentities {
-    private class Registration(
-        val identity: PortIdentity,
-        val registry: WeakReference<PortRegistry>,
-    ) {
+    internal class EntryObservation {
         @Volatile
         var externalEntryObserved: Boolean = false
+            private set
 
         @Volatile
         var reactiveEntryObserved: Boolean = false
+            private set
+
+        /** Monotone entry classification: settled kinds need no further shared write. */
+        fun observe(reactive: Boolean) {
+            if (reactive) {
+                if (!reactiveEntryObserved) reactiveEntryObserved = true
+            } else {
+                if (!externalEntryObserved) externalEntryObserved = true
+            }
+        }
     }
 
+    private class Registration(
+        val identity: PortIdentity,
+        val registry: WeakReference<PortRegistry>,
+        val entryObservation: EntryObservation = EntryObservation(),
+    )
+
     private val table = Collections.synchronizedMap(WeakHashMap<Port, Registration>())
+
+    /** Test diagnostic: invoked with the key of every read of [table]. */
+    @Volatile
+    internal var onTableRead: ((Port) -> Unit)? = null
+
+    private fun registration(port: Port): Registration? {
+        onTableRead?.invoke(port)
+        return table[port]
+    }
 
     /**
      * Identity-keyed weak reference: contract APIs may be JDK proxies whose
@@ -83,10 +106,14 @@ internal object PortIdentities {
 
     fun stamp(owner: Any?, name: String, port: Port) {
         if (owner is Cell) {
-            table[port] = Registration(
+            val registration = Registration(
                 identity = PortIdentity(owner.ref, name),
                 registry = WeakReference(PortRegistry.of(owner)),
             )
+            table[port] = registration
+            // The inlet holds its own observation handle so its dispatch path
+            // never reads [table]; a re-stamp rebinds it to the new registration.
+            (port as? FanInlet<*>)?.bindEntryObservation(registration.entryObservation)
             // PN-1: a hosted cell's port gets a replay-stable ref derived from
             // (ownerRef, name) here, at the one seam that knows both. Anonymous
             // ports (not a Cell owner) are never stamped and keep generate().
@@ -94,7 +121,7 @@ internal object PortIdentities {
         }
     }
 
-    fun of(port: Port): PortIdentity? = table[port]?.identity
+    fun of(port: Port): PortIdentity? = registration(port)?.identity
 
     /**
      * Records that [api] was attached to an outlet without a target-side link
@@ -106,12 +133,12 @@ internal object PortIdentities {
      *
      * The identity marker directly recognises an attachment whose API object
      * is a registered port's own `call`. A wrapper delegating into another
-     * cell's inlet is instead covered by [observeEntry]: an unobserved inlet is
-     * already conservative before its first call, and the reactive call keeps
-     * it conservative thereafter. If that inlet was previously observed as an
-     * external entry, its first opaque delegated call cannot be identified
-     * before delivery; only an identity-visible attachment can close that
-     * irreducible first-call ambiguity.
+     * cell's inlet is instead covered by [EntryObservation.observe]: an
+     * unobserved inlet is already conservative before its first call, and the
+     * reactive call keeps it conservative thereafter. If that inlet was
+     * previously observed as an external entry, its first opaque delegated
+     * call cannot be identified before delivery; only an identity-visible
+     * attachment can close that irreducible first-call ambiguity.
      */
     fun markBypassTarget(api: Any) {
         reapBypassTargets()
@@ -129,18 +156,6 @@ internal object PortIdentities {
             val stale = bypassQueue.poll() as? ApiReference ?: return
             bypassTargets.remove(stale)
         }
-    }
-
-    /**
-     * Records whether a registered input [port] was invoked externally or
-     * while carrying another outlet's wave. This observation lives on the
-     * existing weak registration: it neither retains the port nor infers a
-     * target by reflecting into an opaque wrapper API.
-     */
-    fun observeEntry(port: Port, reactive: Boolean) {
-        val registration = table[port] ?: return
-        if (reactive) registration.reactiveEntryObserved = true
-        else registration.externalEntryObserved = true
     }
 
     /**
@@ -164,7 +179,7 @@ internal object PortIdentities {
      * `null`.
      */
     fun hasInboundWavePath(port: Port): Boolean? {
-        val registry = table[port]?.registry?.get() ?: return null
+        val registry = registration(port)?.registry?.get() ?: return null
         val inputs = mutableListOf<Port>()
         registry.names().forEach { name ->
             val candidate = registry[name] ?: return@forEach
@@ -172,11 +187,11 @@ internal object PortIdentities {
             val openInbound = candidate is Linked &&
                 candidate.linking.links.any { it.to == candidate.ref }
             val bypassFed = candidate is Use<*> && isBypassTarget(candidate.call)
-            val reactiveEntry = table[candidate]?.reactiveEntryObserved == true
+            val reactiveEntry = registration(candidate)?.entryObservation?.reactiveEntryObserved == true
             if (openInbound || bypassFed || reactiveEntry) return true
         }
         if (inputs.isEmpty()) return false
-        return inputs.none { table[it]?.externalEntryObserved == true }
+        return inputs.none { registration(it)?.entryObservation?.externalEntryObserved == true }
     }
 }
 
