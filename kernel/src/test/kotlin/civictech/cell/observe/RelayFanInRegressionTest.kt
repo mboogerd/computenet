@@ -33,6 +33,7 @@ import civictech.cell.port.registerPort
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import io.kotest.assertions.withClue
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -272,7 +273,8 @@ class RelayFanInRegressionTest {
 
     @Test
     fun `a quorum-minted wave reaching a fan-in by two paths is not settled before its second path`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val first = Source()
         val closing = Source()
         val publishing = QuorumSetCell<String>(threshold = { n -> n })
@@ -287,20 +289,25 @@ class RelayFanInRegressionTest {
         management.connect(publishing.ref, "outlet", relay.ref, "inlet")
         management.connect(relay.ref, "outlet", fanIn.ref, "inlet")
         management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+        controller.runToIdle()
 
         first.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
         // Closing the other source lowers publishing's threshold. It therefore
         // emits a fresh wave under its own source id, down both paths.
         closing.outlet.linking.links.single().unlink()
+        controller.runToIdle()
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.dataWaves.shouldNotBeEmpty()
             probe.duplicateSettlements() shouldBe emptySet()
         }
     }
 
     @Test
     fun `a mint-then-forward outlet is not treated as source-disjoint before its first forward`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val source = Source()
         val mixed = MintThenForward()
         val fanIn = QuorumSetCell<String>(threshold = { n -> n })
@@ -311,14 +318,18 @@ class RelayFanInRegressionTest {
         management.connect(source.ref, "outlet", mixed.ref, "inlet")
         management.connect(mixed.ref, "outlet", fanIn.ref, "inlet")
         management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+        controller.runToIdle()
 
         // A spontaneous emission must not make a structurally reactive outlet
         // look like a root before its first forwarded wave.
         mixed.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
         probe.clear()
         source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
+            probe.dataWaves.shouldNotBeEmpty()
             probe.duplicateSettlements() shouldBe emptySet()
         }
     }
@@ -415,7 +426,8 @@ class RelayFanInRegressionTest {
 
     @Test
     fun `an outlet whose cell is fed only by an Observe link is not a structural root`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val source = Source()
         val pass = MintThenForward()
         val observer = MintThenForward()
@@ -428,12 +440,15 @@ class RelayFanInRegressionTest {
         management.connect(pass.ref, "outlet", observer.ref, "inlet", LinkOptions(role = LinkRole.Observe))
         management.connect(observer.ref, "outlet", fanIn.ref, "inlet")
         management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+        controller.runToIdle()
 
         // The observer has minted once and has no Consume input, yet its tap
         // forwards the source's wave: an Observe input still makes it reactive.
         observer.send(SetDelta(adds = mapOf("m" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
         probe.clear()
         source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
             probe.dataWaves.size shouldBe 1
@@ -443,7 +458,8 @@ class RelayFanInRegressionTest {
 
     @Test
     fun `a publishing relay hop fed through an Observe link publishes that link's source`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val source = Source()
         val pass = MintThenForward()
         val publishing = QuorumSetCell<String>(threshold = { 1 })
@@ -456,10 +472,12 @@ class RelayFanInRegressionTest {
         management.connect(pass.ref, "outlet", publishing.ref, "inlet", LinkOptions(role = LinkRole.Observe))
         management.connect(publishing.ref, "outlet", fanIn.ref, "inlet")
         management.connect(fanIn.ref, "outlet", probe.ref, "inlet")
+        controller.runToIdle()
 
         // The publishing hop's only input is an Observe link, yet it re-emits
         // the source's wave: its published provenance must include that source.
         source.send(SetDelta(adds = mapOf("e" to setOf(Timestamp(UUID.randomUUID(), 1L)))))
+        controller.runToIdle()
 
         withClue("progress=${probe.progressedWaves}, data=${probe.dataWaves}") {
             probe.dataWaves.size shouldBe 1
