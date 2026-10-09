@@ -99,7 +99,8 @@ class FanInlet<Api : Any>(
     /**
      * This inlet's entry observation, pushed by [PortIdentities.stamp] at
      * registration (and replaced on a re-stamp, e.g. a composite's flatten),
-     * so [call] never reads the JVM-global weak table. Null while unregistered.
+     * so [call] and [offerHosted] never read the JVM-global weak table. Null
+     * while unregistered.
      */
     @Volatile
     private var entryObservation: PortIdentities.EntryObservation? = null
@@ -246,7 +247,13 @@ class FanInlet<Api : Any>(
         if (activeImplementation != null && entry == null) return false
         checkpointOrder[invocation] = hostSequence
         try {
-            CurrentContext.with(invocation.context) { (entry ?: terminal).invoke(invocation) }
+            CurrentContext.with(invocation.context) {
+                // The hosted policy path bypasses [call], but it has the same
+                // external/reactive entry semantics and must record them before
+                // downstream emissions can query this owner's provenance.
+                entryObservation?.observe(reactive = CurrentContext.get() != null)
+                (entry ?: terminal).invoke(invocation)
+            }
         } catch (failure: Throwable) {
             if (!checkpointHeld(invocation)) checkpointOrder.remove(invocation)
             throw failure
