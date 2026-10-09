@@ -52,6 +52,23 @@ links carry null. [43-ADMIT-01] Deny-by-default is a boundary control in both la
 — refusals surface as ordinary dead letters. Verified: `TrustBoundaryTest`
 (100 seeds + open-mode control).
 
+**Anonymous announcement ownership in Open mode.** Registry announcements
+from a named peer are ownership-protected by that `PeerId`: a different named
+peer cannot re-aim or retract its refs, and a named peer can neither capture an
+anonymous ref nor be captured by an anonymous peer. Announcements from
+anonymous (null-`PeerId`) peers are deliberately **not** ownership-protected
+from one another. All anonymous connections compare as the same owner, so any
+anonymous connection may re-aim or retract another anonymous connection's refs
+and subsequent deliveries follow the newly announced sink. A peer that needs
+the existing capture protection names itself with a `PeerId`.
+
+Stronger anonymous ownership is a boundary control under P7, not an ambient
+kernel rule. It remains future, opt-in `BoundaryPolicy`/`PeerAuthPolicy` work;
+the `PeerAuthPolicy.Open` path and its wire bytes stay unchanged. In particular,
+keying ownership on a connection sink is not the Open-mode rule: it cannot
+distinguish an unrelated anonymous peer from a legitimate reconnect whose old
+connection is still half-open.
+
 Landed (phase 2, DSC1 — `computenet-ssa`): per-peer Ed25519 keypairs
 (`:identity`), a `PeerId` that today resolves 1:1 from the key's fingerprint
 (via the interim `PeerIdentityBinding`, `computenet-376c`), and a signed-nonce

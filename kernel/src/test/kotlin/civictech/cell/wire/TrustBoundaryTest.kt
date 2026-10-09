@@ -435,7 +435,10 @@ class TrustBoundaryTest {
      * the q→P peering: nothing supplies a [PeerId] to the invocation, so the
      * only identity in play is the one P's [BridgeIngressCell] stamped.
      */
-    private class RedirectRig {
+    private class RedirectRig(
+        private val requesterPeer: PeerId? = REQUESTER_Q,
+        private val thirdPeer: PeerId? = THIRD_R,
+    ) {
         val controller = SimulationController(0)
         val registryP = LocationRegistry()
         val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
@@ -466,8 +469,8 @@ class TrustBoundaryTest {
 
         init {
             val p = Peering.Side(registryP, bridgeP, peer = PEER_P)
-            val q = Peering.Side(registryQ, bridgeQ, peer = REQUESTER_Q)
-            val r = Peering.Side(registryR, bridgeR, peer = THIRD_R)
+            val q = Peering.Side(registryQ, bridgeQ, peer = requesterPeer)
+            val r = Peering.Side(registryR, bridgeR, peer = thirdPeer)
             listOf(hostP, bridgeP).forEach { h ->
                 h.deadLetterOutlet.subscribe(Use.fixed(object : Propagate<DeadLetter> {
                     override fun propagate(value: DeadLetter) {
@@ -568,6 +571,7 @@ class TrustBoundaryTest {
     private fun RedirectRig.assertImpostorAnnouncementRefused(
         lettersBefore: Int,
         faultLettersBefore: Long,
+        expectedPrincipal: PeerId? = RedirectRig.THIRD_R,
     ) {
         val letters = deadLettersP.drop(lettersBefore)
             .filter { it.denial?.exposure == "announcement-admission" }
@@ -576,9 +580,9 @@ class TrustBoundaryTest {
         val denial = letter.denial!!
         denial.seam shouldBe BoundarySeam.ADMISSION
         denial.reason shouldBe DenialReason.NOT_ADMITTED
-        denial.principal shouldBe RedirectRig.THIRD_R
+        denial.principal shouldBe expectedPrincipal
         letter.cause shouldBe null
-        letter.description shouldContain "third-party-r"
+        letter.description shouldContain (expectedPrincipal?.name ?: "<anonymous>")
 
         bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
         bridgeP.supervisionAccounting().restarts shouldBe 0L
@@ -608,6 +612,96 @@ class TrustBoundaryTest {
         rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret")
         impostorOnR.received.shouldBeEmpty()
         rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
+    }
+
+    /**
+     * computenet-4f55i, council option D: Open-mode anonymous announcements
+     * deliberately share the null [PeerId] owner. P has two independent
+     * loopback connections to anonymous peers q and r; r's announcement of
+     * q's full ref is admitted and the already-linked proxy follows the new
+     * sink. This pins non-protection rather than treating null equality as an
+     * accidental implementation detail.
+     */
+    @Test
+    fun `computenet-4f55i - anonymous peers may re-aim each other's announcements`() {
+        val rig = RedirectRig(requesterPeer = null, thirdPeer = null)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        rig.consumerOnQ.received shouldBe listOf("first")
+
+        val lettersBefore = rig.deadLettersP.size
+        val consumerOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("re-aimed")
+
+        rig.consumerOnQ.received shouldBe listOf("first")
+        consumerOnR.received shouldBe listOf("re-aimed")
+        val location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        location.peer shouldBe null
+        (location.sink === rig.pr.aToB).shouldBeTrue()
+        rig.deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+            .shouldBeEmpty()
+    }
+
+    /**
+     * The named/anonymous boundary remains protected in both directions even
+     * though two anonymous connections share ownership: concrete [PeerId] and
+     * null never compare equal. Both arms use independent loopback peerings and
+     * prove delivery stays with the incumbent after the refused announcement.
+     */
+    @Test
+    fun `computenet-4f55i - named and anonymous peers cannot capture each other's announcements`() {
+        val anonymousOwner = RedirectRig(requesterPeer = null, thirdPeer = RedirectRig.THIRD_R)
+        anonymousOwner.bridgeP.managementInlet.call.supervise(
+            anonymousOwner.mirrorFromR,
+            SupervisionPolicy.RESTART,
+        )
+        val anonymousConsumer = HostedCellProxy.create(
+            anonymousOwner.consumerOnQ.ref,
+            anonymousOwner.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        anonymousOwner.source.outlet.linkTo(anonymousConsumer.inlet)
+        val namedLettersBefore = anonymousOwner.deadLettersP.size
+        val namedFaultLettersBefore = anonymousOwner.bridgeP.supervisionAccounting().deadLetters
+        val namedImpostor = anonymousOwner.announceImpostorFromR(anonymousOwner.consumerOnQ.ref)
+        anonymousOwner.emit("anonymous-owner")
+
+        anonymousOwner.consumerOnQ.received shouldBe listOf("anonymous-owner")
+        namedImpostor.received.shouldBeEmpty()
+        anonymousOwner.assertImpostorAnnouncementRefused(
+            namedLettersBefore,
+            namedFaultLettersBefore,
+        )
+
+        val namedOwner = RedirectRig(requesterPeer = RedirectRig.REQUESTER_Q, thirdPeer = null)
+        namedOwner.bridgeP.managementInlet.call.supervise(
+            namedOwner.mirrorFromR,
+            SupervisionPolicy.RESTART,
+        )
+        val namedConsumer = HostedCellProxy.create(
+            namedOwner.consumerOnQ.ref,
+            namedOwner.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        namedOwner.source.outlet.linkTo(namedConsumer.inlet)
+        val anonymousLettersBefore = namedOwner.deadLettersP.size
+        val anonymousFaultLettersBefore = namedOwner.bridgeP.supervisionAccounting().deadLetters
+        val anonymousImpostor = namedOwner.announceImpostorFromR(namedOwner.consumerOnQ.ref)
+        namedOwner.emit("named-owner")
+
+        namedOwner.consumerOnQ.received shouldBe listOf("named-owner")
+        anonymousImpostor.received.shouldBeEmpty()
+        namedOwner.assertImpostorAnnouncementRefused(
+            anonymousLettersBefore,
+            anonymousFaultLettersBefore,
+            expectedPrincipal = null,
+        )
     }
 
     /**
