@@ -96,9 +96,17 @@ class FanInlet<Api : Any>(
     override var ref: PortRef = initialRef
         private set
 
-    /** Cached after the first registered dispatch; avoids the JVM-global weak table thereafter. */
+    /**
+     * This inlet's entry observation, pushed by [PortIdentities.stamp] at
+     * registration (and replaced on a re-stamp, e.g. a composite's flatten),
+     * so [call] never reads the JVM-global weak table. Null while unregistered.
+     */
     @Volatile
     private var entryObservation: PortIdentities.EntryObservation? = null
+
+    internal fun bindEntryObservation(observation: PortIdentities.EntryObservation) {
+        entryObservation = observation
+    }
 
     override fun deriveRef(owner: CellRef, name: String) {
         ref = PortRef.of(owner, name)
@@ -313,9 +321,7 @@ class FanInlet<Api : Any>(
         // opaque wrapper that delegates a producer's live wave into this
         // inlet. Record the distinction before dispatch: downstream emissions
         // can synchronously ask whether this owner is a structural root.
-        val observation = entryObservation
-            ?: PortIdentities.entryObservation(this)?.also { entryObservation = it }
-        observation?.observe(reactive = CurrentContext.get() != null)
+        entryObservation?.observe(reactive = CurrentContext.get() != null)
         if (chainEntry != null) frontierGate else (activeImplementation?.call ?: parkingImplementation)
     }
 

@@ -57,9 +57,14 @@ internal object PortIdentities {
 
     private val table = Collections.synchronizedMap(WeakHashMap<Port, Registration>())
 
-    /** Test diagnostic for proving whether inlet entry observation reaches [table]. */
+    /** Test diagnostic: invoked with the key of every read of [table]. */
     @Volatile
-    internal var onEntryObservationLookup: ((Port) -> Unit)? = null
+    internal var onTableRead: ((Port) -> Unit)? = null
+
+    private fun registration(port: Port): Registration? {
+        onTableRead?.invoke(port)
+        return table[port]
+    }
 
     /**
      * Identity-keyed weak reference: contract APIs may be JDK proxies whose
@@ -101,10 +106,14 @@ internal object PortIdentities {
 
     fun stamp(owner: Any?, name: String, port: Port) {
         if (owner is Cell) {
-            table[port] = Registration(
+            val registration = Registration(
                 identity = PortIdentity(owner.ref, name),
                 registry = WeakReference(PortRegistry.of(owner)),
             )
+            table[port] = registration
+            // The inlet holds its own observation handle so its dispatch path
+            // never reads [table]; a re-stamp rebinds it to the new registration.
+            (port as? FanInlet<*>)?.bindEntryObservation(registration.entryObservation)
             // PN-1: a hosted cell's port gets a replay-stable ref derived from
             // (ownerRef, name) here, at the one seam that knows both. Anonymous
             // ports (not a Cell owner) are never stamped and keep generate().
@@ -112,7 +121,7 @@ internal object PortIdentities {
         }
     }
 
-    fun of(port: Port): PortIdentity? = table[port]?.identity
+    fun of(port: Port): PortIdentity? = registration(port)?.identity
 
     /**
      * Records that [api] was attached to an outlet without a target-side link
@@ -150,17 +159,6 @@ internal object PortIdentities {
     }
 
     /**
-     * Resolves the entry observation attached to a registered input [port].
-     * The inlet caches this handle after its first invocation, keeping the
-     * weak table lookup off every subsequent dispatch while the handle's
-     * monotone, volatile flags remain visible to provenance resolution.
-     */
-    fun entryObservation(port: Port): EntryObservation? {
-        onEntryObservationLookup?.invoke(port)
-        return table[port]?.entryObservation
-    }
-
-    /**
      * Whether [port]'s owning cell can receive another source's wave through
      * an open inbound link, a link-bypassing attachment, or an input whose
      * entry mode has not yet been observed; or `null` when [port] has no
@@ -181,7 +179,7 @@ internal object PortIdentities {
      * `null`.
      */
     fun hasInboundWavePath(port: Port): Boolean? {
-        val registry = table[port]?.registry?.get() ?: return null
+        val registry = registration(port)?.registry?.get() ?: return null
         val inputs = mutableListOf<Port>()
         registry.names().forEach { name ->
             val candidate = registry[name] ?: return@forEach
@@ -189,11 +187,11 @@ internal object PortIdentities {
             val openInbound = candidate is Linked &&
                 candidate.linking.links.any { it.to == candidate.ref }
             val bypassFed = candidate is Use<*> && isBypassTarget(candidate.call)
-            val reactiveEntry = table[candidate]?.entryObservation?.reactiveEntryObserved == true
+            val reactiveEntry = registration(candidate)?.entryObservation?.reactiveEntryObserved == true
             if (openInbound || bypassFed || reactiveEntry) return true
         }
         if (inputs.isEmpty()) return false
-        return inputs.none { table[it]?.entryObservation?.externalEntryObserved == true }
+        return inputs.none { registration(it)?.entryObservation?.externalEntryObserved == true }
     }
 }
 
