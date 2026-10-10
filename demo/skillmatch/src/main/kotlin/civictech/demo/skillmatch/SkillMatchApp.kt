@@ -12,8 +12,9 @@ import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.observe.Observation
-import civictech.cell.observe.observation
+import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.View
+import civictech.cell.observe.observe
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
@@ -67,7 +68,7 @@ data class MarketEntry(val supply: Long, val demand: Long, val scarce: Boolean) 
 data class QualEntry(val matched: Long, val required: Long, val qualified: Boolean) : Serializable
 
 /**
- * The dataflow pipeline, shared verbatim by the app and the seeded test:
+ * The dataflow pipeline, shared verbatim by the app and the seeded tests.
  *
  *   candSkills ─┬► matches (⋈ on skill) ─► matchCounts (count per candidate×job)
  *   jobSkills ──┼► required (count per job)
@@ -240,31 +241,41 @@ class SkillMatchApp(port: Int = 8080) {
     private val candOps = host.lookup(refs.candSkills)!!.inlet.call
     private val jobOps = host.lookup(refs.jobSkills)!!.inlet.call
 
-    // The raw inputs have different root sets, so they stay in separate groups.
-    // These four views sit over ungated JoinSetCell/SemiJoinCell/LookupJoinCell/
-    // CombineLatestCell instances, which [KE2-09] (computenet-lw0mv) rejects at
-    // build. Opting out per view preserves this demo's observable behaviour;
-    // the known intra-wave tear remains visible through bufferedWaves.
-    // Gating these cells with emitOnFrontier would change the frame shape and
-    // belongs to the separate operator follow-up.
-    private val observation: Observation = host.observation {
-        set("candSkills", refs.candSkills.ref)
-        set("jobSkills", refs.jobSkills.ref)
-        unchecked("matches")
-        unchecked("gap")
-        unchecked("qualification")
-        unchecked("market")
-        set("matches", refs.matches.ref)
-        set("gap", refs.gap.ref)
-        map("qualification", refs.qualification.ref)
-        map("market", refs.market.ref)
-    }
+    /*
+     * Root trace for the four derived views (F-27 / [22-LIVE-01]):
+     *   matches       -> {candSkills, jobSkills}
+     *   gap           -> {candSkills, jobSkills}
+     *   qualification -> {candSkills, jobSkills} via matches/matchCounts + required
+     *   market        -> {candSkills, jobSkills} via supply + demand
+     *
+     * All four therefore cross the independent candidate/job roots; there is
+     * no same-single-root subgroup to align. Frontier-gating those joins makes
+     * a candidate-only or job-only wave depend on application-authored
+     * Progress, which F-27 rejects. Each outlet is consequently materialized
+     * by its own point-consistent ObserveCell. No aligned group remains in this
+     * demo, so [KE2-09] admission has no skillmatch group to check.
+     */
+    private val candSkillsView: ObservationSink<Set<CandidateSkill>> =
+        host.observe(refs.candSkills.ref, View.set())
+    private val jobSkillsView: ObservationSink<Set<JobSkill>> =
+        host.observe(refs.jobSkills.ref, View.set())
+    private val matchesView: ObservationSink<Set<Match>> =
+        host.observe(refs.matches.ref, View.set())
+    private val gapView: ObservationSink<Set<JobSkill>> =
+        host.observe(refs.gap.ref, View.set())
+    private val qualificationView: ObservationSink<Map<CandidateJob, QualEntry>> =
+        host.observe(refs.qualification.ref, View.map())
+    private val marketView: ObservationSink<Map<String, MarketEntry>> =
+        host.observe(refs.market.ref, View.map())
 
-    /** Diagnostic for the frame-level contract: no same-root wave remains held at idle. */
-    internal val alignedBufferedWaves: Int get() = observation.bufferedWaves
-
-    internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf
+    internal fun observationSnapshots(): Map<String, Any?> = linkedMapOf(
+        "candSkills" to candSkillsView.current(),
+        "jobSkills" to jobSkillsView.current(),
+        "matches" to matchesView.current(),
+        "gap" to gapView.current(),
+        "qualification" to qualificationView.current(),
+        "market" to marketView.current(),
+    )
 
     private val shell = DemoShell(port)
     private var inspector: InspectorServer? = null
@@ -338,9 +349,14 @@ class SkillMatchApp(port: Int = 8080) {
         shell.route("/op") { handleOp(it) }
         shell.sse("/events") { stateJson() }
 
-        // The observation publishes one point-consistent frame assembled from
-        // its independent root groups.
-        observation.onChange { broadcast() }
+        // Independent observations may publish at different frontiers; every
+        // callback broadcasts a cross-view assembly of their latest snapshots.
+        candSkillsView.onChange { broadcast() }
+        jobSkillsView.onChange { broadcast() }
+        matchesView.onChange { broadcast() }
+        gapView.onChange { broadcast() }
+        qualificationView.onChange { broadcast() }
+        marketView.onChange { broadcast() }
     }
 
     private fun handleOp(exchange: HttpExchange) {
@@ -382,7 +398,7 @@ class SkillMatchApp(port: Int = 8080) {
                     "${esc(owner)}:${skills.sorted().joinToString(",", "[", "]") { esc(it) }}"
                 }
 
-        val snapshot = observation.current().views
+        val snapshot = observationSnapshots()
         @Suppress("UNCHECKED_CAST")
         val candSkills = snapshot["candSkills"] as Set<CandidateSkill>
         @Suppress("UNCHECKED_CAST")
