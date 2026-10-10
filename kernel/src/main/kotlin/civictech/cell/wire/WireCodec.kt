@@ -16,6 +16,7 @@ import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.data.delta.TaggedMapDeltaSerializer
+import civictech.cell.partition.RoutedCommand
 import civictech.cell.replication.Stamped
 import civictech.cell.replication.SignedWrite
 import civictech.cell.replication.SignedWriteBatch
@@ -227,8 +228,8 @@ object WireCodec {
                 // PartitionedCell shard route (spec 20/24 §Partitioned state, CP-D3): epoch + delta
                 @Suppress("UNCHECKED_CAST")
                 subclass(
-                    civictech.cell.partition.RoutedCommand::class,
-                    civictech.cell.partition.RoutedCommand.serializer(polyAny) as KSerializer<civictech.cell.partition.RoutedCommand<*>>,
+                    RoutedCommand::class,
+                    RoutedCommand.serializer(polyAny) as KSerializer<RoutedCommand<*>>,
                 )
                 // single-writer leader→follower log unit (spec 42 §Single-writer replication, W4.3)
                 @Suppress("UNCHECKED_CAST")

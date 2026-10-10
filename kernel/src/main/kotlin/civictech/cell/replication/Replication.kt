@@ -10,6 +10,7 @@ import civictech.cell.control.StallNotice
 import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.data.WatermarkCell
+import civictech.cell.evolve.Effectful
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.notifyDownstream
@@ -492,7 +493,7 @@ class Replication(
         // The authority-bearing path is [SingleWriterReplication.replicate] (a
         // SingleWriterReplicable leader fires, followers suppress) — a distinct
         // method this guard never sees, so authority-declaring cells stay admitted.
-        if (cell is civictech.cell.evolve.Effectful) {
+        if (cell is Effectful) {
             val interest = registry.instances.interestOf(cell.ref)
             val overlapsExisting = registry.instances.replicasOf(cell.ref.id)
                 .any { it != cell.ref && interest.overlaps(registry.instances.interestOf(it)) }

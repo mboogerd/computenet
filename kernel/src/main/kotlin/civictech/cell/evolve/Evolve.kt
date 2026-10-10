@@ -3,6 +3,7 @@ package civictech.cell.evolve
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.data.Replicable
 import civictech.cell.host.ManagedHost
 import civictech.cell.membrane.Principal
 import civictech.cell.membrane.TrafficLightApi
@@ -14,6 +15,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.port.identity
+import civictech.cell.replication.Replication
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import java.util.concurrent.TimeUnit
@@ -302,9 +304,9 @@ object Evolve {
      */
     fun runReplica(
         host: ManagedHost,
-        replication: civictech.cell.replication.Replication,
-        incumbent: civictech.cell.data.Replicable<*>,
-        candidate: civictech.cell.data.Replicable<*>,
+        replication: Replication,
+        incumbent: Replicable<*>,
+        candidate: Replicable<*>,
         policy: PromotionPolicy,
         gates: List<InvariantCell<*, *>>,
         outletName: String = "outlet",

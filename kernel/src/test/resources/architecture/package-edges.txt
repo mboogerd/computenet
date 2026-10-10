@@ -1,5 +1,5 @@
 # T10-C architecture ratchet baseline: pinned civictech.cell package->package
-# import edges (kernel/src/main). Generated from the tree at commit c59cd65
+# code-reference edges (kernel/src/main). Generated from the tree at commit c59cd65
 # (post-T03 dead-import sweep). One 'from -> to' per line, sorted.
 #
 # A new edge here means a new cross-package dependency was introduced --
@@ -141,8 +141,20 @@
 # ApplyContext forwards the SignatureVerifier seam to Replication.replicate for
 # authority-at-admission, and promotion casts graph-declared gates to
 # InvariantCell for invariant-gated evolution. These are real construction
-# dependencies; fully qualifying the references would only hide them from this
-# import-based ratchet.
+# dependencies; fully qualifying the references only hid them from the former
+# import-only ratchet.
+# computenet-9ms68: wire -> partition, evolve -> data, evolve -> replication,
+# and replication -> evolve ADDED — the qualified-reference scan exposed four
+# dependencies that were already live but invisible to the import-only ratchet.
+# WireCodec must register RoutedCommand's polymorphic serializer for partitioned
+# shard routes. Evolution.runReplica/Promotion.promoteReplica accept Replicable
+# cells and delegate the same-ref COMMIT to Replication.rebind; importing those
+# API types also makes the KDoc link resolve without the former FQN workaround.
+# Replication's mergeable-mesh admission guard classifies Effectful cells before
+# admitting overlapping replicas. Removing any edge would require relocating or
+# duplicating those owning APIs, not merely changing syntax. The two evolution
+# edges and the reverse replication edge make the pre-existing evolve <->
+# replication 2-cycle explicit; both packages were already in G-63's single SCC.
 cell -> link
 cell -> port
 cell -> proxy
@@ -165,11 +177,13 @@ data -> link
 data -> port
 data -> protocol
 evolve -> cell
+evolve -> data
 evolve -> host
 evolve -> link
 evolve -> membrane
 evolve -> port
 evolve -> proxy
+evolve -> replication
 evolve -> verify
 graph -> cell
 graph -> data
@@ -242,6 +256,7 @@ replication -> cell
 replication -> consistency
 replication -> control
 replication -> data
+replication -> evolve
 replication -> host
 replication -> link
 replication -> membrane
@@ -257,6 +272,7 @@ wire -> control
 wire -> data
 wire -> host
 wire -> link
+wire -> partition
 wire -> port
 wire -> protocol
 wire -> proxy
