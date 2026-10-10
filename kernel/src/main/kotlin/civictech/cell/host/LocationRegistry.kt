@@ -971,9 +971,10 @@ class LocationRegistry {
      * deferred claim made by that sink, while an owning connection's admitted
      * retraction installs the latest surviving claim after [onUnpublish].
      *
-     * Returns the incumbent on refusal and changes nothing; otherwise removes
-     * the binding under the ref's queue lock and fires [onUnpublish] as
-     * [mirrorUnpublish] does.
+     * Returns the incumbent on refusal and changes no location (a refused
+     * PerConnection retraction may withdraw that sink's own deferred claim);
+     * otherwise removes the binding under the ref's queue lock and fires
+     * [onUnpublish] as [mirrorUnpublish] does.
      */
     internal fun unpublishFromPeer(
         ref: CellRef,
