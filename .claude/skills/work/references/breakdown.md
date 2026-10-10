@@ -103,49 +103,49 @@ what you verified, the fork, and what each answer produces.
 
 ## The files claim
 
-`metadata.files` is a scheduling lock: tasks with disjoint claims run in
-parallel, and an implementer stays inside its claim. An incomplete claim makes
-a task unsatisfiable; an over-broad one costs a sibling a batch slot, which is
-cheaper.
+`metadata.files` is a scheduling lock: disjoint claims run in parallel, and an
+implementer stays inside its claim. A missing file makes a task unsatisfiable;
+an extra one only costs a sibling a batch slot.
 
 **A claim covers every file that must change for the acceptance to hold, and no
 file the task only reads.** Derive it by closure, not from the prose. For each
 thing the task adds, changes, removes or moves, grep main AND test sources in
-every module and `.github/`, read each hit, and claim the ones that must
-change. Record each grep in the description as `observed:`.
+every module and `.github/`, read each hit, and claim the ones that must change.
+Record each grep in the description as `observed:`.
 
-- Removed or changed (member, constructor, type, file or side store, route or
-  response string): its callers, its readers, and tests asserting the old value
-  or a placeholder.
+- Removed or changed (member, constructor, type, file, side store, route,
+  response string): its callers and readers, and tests asserting the old value.
 - Added to a set (sealed type, enum, package, corpus directory): grep an
-  existing sibling (`is <SiblingVariant>`, the package path), not the new
-  entry. That finds exhaustive `when`s, inventories
-  (`oracle/src/test/resources/*-inventory.txt` for a top-level type in
-  `civictech.cell.data` or `.op`; `CorpusCrossCheckTest` for a `24-data-cells`
-  scenario) and completeness gates. A new module claims `doc/ARCHITECTURE.md`;
-  a new cross-package kernel edge claims
-  `kernel/src/test/resources/architecture/package-edges.txt`.
+  existing sibling (`is <SiblingVariant>`, the package path), not the new entry.
+  That finds exhaustive `when`s, inventories and completeness gates.
+- Checked outside its module: a baseline or generated file a check compares with
+  the code. Grep `*/src/test/resources/` and `.github/workflows/` for each type,
+  call or import the code adds or drops, not only the files it edits; claim each
+  hit and gate on what reads it (grep its name in `*.kt` and `.github/`),
+  whatever module the gate is scoped to. Examples:
+  `kernel/src/test/resources/architecture/package-edges.txt` (a kernel
+  cross-package import), `peerid-constructions.txt` (`PeerId(` anywhere),
+  `doc/FEATURE-STATUS.md` (demo imports or cells).
 - Mirrored: the mirror and the test that pins it (`ui/src/api/types.ts` with
-  `ui/test/types.test.ts`), and the value types a new journal or checkpoint
-  path serializes.
-- Always: the test pinning the acceptance; every file the bead's own
-  prescribed mutation or reproduction edits (or a statement that the reviewer
-  runs it); and KDoc or comments narrating a changed rule (grep its distinctive
-  phrases and requirement id) — no test fails on a stale explanation.
+  `ui/test/types.test.ts`), and the value types a new journal or checkpoint path
+  serializes.
+- Always: the test pinning the acceptance; every file the bead's own prescribed
+  mutation or reproduction edits (or a statement that the reviewer runs it); and
+  KDoc or comments narrating a changed rule (grep its distinctive phrases and
+  requirement id) — no test fails on a stale explanation.
 
 Read the hits rather than claiming them all; an import is not an enumeration. A
-sibling's claim is a lower bound. When unsure, claim wider and say in the
-description that the breadth is deliberate and how you derived it.
+sibling's claim is a lower bound. When unsure, claim wider and say why.
 
 Check pending work, not only the tree: a file that does not exist yet may be
 claimed by an unstarted task elsewhere in the epic. Resolve the epic with
-`.claude/skills/work/scripts/epic-of.sh <id>`, list the open children of each
-of its features (`bd list --parent` reaches one level), and compare claims. A
+`.claude/skills/work/scripts/epic-of.sh <id>`, list the open children of each of
+its features (`bd list --parent` reaches one level), and compare claims. A
 sibling with no claim gives no signal: read its description instead.
 
-An empty claim is legitimate when files are unknowable before a diagnosis
-(state the expected scope in the acceptance) or the task produces no diff. Say
-which in the description; never in `files`, where a sentence reads as a path.
+An empty claim is legitimate when files are unknowable before a diagnosis (state
+the expected scope in the acceptance) or the task produces no diff. Say which in
+the description; never in `files`, where a sentence reads as a path.
 
 ## Metadata and edges
 
