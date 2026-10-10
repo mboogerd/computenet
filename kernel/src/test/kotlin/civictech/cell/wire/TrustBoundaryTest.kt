@@ -25,10 +25,12 @@ import civictech.cell.link.allowPeers
 import civictech.cell.port.input
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.IntakeClosedException
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.InvocationSink
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
@@ -874,6 +876,54 @@ class TrustBoundaryTest {
         rig.controller.runToIdle()
 
         rig.registryP.location(rig.consumerOnQ.ref) shouldBe null
+    }
+
+    /**
+     * `unpublishRemotes` is the transport's send-failure path: a sink that
+     * notices its socket is dead calls it from inside `deliver`, on a sender
+     * thread that may already hold one ref's park-queue monitor (a hold
+     * release replaying, a publish draining). Two such senders, each holding a
+     * different ref routed through the same dead sink, must both finish — the
+     * retire must not wait on a monitor the other sender holds.
+     */
+    @Test
+    fun `computenet-ddurc - two senders that notice one dead sink mid-replay both retire it`() {
+        // The losing interleaving is a race (both senders must scan the
+        // registry before either removes its ref), so it is attempted many
+        // times; one stuck round fails the test.
+        repeat(500) { round ->
+            val registry = LocationRegistry()
+            val refs = listOf(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()))
+            val bothMidReplay = java.util.concurrent.CyclicBarrier(2)
+            val dead = object : InvocationSink {
+                override fun deliver(invocation: HostedPortInvocation) {
+                    bothMidReplay.await(20, java.util.concurrent.TimeUnit.SECONDS)
+                    registry.unpublishRemotes(this)
+                    throw IntakeClosedException(invocation.cellRef)
+                }
+            }
+            refs.forEach { ref ->
+                registry.hold(ref)
+                registry.publish(ref, dead)
+                registry.deliver(
+                    HostedPortInvocation(
+                        ref, "inlet", HostedPortInvocation.Type.PORT_API,
+                        Invocation("provide", listOf("java.lang.Object"), listOf("parked")),
+                    ),
+                )
+            }
+
+            val senders = refs.map { ref ->
+                Thread { registry.release(ref) }.apply { isDaemon = true; start() }
+            }
+            senders.forEach { it.join(10_000) }
+
+            (round to senders.map { it.isAlive }) shouldBe (round to listOf(false, false))
+            refs.forEach { ref ->
+                registry.location(ref) shouldBe null
+                registry.parkedFor(ref).size shouldBe 1
+            }
+        }
     }
 
     /**

@@ -94,6 +94,14 @@ class LocationRegistry {
     private val deferredAnonymousClaims = ConcurrentHashMap<CellRef, InvocationSink>()
 
     /**
+     * Set, and never cleared, by the first [AnonymousOwnership.PerConnection]
+     * admission call on this registry. While it is false [unpublishRemotes]
+     * takes no monitor at all — see the deadlock caveat there.
+     */
+    @Volatile
+    private var perConnectionOwnershipUsed = false
+
+    /**
      * Refs deliberately [retire]d: [deliver] refuses an invocation addressed to
      * one of these instead of parking it (computenet-vzb, gyvli-D3). Written
      * under the ref's park-queue monitor — the one [deliver]'s slow path holds —
@@ -665,9 +673,10 @@ class LocationRegistry {
      * recovery remains able to replace stale placement state, while a peer
      * cannot shadow a cell this process is currently serving.
      *
-     * Returns the incumbent on refusal and makes **no** registry or publish-
-     * hook change. The caller owns typed boundary accounting because it knows
-     * the announcing connection's principal.
+     * Returns the incumbent on refusal and makes **no** location or publish-
+     * hook change (a `PerConnection` refusal may record a deferred claim, see
+     * below). The caller owns typed boundary accounting because it knows the
+     * announcing connection's principal.
      *
      * [anonymousOwnership] defaults to [AnonymousOwnership.Shared], whose
      * [Remote] conflict expression remains exactly `incumbent.peer != peer`:
@@ -689,6 +698,7 @@ class LocationRegistry {
         peer: PeerId?,
         anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
     ): RemotePublishRefusal? {
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) perConnectionOwnershipUsed = true
         val incoming = Remote(sink, peer)
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         val refusal = synchronized(queue) {
@@ -988,6 +998,7 @@ class LocationRegistry {
         sink: InvocationSink,
         anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
     ): RemotePublishRefusal? {
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) perConnectionOwnershipUsed = true
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         var applyDeferred = false
         val refusal = synchronized(queue) {
@@ -1070,9 +1081,31 @@ class LocationRegistry {
      * terminates, instead of recursing through a half-emptied map. The batch is
      * also what makes a listener's own re-read of this registry answer about a
      * fully disconnected peer rather than an arbitrary prefix of one.
+     *
+     * **No monitor is taken** on a registry that has never admitted under
+     * [AnonymousOwnership.PerConnection]: the send-failure caller may already
+     * hold one ref's park-queue monitor (a hold release replaying, a publish
+     * draining), and two such senders each waiting for the other's ref would
+     * deadlock. **Known limit:** once `PerConnection` has been used, the scan
+     * takes each affected ref's park-queue monitor in turn (deferred claims
+     * are guarded by it), so that deadlock is reachable there — two senders,
+     * each holding a different ref's monitor, noticing the same dead sink at
+     * once (computenet-ddurc feature review).
      */
     fun unpublishRemotes(via: InvocationSink) {
         val dropped = mutableListOf<CellRef>()
+        if (!perConnectionOwnershipUsed) {
+            locations.entries.removeIf { entry ->
+                ((entry.value as? Remote)?.sink === via).also {
+                    if (it) {
+                        instances.remove(entry.key)
+                        dropped += entry.key
+                    }
+                }
+            }
+            dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
+            return
+        }
         val candidates = mutableSetOf<CellRef>()
         locations.forEach { (ref, location) ->
             if ((location as? Remote)?.sink === via) candidates += ref
