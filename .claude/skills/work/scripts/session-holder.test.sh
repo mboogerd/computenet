@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for session-holder.sh. Uses REAL processes rather than a ps stub: the
 # whole point of the token is that it tracks a live OS process, and a stubbed
-# ps would test the parser instead of the property. Expect "15 passed, 0 failed".
+# ps would test the parser instead of the property. Expect "16 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-holder.sh"}
@@ -17,6 +17,10 @@ check() { # token expected-word expected-rc label
 }
 
 export BEADS_ACTOR=${BEADS_ACTOR:-test-actor}
+# The STALE path asks bd for child beads; never let it reach the real tracker.
+stub=$(mktemp -d); trap 'rm -rf "$stub"' EXIT
+printf '#!/bin/sh\necho "[]"\n' > "$stub/bd"; chmod +x "$stub/bd"
+export PATH="$stub:$PATH"
 
 # 1-2. The token is well-formed and stable within one session.
 tok=$("$SCRIPT"); rc=$?
@@ -71,6 +75,17 @@ out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "not-a-da
 { [ "$out" = STALE ] && [ "$rc" = 1 ]; } \
   && ok "an unparseable updated-at falls back to STALE" \
   || bad "unparseable updated-at — got '$out' rc=$rc, wanted 'STALE' rc=1"
+# computenet-q8ksa: an orchestrator writes its children, not the epic row. A stale
+# row plus a child stamped with the same holder and written just now reads LIVE.
+# Without --limit 0 the stub answers as bd's documented 50-row, priority-sorted
+# default would if the newest write fell off it (bd 1.1.2 does not page --json).
+fb=$(mktemp -d)  # shadows the [] stub for this one case
+printf '#!/bin/sh\ncase " $* " in *" --limit 0 "*) t=%s ;; *) t=2020-01-01T00:00:00Z ;; esac\necho "[{\\"updated_at\\":\\"$t\\"}]"\n' "$recent" > "$fb/bd"; chmod +x "$fb/bd"
+out=$(PATH="$fb:$PATH" HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" "2020-01-01T00:00:00Z" 2>&1); rc=$?
+{ [ "$out" = LIVE ] && [ "$rc" = 0 ]; } \
+  && ok "an old token with a recently written child bead reads LIVE" \
+  || bad "child-recency — got '$out' rc=$rc, wanted 'LIVE' rc=0"
+rm -f "$fb/bd"; rmdir "$fb"
 kill "$elder" 2>/dev/null; wait "$elder" 2>/dev/null
 
 # 8-9. Nothing established is UNKNOWN (exit 3), never an all-clear.
