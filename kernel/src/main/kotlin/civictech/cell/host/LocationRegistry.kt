@@ -7,6 +7,7 @@ import civictech.cell.link.Interest
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.control.ParkQueue
+import civictech.cell.wire.AnonymousOwnership
 import java.lang.ref.WeakReference
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -46,7 +47,12 @@ import java.util.concurrent.ConcurrentHashMap
  * `heldRefs` is caught, `parkedForFlip` is not (both measured 2026-08-15),
  * so a second home under any other name survives it.
  */
-class LocationRegistry {
+class LocationRegistry internal constructor(
+    private val beforeSharedRemoteRemoval: (() -> Unit)?,
+    private val onPerConnectionWait: (() -> Unit)?,
+) {
+
+    constructor() : this(null, null)
 
     private val topology = TopologyIndex()
 
@@ -76,10 +82,129 @@ class LocationRegistry {
      * captured under the same per-ref lock that guards installation, so the
      * caller can account the refusal without a racy second registry read.
      */
-    internal data class RemotePublishRefusal(val incumbent: Location)
+    internal data class RemotePublishRefusal(
+        val incumbent: Location,
+        val deferred: Boolean = false,
+    )
 
     private val locations = ConcurrentHashMap<CellRef, Location>()
     private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
+
+    /**
+     * Latest refused anonymous claimant per ref under
+     * [AnonymousOwnership.PerConnection]. A claim is live only while its
+     * [InvocationSink] connection is live; every mutation is made under the
+     * ref's [parked] queue monitor. The default Shared path never writes here.
+     */
+    private val deferredAnonymousClaims = ConcurrentHashMap<CellRef, InvocationSink>()
+
+    /**
+     * A lock-free mode latch plus the number of Shared retirements already in
+     * their monitor-free scan. The sign bit means PerConnection has been used;
+     * the remaining bits count scans that won the Shared path just before that
+     * first transition. The first PerConnection admission waits for those scans
+     * to leave before it can record a deferred claim, closing the first-use
+     * remove-after-record race without putting a park-queue monitor on Shared.
+     */
+    private val anonymousOwnershipState = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Park-queue monitors may nest reentrantly while a sink delivers. Cleanup
+     * that needs a *different* ref's monitor must wait until the sender has
+     * left the outermost one, or two senders can each wait for the other's ref.
+     * The state is per-thread and shared by every registry so a sink cannot
+     * escape the rule by retiring through another registry.
+     */
+    private class QueueMonitorState {
+        var depth = 0
+        var draining = false
+        val afterUnlock = java.util.ArrayDeque<() -> Unit>()
+    }
+
+    private companion object {
+        private const val PER_CONNECTION = Int.MIN_VALUE
+        private val queueMonitorState = ThreadLocal.withInitial(::QueueMonitorState)
+    }
+
+    private fun enterSharedRetirement(): Boolean {
+        while (true) {
+            val state = anonymousOwnershipState.get()
+            if (state < 0) return false
+            if (anonymousOwnershipState.compareAndSet(state, state + 1)) return true
+        }
+    }
+
+    private fun enablePerConnectionOwnership() {
+        while (true) {
+            val state = anonymousOwnershipState.get()
+            if (state < 0) {
+                awaitSharedRetirements()
+                return
+            }
+            if (anonymousOwnershipState.compareAndSet(state, state or PER_CONNECTION)) {
+                if (state != 0) onPerConnectionWait?.invoke()
+                awaitSharedRetirements()
+                return
+            }
+        }
+    }
+
+    private fun awaitSharedRetirements() {
+        var spins = 0
+        while (anonymousOwnershipState.get() != PER_CONNECTION) {
+            if (++spins and 0xff == 0) Thread.yield() else Thread.onSpinWait()
+        }
+    }
+
+    private inline fun <T> withParkQueueMonitor(
+        queue: ParkQueue<HostedPortInvocation>,
+        action: () -> T,
+    ): T {
+        val state = queueMonitorState.get()
+        state.depth += 1
+        var failure: Throwable? = null
+        try {
+            return synchronized(queue) { action() }
+        } catch (thrown: Throwable) {
+            failure = thrown
+            throw thrown
+        } finally {
+            state.depth -= 1
+            if (state.depth == 0) {
+                try {
+                    drainAfterQueueUnlock(state)
+                } catch (cleanupFailure: Throwable) {
+                    if (failure == null) throw cleanupFailure
+                    failure.addSuppressed(cleanupFailure)
+                }
+            }
+        }
+    }
+
+    private fun afterOutermostQueueMonitor(action: () -> Unit) {
+        val state = queueMonitorState.get()
+        state.afterUnlock.addLast(action)
+        if (state.depth == 0) drainAfterQueueUnlock(state)
+    }
+
+    private fun drainAfterQueueUnlock(state: QueueMonitorState) {
+        if (state.draining) return
+        state.draining = true
+        var failure: Throwable? = null
+        try {
+            while (state.depth == 0 && state.afterUnlock.isNotEmpty()) {
+                try {
+                    state.afterUnlock.removeFirst().invoke()
+                } catch (thrown: Throwable) {
+                    if (failure == null) failure = thrown else failure.addSuppressed(thrown)
+                }
+            }
+        } finally {
+            state.draining = false
+            if (state.depth == 0 && state.afterUnlock.isEmpty()) queueMonitorState.remove()
+        }
+        failure?.let { throw it }
+    }
 
     /**
      * Refs deliberately [retire]d: [deliver] refuses an invocation addressed to
@@ -478,7 +603,7 @@ class LocationRegistry {
 
     /** Parked invocations awaiting a [publish] for [ref] (test/introspection surface). */
     fun parkedFor(ref: CellRef): List<HostedPortInvocation> =
-        parked[ref]?.let { synchronized(it) { it.snapshot() } } ?: emptyList()
+        parked[ref]?.let { queue -> withParkQueueMonitor(queue) { queue.snapshot() } } ?: emptyList()
 
     /**
      * Drain everything parked at [ref] and return it, in park order, leaving
@@ -497,7 +622,7 @@ class LocationRegistry {
      * rely on via the per-ref `synchronized` monitor).
      */
     fun unpark(ref: CellRef): List<HostedPortInvocation> =
-        parked[ref]?.let { synchronized(it) { it.drain() } } ?: emptyList()
+        parked[ref]?.let { queue -> withParkQueueMonitor(queue) { queue.drain() } } ?: emptyList()
 
     /**
      * Optimistic send with lazy re-resolution: enqueue on the located host or
@@ -515,7 +640,7 @@ class LocationRegistry {
     fun deliver(invocation: HostedPortInvocation) {
         if (!holds.isHeld(invocation.cellRef) && send(locations[invocation.cellRef], invocation)) return
         val queue = parked.computeIfAbsent(invocation.cellRef) { ParkQueue() }
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             if (invocation.cellRef in tombstones) {
                 refuseRetired(invocation)
                 return
@@ -558,7 +683,7 @@ class LocationRegistry {
     private fun replay(ref: CellRef, expected: Location) {
         if (holds.isHeld(ref)) return // parked deliberately for the flip window — [release] drains it
         val queue = parked[ref] ?: return
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             if (locations[ref] != expected) return
             queue.drainWhile { send(expected, it) }
         }
@@ -653,17 +778,19 @@ class LocationRegistry {
      * recovery remains able to replace stale placement state, while a peer
      * cannot shadow a cell this process is currently serving.
      *
-     * Returns the incumbent on refusal and makes **no** registry or publish-
-     * hook change. The caller owns typed boundary accounting because it knows
-     * the announcing connection's principal.
+     * Returns the incumbent on refusal and makes **no** location or publish-
+     * hook change (a `PerConnection` refusal may record a deferred claim, see
+     * below). The caller owns typed boundary accounting because it knows the
+     * announcing connection's principal.
      *
-     * Two limits of this rule. **Anonymous announcements are not ownership-
-     * protected from one another**: [peer] is compared by equality, so every
-     * connection that announces with a null [PeerId] is the same owner and may
-     * re-aim or retract another anonymous connection's refs. A named peer can
-     * neither capture an anonymous one's ref nor be captured by it; a peer that
-     * needs that protection names its [PeerId]. Stronger anonymous ownership is
-     * future opt-in boundary-policy work, not a change to the Open path.
+     * [anonymousOwnership] defaults to [AnonymousOwnership.Shared], whose
+     * [Remote] conflict expression remains exactly `incumbent.peer != peer`:
+     * every null-[PeerId] connection shares one owner. Under
+     * [AnonymousOwnership.PerConnection], two anonymous locations conflict
+     * when their sinks differ. The refused publication remains observable, and
+     * its latest claim is deferred until the incumbent connection retracts the
+     * ref or retires through [unpublishRemotes]. Named ownership is unchanged.
+     *
      * **A cross-peer handover is ordered**: a ref moving from peer q to peer r
      * is admitted here only once q's retraction ([unpublishFromPeer]) or q's
      * disconnect ([unpublishRemotes]) has removed q's binding; an announcement
@@ -674,20 +801,35 @@ class LocationRegistry {
         ref: CellRef,
         sink: InvocationSink,
         peer: PeerId?,
+        anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
     ): RemotePublishRefusal? {
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) enablePerConnectionOwnership()
         val incoming = Remote(sink, peer)
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-        val refusal = synchronized(queue) {
+        val refusal = withParkQueueMonitor(queue) {
             val incumbent = locations[ref]
             val conflicts = when (incumbent) {
                 is Local -> incumbent.host.hosts(ref)
-                is Remote -> incumbent.peer != peer
+                is Remote -> when (anonymousOwnership) {
+                    AnonymousOwnership.Shared -> incumbent.peer != peer
+                    AnonymousOwnership.PerConnection ->
+                        if (incumbent.peer == null && peer == null) incumbent.sink !== sink
+                        else incumbent.peer != peer
+                }
                 null -> false
             }
             if (conflicts) {
-                RemotePublishRefusal(incumbent!!)
+                val deferred = anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    peer == null && incumbent is Remote && incumbent.peer == null
+                if (deferred) deferredAnonymousClaims[ref] = sink
+                RemotePublishRefusal(incumbent!!, deferred)
             } else {
                 installLocked(ref, incoming, queue)
+                if (anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    deferredAnonymousClaims[ref] === sink
+                ) {
+                    deferredAnonymousClaims.remove(ref)
+                }
                 null
             }
         }
@@ -830,7 +972,7 @@ class LocationRegistry {
      */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             installLocked(ref, location, queue)
         }
     }
@@ -886,7 +1028,7 @@ class LocationRegistry {
     fun retire(refs: Collection<CellRef>) {
         refs.forEach { ref ->
             val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-            synchronized(queue) {
+            withParkQueueMonitor(queue) {
                 tombstones += ref
                 queue.drain().forEach(::refuseRetired)
             }
@@ -906,7 +1048,7 @@ class LocationRegistry {
     fun unretire(refs: Collection<CellRef>) {
         refs.forEach { ref ->
             val queue = parked[ref]
-            if (queue == null) tombstones -= ref else synchronized(queue) { tombstones -= ref }
+            if (queue == null) tombstones -= ref else withParkQueueMonitor(queue) { tombstones -= ref }
         }
     }
 
@@ -944,37 +1086,80 @@ class LocationRegistry {
      * guard is bypassed in two announcements: unpublish the incumbent, then
      * publish the now-fresh ref.
      *
-     * Ownership is the same nullable-[PeerId] equality as [publishFromPeer].
-     * Consequently, one anonymous connection may retract another anonymous
-     * connection's binding; named and anonymous peers cannot retract each
-     * other's bindings. Anonymous capture protection requires naming the peer
-     * today and remains future opt-in boundary-policy work for unnamed peers;
-     * the Open path deliberately keeps this behavior.
+     * [anonymousOwnership] has the same rule as [publishFromPeer]. Shared keeps
+     * the exact nullable-[PeerId] equality used by the Open path. PerConnection
+     * compares anonymous [sink] identities; a refused retraction also drops a
+     * deferred claim made by that sink, while an owning connection's admitted
+     * retraction installs the latest surviving claim after [onUnpublish].
      *
-     * Returns the incumbent on refusal and changes nothing; otherwise removes
-     * the binding under the ref's queue lock and fires [onUnpublish] as
-     * [mirrorUnpublish] does.
+     * Returns the incumbent on refusal and changes no location (a refused
+     * PerConnection retraction may withdraw that sink's own deferred claim);
+     * otherwise removes the binding under the ref's queue lock and fires
+     * [onUnpublish] as [mirrorUnpublish] does.
      */
-    internal fun unpublishFromPeer(ref: CellRef, peer: PeerId?): RemotePublishRefusal? {
+    internal fun unpublishFromPeer(
+        ref: CellRef,
+        peer: PeerId?,
+        sink: InvocationSink,
+        anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
+    ): RemotePublishRefusal? {
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) enablePerConnectionOwnership()
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-        val refusal = synchronized(queue) {
+        var applyDeferred = false
+        val refusal = withParkQueueMonitor(queue) {
             val incumbent = locations[ref]
             val conflicts = when (incumbent) {
                 is Local -> incumbent.host.hosts(ref)
-                is Remote -> incumbent.peer != peer
+                is Remote -> when (anonymousOwnership) {
+                    AnonymousOwnership.Shared -> incumbent.peer != peer
+                    AnonymousOwnership.PerConnection ->
+                        if (incumbent.peer == null && peer == null) incumbent.sink !== sink
+                        else incumbent.peer != peer
+                }
                 null -> false
             }
             if (conflicts) {
+                if (anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    peer == null && incumbent is Remote && incumbent.peer == null &&
+                    deferredAnonymousClaims[ref] === sink
+                ) {
+                    deferredAnonymousClaims.remove(ref)
+                }
                 RemotePublishRefusal(incumbent!!)
             } else {
+                applyDeferred = anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    peer == null && incumbent is Remote && incumbent.peer == null
                 locations.remove(ref)
                 instances.remove(ref)
                 descriptions.remove(ref)
                 null
             }
         }
-        if (refusal == null) onUnpublish.forEach { notify(it, ref) }
+        if (refusal == null) {
+            onUnpublish.forEach { notify(it, ref) }
+            if (applyDeferred) applyDeferredAnonymousClaim(ref)
+        }
         return refusal
+    }
+
+    /** Install and consume a still-live deferred claimant, if [ref] remains free. */
+    private fun applyDeferredAnonymousClaim(ref: CellRef) {
+        val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+        val installed = withParkQueueMonitor(queue) {
+            if (locations[ref] != null) {
+                false
+            } else {
+                val claimant = deferredAnonymousClaims[ref]
+                if (claimant == null) {
+                    false
+                } else {
+                    installLocked(ref, Remote(claimant, peer = null), queue)
+                    deferredAnonymousClaims.remove(ref)
+                    true
+                }
+            }
+        }
+        if (installed) onPublish.forEach { notify(it, ref) }
     }
 
     /** Announcement-fed remote unpublish; deliberately does not re-announce (mirrors [mirrorLink]). */
@@ -1001,17 +1186,85 @@ class LocationRegistry {
      * terminates, instead of recursing through a half-emptied map. The batch is
      * also what makes a listener's own re-read of this registry answer about a
      * fully disconnected peer rather than an arbitrary prefix of one.
+     *
+     * Location removal is lock-free even after
+     * [AnonymousOwnership.PerConnection] has been used. Deferred-claim cleanup
+     * still runs under each ref's park-queue monitor, but when this send-failure
+     * path is entered from a replay or publish drain it is queued until the
+     * sender exits its outermost monitor. Thus a sender holding queue X never
+     * waits for queue Y; an ordinary close-path call that holds no queue still
+     * finishes the same reconciliation synchronously before returning. A
+     * registry that has never used `PerConnection` keeps the original body
+     * below and takes no park-queue monitor at all.
      */
     fun unpublishRemotes(via: InvocationSink) {
-        val dropped = mutableListOf<CellRef>()
-        locations.entries.removeIf { entry ->
-            ((entry.value as? Remote)?.sink === via).also {
-                if (it) {
-                    instances.remove(entry.key)
-                    dropped += entry.key
+        if (enterSharedRetirement()) {
+            val dropped = mutableListOf<CellRef>()
+            try {
+                beforeSharedRemoteRemoval?.invoke()
+                locations.entries.removeIf { entry ->
+                    ((entry.value as? Remote)?.sink === via).also {
+                        if (it) {
+                            instances.remove(entry.key)
+                            dropped += entry.key
+                        }
+                    }
                 }
+            } finally {
+                anonymousOwnershipState.decrementAndGet()
+            }
+            dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
+            return
+        }
+
+        val candidates = linkedSetOf<CellRef>()
+        val dropped = linkedSetOf<CellRef>()
+        locations.forEach { (ref, location) ->
+            if ((location as? Remote)?.sink === via && removeRemoteLocation(ref, via)) {
+                candidates += ref
+                dropped += ref
+            }
+        }
+        deferredAnonymousClaims.forEach { (ref, claimant) ->
+            if (claimant === via) candidates += ref
+        }
+        afterOutermostQueueMonitor {
+            finishRemoteRetirement(via, candidates, dropped)
+        }
+    }
+
+    /** Finish one lock-free retirement once this thread holds no park-queue monitor. */
+    private fun finishRemoteRetirement(
+        via: InvocationSink,
+        candidates: Set<CellRef>,
+        initiallyDropped: Set<CellRef>,
+    ) {
+        val dropped = initiallyDropped.toMutableSet()
+        candidates.forEach { ref ->
+            val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+            withParkQueueMonitor(queue) {
+                if (deferredAnonymousClaims[ref] === via) {
+                    deferredAnonymousClaims.remove(ref)
+                }
+                if (removeRemoteLocation(ref, via)) dropped += ref
+                if (locations[ref] == null) instances.remove(ref)
             }
         }
         dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
+        dropped.forEach(::applyDeferredAnonymousClaim)
+    }
+
+    /** Remove only the binding still routed through [via], despite a concurrent replacement. */
+    private fun removeRemoteLocation(ref: CellRef, via: InvocationSink): Boolean {
+        var removed = false
+        locations.computeIfPresent(ref) { _, current ->
+            if (current is Remote && current.sink === via) {
+                removed = true
+                null
+            } else {
+                current
+            }
+        }
+        return removed
     }
 }
