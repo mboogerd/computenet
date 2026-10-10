@@ -927,6 +927,116 @@ class TrustBoundaryTest {
     }
 
     /**
+     * The same two-sender failure with PerConnection state active and a live
+     * deferred claimant on each ref. Retirement still removes locations
+     * immediately, but claim reconciliation waits until each sender has left
+     * the park-queue monitor it entered through replay.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection two senders mid-replay retire and admit deferred claims`() {
+        repeat(500) { round ->
+            val registry = LocationRegistry()
+            val refs = listOf(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()))
+            val bothMidReplay = java.util.concurrent.CyclicBarrier(2)
+            val dead = object : InvocationSink {
+                override fun deliver(invocation: HostedPortInvocation) {
+                    bothMidReplay.await(20, java.util.concurrent.TimeUnit.SECONDS)
+                    registry.unpublishRemotes(this)
+                    throw IntakeClosedException(invocation.cellRef)
+                }
+            }
+            val claimants = refs.associateWith { InvocationSink { } }
+            refs.forEach { ref ->
+                registry.hold(ref)
+                registry.publishFromPeer(
+                    ref,
+                    dead,
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                ) shouldBe null
+                registry.publishFromPeer(
+                    ref,
+                    claimants.getValue(ref),
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                )!!.deferred.shouldBeTrue()
+                registry.deliver(
+                    HostedPortInvocation(
+                        ref, "inlet", HostedPortInvocation.Type.PORT_API,
+                        Invocation("provide", listOf("java.lang.Object"), listOf("parked")),
+                    ),
+                )
+            }
+
+            val senders = refs.map { ref ->
+                Thread { registry.release(ref) }.apply { isDaemon = true; start() }
+            }
+            senders.forEach { it.join(10_000) }
+
+            (round to senders.map { it.isAlive }) shouldBe (round to listOf(false, false))
+            refs.forEach { ref ->
+                val location = registry.location(ref) as LocationRegistry.Remote
+                location.sink shouldBeSameInstanceAs claimants.getValue(ref)
+                registry.parkedFor(ref).shouldBeEmpty()
+            }
+        }
+    }
+
+    /**
+     * A Shared retirement may have selected its monitor-free path immediately
+     * before the registry's first PerConnection admission. The admission waits
+     * for that already-entered scan, so it observes the ref as free and installs
+     * directly instead of recording a claim the Shared scan would strand.
+     */
+    @Test
+    fun `computenet-ddurc - first PerConnection admission cannot race behind a Shared retire scan`() {
+        val sharedScanEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseSharedScan = java.util.concurrent.CountDownLatch(1)
+        val perConnectionWaiting = java.util.concurrent.CountDownLatch(1)
+        val registry = LocationRegistry(
+            beforeSharedRemoteRemoval = {
+                sharedScanEntered.countDown()
+                releaseSharedScan.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+            },
+            onPerConnectionWait = perConnectionWaiting::countDown,
+        )
+        val ref = CellRef(UUID.randomUUID())
+        val owner = InvocationSink { }
+        val claimant = InvocationSink { }
+        registry.publish(ref, owner)
+
+        val retirer = Thread { registry.unpublishRemotes(owner) }.apply {
+            isDaemon = true
+            start()
+        }
+        sharedScanEntered.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        val refusal = java.util.concurrent.atomic.AtomicReference<LocationRegistry.RemotePublishRefusal?>()
+        val publisher = Thread {
+            refusal.set(
+                registry.publishFromPeer(
+                    ref,
+                    claimant,
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                ),
+            )
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        perConnectionWaiting.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        releaseSharedScan.countDown()
+        retirer.join(10_000)
+        publisher.join(10_000)
+
+        listOf(retirer.isAlive, publisher.isAlive) shouldBe listOf(false, false)
+        refusal.get() shouldBe null
+        registry.location(ref) shouldBe LocationRegistry.Remote(claimant, peer = null)
+    }
+
+    /**
      * The named/anonymous boundary remains protected in both directions even
      * though two anonymous connections share ownership: concrete [PeerId] and
      * null never compare equal. Both arms use independent loopback peerings and
