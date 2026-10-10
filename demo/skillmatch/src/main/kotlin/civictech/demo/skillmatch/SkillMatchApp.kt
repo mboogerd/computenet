@@ -268,17 +268,6 @@ class SkillMatchApp(port: Int = 8080) {
     private val marketView: ObservationSink<Map<String, MarketEntry>> =
         host.observe(refs.market.ref, View.map())
 
-    internal val alignedGroups: Set<String> = emptySet()
-
-    internal val observationGroups: Map<String, String> = linkedMapOf(
-        "candSkills" to "candSkills",
-        "jobSkills" to "jobSkills",
-        "matches" to "matches",
-        "gap" to "gap",
-        "qualification" to "qualification",
-        "market" to "market",
-    )
-
     internal fun observationSnapshots(): Map<String, Any?> = linkedMapOf(
         "candSkills" to candSkillsView.current(),
         "jobSkills" to jobSkillsView.current(),

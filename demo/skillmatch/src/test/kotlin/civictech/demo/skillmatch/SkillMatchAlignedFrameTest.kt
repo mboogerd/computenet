@@ -4,30 +4,8 @@ import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class SkillMatchAlignedFrameTest {
-
-    @Test
-    fun `cross-root derived views use independent point-consistent groups`() {
-        val app = SkillMatchApp(port = 0).start()
-        try {
-            assertEquals(
-                mapOf(
-                    "candSkills" to "candSkills",
-                    "jobSkills" to "jobSkills",
-                    "matches" to "matches",
-                    "gap" to "gap",
-                    "qualification" to "qualification",
-                    "market" to "market",
-                ),
-                app.observationGroups,
-            )
-            assertTrue(app.alignedGroups.isEmpty(), "skillmatch must not align across candidate/job roots")
-        } finally {
-            app.stop()
-        }
-    }
 
     @Test
     fun `candidate-only wave reaches every point-consistent view without buffering`() {
@@ -48,7 +26,6 @@ class SkillMatchAlignedFrameTest {
                 app.observationSnapshots() == expected
             }
             assertEquals(expected, app.observationSnapshots())
-            assertTrue(app.alignedGroups.isEmpty(), "candidate-only wave must leave no aligned group buffered")
         } finally {
             app.stop()
         }
@@ -73,7 +50,6 @@ class SkillMatchAlignedFrameTest {
                 app.observationSnapshots() == expected
             }
             assertEquals(expected, app.observationSnapshots())
-            assertTrue(app.alignedGroups.isEmpty(), "job-only wave must leave no aligned group buffered")
         } finally {
             app.stop()
         }

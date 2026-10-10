@@ -34,7 +34,14 @@ class SkillMatchInspectorTest {
                 "qualification", "gap", "supply", "demand", "market",
             ).forEach { name -> assertTrue(""""name":"$name"""" in json, "missing node $name: $json") }
 
-            // plus one unnamed point-consistent sink per observed view
+            // plus one unnamed point-consistent sink per observed view, and no
+            // aligned composite: every derived view crosses both roots (F-27)
+            assertEquals(
+                6,
+                json.split("\"typeFqn\":\"civictech.cell.observe.ObserveCell\"").size - 1,
+                "expected six independent ObserveCell sinks: $json",
+            )
+            assertTrue("AlignedCompositeCell" !in json, "skillmatch aligns no views: $json")
             assertEquals(16, json.split("\"typeFqn\"").size - 1, "unexpected node count: $json")
             assertEquals(18, json.split("\"role\":\"CONSUME\"").size - 1, "unexpected edge count: $json")
 
