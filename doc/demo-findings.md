@@ -1882,6 +1882,33 @@ single `observeAligned` sink; `votes`, `wanted` and `shared` stay on
 point-consistent `host.observe` hubs, each individually satisfying
 `[22-OBS-01]`.
 
+**Completion-handle adoption, explicitly not adopted (2026-10-10,
+`computenet-2tfmf`).** A measured implementation (commit `86c60a4a`, withdrawn)
+declared one dynamic `item-op` write, stamped add/remove/remove-mine through
+it, and blocked the HTTP operation on `visibilityOf(wave)` for the
+`{items, produce}` group. The in-process add case worked: its handle completed
+only after the current aligned frame contained both the item and its derived
+produce membership. `TwoJvmConvergenceTest`'s `` `a remove by a user who did
+not add the item converges on both JVMs` `` then stalled until its 5-minute
+timeout. The stalled request was not the union-scoped `remove` — that one
+completed and the test moved on — but the `remove-mine` that follows it: bob
+removing, from his own writer, an item only alice had added. That operation is
+ineffective by construction, and `SetCell`'s `remove` of an element it does not
+hold returns without emitting a delta or an ack, so the stamped wave never
+reaches the sink and its handle is never retired. On that reading of the code
+the stall needs neither a second JVM nor a peer link (not separately measured
+in one JVM). This is `FrontierWitness.visibilityOf`'s documented
+behaviour, not a kernel defect: a handle for a wave the sink never witnesses
+stays outstanding until a later wave of the same source retires, the sink
+closes, or the caller times out
+(`kernel/src/main/kotlin/civictech/cell/observe/Visibility.kt`). The withdrawn
+implementation waited with an unbounded `join`. Adopting the handle in shopping
+therefore needs an answer for ineffective item operations — the writer and
+union ops return `Unit`, so the demo cannot tell an ineffective write from a
+slow one without a caller-side timeout or a kernel-side ack for an ineffective
+stamped command — and that is outside this item, so shopping retains its
+existing write behavior.
+
 **Escape, explicitly unchosen**: a drop-all absorbing edge from `votesUnion`
 into the `items`/`produce` arm would emit a `Progress` absorb-ack for every
 vote wave and make a four-view sink "work" by construction. This is not
