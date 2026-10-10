@@ -18,6 +18,9 @@ import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo
 import civictech.cell.replication.Replication
+import civictech.cell.replication.SignedWrite
+import civictech.cell.replication.TransferAuthority
+import civictech.cell.replication.WriteAuthority
 import civictech.concord.driver.CellId
 import civictech.concord.driver.HostId
 import civictech.concord.driver.LinkResult
@@ -95,6 +98,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * here refuses the co-placed shape.
      */
     private val replications = IdentityHashMap<ManagedHost, Replication>()
+    private val writeSigning = StubWriteSigning()
 
     private fun replicationFor(host: ManagedHost): Replication =
         replications.getOrPut(host) { Replication(driver.registryOf(host)) }
@@ -102,6 +106,20 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     /** Stable logical id per `replica-of` group; instance ids counted within a group. */
     private val logicalIds = LinkedHashMap<String, UUID>()
     private val instanceCounters = LinkedHashMap<String, Long>()
+
+    /**
+     * Exact envelopes produced by ordinary `signed-apply` steps, keyed only by
+     * neutral scenario vocabulary. A replay reuses one of these objects rather
+     * than reconstructing its driver-owned author counter or merge tags.
+     */
+    private data class SignedApplyKey(
+        val logicalId: UUID,
+        val actor: String,
+        val op: String,
+        val value: Value,
+    )
+
+    private val signedApplies = LinkedHashMap<SignedApplyKey, SignedWrite>()
 
     /** The routed cross-host stream target: property `inlet` binds the target cell's `inlet` port. */
     private interface DeltaInletProxy {
@@ -196,7 +214,14 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * identical to a `replica-of` cell with no `interest:` (42-REPL-01/`42-REPL-LATE-01`
      * keep passing unchanged).
      */
-    fun spawnReplica(hostId: HostId, cellId: CellId, type: String, logical: String, interest: Value? = null) {
+    fun spawnReplica(
+        hostId: HostId,
+        cellId: CellId,
+        type: String,
+        logical: String,
+        interest: Value? = null,
+        authority: Value? = null,
+    ) {
         val host = driver.hostFor(if (hostId == "") null else hostId)
         val logicalId = logicalIds.getOrPut(logical) { UUID.randomUUID() }
         val instanceId = (instanceCounters[logical] ?: 0L).also { instanceCounters[logical] = it + 1 }
@@ -230,7 +255,18 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         // `replicate` spawns the replica on the host and wires the gossip mesh to
         // every peer already published under this logical id (and, via onPublish,
         // every peer that joins later).
-        replicationFor(host).replicate(replica, host)
+        val principal = parseAuthority(authority)
+        if (principal == null) {
+            replicationFor(host).replicate(replica, host)
+        } else {
+            replicationFor(host).replicate(
+                replica,
+                host,
+                authority = WriteAuthority.Principal(writeSigning.principal(principal)),
+                signer = writeSigning.signer(principal),
+                verifier = writeSigning.verifier,
+            )
+        }
 
         // A co-hosted read companion: the replica re-emits every effective delta
         // (local writes AND merged gossip — `applyRemote` → `outlet.originate`)
@@ -254,6 +290,133 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
             viewKind = built.viewKind,
             log = built.observations ?: mutableListOf(),
         )
+    }
+
+    /** Drive one author-signed set delta through the target replica's gossip intake. */
+    fun signedApply(cellId: CellId, actor: String, op: String, value: Value) {
+        val target = authorityTarget(cellId)
+        val payload = signedSetDelta(target, actor, op, value)
+        val write = writeSigning.signed(actor, target.ref.id, payload)
+        driveSigned(target, write)
+        signedApplies[SignedApplyKey(target.ref.id, actor, op, value)] = write
+    }
+
+    /** Drive an otherwise valid signed set delta after corrupting only its signature. */
+    fun forgeSignedApply(cellId: CellId, actor: String, op: String, value: Value) {
+        val target = authorityTarget(cellId)
+        val payload = signedSetDelta(target, actor, op, value)
+        driveSigned(target, writeSigning.forged(actor, target.ref.id, payload))
+    }
+
+    /** Re-drive the exact envelope from the most recent matching ordinary signed apply. */
+    fun replaySignedApply(cellId: CellId, actor: String, op: String, value: Value) {
+        val target = authorityTarget(cellId)
+        val key = SignedApplyKey(target.ref.id, actor, op, value)
+        val write = signedApplies[key]
+            ?: throw UnsupportedCatalogBinding(
+                "replay-signed-apply at '$cellId' has no prior matching signed-apply " +
+                    "for actor '$actor', op '$op' and value '$value'",
+            )
+        driveSigned(target, write)
+    }
+
+    /** Drive a signed principal-transfer operation through the same admission path as a write. */
+    fun transferAuthority(cellId: CellId, actor: String, to: String) {
+        val target = authorityTarget(cellId)
+        val payload = TransferAuthority(writeSigning.principal(to))
+        val write = writeSigning.signed(actor, target.ref.id, payload)
+        // The target adapter relays an admitted transfer on its mesh outlet,
+        // as it relays a data write; every receiving adapter still verifies
+        // and authorizes it independently.
+        driveSigned(target, write)
+    }
+
+    /**
+     * Read the authoritative per-adapter tally, or the structured host audit
+     * records when a principal filter is present. The hosted denial record is
+     * the surface that preserves `BoundaryDenial.principal`; the sink's total
+     * alone deliberately does not retain records.
+     */
+    fun writeDenials(cellId: CellId, principal: String?): Long {
+        val target = driver.cells[cellId]
+            ?: throw UnsupportedCatalogBinding("write-denials target '$cellId' is not a spawned cell")
+        val adapter = replicationFor(target.host).authorityOf(target.ref)
+            ?: throw UnsupportedCatalogBinding(
+                "write-denials at '$cellId': no write-authority adapter is installed, and answering 0 " +
+                    "would make an unobserved boundary pass vacuously",
+            )
+        val sink = adapter.boundaryDenials["write-authority"]
+            ?: throw UnsupportedCatalogBinding("write-denials at '$cellId': adapter has no write-authority sink")
+        if (principal == null) return sink.denialCount
+
+        val adapterMarker = "on ${adapter.ref}:"
+        return driver.deadLetters().count { record ->
+            record.principal == principal && adapterMarker in record.reason
+        }.toLong()
+    }
+
+    private fun authorityTarget(cellId: CellId): KernelDriver.Bound {
+        val target = driver.cells[cellId]
+            ?: throw UnsupportedCatalogBinding("signed write target '$cellId' is not a spawned cell")
+        if (replicationFor(target.host).authorityOf(target.ref) == null) {
+            throw UnsupportedCatalogBinding(
+                "signed write target '$cellId' has no write-authority adapter; declare authority on a replica-of cell",
+            )
+        }
+        if (target.cell !is SetCell<*>) {
+            throw UnsupportedCatalogBinding(
+                "signed-apply is bound only for authority-bearing set-source replicas; '$cellId' is ${target.type}",
+            )
+        }
+        return target
+    }
+
+    private fun signedSetDelta(
+        target: KernelDriver.Bound,
+        actor: String,
+        op: String,
+        value: Value,
+    ): SetDelta<Any?> {
+        val element = KernelCatalog.unwrap(value)
+        return when (op) {
+            "add" -> SetDelta(
+                adds = mapOf(element to setOf(writeSigning.freshTag(actor, target.ref.id))),
+            )
+            "remove" -> {
+                @Suppress("UNCHECKED_CAST")
+                val snapshot = (target.cell as SetCell<Any?>).snapshot() as Map<String, Any?>
+                val adds = snapshot["adds"] as? Map<*, *> ?: emptyMap<Any?, Any?>()
+                val dels = snapshot["dels"] as? Map<*, *> ?: emptyMap<Any?, Any?>()
+                val live = (adds[element] as? Collection<*>)
+                    .orEmpty()
+                    .filterIsInstance<Timestamp>()
+                    .toSet() - (dels[element] as? Collection<*>).orEmpty().filterIsInstance<Timestamp>().toSet()
+                if (live.isEmpty()) SetDelta()
+                else SetDelta(
+                    dels = mapOf(element to (live + writeSigning.freshTag(actor, target.ref.id))),
+                )
+            }
+            else -> throw UnsupportedCatalogBinding(
+                "signed-apply on '${target.type}' supports only op 'add' or 'remove', not '$op'",
+            )
+        }
+    }
+
+    private fun driveSigned(target: KernelDriver.Bound, write: SignedWrite) {
+        val routed = HostedCellProxy.create(
+            target.ref,
+            driver.registryOf(target.host),
+            GossipInletProxy::class.java,
+        ) as GossipInletProxy
+        routed.deltaInlet.call.propagate(write)
+    }
+
+    private fun parseAuthority(value: Value?): String? {
+        if (value == null) return null
+        val fields = (value as? Value.MapVal)?.entries
+            ?: throw UnsupportedCatalogBinding("authority must be a map with one principal field")
+        return (fields["principal"] as? Value.StrVal)?.value?.takeIf { it.isNotBlank() }
+            ?: throw UnsupportedCatalogBinding("authority requires a non-blank principal")
     }
 
     /**

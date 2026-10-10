@@ -18,8 +18,8 @@ import kotlin.test.assertTrue
 
 /**
  * The Eisenhower triage board end to end (feature computenet-i00bh): seeding a
- * standing round from a [CandidateSource], [Jev] rating alongside a human and an
- * agent, the quadrant on `/aggregate`, the bias-safe `/worklist`, and journal
+ * standing round from a [CandidateSource], [BeadsHeuristic] rating into the AI
+ * score beside a human and an agent in the human one, the quadrant on `/aggregate`, the bias-safe `/worklist`, and journal
  * replay of a seeded round.
  *
  * No `bd` subprocess runs here — the seam takes a fixture source, which is the
@@ -35,7 +35,7 @@ class TriageBoardTest {
     /** Both axes floored: P3, no dependents, fresh → 1.0/1.0. */
     private val bottom = Candidate("computenet-bot", "Bottom epic", "the low one", "epic", 3, 0, 0)
 
-    /** No priority → Jev abstains on both axes, so this one arrives unrated. */
+    /** No priority → the heuristic abstains on both axes, so this one arrives unrated. */
     private val blind = Candidate("computenet-bld", "Blind epic", "", "epic", null, 5, 60)
 
     private fun source(vararg c: Candidate) = CandidateSource { c.toList() }
@@ -48,6 +48,9 @@ class TriageBoardTest {
 
     private fun JsonObject.num(key: String): Double? =
         (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content?.toDouble()
+
+    /** The row's AI side, or null while the AI population has not rated it. */
+    private fun JsonObject.ai(): JsonObject? = this["ai"] as? JsonObject
 
     private fun HttpProbe.awaitRow(id: String, predicate: (JsonObject) -> Boolean): JsonObject {
         val body = await(path = "/topics/triage/aggregate") { b -> row(b, id)?.let(predicate) == true }
@@ -86,11 +89,11 @@ class TriageBoardTest {
 
     /**
      * The whole phase-1 slice: real-shaped candidates in, a two-dimension
-     * Eisenhower topic out, ideas keyed by BEAD ID, Jev's ratings on the board
-     * and its abstention left genuinely unrated.
+     * Eisenhower topic out, ideas keyed by BEAD ID, the heuristic's ratings in
+     * the AI score and its abstention left genuinely unrated.
      */
     @Test
-    fun `seeding builds the Eisenhower round, keyed by bead id, with Jev rating and abstaining`() =
+    fun `seeding builds the Eisenhower round, keyed by bead id, with the heuristic rating and abstaining`() =
         withApp(tmpJournal()) { app, probe ->
             assertEquals(3, seedBeadsTriage(app, source(top, bottom, blind)))
 
@@ -107,23 +110,46 @@ class TriageBoardTest {
             )
 
             // the idea id IS the bead id — no slug of the title, so Phase 2 needs no lookup table
-            val t = probe.awaitRow("computenet-top") { it.num("score") != null }
+            val t = probe.awaitRow("computenet-top") { it.ai()?.num("score") != null }
             assertEquals("Top epic", t["title"]!!.jsonPrimitive.content)
-            assertEquals(9.0, t.num("score"), "importance 9 and urgency 9, equally weighted")
-            assertEquals("do", t["quadrant"]!!.jsonPrimitive.content)
+            assertEquals(9.0, t.ai()!!.num("score"), "importance 9 and urgency 9, equally weighted")
+            assertEquals("do", t.ai()!!["quadrant"]!!.jsonPrimitive.content)
+            // the heuristic is not a human: the human side is untouched and nothing is ranked
+            assertEquals(JsonNull, t["score"], "$t")
+            assertEquals(JsonNull, t["rank"], "$t")
+            assertEquals(0, t["raters"]!!.jsonPrimitive.content.toInt())
 
-            val b = probe.awaitRow("computenet-bot") { it.num("score") != null }
-            assertEquals(1.0, b.num("score"))
-            assertEquals("drop", b["quadrant"]!!.jsonPrimitive.content)
+            val b = probe.awaitRow("computenet-bot") { it.ai()?.num("score") != null }
+            assertEquals(1.0, b.ai()!!.num("score"))
+            assertEquals("drop", b.ai()!!["quadrant"]!!.jsonPrimitive.content)
 
-            // Jev declined: absence, not a middling 5 — so the row is unranked and unplaced
-            val blindRow = row(probe.get("/topics/triage/aggregate").body(), "computenet-bld")!!
+            // the heuristic declined: absence, not a middling 5 — no AI side at all
+            val board = probe.get("/topics/triage/aggregate").body()
+            val blindRow = row(board, "computenet-bld")!!
+            assertEquals(JsonNull, blindRow["ai"], "$blindRow")
             assertEquals(JsonNull, blindRow["score"], "$blindRow")
-            assertEquals(JsonNull, blindRow["rank"], "$blindRow")
             assertEquals(JsonNull, blindRow["quadrant"], "$blindRow")
-            assertEquals(0L, blindRow["ratings"]!!.jsonPrimitive.content.toLong())
-            assertEquals(emptyMap(), blindRow["byDim"]!!.jsonObject)
+            // unranked rows read in the AI's order until a human rates
+            assertEquals(
+                listOf("computenet-top", "computenet-bot", "computenet-bld"),
+                parse(board)["ideas"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.content },
+            )
         }
+
+    /**
+     * Before the AI score, the heuristic wrote as participant `jev` into the
+     * HUMAN ratings. A re-seed over such a journal removes those rows, once.
+     */
+    @Test
+    fun `a re-seed drops the heuristic's legacy human-side ratings`() = withApp(tmpJournal()) { app, probe ->
+        seedBeadsTriage(app, source(top, bottom))
+        app.seedRating(TRIAGE_TOPIC, "computenet-top", Eisenhower.IMPORTANCE, LEGACY_HEURISTIC_PARTICIPANT, 9.0)
+        probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content == "1" }
+
+        seedBeadsTriage(app, source(top, bottom))
+        val t = probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content == "0" }
+        assertEquals(1, t.ai()!!["raters"]!!.jsonPrimitive.content.toInt(), "the heuristic still rates, AI-side: $t")
+    }
 
     /** A re-seed of an unchanged tracker writes no journal line: a standing round is re-seedable on every boot. */
     @Test
@@ -148,11 +174,11 @@ class TriageBoardTest {
             """{"participant":"ann","idea":"computenet-bot","dim":"importance","value":7}""",
             "/topics/triage/rate",
         )
-        probe.awaitRow("computenet-bot") { it["raters"]!!.jsonPrimitive.content.toInt() == 2 }
+        probe.awaitRow("computenet-bot") { it["raters"]!!.jsonPrimitive.content.toInt() == 1 }
 
         seedBeadsTriage(app, source(top)) // bottom is gone from the tracker's ready set
         val b = row(probe.get("/topics/triage/aggregate").body(), "computenet-bot")!!
-        assertEquals(2, b["raters"]!!.jsonPrimitive.content.toInt(), "ann's rating survived the re-seed: $b")
+        assertEquals(1, b["raters"]!!.jsonPrimitive.content.toInt(), "ann's rating survived the re-seed: $b")
     }
 
     /**
@@ -175,23 +201,22 @@ class TriageBoardTest {
         }
     }
 
-    // ── the three rater classes together ─────────────────────────────────
+    // ── the rater classes together ───────────────────────────────────
 
     /**
-     * Human, agent and Jev are one participant population. The agent judges
-     * pairwise and [PairwiseFit] turns that into ratings on the same scale; a
-     * human disagreeing with Jev sets `split` exactly as two humans would, and
-     * the facilitator's override stays advisory on top.
+     * Human and agent are one population; the heuristic is the AI one. The agent
+     * judges pairwise and [PairwiseFit] turns that into ratings on the human
+     * side; a human disagreeing with the heuristic shows as `diverges`, not as
+     * `split` — `split` is people disagreeing with people — and the
+     * facilitator's override stays advisory on top.
      */
     @Test
-    fun `human, agent and Jev rate as one population, and disagreement splits`() =
+    fun `human and agent rate as one population, the heuristic as the AI one, and disagreement diverges`() =
         withApp(tmpJournal()) { app, probe ->
             seedBeadsTriage(app, source(top, bottom))
-            // Jev alone: one rater per axis
-            var t = probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content.toInt() == 1 }
-            assertEquals("false", t["split"]!!.jsonPrimitive.content)
+            probe.awaitRow("computenet-top") { it.ai()?.num("score") != null }
 
-            // a human disagrees hard with Jev's 9.0 on importance → stdev >= 2.0 → split
+            // a human disagrees hard with the heuristic's 9.0 on importance
             assertEquals(
                 200,
                 probe.postJson(
@@ -199,14 +224,17 @@ class TriageBoardTest {
                     "/topics/triage/rate",
                 ).statusCode(),
             )
-            t = probe.awaitRow("computenet-top") { it["split"]!!.jsonPrimitive.content == "true" }
-            assertEquals(5.5, t["byDim"]!!.jsonObject["importance"]!!.jsonObject.num("mean"), "(9 + 2) / 2")
+            var t = probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content.toInt() == 1 }
+            assertEquals("false", t["split"]!!.jsonPrimitive.content, "one human cannot split: $t")
+            assertEquals(2.0, t["byDim"]!!.jsonObject["importance"]!!.jsonObject.num("mean"), "the human mean is ann's alone")
+            assertEquals(listOf("importance"), t["diverges"]!!.jsonArray.map { it.jsonPrimitive.content }, "|2 - 9| >= 2: $t")
 
-            // an agent judges pairwise on the same axis; its derived ratings join the same map
+            // an agent judges pairwise on the same axis; its derived ratings join the HUMAN map
             judge(probe, "agent-1", "computenet-top", "computenet-bot", "a")
-            t = probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content.toInt() == 3 }
+            t = probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content.toInt() == 2 }
             val importance = t["byDim"]!!.jsonObject["importance"]!!.jsonObject
-            assertEquals(3L, importance["n"]!!.jsonPrimitive.content.toLong(), "jev, ann and agent-1: $t")
+            assertEquals(2L, importance["n"]!!.jsonPrimitive.content.toLong(), "ann and agent-1: $t")
+            assertEquals(1, t.ai()!!["raters"]!!.jsonPrimitive.content.toInt(), "the AI side is the heuristic alone: $t")
 
             // the facilitator's final say rides on top, leaving the computed score visible
             assertEquals(
@@ -237,10 +265,10 @@ class TriageBoardTest {
             """{"participant":"ann","idea":"computenet-top","dim":"importance","value":2}""",
             "/topics/triage/rate",
         )
-        probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content.toInt() == 2 }
+        probe.awaitRow("computenet-top") { it["raters"]!!.jsonPrimitive.content.toInt() == 1 }
 
         val body = probe.get("/topics/triage/worklist?participant=agent-1&dim=importance").body()
-        for (leak in listOf("\"rank\"", "\"score\"", "\"quadrant\"", "\"mean\"", "\"stdev\"", "\"split\"", "\"raters\"", "\"byDim\"", "\"ann\"", "\"jev\"", "\"proposer\"")) {
+        for (leak in listOf("\"rank\"", "\"score\"", "\"quadrant\"", "\"mean\"", "\"stdev\"", "\"split\"", "\"raters\"", "\"byDim\"", "\"ann\"", "ai:beads-heuristic", "\"ai\"", "\"proposer\"")) {
             assertTrue(leak !in body, "the worklist leaked $leak: $body")
         }
         val w = parse(body)
@@ -314,7 +342,7 @@ class TriageBoardTest {
 
     // ── durability ───────────────────────────────────────────────────────
 
-    /** A seeded round, Jev's ratings and the human's all survive a restart over the same journal. */
+    /** A seeded round, the heuristic's ratings and the human's all survive a restart over the same journal. */
     @Test
     fun `a seeded round survives a restart`() {
         val journal = tmpJournal()
@@ -325,14 +353,16 @@ class TriageBoardTest {
                 "/topics/triage/rate",
             )
             judge(probe, "agent-1", "computenet-top", "computenet-bot", "a")
-            probe.awaitRow("computenet-bot") { it["raters"]!!.jsonPrimitive.content.toInt() == 3 }
+            probe.awaitRow("computenet-bot") { it["raters"]!!.jsonPrimitive.content.toInt() == 2 }
         }
         withApp(journal) { _, probe ->
-            val t = probe.awaitRow("computenet-top") { it.num("score") != null }
-            assertEquals("do", t["quadrant"]!!.jsonPrimitive.content, "$t")
-            // jev's urgency for `bottom` is 1.0 and ann's is 6.0, so the replayed mean is 3.5
-            val b = probe.awaitRow("computenet-bot") { it["raters"]!!.jsonPrimitive.content == "3" }
-            assertEquals(3.5, b["byDim"]!!.jsonObject["urgency"]!!.jsonObject.num("mean"), "$b")
+            val t = probe.awaitRow("computenet-top") { it.ai()?.num("score") != null }
+            assertEquals("do", t.ai()!!["quadrant"]!!.jsonPrimitive.content, "$t")
+            // ann's urgency for `bottom` is 6.0 and the heuristic's 1.0: both replayed, each on its own side
+            val b = probe.awaitRow("computenet-bot") { it["raters"]!!.jsonPrimitive.content == "2" && it.ai() != null }
+            assertEquals(6.0, b["byDim"]!!.jsonObject["urgency"]!!.jsonObject.num("mean"), "$b")
+            assertEquals(1.0, b.ai()!!["byDim"]!!.jsonObject["urgency"]!!.jsonObject.num("mean"), "$b")
+            assertTrue("urgency" in b["diverges"]!!.jsonArray.map { it.jsonPrimitive.content }, "$b")
 
             // the agent's judgements replayed too, so its derived rating is still there
             val w = worklist(probe, "agent-1")

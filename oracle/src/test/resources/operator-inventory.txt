@@ -55,6 +55,10 @@ CountCellPorts
 CountSetApi
 CountSetCellBase
 ExclusiveEvictionRefused
+FanInGatedFold
+FanInSettlementCapabilities
+FanInSettlementCapability
+FanInSettlementGate
 FilterCell
 FilterCellPorts
 FilterSetApi

@@ -115,9 +115,9 @@ class AlignmentServerTest {
         seed(probe)
         val topics = probe.get("/topics").body()
         assertTrue(
-            """"ideas":"everyone","boardVisibility":"after-rating","revealed":false,"gutCheck":false,"dotBudget":3,"dimensions":[""" +
-                """{"id":"effort","name":"Effort","weight":1.0000,"direction":"value","lowLabel":"","highLabel":""},""" +
-                """{"id":"impact","name":"Impact","weight":2.0000,"direction":"value","lowLabel":"","highLabel":""}]""" in topics,
+            """"ideas":"everyone","boardVisibility":"after-rating","revealed":false,"gutCheck":false,"dotBudget":3,"aiRaters":[],"aiRunning":false,"dimensions":[""" +
+                """{"id":"effort","name":"Effort","weight":1.0000,"direction":"value","lowLabel":"","highLabel":"","description":""},""" +
+                """{"id":"impact","name":"Impact","weight":2.0000,"direction":"value","lowLabel":"","highLabel":"","description":""}]""" in topics,
             topics,
         )
 
@@ -976,7 +976,7 @@ class AlignmentServerTest {
             }
             for (want in listOf(
                 """"ideas":"facilitator","boardVisibility":"after-reveal","revealed":true,"gutCheck":true,"dotBudget":2""",
-                """{"id":"effort","name":"Effort","weight":4.0000,"direction":"value","lowLabel":"none","highLabel":"a lot"}""",
+                """{"id":"effort","name":"Effort","weight":4.0000,"direction":"value","lowLabel":"none","highLabel":"a lot","description":""}""",
                 """"id":"b","title":"B edited","description":"new","proposer":"bob","note":"decided: ship it","noteBy":"bob"""",
                 """"override":6.5000""",
             )) {
@@ -1089,7 +1089,7 @@ class AlignmentServerTest {
         seedValueCost(probe)
         val topics = probe.get("/topics").body()
         assertTrue(
-            """{"id":"effort","name":"Effort","weight":1.0000,"direction":"cost","lowLabel":"an afternoon","highLabel":"a quarter"}""" in topics,
+            """{"id":"effort","name":"Effort","weight":1.0000,"direction":"cost","lowLabel":"an afternoon","highLabel":"a quarter","description":""}""" in topics,
             topics,
         )
 
@@ -1180,7 +1180,7 @@ class AlignmentServerTest {
             seedValueFactor(probe)
             val topics = probe.get("/topics").body()
             assertTrue(
-                """{"id":"sway","name":"Sway","weight":1.0000,"direction":"factor","lowLabel":"","highLabel":""}""" in topics,
+                """{"id":"sway","name":"Sway","weight":1.0000,"direction":"factor","lowLabel":"","highLabel":"","description":""}""" in topics,
                 topics,
             )
 

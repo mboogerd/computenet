@@ -6,7 +6,6 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.control.Magnitude
 import civictech.cell.link.catchUpOnLinked
-import civictech.cell.observe.View
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -282,58 +281,5 @@ class IssueNode(
         val values = positions.indices.map { p -> perLayer.map { it[p] } }
         val consensus = Softmax.shares(positions.map { heard[it]?.consensus ?: 0.5 })
         return Shares(root, positions, values, consensus, size)
-    }
-}
-
-/** Model A: folds every POSITIONS issue's [Shares] into `{ root -> latest shares }`, as [CredenceHubView] does credences. */
-class SharesHubView(private val onUpdate: () -> Unit = {}) : View<Shares, Map<CellRef, Shares>> {
-    @Volatile
-    private var shares: Map<CellRef, Shares> = emptyMap()
-
-    override fun apply(delta: Shares): Boolean {
-        val changed = shares[delta.source].let { it?.values != delta.values || it.consensus != delta.consensus }
-        if (changed) {
-            shares = shares + (delta.source to delta)
-            onUpdate()
-        }
-        return changed
-    }
-
-    override fun current(): Map<CellRef, Shares> = shares
-
-    override fun snapshot(): java.io.Serializable = HashMap(shares)
-
-    @Suppress("UNCHECKED_CAST")
-    override fun restore(state: java.io.Serializable) {
-        shares = HashMap(state as Map<CellRef, Shares>)
-    }
-}
-
-/**
- * The read model: folds every node's [Credence] into one immutable
- * `{ node -> latest credence }` map, run by a kernel `ObserveCell`. It is the
- * only place `snapshot()` reads credences from. [onUpdate] fires on every
- * effective change (the app's SSE dirty flag).
- */
-class CredenceHubView(private val onUpdate: () -> Unit = {}) : View<Credence, Map<CellRef, Credence>> {
-    @Volatile
-    private var credences: Map<CellRef, Credence> = emptyMap()
-
-    override fun apply(delta: Credence): Boolean {
-        val changed = credences[delta.source].let { it?.values != delta.values || it.neutral != delta.neutral || it.argued != delta.argued }
-        if (changed) {
-            credences = credences + (delta.source to delta)
-            onUpdate()
-        }
-        return changed
-    }
-
-    override fun current(): Map<CellRef, Credence> = credences
-
-    override fun snapshot(): java.io.Serializable = HashMap(credences)
-
-    @Suppress("UNCHECKED_CAST")
-    override fun restore(state: java.io.Serializable) {
-        credences = HashMap(state as Map<CellRef, Credence>)
     }
 }

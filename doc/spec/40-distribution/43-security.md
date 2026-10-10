@@ -52,6 +52,43 @@ links carry null. [43-ADMIT-01] Deny-by-default is a boundary control in both la
 — refusals surface as ordinary dead letters. Verified: `TrustBoundaryTest`
 (100 seeds + open-mode control).
 
+**Anonymous announcement ownership in Open mode.** Registry announcements
+from a named peer are ownership-protected by that `PeerId`: a different named
+peer cannot re-aim or retract its refs, and a named peer can neither capture an
+anonymous ref nor be captured by an anonymous peer. Announcements from
+anonymous (null-`PeerId`) peers are deliberately **not** ownership-protected
+from one another. All anonymous connections compare as the same owner, so any
+anonymous connection may re-aim or retract another anonymous connection's refs
+and subsequent deliveries follow the newly announced sink. A peer that needs
+the existing capture protection names itself with a `PeerId`.
+
+Stronger anonymous ownership is now an opt-in, receiver-side admission setting
+beside `Peering.Side.allow`, at the [43-ADMIT-02] seam:
+`Peering.Side.anonymousOwnership = AnonymousOwnership.PerConnection` (default
+`Shared`). It is neither a `PeerAuthPolicy` variant nor a `BoundaryPolicy`
+predicate. Under `PerConnection`, each anonymous announcement belongs to the
+connection that installed it: another anonymous connection's publish or
+retraction of that ref is refused with the same typed
+`announcement-admission`/`NOT_ADMITTED` denial used for a different named peer.
+The receiver defers a refused claim, then installs it when the owning
+connection retires through `unpublishRemotes` or retracts the ref; the latest
+claimant wins in Open's last-writer order. Thus a reconnect whose old
+connection is still half-open regains its refs without another announcement.
+`TrustBoundaryTest` and `WsReconnectSmokeTest` pin the loopback and WebSocket
+paths.
+
+This does not protect the post-disconnect race already present in Open: after
+the owner retires, a pending stranger may take the ref before the peer re-dials.
+A peer needing protection across its own absence still names a `PeerId`. The
+deferral is receiver-local; nothing crosses the wire, so there is no token,
+replay, or expiry model. `Shared` and the entire `PeerAuthPolicy.Open` path
+remain byte-for-byte unchanged, with no hello or frame field in any mode. Sink
+identity alone cannot distinguish an unrelated anonymous peer from a legitimate
+reconnect whose old connection is still half-open: both present a sink other
+than the owner's, and both are refused. That is why the refused claim is
+deferred rather than dropped; the receiver-side deferral is what lets that
+reconnect recover.
+
 Landed (phase 2, DSC1 — `computenet-ssa`): per-peer Ed25519 keypairs
 (`:identity`), a `PeerId` that today resolves 1:1 from the key's fingerprint
 (via the interim `PeerIdentityBinding`, `computenet-376c`), and a signed-nonce

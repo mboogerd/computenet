@@ -87,6 +87,12 @@ interface RegistryAnnounce {
  * cell's typed `"announcement-admission"` denial sink, naming [peer]; it never
  * throws and therefore never becomes a supervision fault.
  *
+ * When [anonymousOwnership] is [AnonymousOwnership.PerConnection], an
+ * anonymous connection may only refresh or retract locations installed through
+ * this mirror's [toPeer] sink. A conflicting anonymous publication is still
+ * refused and accounted here, but the registry defers its claim until the
+ * incumbent connection retires; no new announcement is required then.
+ *
  * "Per connection" means per connection *instance*, on every path: a socket
  * transport mints a mirror per socket open rather than per session object
  * (computenet-dqy.14), and [Peering.Loopback.heal] mints a fresh pair rather
@@ -102,6 +108,7 @@ class RegistryMirrorCell(
     private val toPeer: InvocationSink,
     initialPeer: PeerId? = null,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
+    private val anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
 ) : Cell, BoundaryDenialAccounting {
 
     /**
@@ -195,13 +202,18 @@ class RegistryMirrorCell(
             is LocationRegistry.Local -> "a cell actively hosted on this side"
             is LocationRegistry.Remote -> "peer ${location.peer ?: "<anonymous>"}"
         }
+        val deferred = if (refusal.deferred) {
+            "; the claim is deferred until the incumbent connection retires"
+        } else {
+            ""
+        }
         announcementSink.deny(
             seam = BoundarySeam.ADMISSION,
             reason = DenialReason.NOT_ADMITTED,
             principal = peer,
             subject = subject,
             detail = "$subject from ${peer ?: "<anonymous>"} for $ref refused: " +
-                "the ref is already bound to $incumbent",
+                "the ref is already bound to $incumbent$deferred",
             deniedArgs = emptyList(),
         )
     }
@@ -212,7 +224,8 @@ class RegistryMirrorCell(
         inlet.serve(object : RegistryAnnounce {
             override fun published(ref: CellRef) = synchronized(gate) {
                 if (attached) {
-                    registry.publishFromPeer(ref, toPeer, peer)?.let { refuseCollision(ref, it) }
+                    registry.publishFromPeer(ref, toPeer, peer, anonymousOwnership)
+                        ?.let { refuseCollision(ref, it) }
                 } else {
                     refuse()
                 }
@@ -229,7 +242,7 @@ class RegistryMirrorCell(
 
             override fun unpublished(ref: CellRef) = synchronized(gate) {
                 if (attached) {
-                    registry.unpublishFromPeer(ref, peer)?.let {
+                    registry.unpublishFromPeer(ref, peer, toPeer, anonymousOwnership)?.let {
                         refuseCollision(ref, it, "RegistryAnnounce.unpublished")
                     }
                 } else {
@@ -409,6 +422,20 @@ sealed interface PeerAuthPolicy {
     data class RequireAuthenticated(
         val nonceRetentionMillis: Long = DEFAULT_NONCE_RETENTION_MILLIS,
     ) : PeerAuthPolicy
+}
+
+/**
+ * How a receiving [Peering.Side] attributes announcements whose [PeerId] is
+ * null. This is independent of [PeerAuthPolicy]: that policy decides whether
+ * an anonymous connection is admitted, while this policy decides whether
+ * admitted anonymous connections share announcement ownership.
+ */
+enum class AnonymousOwnership {
+    /** The Open-path rule: every anonymous connection compares as one owner. */
+    Shared,
+
+    /** Each anonymous connection owns its announcements through its connection sink. */
+    PerConnection,
 }
 
 /**
@@ -643,10 +670,22 @@ object Peering {
          * both paths it is the **receiving** side's binding that resolves the
          * peer's presented key (feature `computenet-5y8t.1`, decision D9).
          *
-         * It is last in the constructor so every existing positional and
-         * named `Side(...)` construction compiles unchanged.
+         * It remains defaulted so every existing positional and named
+         * `Side(...)` construction compiles unchanged.
          */
         val identityBinding: PeerIdentityBinding = PeerIdentityBinding.Interim,
+        /**
+         * Ownership of anonymous announcements received by this side. Under
+         * [AnonymousOwnership.Shared] (the default), null-[PeerId]
+         * connections retain the Open-path shared-owner rule. Under
+         * [AnonymousOwnership.PerConnection], a connection owns locations by
+         * sink identity and a refused replacement is re-admitted when the
+         * incumbent connection retires.
+         *
+         * This is last and defaulted so existing `Side(...)` constructions
+         * compile and behave unchanged.
+         */
+        val anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
     ) {
         /**
          * This side's signer, and therefore this side's announcement counter —
@@ -1346,7 +1385,12 @@ object Peering {
      * Callers that only wanted the ref read `.ref`.
      */
     fun spawnMirror(side: Side, toPeer: InvocationSink, peer: PeerId? = null): RegistryMirrorCell {
-        val mirror = RegistryMirrorCell(side.registry, toPeer, peer)
+        val mirror = RegistryMirrorCell(
+            side.registry,
+            toPeer,
+            peer,
+            anonymousOwnership = side.anonymousOwnership,
+        )
         side.bridgeHost.managementInlet.call.spawn(mirror)
         return mirror
     }

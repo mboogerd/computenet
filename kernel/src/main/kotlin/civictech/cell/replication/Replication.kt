@@ -22,6 +22,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.membrane.SignatureVerifier
 import java.util.*
 import civictech.cell.data.delta.WatermarkDelta
 import civictech.cell.data.delta.DeliveryTracking
@@ -75,6 +76,29 @@ class Replication(
     }
 
     private val localReplicas = mutableMapOf<UUID, MutableList<Replicable<*>>>()
+
+    private data class AuthorityBinding(
+        val authority: WriteAuthority,
+        val signer: WriteSigner,
+        val verifier: SignatureVerifier,
+    )
+
+    /** Authority adapters are lifecycle companions, never replica-set members. */
+    private val adapters = mutableMapOf<CellRef, AuthorityGossip>()
+    private val authorityBindings = mutableMapOf<CellRef, AuthorityBinding>()
+
+    /**
+     * One counter sequence per signing peer for this Replication's lifetime.
+     * A ref re-replicated here (rebind, evict-then-return, supersede) keeps
+     * signing above its earlier counters: peers retain those `(author, counter)`
+     * pairs, so restarting the sequence would refuse the owner's next writes
+     * as `REPLAY` while its own replica applied them. Cross-process restart is
+     * the incarnation's job (ermvz-D10), not this map's.
+     */
+    private val countingSigners = mutableMapOf<civictech.cell.link.PeerId, CountingWriteSigner>()
+
+    /** The local authority adapter for [ref], or null on the byte-identical open path. */
+    fun authorityOf(ref: CellRef): AuthorityGossip? = adapters[ref]
 
     /** The host each local replica was spawned on — needed to suspend/despawn it later (eviction). */
     private val hostOf = mutableMapOf<CellRef, ManagedHost>()
@@ -438,7 +462,13 @@ class Replication(
      * see [supersedeLocalInstance] for why the superseded instance's local
      * bookkeeping has to be dropped here rather than by a cooperative path.
      */
-    fun replicate(cell: Replicable<*>, host: ManagedHost) {
+    fun replicate(
+        cell: Replicable<*>,
+        host: ManagedHost,
+        authority: WriteAuthority = WriteAuthority.Open,
+        signer: WriteSigner? = null,
+        verifier: SignatureVerifier? = null,
+    ) {
         // PN-17 effect-authority formation refusal (spec 31 §Effects on instance
         // sets, plan §3b). A [Replicable] that is ALSO
         // [civictech.cell.evolve.Effectful] joining THIS mergeable mesh has no
@@ -474,6 +504,34 @@ class Replication(
                 hasAuthority = false,
             )
         }
+        val adapter = if (authority == WriteAuthority.Open) {
+            null
+        } else {
+            val requiredSigner = requireNotNull(signer) {
+                "write authority for ${cell.ref} requires a WriteSigner"
+            }
+            val requiredVerifier = requireNotNull(verifier) {
+                "write authority for ${cell.ref} requires a SignatureVerifier"
+            }
+            require(registry.instances.interestOf(cell.ref) is Interest.Total) {
+                "write authority for ${cell.ref} requires total interest"
+            }
+            val localDelta = (HostedCellProxy.create(cell.ref, host, ReplicaDeltaInlet::class.java)
+                as ReplicaDeltaInlet).deltaInlet.call
+            AuthorityGossip(
+                cell = cell,
+                authority = authority,
+                signer = countingSigners.getOrPut(requiredSigner.peerId) {
+                    CountingWriteSigner(requiredSigner)
+                },
+                verifier = requiredVerifier,
+                writeAhead = localDelta::propagate,
+                afterRecoveryApplied = { block ->
+                    host.recoveryAwareQuiescence().asFuture().thenRun(block)
+                    Unit
+                },
+            )
+        }
         val superseded = supersedeLocalInstance(cell)
         // computenet-uju5: a ref that returns here continues the tag lane its previous
         // incarnation left, instead of restarting the counter and re-minting tags peers
@@ -483,7 +541,36 @@ class Replication(
         departedTagLanes[cell.ref]?.let { high -> (cell as? TagLaneContinuity)?.continueTagLaneAbove(high) }
         localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
         hostOf[cell.ref] = host
+        if (adapter == null) {
+            adapters.remove(cell.ref)
+            authorityBindings.remove(cell.ref)
+        } else {
+            adapters[cell.ref] = adapter
+            authorityBindings[cell.ref] = AuthorityBinding(authority, signer!!, verifier!!)
+        }
         host.managementInlet.call.spawn(cell)
+        if (adapter != null) {
+            try {
+                host.spawnDurabilityCompanion(adapter, cell.ref)
+            } catch (failure: Throwable) {
+                try {
+                    host.rollbackSpawn(cell.ref)
+                } catch (cleanupFailure: Throwable) {
+                    failure.addSuppressed(cleanupFailure)
+                }
+                localReplicas[cell.ref.id]?.let { replicas ->
+                    replicas.remove(cell)
+                    if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
+                }
+                if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
+                linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
+                if (adapters[cell.ref] === adapter) {
+                    adapters.remove(cell.ref)
+                    authorityBindings.remove(cell.ref)
+                }
+                throw failure
+            }
+        }
         registry.instances.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
         trackDeliveries(cell, host, rehome = superseded)
     }
@@ -800,7 +887,7 @@ class Replication(
             // just flushed (computenet-078s closed that ordering wart).
             catchUpTarget?.let { link ->
                 @Suppress("UNCHECKED_CAST")
-                (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+                gossipOutlet(cell).linking.fireLinked(link)
             }
         }
         // computenet-uju5: the replica is leaving on a ref that may come back here. Carry
@@ -817,6 +904,8 @@ class Replication(
         hostOf.remove(cell.ref)
         linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
         partitionSuspended.remove(cell.ref)
+        adapters.remove(cell.ref)?.let { adapter -> host.managementInlet.call.despawn(adapter.ref) }
+        authorityBindings.remove(cell.ref)
         return true
     }
 
@@ -874,6 +963,8 @@ class Replication(
                 "continues the tag lane and the watermark row); candidate ${candidate.ref} != incumbent ${incumbent.ref}"
         }
         val ref = incumbent.ref
+        val authorityBinding = authorityBindings.remove(ref)
+        val adapter = adapters.remove(ref)
         if (carryTagState && incumbent is civictech.cell.Stateful && candidate is civictech.cell.Stateful) {
             candidate.restore(incumbent.snapshot())
         }
@@ -889,10 +980,18 @@ class Replication(
         // stamp while the local swap despawns and re-spawns, then let
         // CurrentPeer restore it for the caller.
         CurrentPeer.withStamp(null) {
+            adapter?.let { host.managementInlet.call.despawn(it.ref) }
             host.managementInlet.call.despawn(ref)
             // recovery: republish the candidate under the SAME ref and re-establish
             // this peer's gossip + watermark tracking (companion reused).
-            replicate(candidate, host)
+            if (authorityBinding == null) replicate(candidate, host)
+            else replicate(
+                candidate,
+                host,
+                authorityBinding.authority,
+                authorityBinding.signer,
+                authorityBinding.verifier,
+            )
         }
     }
 
@@ -946,7 +1045,7 @@ class Replication(
             // computenet-h50w): `cell` here is whatever object was linked, and
             // re-firing a DISCARDED one's outlet reaches nobody.
             @Suppress("UNCHECKED_CAST")
-            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+            gossipOutlet(cell).linking.fireLinked(link)
             return
         }
         // the proxy resolves the port by name; delta types are erased on this
@@ -962,8 +1061,12 @@ class Replication(
         val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
-        linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(sink, at = gossipRef(local.ref, other))
+        linked[key] = local to gossipOutlet(local).streamTo(sink, at = gossipRef(local.ref, other))
     }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun gossipOutlet(cell: Replicable<*>): FanOutlet<Propagate<Any?>> =
+        adapters[cell.ref]?.outlet ?: (cell.outlet as FanOutlet<Propagate<Any?>>)
 
     /**
      * The stable identity of the gossip subscription `local → other` carries on

@@ -133,6 +133,16 @@
 # that duplicate. No new cycle: nothing under civictech.cell.consistency
 # imports civictech.cell.observe (verified by grep), so the edge is one-way
 # and observe stays a sink package.
+# INT3 write authority: replication -> membrane ADDED — AuthorityState reuses
+# the existing SignatureVerifier seam implemented by :identity. Duplicating a
+# verifier in replication would create two meanings for the same signature
+# check and leave Ed25519SignatureVerifier implementing only one of them.
+# computenet-g58du: graph -> membrane and graph -> verify ADDED (ermvz-D16) —
+# ApplyContext forwards the SignatureVerifier seam to Replication.replicate for
+# authority-at-admission, and promotion casts graph-declared gates to
+# InvariantCell for invariant-gated evolution. These are real construction
+# dependencies; fully qualifying the references would only hide them from this
+# import-based ratchet.
 cell -> link
 cell -> port
 cell -> proxy
@@ -167,9 +177,11 @@ graph -> durability
 graph -> evolve
 graph -> host
 graph -> link
+graph -> membrane
 graph -> nature
 graph -> port
 graph -> replication
+graph -> verify
 host -> cell
 host -> control
 host -> durability
@@ -232,6 +244,7 @@ replication -> control
 replication -> data
 replication -> host
 replication -> link
+replication -> membrane
 replication -> nature
 replication -> port
 replication -> proxy

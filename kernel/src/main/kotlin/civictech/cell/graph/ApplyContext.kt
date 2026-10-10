@@ -22,6 +22,7 @@ import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Link
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
+import civictech.cell.membrane.SignatureVerifier
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
@@ -29,6 +30,9 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.identity
 import civictech.cell.replication.Replication
+import civictech.cell.replication.WriteAuthority
+import civictech.cell.replication.WriteSigner
+import civictech.cell.verify.InvariantCell
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -69,6 +73,8 @@ class ApplyContext(
     val journals: Map<String, Journal> = emptyMap(),
     val journalDirs: Map<String, File> = emptyMap(),
     val topology: Journal? = null,
+    val writeSigner: WriteSigner? = null,
+    val signatureVerifier: SignatureVerifier? = null,
 ) : TopologyApplier {
     private val journalBindings = ConcurrentHashMap<CellRef, Journal>()
     private val fold = MutableTopologyFold()
@@ -219,8 +225,13 @@ class ApplyContext(
         }
     }
 
+    /** Both write-authority seams are present; checked before journaling so a refusal leaves no record. */
+    internal fun hasAuthoritySeams(): Boolean = writeSigner != null && signatureVerifier != null
+
     internal fun applySpawn(event: TopoEvent.Spawn, prepared: Cell? = null): CellRef {
         check(!fold.containsHandle(event.handle)) { "duplicate handle '${event.handle}'" }
+        val authority = event.authority ?: WriteAuthority.Open
+        if (authority != WriteAuthority.Open && !hasAuthoritySeams()) throw missingAuthoritySeams(event.handle)
         event.journalId?.let { journalId ->
             bind(event.ref, journals[journalId] ?: throw missingJournal(event.handle, journalId))
         }
@@ -236,7 +247,7 @@ class ApplyContext(
                     "spawn step '${event.handle}': parameter 'replicated' requires a Replicable cell " +
                         "(built ${cell.javaClass.name})",
                 )
-            service.replicate(replicable, host)
+            service.replicate(replicable, host, authority, writeSigner, signatureVerifier)
             if (event.shadow) suppressShadow(cell)
             cell.ref
         } else if (event.shadow) {
@@ -553,7 +564,7 @@ class ApplyContext(
             candidate = prepared.candidate,
             policy = step.policy,
             gates = gates.map { (handle, cell) ->
-                cell as? civictech.cell.verify.InvariantCell<*, *>
+                cell as? InvariantCell<*, *>
                     ?: throw Promotion.PromotionAborted(
                         "PRECHECK",
                         "gate handle '$handle' (${cell.ref}) is not an InvariantCell",

@@ -1,0 +1,53 @@
+{
+  "id": "WV-PAYLOAD-SIGNEDWRITE-01",
+  "title": "SignedWrite with opaque payload and signature bytes",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": [
+    "WIR1-C05",
+    "WIR1-I01",
+    "WIR1-I02",
+    "WIR1-I03"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {
+        "id": "00000000-0000-0000-0000-000000000042"
+      },
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {
+          "type": "SignedWrite",
+          "fields": {
+            "logicalId": "00000000-0000-0000-0000-000000000042",
+            "author": {
+              "name": "alice"
+            },
+            "counter": 1048577,
+            "payload": [
+              1,
+              2,
+              3
+            ],
+            "signature": [
+              -4,
+              5,
+              6
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"SignedWrite\",{\"logicalId\":\"00000000-0000-0000-0000-000000000042\",\"author\":{\"name\":\"alice\"},\"counter\":1048577,\"payload\":[1,2,3],\"signature\":[-4,5,6]}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU2lnbmVkV3JpdGUiLHsibG9naWNhbElkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQyIiwiYXV0aG9yIjp7Im5hbWUiOiJhbGljZSJ9LCJjb3VudGVyIjoxMDQ4NTc3LCJwYXlsb2FkIjpbMSwyLDNdLCJzaWduYXR1cmUiOlstNCw1LDZdfV1dfQ=="
+  },
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`, following WV-PAYLOAD-WATERLINEDELTA-01's template. The SignedWrite registration's own vector (computenet-ermvz, ermvz-D9): `payload` and `signature` are opaque ByteArrays and encode as JSON number arrays (a negative byte included so sign handling is pinned); `counter` is a non-zero incarnation-shifted value (1 shl 20 or 1). covers [WIR1-C05], [WIR1-I01]-[WIR1-I03]."
+}

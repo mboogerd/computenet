@@ -46,6 +46,18 @@ interface Driver {
     /** Apply operation [op] (with optional [value]) to [cellId]. */
     fun apply(cellId: CellId, op: String, value: Value? = null)
 
+    /** Apply one signed set operation as scenario-local [actor] at an authority-bearing replica. */
+    fun signedApply(cellId: CellId, actor: String, op: String, value: Value)
+
+    /** Apply an otherwise valid signed set operation after corrupting only its signature. */
+    fun forgeSignedApply(cellId: CellId, actor: String, op: String, value: Value)
+
+    /** Re-deliver the exact envelope from the most recent prior matching [signedApply]. */
+    fun replaySignedApply(cellId: CellId, actor: String, op: String, value: Value)
+
+    /** Submit an authority transfer signed by [actor], naming scenario-local principal [to]. */
+    fun transferAuthority(cellId: CellId, actor: String, to: String)
+
     /** Drive the graph to quiescence within [budget] steps; report what settled. */
     fun quiesce(budget: Int): QuiesceReport
 
@@ -331,6 +343,13 @@ interface Driver {
     fun refusalCount(cellId: CellId): Long
 
     /**
+     * Count `write-authority` boundary denials at [cellId], optionally limited
+     * to records attributed to [principal]. A cell with no authority adapter
+     * must fail loudly rather than answer 0.
+     */
+    fun writeDenials(cellId: CellId, principal: String? = null): Long
+
+    /**
      * How many declarations made through [declareInterest] for family [cellId]
      * completed with a typed interest-spawn or budget refusal this run.
      */
@@ -435,6 +454,8 @@ data class DeadLetter(
     val host: HostId?,
     val cell: CellId?,
     val reason: String,
+    /** Author principal carried by a structured boundary-denial record, when present. */
+    val principal: String? = null,
 )
 
 /**

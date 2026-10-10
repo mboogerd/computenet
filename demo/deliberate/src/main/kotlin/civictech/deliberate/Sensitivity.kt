@@ -5,7 +5,6 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.control.Magnitude
 import civictech.cell.link.catchUpOnLinked
-import civictech.cell.observe.View
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -249,35 +248,6 @@ internal fun localPartials(
     }
     return influences.indices.map { i ->
         perLayer.map { it[i].first } to perLayer.map { it[i].second }
-    }
-}
-
-/**
- * The sensitivity read model: every node's latest [Sensitivity], folded by a
- * kernel `ObserveCell` like [CredenceHubView]. [onUpdate] fires on every
- * effective change.
- */
-class SensitivityHubView(private val onUpdate: () -> Unit = {}) : View<Sensitivity, Map<CellRef, Sensitivity>> {
-    @Volatile
-    private var sensitivities: Map<CellRef, Sensitivity> = emptyMap()
-
-    override fun apply(delta: Sensitivity): Boolean {
-        val was = sensitivities[delta.source]
-        val changed = was?.values != delta.values || was?.root != delta.root
-        if (changed) {
-            sensitivities = sensitivities + (delta.source to delta)
-            onUpdate()
-        }
-        return changed
-    }
-
-    override fun current(): Map<CellRef, Sensitivity> = sensitivities
-
-    override fun snapshot(): java.io.Serializable = HashMap(sensitivities)
-
-    @Suppress("UNCHECKED_CAST")
-    override fun restore(state: java.io.Serializable) {
-        sensitivities = HashMap(state as Map<CellRef, Sensitivity>)
     }
 }
 

@@ -4,7 +4,10 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.data.op.FrontierGateable
+import civictech.cell.data.op.QuorumSetCell
+import civictech.cell.data.op.UnionSetCell
 import civictech.cell.host.HostManagementApi
+import civictech.cell.host.HostTopologyView
 import civictech.cell.host.UpstreamAncestry
 import civictech.cell.link.Linked
 import civictech.cell.link.LinkRole
@@ -64,20 +67,32 @@ private class ViewAncestry(
  * Admit one aligned contributor set from the host's live Consume-link structure.
  *
  * Two rules apply, in order. First, every checked view's inclusive ancestry
- * must contain no ungated [FrontierGateable]. Second, a [CycleHead] or a
+ * must contain no operator whose output is not wave-complete. That includes an
+ * ungated [FrontierGateable] and a multi-input [QuorumSetCell] or [UnionSetCell]
+ * whose ancestry crosses an opaque host boundary: their eager path can advance
+ * one output edge before every input edge has settled. Their opt-in fan-in gate
+ * makes the output a valid frontier edge. Second, a [CycleHead] or a
  * [Replicable] whose `deltaInlet` is linked as a Consume re-origination point
  * may not sit on only one branch of shared upstream provenance. [unchecked]
  * exempts its named view from the first rule only.
  *
- * The walk sees links present during these synchronous management reads only.
- * Links added after construction are not rechecked, and bypass wiring absent
- * from the host's live link set reads as a root. Callers must serialize graph
- * construction around this call: the underlying live link collections are not
- * an atomic topology snapshot and are not safe to mutate concurrently. A
- * producer outside this host is opaque and admitted rather than guessed at.
+ * Every ancestry walk and re-origination-port read for one verdict runs inside
+ * one [HostManagementApi.inspectTopology] turn. Concurrent host topology
+ * mutations therefore order wholly before or after admission. Links added
+ * after that turn are not rechecked, and bypass wiring absent from the host's
+ * live link set reads as a root. A producer outside this host is opaque and
+ * admitted rather than guessed at.
  */
 internal fun admitAligned(
     api: HostManagementApi,
+    specs: Map<String, AlignedObserveBuilder.Spec>,
+    unchecked: Set<String>,
+): AdmissionVerdict = api.inspectTopology { topology ->
+    admitAlignedInTurn(topology, specs, unchecked)
+}
+
+private fun admitAlignedInTurn(
+    api: HostTopologyView,
     specs: Map<String, AlignedObserveBuilder.Spec>,
     unchecked: Set<String>,
 ): AdmissionVerdict {
@@ -94,7 +109,7 @@ internal fun admitAligned(
         if (view in unchecked) return@forEach
         val ancestry = ancestryByView.getValue(view)
         ancestry.cells.forEach { (ref, cell) ->
-            if (cell is FrontierGateable && !cell.frontierGated) {
+            if (cell.isUngatedAlignedAncestor(api, ref)) {
                 val verdict = AdmissionVerdict.Rejected.UngatedAncestor(
                     view = view,
                     cell = ref,
@@ -131,6 +146,36 @@ internal fun admitAligned(
     }
 
     return AdmissionVerdict.Admitted(opaque)
+}
+
+/**
+ * Whether [this] can expose a partial input wave on its outlet.
+ *
+ * The set fan-ins' eager mode can advance their single output edge on a real
+ * delta before another input edge settles an earlier wave. Fully local inputs
+ * share the inspected host's serialized execution context, and a single input
+ * has no sibling to outrun, so both stay admissible. A multi-input fan-in with
+ * opaque upstream ancestry must enable its coalescing output gate.
+ */
+private fun Cell.isUngatedAlignedAncestor(api: HostTopologyView, ref: CellRef): Boolean = when (this) {
+    is QuorumSetCell<*> ->
+        !frontierGated && hasMultipleConsumeInputs() && api.upstreamConsumeAncestors(ref).opaque.isNotEmpty()
+    is UnionSetCell<*> ->
+        !frontierGated && hasMultipleConsumeInputs() && api.upstreamConsumeAncestors(ref).opaque.isNotEmpty()
+    is FrontierGateable -> !frontierGated
+    else -> false
+}
+
+private fun Cell.hasMultipleConsumeInputs(): Boolean {
+    var inputs = 0
+    val ports = PortRegistry.of(this)
+    ports.names().forEach { name ->
+        val port = ports[name] as? Linked ?: return@forEach
+        port.linking.links.forEach { link ->
+            if (link.role == LinkRole.Consume && link.toPort === port) inputs++
+        }
+    }
+    return inputs > 1
 }
 
 private fun UpstreamAncestry.includingSelf(spec: AlignedObserveBuilder.Spec): ViewAncestry {

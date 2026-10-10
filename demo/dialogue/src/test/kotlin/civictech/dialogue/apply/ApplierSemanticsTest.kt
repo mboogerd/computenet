@@ -20,7 +20,6 @@ import civictech.dialogue.extract.ExtractedItem
 import civictech.dialogue.extract.ExtractedRelation
 import civictech.dialogue.extract.ExtractedStance
 import civictech.dialogue.extract.segmentContentHash
-import civictech.agora.cell.credenceOf
 import civictech.dialogue.mint.RelationMint
 import civictech.dialogue.mint.RelationProvenanceEntry
 import civictech.dialogue.mint.claimKey

@@ -193,14 +193,15 @@ function renderDrill() {
   const d = t.dimensions.find(x => x.id === drillDim);
   if (!idea || !d) { closeDrill(); return; }
   // gate open, idea and dimension present: the one state.ratings read in the Board slice
-  const ratings = state.ratings.filter(r => r.topic === t.id && r.idea === drillIdea && r.dim === drillDim);
+  // people only: the stats beside them are the human score's; the AI side is the one "AI x.x" line
+  const ratings = state.ratings.filter(r => r.topic === t.id && r.idea === drillIdea && r.dim === drillDim && !isAi(r.participant));
   const agg = state.aggregates[t.id];
   const row = agg ? agg.ideas.find(f => f.id === drillIdea) : undefined;
   el('drillTitle').textContent = idea.title;
   drillRenderDims(t, row);
   const outliers = drillOutliers(ratings);
   drillRenderPlot(t, d, ratings, row ? row.byDim[d.id] : undefined, outliers);
-  drillRenderStats(row ? row.byDim[d.id] : undefined);
+  drillRenderStats(row ? row.byDim[d.id] : undefined, row && row.ai ? row.ai.byDim[d.id] : undefined);
   drillRenderOutlier(ratings, outliers);
   drillRenderNote(t, idea);
 }
@@ -339,10 +340,12 @@ function drillRenderPlot(t, d, ratings, st, outliers) {
   if (refocus) refocus.focus();
 }
 
-function drillRenderStats(st) {
+/** The people's mean line, plus the AI mean on this dimension when the AI raters have one. */
+function drillRenderStats(st, ai) {
   const box = el('drillStats');
-  if (!st) { box.textContent = 'no aggregate for this dimension yet'; return; }
-  box.textContent = 'mean ' + st.mean.toFixed(1) + ' ± ' + st.stdev.toFixed(2) + ' · ' + st.n + (st.n === 1 ? ' rating' : ' ratings');
+  const aiTxt = ai ? ' · AI ' + ai.mean.toFixed(1) : '';
+  if (!st) { box.textContent = 'no aggregate for this dimension yet' + aiTxt; return; }
+  box.textContent = 'mean ' + st.mean.toFixed(1) + ' ± ' + st.stdev.toFixed(2) + ' · ' + st.n + (st.n === 1 ? ' rating' : ' ratings') + aiTxt;
 }
 
 function drillRenderOutlier(ratings, outliers) {

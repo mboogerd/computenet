@@ -1,13 +1,18 @@
 package civictech.cell.data.op
 
 import civictech.cell.BoundedStateful
+import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.StatePage
 import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
+import civictech.cell.control.Progress
+import civictech.cell.link.Link
+import civictech.cell.link.LinkRole
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeOpen
 import civictech.cell.protocol.ProtocolSupport
@@ -21,6 +26,134 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
+
+/** One deferred fan-in fold, applied only after every open input edge has settled its wave. */
+internal fun interface FanInGatedFold<T> {
+    fun apply(): T
+}
+
+/**
+ * Opt-in wave settlement for a single fan-in inlet with many physical edges.
+ *
+ * This is [WaveGate]'s one-inlet counterpart: real deltas and [Progress]
+ * advance a per-edge watermark, folds stay unapplied until every open Consume
+ * edge has settled the wave, and completed waves release in source/counter
+ * order. Catch-up/baseline traffic and stragglers remain immediate. The edge
+ * set is intentionally static and source-blind, so—like [WaveGate]—this mode is
+ * for lanes carrying one shared root's waves, not independent roots.
+ */
+internal class FanInSettlementGate<T>(
+    private val inlet: civictech.cell.port.FanInlet<*>,
+    private val onWave: (Timestamp, MessageContext?, List<FanInGatedFold<T>>) -> Unit,
+) {
+    private class EdgeState(
+        val link: Link,
+        val floors: Map<UUID, Long>,
+        var open: Boolean = true,
+    )
+
+    private class Wave<T> {
+        val folds = mutableListOf<FanInGatedFold<T>>()
+        var context: MessageContext? = null
+    }
+
+    private val edges = LinkedHashMap<UUID, EdgeState>()
+    private val watermark = mutableMapOf<UUID, MutableMap<UUID, Long>>()
+    private val flushedHighWater = mutableMapOf<UUID, Long>()
+    private val pending = LinkedHashMap<Timestamp, Wave<T>>()
+
+    val bufferedWaves: Int get() = pending.size
+
+    init {
+        inlet.onEdgeEvent { link, event ->
+            when (event) {
+                EdgeOpen -> edges[link.id] = EdgeState(link, flushedHighWater.toMap())
+                EdgeClose -> edges[link.id]?.open = false
+            }
+            flushReady()
+        }
+        ProtocolSupport.of(inlet).handle(Protocols.Progress) { link, message ->
+            val progress = message as Progress
+            advanceWatermark(link.id, progress.sourceId, progress.thru)
+            noteAbsorbed(link, progress)
+            flushReady()
+        }
+    }
+
+    /** Buffer [fold] for the current wave; false means the caller must apply it immediately. */
+    fun offer(fold: FanInGatedFold<T>): Boolean {
+        val context = CurrentContext.get()
+        if (context == null || context.baseline != null) return false
+        val edge = edges.values.singleOrNull {
+            it.open && it.link.role == LinkRole.Consume && it.link.from == context.sourcePort
+        } ?: return false
+        val timestamp = context.timestamp
+        val floor = edge.floors[timestamp.sourceId] ?: Long.MIN_VALUE
+        val flushed = flushedHighWater[timestamp.sourceId] ?: Long.MIN_VALUE
+        if (timestamp.counter <= floor || timestamp.counter <= flushed) return false
+
+        advanceWatermark(edge.link.id, timestamp.sourceId, timestamp.counter)
+        val wave = pending.getOrPut(timestamp) { Wave() }
+        wave.folds += fold
+        if (wave.context == null) wave.context = context
+        flushReady()
+        return true
+    }
+
+    private fun noteAbsorbed(link: Link, progress: Progress) {
+        val edge = edges[link.id] ?: return
+        if (!edge.open || edge.link.role != LinkRole.Consume) return
+        if (progress.thru <= (flushedHighWater[progress.sourceId] ?: Long.MIN_VALUE)) return
+        if ((edge.floors[progress.sourceId] ?: Long.MIN_VALUE) >= progress.thru) return
+        pending.getOrPut(Timestamp(progress.sourceId, progress.thru)) { Wave() }
+    }
+
+    private fun advanceWatermark(edgeId: UUID, sourceId: UUID, counter: Long) {
+        watermark.getOrPut(edgeId) { mutableMapOf() }.merge(sourceId, counter, ::maxOf)
+    }
+
+    private fun expectedEdges(timestamp: Timestamp): Set<UUID> = edges.values
+        .asSequence()
+        .filter { it.open && it.link.role == LinkRole.Consume }
+        .filter { (it.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter }
+        .map { it.link.id }
+        .toSet()
+
+    private fun settled(edgeId: UUID, timestamp: Timestamp): Boolean =
+        (watermark[edgeId]?.get(timestamp.sourceId) ?: Long.MIN_VALUE) >= timestamp.counter
+
+    private fun flushReady() {
+        val ready = pending.keys
+            .filter { timestamp -> expectedEdges(timestamp).all { settled(it, timestamp) } }
+            .sortedWith(compareBy({ it.sourceId }, { it.counter }))
+        ready.forEach { timestamp ->
+            val wave = pending.remove(timestamp) ?: return@forEach
+            flushedHighWater.merge(timestamp.sourceId, timestamp.counter, ::maxOf)
+            onWave(timestamp, wave.context, wave.folds)
+        }
+    }
+
+    /** A partially collected wave was never applied or observed; RESTART re-enters by catch-up. */
+    fun clear() = pending.clear()
+}
+
+/** Link-time capability advertised by the two opt-in set fan-ins in this file family. */
+internal data class FanInSettlementCapability(val operator: String, val frontierGated: Boolean)
+
+/**
+ * Weak, JVM-local lookup used by a frontier-gated consumer's ordinary link
+ * policy. Unknown (including remote) producers are not guessed at; known
+ * Quorum/Union outlets must advertise settlement or are refused by name.
+ */
+internal object FanInSettlementCapabilities {
+    private val byOutlet = Collections.synchronizedMap(WeakHashMap<civictech.cell.port.PortRef, FanInSettlementCapability>())
+
+    fun register(outlet: civictech.cell.port.FanOutlet<*>, operator: String, frontierGated: Boolean) {
+        byOutlet[outlet.ref] = FanInSettlementCapability(operator, frontierGated)
+    }
+
+    operator fun get(outlet: civictech.cell.port.PortRef): FanInSettlementCapability? = byOutlet[outlet]
+}
 
 @CellBase
 interface QuorumSetApi<E> {
@@ -87,13 +220,29 @@ interface QuorumSetApi<E> {
  * A delivery flagged [civictech.cell.MessageContext.baseline] is a recovery,
  * not a live wave, and is admitted regardless of [threshold] — see [onInlet]
  * (`[24-REPLAY-01]`).
+ *
+ * ### Aligned observation
+ *
+ * With [emitOnFrontier] enabled, the operator buffers each input wave until
+ * every open input edge has settled it, applies the lane folds together, and
+ * evaluates membership once before advancing the one output edge. The default
+ * remains eager and zero-coordination, per spec 20/22; a frontier-gated
+ * downstream join can require settlement and reject that eager outlet at link
+ * time instead of silently weakening its own guarantee. `observeAligned`
+ * likewise rejects an ungated multi-input quorum whose ancestry crosses an
+ * opaque host boundary, while a gated instance and a single-input instance
+ * remain admissible.
  */
 class QuorumSetCell<E>(
     ref: CellRef = CellRef(UUID.randomUUID()),
+    /** Opt-in shared-source wave settlement before this fan-in advances its output edge. */
+    emitOnFrontier: Boolean = false,
     private val threshold: (liveSources: Int) -> Int,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-) : QuorumSetCellBase<E>(ref), Stateful, BoundedStateful {
+) : QuorumSetCellBase<E>(ref), Stateful, BoundedStateful, FrontierGateable {
+    override val frontierGated: Boolean = emitOnFrontier
+
     private val lanes = PresenceLanes<E>()
 
     /**
@@ -103,13 +252,16 @@ class QuorumSetCell<E>(
      */
     private val ledger: JoinLedger<E> = MintedLedger(ref, "quorum")
 
+    private var gate: FanInSettlementGate<Set<E>>? = null
+
+    /** Waves held by the opt-in settlement gate; always zero when eager. Diagnostic only. */
+    val bufferedWaves: Int get() = gate?.bufferedWaves ?: 0
+
     init {
-        // An upstream Progress carries no lane delta to fold. Forward its exact
-        // source/counter only when this QuorumSetCell has one input edge. With
-        // fan-in, one lane's ack cannot settle the other lanes; this cell's own
-        // absorbed data waves still use emitOrAbsorb below.
-        inlet.relayAbsorbAcks()
-        ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
+        FanInSettlementCapabilities.register(outlet, "QuorumSetCell", frontierGated)
+        // Register lane membership before the gate's edge observer. On close,
+        // the lane disappears before a newly-complete buffered wave is folded.
+        inlet.onEdgeEvent { link, event ->
             when (event) {
                 // n changed → the threshold shifted; re-evaluate the whole
                 // working set, not just an incoming delta's elements.
@@ -124,12 +276,19 @@ class QuorumSetCell<E>(
                 else -> {}
             }
         }
+        if (emitOnFrontier) {
+            gate = FanInSettlementGate(inlet, ::flush)
+        } else {
+            // The eager path retains the existing settled absorb-ack relay.
+            inlet.relayAbsorbAcks(listOf(outlet))
+        }
         // late-join catch-up (G-22): the advertised quorum as a delta-from-empty
         outlet.catchUpOnLinked { if (ledger.isEmpty) null else ledger.asDelta() }
     }
 
     override fun onInlet(value: SetDelta<E>) {
         val ctx = CurrentContext.get()
+        if (gate?.offer(FanInGatedFold { foldLane(ctx, value) }) == true) return
         val effective = lanes.foldEffective(ctx, value)
         // PN-2 / `[24-REPLAY-01]` (spec 20/24 §Durable replay of a mid-graph
         // data cell): a journaled upstream's replayed frames re-enter flagged
@@ -146,6 +305,25 @@ class QuorumSetCell<E>(
         evaluate(effective.adds.keys + effective.dels.keys, recovered)
     }
 
+    /** Apply one deferred lane delta and return every element the settled wave must evaluate. */
+    private fun foldLane(context: MessageContext?, value: SetDelta<E>): Set<E> {
+        val effective = lanes.foldEffective(context, value)
+        return effective.adds.keys + effective.dels.keys
+    }
+
+    /** Apply all lane folds for one complete wave, then advance the outlet exactly once. */
+    private fun flush(
+        timestamp: Timestamp,
+        context: MessageContext?,
+        folds: List<FanInGatedFold<Set<E>>>,
+    ) {
+        val candidates = linkedSetOf<E>()
+        folds.forEach { candidates += it.apply() }
+        CurrentContext.with(context ?: MessageContext(timestamp, outlet.ref)) {
+            evaluate(candidates)
+        }
+    }
+
     /**
      * [recovered] holds the elements this evaluation must admit regardless of
      * [threshold] — a replayed baseline's installs (see [onInlet]); empty on
@@ -159,7 +337,6 @@ class QuorumSetCell<E>(
      * downstream completeness set is waiting on it).
      */
     private fun evaluate(candidates: Collection<E>, recovered: Set<E> = emptySet()) {
-        if (candidates.isEmpty()) return
         val target = threshold(lanes.liveSources)
         val adds = mutableMapOf<E, Set<Timestamp>>()
         val dels = mutableMapOf<E, Set<Timestamp>>()
@@ -190,6 +367,10 @@ class QuorumSetCell<E>(
             emit = { outlet.call.propagate(SetDelta(adds, dels)) },
             absorbAck = { outlet.absorbAck() },
         )
+    }
+
+    override fun onDeactivate(ctx: CellContext) {
+        gate?.clear()
     }
 
     override fun snapshot(): Serializable = arrayListOf(lanes.snapshot(), ledger.snapshot())
@@ -263,26 +444,40 @@ class QuorumSetCell<E>(
     )
 
     companion object {
-        fun <E> create(threshold: (Int) -> Int): QuorumSetApi<E> = QuorumSetCell(threshold = threshold)
+        fun <E> create(
+            threshold: (Int) -> Int,
+            emitOnFrontier: Boolean = false,
+        ): QuorumSetApi<E> = QuorumSetCell(threshold = threshold, emitOnFrontier = emitOnFrontier)
 
         /** Every live source must assert the element — generalises a chained [IntersectSetCell]. */
-        fun <E> intersection(ref: CellRef = CellRef(UUID.randomUUID())): QuorumSetCell<E> =
-            QuorumSetCell(ref) { n -> n }
+        fun <E> intersection(
+            ref: CellRef = CellRef(UUID.randomUUID()),
+            emitOnFrontier: Boolean = false,
+        ): QuorumSetCell<E> = QuorumSetCell(ref, emitOnFrontier) { n -> n }
 
         /** Any live source suffices — matches [UnionSetCell] membership. */
-        fun <E> union(ref: CellRef = CellRef(UUID.randomUUID())): QuorumSetCell<E> =
-            QuorumSetCell(ref) { 1 }
+        fun <E> union(
+            ref: CellRef = CellRef(UUID.randomUUID()),
+            emitOnFrontier: Boolean = false,
+        ): QuorumSetCell<E> = QuorumSetCell(ref, emitOnFrontier) { 1 }
 
         /** A strict majority of live sources: `n / 2 + 1`. */
-        fun <E> majority(ref: CellRef = CellRef(UUID.randomUUID())): QuorumSetCell<E> =
-            QuorumSetCell(ref) { n -> n / 2 + 1 }
+        fun <E> majority(
+            ref: CellRef = CellRef(UUID.randomUUID()),
+            emitOnFrontier: Boolean = false,
+        ): QuorumSetCell<E> = QuorumSetCell(ref, emitOnFrontier) { n -> n / 2 + 1 }
 
         /** All-but-one of the live sources: `n - 1` (the near-miss view). */
-        fun <E> nearMiss(ref: CellRef = CellRef(UUID.randomUUID())): QuorumSetCell<E> =
-            QuorumSetCell(ref) { n -> n - 1 }
+        fun <E> nearMiss(
+            ref: CellRef = CellRef(UUID.randomUUID()),
+            emitOnFrontier: Boolean = false,
+        ): QuorumSetCell<E> = QuorumSetCell(ref, emitOnFrontier) { n -> n - 1 }
 
         /** A fixed quorum of [k] live sources, independent of `n` (k-of-n). */
-        fun <E> kOfN(k: Int, ref: CellRef = CellRef(UUID.randomUUID())): QuorumSetCell<E> =
-            QuorumSetCell(ref) { k }
+        fun <E> kOfN(
+            k: Int,
+            ref: CellRef = CellRef(UUID.randomUUID()),
+            emitOnFrontier: Boolean = false,
+        ): QuorumSetCell<E> = QuorumSetCell(ref, emitOnFrontier) { k }
     }
 }

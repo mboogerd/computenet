@@ -96,6 +96,19 @@ class FanInlet<Api : Any>(
     override var ref: PortRef = initialRef
         private set
 
+    /**
+     * This inlet's entry observation, pushed by [PortIdentities.stamp] at
+     * registration (and replaced on a re-stamp, e.g. a composite's flatten),
+     * so [call] and [offerHosted] never read the JVM-global weak table. Null
+     * while unregistered.
+     */
+    @Volatile
+    private var entryObservation: PortIdentities.EntryObservation? = null
+
+    internal fun bindEntryObservation(observation: PortIdentities.EntryObservation) {
+        entryObservation = observation
+    }
+
     override fun deriveRef(owner: CellRef, name: String) {
         ref = PortRef.of(owner, name)
     }
@@ -234,7 +247,13 @@ class FanInlet<Api : Any>(
         if (activeImplementation != null && entry == null) return false
         checkpointOrder[invocation] = hostSequence
         try {
-            CurrentContext.with(invocation.context) { (entry ?: terminal).invoke(invocation) }
+            CurrentContext.with(invocation.context) {
+                // The hosted policy path bypasses [call], but it has the same
+                // external/reactive entry semantics and must record them before
+                // downstream emissions can query this owner's provenance.
+                entryObservation?.observe(reactive = CurrentContext.get() != null)
+                (entry ?: terminal).invoke(invocation)
+            }
         } catch (failure: Throwable) {
             if (!checkpointHeld(invocation)) checkpointOrder.remove(invocation)
             throw failure
@@ -305,6 +324,11 @@ class FanInlet<Api : Any>(
     }
 
     override val call: Api = Proxy.delegating(clazz) {
+        // Source provenance must distinguish true external ingress from an
+        // opaque wrapper that delegates a producer's live wave into this
+        // inlet. Record the distinction before dispatch: downstream emissions
+        // can synchronously ask whether this owner is a structural root.
+        entryObservation?.observe(reactive = CurrentContext.get() != null)
         if (chainEntry != null) frontierGate else (activeImplementation?.call ?: parkingImplementation)
     }
 
@@ -330,6 +354,22 @@ class FanInlet<Api : Any>(
     override fun serve(api: Api) {
         activeImplementation = Use.fixed(api, ref)
         replayParked()
+    }
+
+    /**
+     * Wrap the currently active root without changing this inlet's buffered
+     * state. Replication's write-authority adapter uses this seam to inspect an
+     * inbound envelope before delegating the admitted payload to the original
+     * `deltaInlet` implementation. A cold inlet has no root to wrap and is
+     * rejected; unlike [serve] and [delegate], interposition never replays the
+     * parked tail.
+     */
+    fun interpose(wrap: (Api) -> Api) {
+        val current = requireNotNull(activeImplementation) {
+            "FanInlet.interpose requires an existing active root"
+        }
+        val wrapped = wrap(current.call)
+        activeImplementation = Use.fixed(wrapped, ref)
     }
 
     /**
