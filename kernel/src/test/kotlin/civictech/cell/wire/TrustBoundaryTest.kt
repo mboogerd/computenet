@@ -34,6 +34,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
@@ -545,6 +546,17 @@ class TrustBoundaryTest {
             controller.runToIdle()
         }
 
+        /** Have q — the owning connection — retract its own ref over [pq]. */
+        fun retractFromQ(ref: CellRef) {
+            val announce = (HostedCellProxy.create(
+                pq.mirrorRefOnA,
+                pq.bToA,
+                Peering.AnnounceInletProxy::class.java,
+            ) as Peering.AnnounceInletProxy).inlet.call
+            announce.unpublished(ref)
+            controller.runToIdle()
+        }
+
         /** Open q's replacement while [pq] is still live; the caller advances the scheduler. */
         fun overlappingQ(): Peering.Loopback = Peering.loopback(p, q)
 
@@ -784,6 +796,84 @@ class TrustBoundaryTest {
         rig.consumerOnQ.received shouldBe listOf("first", "during-overlap", "after")
         rig.bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
         rig.bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
+     * ddurc-D4 rule 4 (review addition): the owner freeing its ref on purpose
+     * admits the deferred claimant as an ordinary publication — `onPublish`
+     * fires once, with no further announcement from the claimant.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection the owner's own retraction admits the deferred claimant`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        val claimant = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).sink shouldBeSameInstanceAs
+            rig.pq.aToB
+        val published = mutableListOf<CellRef>()
+        rig.registryP.onPublish { published += it }
+
+        rig.retractFromQ(rig.consumerOnQ.ref)
+
+        val location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        location.peer shouldBe null
+        location.sink shouldBeSameInstanceAs rig.pr.aToB
+        published.filter { it == rig.consumerOnQ.ref } shouldBe listOf(rig.consumerOnQ.ref)
+        rig.emit("after")
+        rig.consumerOnQ.received shouldBe listOf("first")
+        claimant.received shouldBe listOf("after")
+    }
+
+    /**
+     * ddurc-D4 rule 2 (review addition): a refused claimant that then retracts
+     * the ref no longer wants it, so the incumbent's retirement installs nothing.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection a refused claimant's retraction withdraws its deferred claim`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        val claimant = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.retractFromR(rig.consumerOnQ.ref)
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).sink shouldBeSameInstanceAs
+            rig.pq.aToB
+
+        rig.pq.partition()
+        rig.controller.runToIdle()
+
+        rig.registryP.location(rig.consumerOnQ.ref) shouldBe null
+        claimant.received.shouldBeEmpty()
+    }
+
+    /**
+     * ddurc-D4 rule 3(a) (review addition): a claim lives only as long as its
+     * claimant's connection. A replacement that retires before the incumbent
+     * must not be installed afterwards — its sink is dead.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection a claimant that retires first is never installed`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        val lettersBefore = rig.deadLettersP.size
+        val replacement = rig.overlappingQ()
+        rig.controller.runToIdle()
+        rig.deadLettersP.drop(lettersBefore).count { letter ->
+            letter.denial?.exposure == "announcement-admission" &&
+                letter.description.contains(rig.consumerOnQ.ref.toString()) &&
+                letter.description.contains("the claim is deferred")
+        } shouldBe 1
+
+        replacement.partition()
+        rig.controller.runToIdle()
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).sink shouldBeSameInstanceAs
+            rig.pq.aToB
+        rig.pq.partition()
+        rig.controller.runToIdle()
+
+        rig.registryP.location(rig.consumerOnQ.ref) shouldBe null
     }
 
     /**
