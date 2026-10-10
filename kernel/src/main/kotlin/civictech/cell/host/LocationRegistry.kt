@@ -676,6 +676,12 @@ class LocationRegistry {
      * when their sinks differ. The refused publication remains observable, and
      * its latest claim is deferred until the incumbent connection retracts the
      * ref or retires through [unpublishRemotes]. Named ownership is unchanged.
+     *
+     * **A cross-peer handover is ordered**: a ref moving from peer q to peer r
+     * is admitted here only once q's retraction ([unpublishFromPeer]) or q's
+     * disconnect ([unpublishRemotes]) has removed q's binding; an announcement
+     * by r that arrives first is refused and not retried, so the ref stays
+     * unlocated here until r announces again.
      */
     internal fun publishFromPeer(
         ref: CellRef,
