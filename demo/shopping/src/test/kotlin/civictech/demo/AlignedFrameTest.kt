@@ -1,14 +1,10 @@
 package civictech.demo
 
-import civictech.cell.observe.ObservationFrame
 import civictech.testkit.HttpProbe
 import civictech.testkit.SseTap
 import civictech.testkit.awaitSseData
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -110,56 +106,6 @@ class AlignedFrameTest {
 
             assertEquals(afterVote, afterFirstItem, "an item-only op advanced the votes group frontier")
             assertEquals(afterFirstItem, afterSecondItem, "a second item-only op advanced the votes group frontier")
-        } finally {
-            app.stop()
-        }
-    }
-
-    @Test
-    fun `an in-range add response completes only after its aligned frame is published`() {
-        val app = DemoApp(port = 0).start()
-        try {
-            val probe = HttpProbe("http://localhost:${app.boundPort}")
-            // Materialize and cache this user's keyed writers before occupying
-            // the host queue; writerFor performs awaited management lookups.
-            assertEquals(200, probe.post("user=tester&action=add&item=zebra"))
-
-            val releaseHost = CountDownLatch(1)
-            val hostHeld = CountDownLatch(1)
-            val holder = CompletableFuture.runAsync {
-                app.holdHostForTest {
-                    hostHeld.countDown()
-                    check(releaseHost.await(5, TimeUnit.SECONDS)) { "test did not release the host queue" }
-                }
-            }
-            try {
-                assertTrue(hostHeld.await(5, TimeUnit.SECONDS), "host queue was not held for the completion-order proof")
-                val frameAtCompletion = CompletableFuture<ObservationFrame>()
-                app.itemHandleProbe = { handle ->
-                    // A correct handle is still pending while the host is held.
-                    // A premature completion executes this dependent now and
-                    // captures the pre-apples frame, which the assertions below reject.
-                    handle.thenAccept { frameAtCompletion.complete(app.observationFrame()) }
-                    releaseHost.countDown()
-                }
-
-                assertEquals(200, probe.post("user=tester&action=add&item=apples"))
-
-                val completedFrame = frameAtCompletion.get(5, TimeUnit.SECONDS)
-                assertEquals(
-                    setOf("apples", "zebra"),
-                    completedFrame.views.getValue("items"),
-                    "the handle completed before its item was published by the aligned sink",
-                )
-                assertEquals(
-                    setOf("apples"),
-                    completedFrame.views.getValue("produce"),
-                    "the handle completed before its derived produce change was published by the aligned sink",
-                )
-            } finally {
-                releaseHost.countDown()
-                holder.get(5, TimeUnit.SECONDS)
-            }
         } finally {
             app.stop()
         }

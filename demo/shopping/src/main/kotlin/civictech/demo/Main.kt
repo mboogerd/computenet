@@ -1,7 +1,6 @@
 package civictech.demo
 
 import civictech.cell.CellRef
-import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -14,7 +13,6 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.link
 import civictech.cell.observe.Observation
 import civictech.cell.observe.ObservationFrame
-import civictech.cell.observe.Visibility
 import civictech.cell.observe.observation
 import civictech.cell.port.PortRef
 import civictech.cell.port.streamTo
@@ -35,7 +33,6 @@ import civictech.inspect.edit.WritePlane
 import com.sun.net.httpserver.HttpExchange
 import java.net.URLDecoder
 import java.util.*
-import java.util.concurrent.CompletableFuture
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.ObservedRemoveOps
@@ -200,20 +197,6 @@ class DemoApp(
     internal fun observationFrontier(group: String): Map<UUID, Long> =
         observation.current().groups.getValue(group).frontier
 
-    /** The authoritative current observation, independent of asynchronous SSE listener delivery. */
-    internal fun observationFrame(): ObservationFrame = observation.current()
-
-    /** Test probe for the F1 handle itself; production leaves it unset. */
-    internal var itemHandleProbe: ((CompletableFuture<Visibility>) -> Unit)? = null
-
-    /** Test-only host-queue barrier used to make premature handle completion observable. */
-    internal fun holdHostForTest(block: () -> Unit) {
-        manage.inspectTopology {
-            block()
-            Unit
-        }
-    }
-
     /** The inspector the Runtime serves for `--inspect-port`, null when the flag is absent. */
     val inspector: civictech.inspect.InspectorServer? get() = node.inspector
 
@@ -295,9 +278,6 @@ class DemoApp(
             // use the target inlet ref above and are discoverable too.
             unmanagedFeed(itemsUnion.ref, writerFamilyRoot("items"))
             unmanagedFeed(votesUnion.ref, writerFamilyRoot("votes"))
-            // The concrete keyed writer is selected per request, so this
-            // declared write intentionally has descriptive empty cell scope.
-            write(ITEM_WRITE, emptySet())
             set("items", itemsUnion.ref)
             set("produce", produceCell.ref)
             set("votes", votesUnion.ref)
@@ -386,26 +366,6 @@ class DemoApp(
     private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
         RoutedPropagate(ref, "inlet", registry::deliver)
 
-    /**
-     * Stamp one dynamic item operation and do not return until its wave is
-     * published by the aligned `{items, produce}` group. The synchronous
-     * [Observation.current] read is then guaranteed to include both views;
-     * SSE listener delivery remains deliberately unordered relative to this
-     * completion handle.
-     */
-    private fun completeItemWrite(block: () -> Unit) {
-        val write = observation.write(ITEM_WRITE)
-        val wave = write.invoke {
-            block()
-            checkNotNull(CurrentContext.get()) {
-                "declared item write did not install an ambient message context"
-            }.timestamp
-        }
-        val handle = observation.group(ITEMS_GROUP).visibilityOf(wave)
-        itemHandleProbe?.invoke(handle)
-        handle.join()
-    }
-
     private fun handleOp(exchange: HttpExchange) {
         val params = exchange.requestBody.readBytes().decodeToString()
             .split("&").filter { it.contains("=") }
@@ -418,7 +378,7 @@ class DemoApp(
             ?: return exchange.respond(400, "missing item")
         val (itemOps, voteOps) = writerFor(user)
         when (params["action"]) {
-            "add" -> completeItemWrite { itemOps.add(item) }
+            "add" -> itemOps.add(item)
             // The two removal intents this demo used to conflate (D-UNION):
             //
             // "remove"  — remove *the item*: a union-scoped observed remove
@@ -436,8 +396,8 @@ class DemoApp(
             // deterministic and the per-user writer identity M10.4 depends on
             // is untouched — the union-scoped del is minted at the union, not
             // by borrowing another user's writer.
-            "remove" -> completeItemWrite { itemsRemoveOps.removeObserved(item) }
-            "remove-mine" -> completeItemWrite { itemOps.remove(item) }
+            "remove" -> itemsRemoveOps.removeObserved(item)
+            "remove-mine" -> itemOps.remove(item)
             "vote" -> voteOps.add(item)
             // V4-PILOT: a write onto the replicated cell. With `--replicate`
             // absent [sharedOps] is null and this is a 400, the same answer the
@@ -589,8 +549,6 @@ class DemoApp(
     companion object {
         private const val NODE = "shopping"
         private const val PEER = "peer"
-        private const val ITEM_WRITE = "item-op"
-        private const val ITEMS_GROUP = "items+produce"
 
         private fun roleOf(wire: Wire?): String = when (wire) {
             is Wire.Listen -> "listener"

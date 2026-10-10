@@ -1882,6 +1882,24 @@ single `observeAligned` sink; `votes`, `wanted` and `shared` stay on
 point-consistent `host.observe` hubs, each individually satisfying
 `[22-OBS-01]`.
 
+**Completion-handle adoption, explicitly not adopted (2026-10-10,
+`computenet-2tfmf`).** A measured implementation declared one dynamic
+`item-op` write, stamped add/remove/remove-mine through it, and waited on
+`visibilityOf(wave)` for the `{items, produce}` group before completing the
+HTTP operation. The focused in-process add case worked and proved that its
+handle completed only after the current aligned frame contained both the item
+and its derived produce membership. The full shopping suite exposed the
+counterexample: in the two-JVM convergence case, Bob's union-scoped removal of
+an item introduced by Alice on the other peer never completed its visibility
+handle. At the stall the request thread was blocked in that handle's `join`,
+both managed-host loops were parked with empty queues, and the test client was
+still waiting for the HTTP response. Thus the observation API cannot currently
+provide this completion contract across the demo's whole item-operation
+surface. Adopting it only for add would give related item operations different
+completion semantics; repairing the distributed retirement path belongs below
+the demo and is outside this item, so shopping retains its existing write
+behavior.
+
 **Escape, explicitly unchosen**: a drop-all absorbing edge from `votesUnion`
 into the `items`/`produce` arm would emit a `Progress` absorb-ack for every
 vote wave and make a four-view sink "work" by construction. This is not
