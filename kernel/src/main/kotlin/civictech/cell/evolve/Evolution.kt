@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
+import civictech.cell.data.Replicable
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.Identity
 import civictech.cell.link.Link
@@ -20,6 +21,7 @@ import civictech.cell.port.PortRegistry
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.Use
 import civictech.cell.proxy.Proxy
+import civictech.cell.replication.Replication
 import civictech.nature.ContractRegistry
 import java.io.Serializable
 
@@ -357,8 +359,7 @@ object Promotion {
      * This is additive: single-instance [promote] is unchanged.
      *
      * PRECHECK (no side effects, freely abortable), then COMMIT via
-     * [civictech.cell.replication.Replication.rebind] (fully qualified because
-     * `Replication` is not imported in this file — T11-D):
+     * [Replication.rebind] (the same rebind API passed below):
      *  - [judge], when supplied, must return [PromotionVerdict.Accept] (same
      *    contract as [promote]).
      *  - the candidate MUST reuse the incumbent's [CellRef]. A fresh ref re-mints
@@ -379,9 +380,9 @@ object Promotion {
      */
     fun promoteReplica(
         host: ManagedHost,
-        replication: civictech.cell.replication.Replication,
-        incumbent: civictech.cell.data.Replicable<*>,
-        candidate: civictech.cell.data.Replicable<*>,
+        replication: Replication,
+        incumbent: Replicable<*>,
+        candidate: Replicable<*>,
         outletName: String = "outlet",
         judge: PromotionJudge? = null,
         journal: PromotionJournal? = null,
