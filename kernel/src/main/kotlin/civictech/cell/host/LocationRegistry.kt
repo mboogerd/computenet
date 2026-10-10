@@ -50,9 +50,10 @@ import java.util.concurrent.ConcurrentHashMap
 class LocationRegistry internal constructor(
     private val beforeSharedRemoteRemoval: (() -> Unit)?,
     private val onPerConnectionWait: (() -> Unit)?,
+    private val betweenPerConnectionRetirementScans: (() -> Unit)? = null,
 ) {
 
-    constructor() : this(null, null)
+    constructor() : this(null, null, null)
 
     private val topology = TopologyIndex()
 
@@ -1219,14 +1220,18 @@ class LocationRegistry internal constructor(
 
         val candidates = linkedSetOf<CellRef>()
         val dropped = linkedSetOf<CellRef>()
+        // A claim can be consumed by installing [via] while the location scan
+        // is in progress. Snapshot claims first so either this pass sees the
+        // claim or the following pass sees the installed Remote.
+        deferredAnonymousClaims.forEach { (ref, claimant) ->
+            if (claimant === via) candidates += ref
+        }
+        betweenPerConnectionRetirementScans?.invoke()
         locations.forEach { (ref, location) ->
             if ((location as? Remote)?.sink === via && removeRemoteLocation(ref, via)) {
                 candidates += ref
                 dropped += ref
             }
-        }
-        deferredAnonymousClaims.forEach { (ref, claimant) ->
-            if (claimant === via) candidates += ref
         }
         afterOutermostQueueMonitor {
             finishRemoteRetirement(via, candidates, dropped)

@@ -1037,6 +1037,76 @@ class TrustBoundaryTest {
     }
 
     /**
+     * A claimant retirement must not miss a ref when the incumbent retracts
+     * between the retirement's two candidate scans and promotes that claimant.
+     * The hook sits between the scans, so it pins the interleaving in either
+     * scan order instead of relying on thread timing.
+     */
+    @Test
+    fun `computenet-ilcg6 - claimant retirement covers promotion between candidate scans`() {
+        val firstScanFinished = java.util.concurrent.CountDownLatch(1)
+        val releaseRetirement = java.util.concurrent.CountDownLatch(1)
+        val registry = LocationRegistry(
+            beforeSharedRemoteRemoval = null,
+            onPerConnectionWait = null,
+            betweenPerConnectionRetirementScans = {
+                firstScanFinished.countDown()
+                releaseRetirement.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+            },
+        )
+        val ref = CellRef(UUID.randomUUID())
+        val incumbent = InvocationSink { }
+        val retiringClaimant = InvocationSink { }
+        registry.publishFromPeer(
+            ref,
+            incumbent,
+            peer = null,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.publishFromPeer(
+            ref,
+            retiringClaimant,
+            peer = null,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        )!!.deferred.shouldBeTrue()
+
+        val retirer = Thread { registry.unpublishRemotes(retiringClaimant) }.apply {
+            isDaemon = true
+            start()
+        }
+        firstScanFinished.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        registry.unpublishFromPeer(
+            ref,
+            peer = null,
+            sink = incumbent,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.location(ref) shouldBe LocationRegistry.Remote(retiringClaimant, peer = null)
+        releaseRetirement.countDown()
+        retirer.join(10_000)
+
+        retirer.isAlive shouldBe false
+        registry.location(ref) shouldBe null
+
+        // A stale deferred claim would be resurrected when this probe owner retracts.
+        val probeOwner = InvocationSink { }
+        registry.publishFromPeer(
+            ref,
+            probeOwner,
+            peer = null,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.unpublishFromPeer(
+            ref,
+            peer = null,
+            sink = probeOwner,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.location(ref) shouldBe null
+    }
+
+    /**
      * The named/anonymous boundary remains protected in both directions even
      * though two anonymous connections share ownership: concrete [PeerId] and
      * null never compare equal. Both arms use independent loopback peerings and
