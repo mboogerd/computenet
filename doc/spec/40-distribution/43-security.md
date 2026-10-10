@@ -82,10 +82,12 @@ the owner retires, a pending stranger may take the ref before the peer re-dials.
 A peer needing protection across its own absence still names a `PeerId`. The
 deferral is receiver-local; nothing crosses the wire, so there is no token,
 replay, or expiry model. `Shared` and the entire `PeerAuthPolicy.Open` path
-remain byte-for-byte unchanged, with no hello or frame field in any mode. The
-sink-identity distinction matters here because it distinguishes a stranger
-from a legitimate reconnect while the old connection is half-open; the
-receiver-side deferral is what lets that reconnect recover.
+remain byte-for-byte unchanged, with no hello or frame field in any mode. Sink
+identity alone cannot distinguish an unrelated anonymous peer from a legitimate
+reconnect whose old connection is still half-open: both present a sink other
+than the owner's, and both are refused. That is why the refused claim is
+deferred rather than dropped; the receiver-side deferral is what lets that
+reconnect recover.
 
 Landed (phase 2, DSC1 — `computenet-ssa`): per-peer Ed25519 keypairs
 (`:identity`), a `PeerId` that today resolves 1:1 from the key's fingerprint
