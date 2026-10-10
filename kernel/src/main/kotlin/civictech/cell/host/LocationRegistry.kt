@@ -50,7 +50,7 @@ import java.util.concurrent.ConcurrentHashMap
 class LocationRegistry internal constructor(
     private val beforeSharedRemoteRemoval: (() -> Unit)?,
     private val onPerConnectionWait: (() -> Unit)?,
-    private val afterPerConnectionLocationScan: (() -> Unit)? = null,
+    private val betweenPerConnectionRetirementScans: (() -> Unit)? = null,
 ) {
 
     constructor() : this(null, null, null)
@@ -1226,13 +1226,13 @@ class LocationRegistry internal constructor(
         deferredAnonymousClaims.forEach { (ref, claimant) ->
             if (claimant === via) candidates += ref
         }
+        betweenPerConnectionRetirementScans?.invoke()
         locations.forEach { (ref, location) ->
             if ((location as? Remote)?.sink === via && removeRemoteLocation(ref, via)) {
                 candidates += ref
                 dropped += ref
             }
         }
-        afterPerConnectionLocationScan?.invoke()
         afterOutermostQueueMonitor {
             finishRemoteRetirement(via, candidates, dropped)
         }

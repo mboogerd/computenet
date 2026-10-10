@@ -1038,18 +1038,19 @@ class TrustBoundaryTest {
 
     /**
      * A claimant retirement must not miss a ref when the incumbent retracts
-     * after the retirement's location scan and promotes that claimant. The
-     * scan hook pins the interleaving instead of relying on thread timing.
+     * between the retirement's two candidate scans and promotes that claimant.
+     * The hook sits between the scans, so it pins the interleaving in either
+     * scan order instead of relying on thread timing.
      */
     @Test
     fun `computenet-ilcg6 - claimant retirement covers promotion between candidate scans`() {
-        val locationScanFinished = java.util.concurrent.CountDownLatch(1)
+        val firstScanFinished = java.util.concurrent.CountDownLatch(1)
         val releaseRetirement = java.util.concurrent.CountDownLatch(1)
         val registry = LocationRegistry(
             beforeSharedRemoteRemoval = null,
             onPerConnectionWait = null,
-            afterPerConnectionLocationScan = {
-                locationScanFinished.countDown()
+            betweenPerConnectionRetirementScans = {
+                firstScanFinished.countDown()
                 releaseRetirement.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
             },
         )
@@ -1073,7 +1074,7 @@ class TrustBoundaryTest {
             isDaemon = true
             start()
         }
-        locationScanFinished.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+        firstScanFinished.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
 
         registry.unpublishFromPeer(
             ref,
