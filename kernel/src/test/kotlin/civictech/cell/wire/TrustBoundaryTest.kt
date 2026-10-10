@@ -927,6 +927,62 @@ class TrustBoundaryTest {
     }
 
     /**
+     * The same two-sender failure with PerConnection state active and a live
+     * deferred claimant on each ref. Retirement still removes locations
+     * immediately, but claim reconciliation waits until each sender has left
+     * the park-queue monitor it entered through replay.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection two senders mid-replay retire and admit deferred claims`() {
+        repeat(500) { round ->
+            val registry = LocationRegistry()
+            val refs = listOf(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()))
+            val bothMidReplay = java.util.concurrent.CyclicBarrier(2)
+            val dead = object : InvocationSink {
+                override fun deliver(invocation: HostedPortInvocation) {
+                    bothMidReplay.await(20, java.util.concurrent.TimeUnit.SECONDS)
+                    registry.unpublishRemotes(this)
+                    throw IntakeClosedException(invocation.cellRef)
+                }
+            }
+            val claimants = refs.associateWith { InvocationSink { } }
+            refs.forEach { ref ->
+                registry.hold(ref)
+                registry.publishFromPeer(
+                    ref,
+                    dead,
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                ) shouldBe null
+                registry.publishFromPeer(
+                    ref,
+                    claimants.getValue(ref),
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                )!!.deferred.shouldBeTrue()
+                registry.deliver(
+                    HostedPortInvocation(
+                        ref, "inlet", HostedPortInvocation.Type.PORT_API,
+                        Invocation("provide", listOf("java.lang.Object"), listOf("parked")),
+                    ),
+                )
+            }
+
+            val senders = refs.map { ref ->
+                Thread { registry.release(ref) }.apply { isDaemon = true; start() }
+            }
+            senders.forEach { it.join(10_000) }
+
+            (round to senders.map { it.isAlive }) shouldBe (round to listOf(false, false))
+            refs.forEach { ref ->
+                val location = registry.location(ref) as LocationRegistry.Remote
+                location.sink shouldBeSameInstanceAs claimants.getValue(ref)
+                registry.parkedFor(ref).shouldBeEmpty()
+            }
+        }
+    }
+
+    /**
      * The named/anonymous boundary remains protected in both directions even
      * though two anonymous connections share ownership: concrete [PeerId] and
      * null never compare equal. Both arms use independent loopback peerings and

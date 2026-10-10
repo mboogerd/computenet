@@ -96,10 +96,77 @@ class LocationRegistry {
     /**
      * Set, and never cleared, by the first [AnonymousOwnership.PerConnection]
      * admission call on this registry. While it is false [unpublishRemotes]
-     * takes no monitor at all — see the deadlock caveat there.
+     * takes its original lock-free path and never enters a park-queue monitor.
      */
     @Volatile
     private var perConnectionOwnershipUsed = false
+
+    /**
+     * Park-queue monitors may nest reentrantly while a sink delivers. Cleanup
+     * that needs a *different* ref's monitor must wait until the sender has
+     * left the outermost one, or two senders can each wait for the other's ref.
+     * The state is per-thread and shared by every registry so a sink cannot
+     * escape the rule by retiring through another registry.
+     */
+    private class QueueMonitorState {
+        var depth = 0
+        var draining = false
+        val afterUnlock = java.util.ArrayDeque<() -> Unit>()
+    }
+
+    private companion object {
+        private val queueMonitorState = ThreadLocal.withInitial(::QueueMonitorState)
+    }
+
+    private inline fun <T> withParkQueueMonitor(
+        queue: ParkQueue<HostedPortInvocation>,
+        action: () -> T,
+    ): T {
+        val state = queueMonitorState.get()
+        state.depth += 1
+        var failure: Throwable? = null
+        try {
+            return synchronized(queue) { action() }
+        } catch (thrown: Throwable) {
+            failure = thrown
+            throw thrown
+        } finally {
+            state.depth -= 1
+            if (state.depth == 0) {
+                try {
+                    drainAfterQueueUnlock(state)
+                } catch (cleanupFailure: Throwable) {
+                    if (failure == null) throw cleanupFailure
+                    failure.addSuppressed(cleanupFailure)
+                }
+            }
+        }
+    }
+
+    private fun afterOutermostQueueMonitor(action: () -> Unit) {
+        val state = queueMonitorState.get()
+        state.afterUnlock.addLast(action)
+        if (state.depth == 0) drainAfterQueueUnlock(state)
+    }
+
+    private fun drainAfterQueueUnlock(state: QueueMonitorState) {
+        if (state.draining) return
+        state.draining = true
+        var failure: Throwable? = null
+        try {
+            while (state.depth == 0 && state.afterUnlock.isNotEmpty()) {
+                try {
+                    state.afterUnlock.removeFirst().invoke()
+                } catch (thrown: Throwable) {
+                    if (failure == null) failure = thrown else failure.addSuppressed(thrown)
+                }
+            }
+        } finally {
+            state.draining = false
+            if (state.depth == 0 && state.afterUnlock.isEmpty()) queueMonitorState.remove()
+        }
+        failure?.let { throw it }
+    }
 
     /**
      * Refs deliberately [retire]d: [deliver] refuses an invocation addressed to
@@ -498,7 +565,7 @@ class LocationRegistry {
 
     /** Parked invocations awaiting a [publish] for [ref] (test/introspection surface). */
     fun parkedFor(ref: CellRef): List<HostedPortInvocation> =
-        parked[ref]?.let { synchronized(it) { it.snapshot() } } ?: emptyList()
+        parked[ref]?.let { queue -> withParkQueueMonitor(queue) { queue.snapshot() } } ?: emptyList()
 
     /**
      * Drain everything parked at [ref] and return it, in park order, leaving
@@ -517,7 +584,7 @@ class LocationRegistry {
      * rely on via the per-ref `synchronized` monitor).
      */
     fun unpark(ref: CellRef): List<HostedPortInvocation> =
-        parked[ref]?.let { synchronized(it) { it.drain() } } ?: emptyList()
+        parked[ref]?.let { queue -> withParkQueueMonitor(queue) { queue.drain() } } ?: emptyList()
 
     /**
      * Optimistic send with lazy re-resolution: enqueue on the located host or
@@ -535,7 +602,7 @@ class LocationRegistry {
     fun deliver(invocation: HostedPortInvocation) {
         if (!holds.isHeld(invocation.cellRef) && send(locations[invocation.cellRef], invocation)) return
         val queue = parked.computeIfAbsent(invocation.cellRef) { ParkQueue() }
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             if (invocation.cellRef in tombstones) {
                 refuseRetired(invocation)
                 return
@@ -578,7 +645,7 @@ class LocationRegistry {
     private fun replay(ref: CellRef, expected: Location) {
         if (holds.isHeld(ref)) return // parked deliberately for the flip window — [release] drains it
         val queue = parked[ref] ?: return
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             if (locations[ref] != expected) return
             queue.drainWhile { send(expected, it) }
         }
@@ -701,7 +768,7 @@ class LocationRegistry {
         if (anonymousOwnership == AnonymousOwnership.PerConnection) perConnectionOwnershipUsed = true
         val incoming = Remote(sink, peer)
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-        val refusal = synchronized(queue) {
+        val refusal = withParkQueueMonitor(queue) {
             val incumbent = locations[ref]
             val conflicts = when (incumbent) {
                 is Local -> incumbent.host.hosts(ref)
@@ -867,7 +934,7 @@ class LocationRegistry {
      */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             installLocked(ref, location, queue)
         }
     }
@@ -923,7 +990,7 @@ class LocationRegistry {
     fun retire(refs: Collection<CellRef>) {
         refs.forEach { ref ->
             val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-            synchronized(queue) {
+            withParkQueueMonitor(queue) {
                 tombstones += ref
                 queue.drain().forEach(::refuseRetired)
             }
@@ -943,7 +1010,7 @@ class LocationRegistry {
     fun unretire(refs: Collection<CellRef>) {
         refs.forEach { ref ->
             val queue = parked[ref]
-            if (queue == null) tombstones -= ref else synchronized(queue) { tombstones -= ref }
+            if (queue == null) tombstones -= ref else withParkQueueMonitor(queue) { tombstones -= ref }
         }
     }
 
@@ -1001,7 +1068,7 @@ class LocationRegistry {
         if (anonymousOwnership == AnonymousOwnership.PerConnection) perConnectionOwnershipUsed = true
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         var applyDeferred = false
-        val refusal = synchronized(queue) {
+        val refusal = withParkQueueMonitor(queue) {
             val incumbent = locations[ref]
             val conflicts = when (incumbent) {
                 is Local -> incumbent.host.hosts(ref)
@@ -1040,7 +1107,7 @@ class LocationRegistry {
     /** Install and consume a still-live deferred claimant, if [ref] remains free. */
     private fun applyDeferredAnonymousClaim(ref: CellRef) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-        val installed = synchronized(queue) {
+        val installed = withParkQueueMonitor(queue) {
             if (locations[ref] != null) {
                 false
             } else {
@@ -1082,19 +1149,19 @@ class LocationRegistry {
      * also what makes a listener's own re-read of this registry answer about a
      * fully disconnected peer rather than an arbitrary prefix of one.
      *
-     * **No monitor is taken** on a registry that has never admitted under
-     * [AnonymousOwnership.PerConnection]: the send-failure caller may already
-     * hold one ref's park-queue monitor (a hold release replaying, a publish
-     * draining), and two such senders each waiting for the other's ref would
-     * deadlock. **Known limit:** once `PerConnection` has been used, the scan
-     * takes each affected ref's park-queue monitor in turn (deferred claims
-     * are guarded by it), so that deadlock is reachable there — two senders,
-     * each holding a different ref's monitor, noticing the same dead sink at
-     * once (computenet-ddurc feature review).
+     * Location removal is lock-free even after
+     * [AnonymousOwnership.PerConnection] has been used. Deferred-claim cleanup
+     * still runs under each ref's park-queue monitor, but when this send-failure
+     * path is entered from a replay or publish drain it is queued until the
+     * sender exits its outermost monitor. Thus a sender holding queue X never
+     * waits for queue Y; an ordinary close-path call that holds no queue still
+     * finishes the same reconciliation synchronously before returning. A
+     * registry that has never used `PerConnection` keeps the original body
+     * below and takes no park-queue monitor at all.
      */
     fun unpublishRemotes(via: InvocationSink) {
-        val dropped = mutableListOf<CellRef>()
         if (!perConnectionOwnershipUsed) {
+            val dropped = mutableListOf<CellRef>()
             locations.entries.removeIf { entry ->
                 ((entry.value as? Remote)?.sink === via).also {
                     if (it) {
@@ -1106,28 +1173,55 @@ class LocationRegistry {
             dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
             return
         }
-        val candidates = mutableSetOf<CellRef>()
+
+        val candidates = linkedSetOf<CellRef>()
+        val dropped = linkedSetOf<CellRef>()
         locations.forEach { (ref, location) ->
-            if ((location as? Remote)?.sink === via) candidates += ref
+            if ((location as? Remote)?.sink === via && removeRemoteLocation(ref, via)) {
+                candidates += ref
+                dropped += ref
+            }
         }
         deferredAnonymousClaims.forEach { (ref, claimant) ->
             if (claimant === via) candidates += ref
         }
+        afterOutermostQueueMonitor {
+            finishRemoteRetirement(via, candidates, dropped)
+        }
+    }
+
+    /** Finish one lock-free retirement once this thread holds no park-queue monitor. */
+    private fun finishRemoteRetirement(
+        via: InvocationSink,
+        candidates: Set<CellRef>,
+        initiallyDropped: Set<CellRef>,
+    ) {
+        val dropped = initiallyDropped.toMutableSet()
         candidates.forEach { ref ->
             val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-            synchronized(queue) {
+            withParkQueueMonitor(queue) {
                 if (deferredAnonymousClaims[ref] === via) {
                     deferredAnonymousClaims.remove(ref)
                 }
-                val incumbent = locations[ref]
-                if (incumbent is Remote && incumbent.sink === via) {
-                    locations.remove(ref)
-                    instances.remove(ref)
-                    dropped += ref
-                }
+                if (removeRemoteLocation(ref, via)) dropped += ref
+                if (locations[ref] == null) instances.remove(ref)
             }
         }
         dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
         dropped.forEach(::applyDeferredAnonymousClaim)
+    }
+
+    /** Remove only the binding still routed through [via], despite a concurrent replacement. */
+    private fun removeRemoteLocation(ref: CellRef, via: InvocationSink): Boolean {
+        var removed = false
+        locations.computeIfPresent(ref) { _, current ->
+            if (current is Remote && current.sink === via) {
+                removed = true
+                null
+            } else {
+                current
+            }
+        }
+        return removed
     }
 }
