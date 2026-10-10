@@ -983,6 +983,60 @@ class TrustBoundaryTest {
     }
 
     /**
+     * A Shared retirement may have selected its monitor-free path immediately
+     * before the registry's first PerConnection admission. The admission waits
+     * for that already-entered scan, so it observes the ref as free and installs
+     * directly instead of recording a claim the Shared scan would strand.
+     */
+    @Test
+    fun `computenet-ddurc - first PerConnection admission cannot race behind a Shared retire scan`() {
+        val sharedScanEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseSharedScan = java.util.concurrent.CountDownLatch(1)
+        val perConnectionWaiting = java.util.concurrent.CountDownLatch(1)
+        val registry = LocationRegistry(
+            beforeSharedRemoteRemoval = {
+                sharedScanEntered.countDown()
+                releaseSharedScan.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+            },
+            onPerConnectionWait = perConnectionWaiting::countDown,
+        )
+        val ref = CellRef(UUID.randomUUID())
+        val owner = InvocationSink { }
+        val claimant = InvocationSink { }
+        registry.publish(ref, owner)
+
+        val retirer = Thread { registry.unpublishRemotes(owner) }.apply {
+            isDaemon = true
+            start()
+        }
+        sharedScanEntered.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        val refusal = java.util.concurrent.atomic.AtomicReference<LocationRegistry.RemotePublishRefusal?>()
+        val publisher = Thread {
+            refusal.set(
+                registry.publishFromPeer(
+                    ref,
+                    claimant,
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                ),
+            )
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        perConnectionWaiting.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        releaseSharedScan.countDown()
+        retirer.join(10_000)
+        publisher.join(10_000)
+
+        listOf(retirer.isAlive, publisher.isAlive) shouldBe listOf(false, false)
+        refusal.get() shouldBe null
+        registry.location(ref) shouldBe LocationRegistry.Remote(claimant, peer = null)
+    }
+
+    /**
      * The named/anonymous boundary remains protected in both directions even
      * though two anonymous connections share ownership: concrete [PeerId] and
      * null never compare equal. Both arms use independent loopback peerings and

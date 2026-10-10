@@ -47,7 +47,12 @@ import java.util.concurrent.ConcurrentHashMap
  * `heldRefs` is caught, `parkedForFlip` is not (both measured 2026-08-15),
  * so a second home under any other name survives it.
  */
-class LocationRegistry {
+class LocationRegistry internal constructor(
+    private val beforeSharedRemoteRemoval: (() -> Unit)?,
+    private val onPerConnectionWait: (() -> Unit)?,
+) {
+
+    constructor() : this(null, null)
 
     private val topology = TopologyIndex()
 
@@ -94,12 +99,14 @@ class LocationRegistry {
     private val deferredAnonymousClaims = ConcurrentHashMap<CellRef, InvocationSink>()
 
     /**
-     * Set, and never cleared, by the first [AnonymousOwnership.PerConnection]
-     * admission call on this registry. While it is false [unpublishRemotes]
-     * takes its original lock-free path and never enters a park-queue monitor.
+     * A lock-free mode latch plus the number of Shared retirements already in
+     * their monitor-free scan. The sign bit means PerConnection has been used;
+     * the remaining bits count scans that won the Shared path just before that
+     * first transition. The first PerConnection admission waits for those scans
+     * to leave before it can record a deferred claim, closing the first-use
+     * remove-after-record race without putting a park-queue monitor on Shared.
      */
-    @Volatile
-    private var perConnectionOwnershipUsed = false
+    private val anonymousOwnershipState = java.util.concurrent.atomic.AtomicInteger()
 
     /**
      * Park-queue monitors may nest reentrantly while a sink delivers. Cleanup
@@ -115,7 +122,38 @@ class LocationRegistry {
     }
 
     private companion object {
+        private const val PER_CONNECTION = Int.MIN_VALUE
         private val queueMonitorState = ThreadLocal.withInitial(::QueueMonitorState)
+    }
+
+    private fun enterSharedRetirement(): Boolean {
+        while (true) {
+            val state = anonymousOwnershipState.get()
+            if (state < 0) return false
+            if (anonymousOwnershipState.compareAndSet(state, state + 1)) return true
+        }
+    }
+
+    private fun enablePerConnectionOwnership() {
+        while (true) {
+            val state = anonymousOwnershipState.get()
+            if (state < 0) {
+                awaitSharedRetirements()
+                return
+            }
+            if (anonymousOwnershipState.compareAndSet(state, state or PER_CONNECTION)) {
+                if (state != 0) onPerConnectionWait?.invoke()
+                awaitSharedRetirements()
+                return
+            }
+        }
+    }
+
+    private fun awaitSharedRetirements() {
+        var spins = 0
+        while (anonymousOwnershipState.get() != PER_CONNECTION) {
+            if (++spins and 0xff == 0) Thread.yield() else Thread.onSpinWait()
+        }
     }
 
     private inline fun <T> withParkQueueMonitor(
@@ -765,7 +803,7 @@ class LocationRegistry {
         peer: PeerId?,
         anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
     ): RemotePublishRefusal? {
-        if (anonymousOwnership == AnonymousOwnership.PerConnection) perConnectionOwnershipUsed = true
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) enablePerConnectionOwnership()
         val incoming = Remote(sink, peer)
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         val refusal = withParkQueueMonitor(queue) {
@@ -1065,7 +1103,7 @@ class LocationRegistry {
         sink: InvocationSink,
         anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
     ): RemotePublishRefusal? {
-        if (anonymousOwnership == AnonymousOwnership.PerConnection) perConnectionOwnershipUsed = true
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) enablePerConnectionOwnership()
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         var applyDeferred = false
         val refusal = withParkQueueMonitor(queue) {
@@ -1160,15 +1198,20 @@ class LocationRegistry {
      * below and takes no park-queue monitor at all.
      */
     fun unpublishRemotes(via: InvocationSink) {
-        if (!perConnectionOwnershipUsed) {
+        if (enterSharedRetirement()) {
             val dropped = mutableListOf<CellRef>()
-            locations.entries.removeIf { entry ->
-                ((entry.value as? Remote)?.sink === via).also {
-                    if (it) {
-                        instances.remove(entry.key)
-                        dropped += entry.key
+            try {
+                beforeSharedRemoteRemoval?.invoke()
+                locations.entries.removeIf { entry ->
+                    ((entry.value as? Remote)?.sink === via).also {
+                        if (it) {
+                            instances.remove(entry.key)
+                            dropped += entry.key
+                        }
                     }
                 }
+            } finally {
+                anonymousOwnershipState.decrementAndGet()
             }
             dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
             return
