@@ -155,6 +155,9 @@
 # duplicating those owning APIs, not merely changing syntax. The two evolution
 # edges and the reverse replication edge make the pre-existing evolve <->
 # replication 2-cycle explicit; both packages were already in G-63's single SCC.
+# wire -> partition likewise makes a direct wire <-> partition 2-cycle explicit:
+# partition -> wire was already baselined (PartitionedShardSet imports
+# PortAddress/WireEdgeLink), and both packages were already in that same SCC.
 cell -> link
 cell -> port
 cell -> proxy
