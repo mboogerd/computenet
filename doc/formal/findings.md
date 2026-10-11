@@ -241,10 +241,12 @@ exists while `D` has not flushed them. Opening `cd` at floor zero then makes
 does not repair the wait: in the model it records catch-up arrival without
 advancing `watermark`, changing `pending`, or representing a wave position.
 
-This is the added-link half of the G-39 / 93 I-13 source-set dissemination
-residual. P05 exposes the liveness failure directly. P01 also fails because a
-later delivery on the new arm can advance it far enough to release an earlier
-wave without the contribution the new arm never carried.
+`unverified:` this is the added-link half of the G-39 / 93 I-13 source-set
+dissemination residual.
+
+P05 exposes the liveness failure directly. P01 also fails because a later
+delivery on the new arm can advance it far enough to release an earlier wave
+without the contribution the new arm never carried.
 
 `unverified:` no kernel test reproduces this complete late-open interleaving.
 The relevant code has the same local ingredients:
