@@ -131,3 +131,139 @@ source, not topology removal, and the `[22-GF-01]`/`[22-GF-02]` safety rules
 continue to hold because the waves remain buffered rather than releasing torn.
 The conflict is therefore with decided prose plus the G-39 proposal, and stays
 in this evidence ledger until the specification follow-up resolves it.
+
+## BS-5 guard — an unguarded late open strands a waiting join (G-39; 93 I-13)
+
+Recorded by `computenet-ayuhs`, feature `computenet-tusn0`, epic
+`computenet-7fe`.
+
+### Minimal configuration
+
+The counterexample uses the constants of
+`formal/models/MCFrontierCut-openLate.cfg` against module `MCFrontierCut`:
+
+```tla
+SPECIFICATION CutSpec
+CONSTANTS
+    Sources = {"A"}
+    Cells = {"A", "B", "C", "D"}
+    Edges = {"ab", "ac", "bd", "cd"}
+    From <- OpenLateFrom
+    To <- OpenLateTo
+    WaveBound = 3
+    EmitFrom = {"A"}
+    MayAbsorb = {}
+    AbsorbAck = TRUE
+    Fifo = TRUE
+    LateEdges = {"cd"}
+    CutEdges = {}
+    Frontier = {"D"}
+    Carries <- OpenLateCarries
+    IgnoreArm = {}
+    WatermarkByMax = TRUE
+    FloorIgnored = FALSE
+    CloseIgnored = FALSE
+    Restarts = 0
+    Owner <- IdentityOwner
+    Successor <- IdentitySuccessor
+    FreshEpochIds = TRUE
+    AnnounceRestart = TRUE
+    Swappable = {}
+    SwapEmitsMarker = FALSE
+    CountBaselines = FALSE
+PROPERTY P05
+```
+
+Mutation: delete the three-line `IF`/`THEN`/`ELSE` scenario guard from
+`LinkStep(e)` in `formal/specs/Frontier.tla`, leaving `Link(e)` and its frame
+condition unchanged. A second run replaces `PROPERTY P05` with
+`INVARIANT P01`; each run names only the property being reproduced.
+
+Direct TLC runs on the pinned jar with `-workers 1` observed:
+
+```text
+P05: exit 13 — Error: Temporal properties were violated.
+P01: exit 12 — Error: Invariant P01 is violated.
+```
+
+The P05 run generated 2,337 states and found 902 distinct states. The P01 run
+stopped at the invariant violation after 1,168 generated and 488 distinct
+states. The checked-in guard was restored after both runs; this finding records
+the temporary mutation, not a model change.
+
+### Counterexample trace
+
+The trace retains only the variables that change or establish the terminal
+wait. It is one recorded `-workers 1` P05 behavior (TLC banner `fp 17`). TLC
+randomizes its fingerprint function per run, so this interleaving is not
+claimed to be reproducible or shortest.
+
+1. Initially, `counter[A] = 0`; `live = {ab, ac, bd}`; `cd` is closed; every
+   `floor` and `watermark` entry is zero; every channel and `pending[D]` is
+   empty; and `released[D][A] = <<>>`.
+2. The source emits wave 1: `counter[A] = 1`, with `Delta(A, 1)` on `ab` and
+   `ac`.
+3. `C` consumes wave 1 from `ac`; because `cd` is not live, that wave is not
+   forwarded onto `cd`.
+4. The source emits wave 2: `counter[A] = 2`; `ab` now holds waves 1 and 2,
+   and `ac` holds wave 2.
+5. `C` consumes wave 2, again while `cd` is not live.
+6. The source emits wave 3: `counter[A] = 3`; `ab` holds waves 1–3 and `ac`
+   holds wave 3.
+7. `B` forwards wave 1: `ab` retains waves 2–3 and `bd` holds wave 1.
+8. `C` consumes wave 3, still before the late edge exists.
+9. `B` forwards wave 2: `ab` retains wave 3 and `bd` holds waves 1–2.
+10. `LinkStep(cd)` adds `cd` to `live` and queues `EdgeOpen` followed by
+    `Baseline(A)` on `cd`.
+11. `B` forwards wave 3: `ab` is empty and `bd` holds waves 1–3.
+12. `D` consumes `EdgeOpen`: `open[cd] = TRUE` and
+    `floor[cd][A] = flushedHigh[D][A] = 0`; the baseline remains on `cd`.
+13. `D` consumes wave 1 from `bd`: `watermark[bd][A] = 1` and
+    `pending[D] = {<<A, 1, bd>>}`.
+14. `D` consumes wave 2 from `bd`: `watermark[bd][A] = 2` and the pending set
+    gains `<<A, 2, bd>>`.
+15. `D` consumes wave 3 from `bd`: `watermark[bd][A] = 3`; `bd` is empty; and
+    the pending set gains `<<A, 3, bd>>`.
+16. `D` consumes `Baseline(A)`. All channels are now empty, but
+    `open[cd] = TRUE`, `floor[cd][A] = 0`, `watermark[cd][A] = 0`,
+    `pending[D] = {<<A, 1, bd>>, <<A, 2, bd>>, <<A, 3, bd>>}`, and
+    `released[D][A] = <<>>`.
+17. `CutSpec` stutters in that quiescent state, so P05 fails.
+
+### Reading
+
+The guard requires the target frontier to have flushed every already-emitted
+counter carried by the late edge before `LinkStep` can fire. That is a scenario
+restriction encoding BS-5's given that the new arm opens after the earlier
+waves flush, not a kernel rule. Without it, `C` may consume waves before `cd`
+exists while `D` has not flushed them. Opening `cd` at floor zero then makes
+`D` expect that arm for waves it can never receive there. The Baseline message
+does not repair the wait: in the model it records catch-up arrival without
+advancing `watermark`, changing `pending`, or representing a wave position.
+
+`unverified:` this is the added-link half of G-39 / 93 I-13's question of
+which wave a new edge counts from. The trace is not a source-set-dissemination
+counterexample: `OpenLateCarries` keeps `Carries[cd] = {"A"}` throughout; the
+join strands because `D` installs a floor below `C`'s already-consumed
+position.
+
+P05 exposes the liveness failure directly. P01 also fails because a later
+delivery on the new arm can advance it far enough to release an earlier wave
+without the contribution the new arm never carried.
+
+`unverified:` no kernel test reproduces this complete late-open interleaving.
+The relevant code has the same local ingredients:
+`Handshake.handshake` delivers `EdgeOpen` before on-link catch-up;
+`WaveFrontier.registerHandlers` installs the edge with
+`flushedHighWater.toMap()`; and `WaveFrontier.offer` releases a non-null
+`MessageContext.baseline` immediately without advancing a watermark or adding
+pending wave state. Those named anchors establish the correspondence, not that
+the runtime reaches the model's stranded state.
+
+### Disposition
+
+The existing G-39 follow-up, `computenet-co98h`, owns both this added-link
+case and the BS-7 upstream-cut case. It must decide whether hop-by-hop source-set
+propagation prevents the impossible expectation, whether a local drain or
+explicit `Stall`/`RE-SCOPE` rule closes it, and what runtime scenario verifies
+the decision. This finding records the counterexample and selects no repair.
