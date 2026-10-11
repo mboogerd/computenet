@@ -70,7 +70,7 @@ Observed by `formal/check.sh` on 2026-10-11 CEST using an Apple M3 Max and OpenJ
 | P07 | `MCFrontierSmall-absorb.cfg` (positive baseline; P07 is control-only) | `MCNoAbsorbAck.cfg` | exit 11 — `Deadlock reached.` |
 | P08 | `MCFrontierSmall-twoSources.cfg` | `MCOverAligned.cfg` | exit 12 — `Invariant P08 is violated.` |
 
-Control state counts are omitted because violating runs under `-workers auto` are not stable. The outcomes above came from direct serial TLC runs and are declared in each control's `\* EXPECT Error: ...` header, which `check.sh` enforces. Every default core configuration completed within the CI budget, so the deep configurations ledger stays empty ([FRM1-D-09]).
+Control state counts are omitted because violating runs under `-workers auto` are not stable. The outcomes above came from direct serial TLC runs and are declared in each control's `\* EXPECT Error: ...` header, which `check.sh` enforces. No control names P05: a wave left pending keeps `Terminating` disabled, so the stall is a deadlock, which TLC reports before it evaluates any temporal property (`ABSTRACTION.md`, "Property map"). Every default core configuration completed within the CI budget, so the deep configurations ledger stays empty ([FRM1-D-09]).
 
 ## Deep configurations ledger
 

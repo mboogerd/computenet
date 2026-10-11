@@ -82,6 +82,20 @@ its listed `P05` temporal property is evaluated. It therefore remains the
 control for the load-bearing no-ack stall and names the deadlock as its
 expected outcome; `MCUnackedAbsorb.cfg` is the separate direct P06 control.
 
+No control names `P05`, and none can under the harness's flags without a spec
+change. `Terminating` requires every frontier's `pending` to be empty, and
+every other action is finite: emission is bounded by `WaveBound` and each
+delivery moves a message one hop down an acyclic graph. A wave that is still
+pending when emission and delivery are exhausted therefore leaves a state with
+no enabled action, which TLC reports as `Deadlock reached.` before it
+evaluates any temporal property. The device that frees `P06` does not carry
+over: with `IgnoreArm = {"cd"}` the frontier no longer waits on the unacked
+arm, no wave is stranded, and `P05` holds. Observed in direct serial TLC runs
+(`-workers 1`, Darwin arm64, OpenJDK 25.0.2, 2026-10-11): `MCNoAbsorbAck.cfg`'s
+constants with only `PROPERTY P05` exit 11; `MCUnackedAbsorb.cfg`'s constants
+with `PROPERTY P05` in place of `P06` exit 0; the former with TLC's
+`-deadlock` flag, which the harness must not pass, exits 13.
+
 ## Non-properties
 
 None of P01–P08 is a non-property: each is stated and checked at this abstraction, with P07 expressed by its deliberately broken control. P06 is near-definitional because acknowledgement is enqueued in the same model action that records absorption; its load-bearing consequence is P07. P01 recognizes absorption only at the producer one hop above the lagging edge. Those are limitations of the abstraction, not reasons to discard either property.
