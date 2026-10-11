@@ -76,7 +76,7 @@ late opens, cuts, source-epoch restart, preserved-epoch swap, and baselines:
 | `MCFrontierCut-swap.cfg` | preserved-epoch swap | P01, P02, P04, P05, P14 | 92 | 12 | 1 | `PASS model` |
 
 TLC does not print a complete-state-graph depth for the temporal violation in
-`MCFrontierCut-chain2.cfg`; its shortest printed behavior reaches the stuttering
+`MCFrontierCut-chain2.cfg`; the behavior it prints reaches the stuttering
 state at state 10. The direct `-workers 1` evidence and reduced trace are in
 `doc/formal/findings.md`.
 

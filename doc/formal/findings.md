@@ -58,14 +58,19 @@ The checked-in expectation and the observed TLC diagnostic are exact:
 
 A direct TLC v1.7.4 run with `-workers 1` generated 1,031 states and found 393
 distinct states. TLC does not print a complete-state-graph depth for this
-temporal violation; its shortest behavior reaches the terminal stutter at state
+temporal violation; the behavior it prints reaches the terminal stutter at state
 10. The harness reports this configuration as `PASS model(expected-violation)`.
 
-### Shortest counterexample
+### Counterexample trace
 
 The trace below intentionally retains only `live`, `channel`, `open`, `floor`,
 `watermark`, `pending`, and `released`, the state needed to explain the
-failure.
+failure. It is the behavior one recorded `-workers 1` run printed (TLC banner
+`fp 95`). TLC picks its fingerprint function at random per run, so the order of
+states 3–9 is not reproducible: four further `-workers 1` runs on the same
+tree (`fp 107`, `13`, `96`, `80`) each printed a different interleaving, all
+ten states long, all cutting `am` at state 2, and all reaching the same state 9.
+The trace is not claimed to be the shortest violating behavior.
 
 1. Initially, `live = {am, md, ab, bd}`; all four `open` entries are `TRUE`;
    every `floor` and `watermark` entry is zero; every `channel` is empty;
