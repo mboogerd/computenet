@@ -8,7 +8,7 @@ Two workflows, both GitHub-native.
 
 Runs on every `push` and `pull_request`. JDK 21 Temurin (matching
 `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`'s `jvmToolchain(21)`), Gradle
-cached via `gradle/actions/setup-gradle@v4`. Six jobs, each with a
+cached via `gradle/actions/setup-gradle@v4`. Eight jobs, each with a
 `timeout-minutes` cap so a hung test can't burn a runner indefinitely:
 
 | Job | What it gates | Timeout |
@@ -19,9 +19,11 @@ cached via `gradle/actions/setup-gradle@v4`. Six jobs, each with a
 | `concord-full` | full concord corpus (`core,dist,dur`) + `CONCORDANCE.md` regeneration must be a no-op | 30m |
 | `ui-test` | `inspect/ui` typecheck + tests | 15m |
 | `agora-ui-test` | `demo/agora/ui` typecheck + tests | 15m |
+| `deliberate-ui-test` | `demo/deliberate/ui` typecheck, tests + build | 15m |
 | `formal-check` | `formal/check.sh` — every TLA+ model config must pass and every control must fail; advisory until added to the ruleset | 15m |
 
-Together these are `./gradlew test`'s superset — the split into fast/serial
+The four Gradle jobs above are `./gradlew test`'s superset; the three UI jobs
+and `formal-check` are non-Gradle checks. The split into fast/serial
 lanes exists because the multi-JVM tests fork real processes and starve when
 contended (see `doc/remediation/AUDIT-2026-07-28.md` §W1). `ubuntu-latest`
 gives this repo the 4-vCPU/16-GB standard runner tier, not the 2-vCPU/8-GB
