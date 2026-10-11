@@ -96,6 +96,13 @@ else
 fi
 
 command -v "$JAVA_BIN" >/dev/null 2>&1 || harness_error "java is not available: $JAVA_BIN"
+if [[ "$JAVA_BIN" == */* && "$JAVA_BIN" != /* ]]; then
+    java_dir="${JAVA_BIN%/*}"
+    java_name="${JAVA_BIN##*/}"
+    java_dir="$(cd -- "$java_dir" && pwd -P)" || \
+        harness_error "could not resolve java path: $JAVA_BIN"
+    JAVA_BIN="$java_dir/$java_name"
+fi
 
 if (( ${#configs[@]} == 0 )); then
     exit 0
@@ -103,6 +110,8 @@ fi
 
 meta_root="$(mktemp -d "${TMPDIR:-/tmp}/computenet-tlc.XXXXXX")" || \
     harness_error "could not create TLC metadata directory"
+java_tmp="$meta_root/java-tmp"
+mkdir "$java_tmp" || harness_error "could not create TLC Java temporary directory"
 trap 'rm -rf "$meta_root"' EXIT
 
 overall=0
@@ -189,6 +198,7 @@ for cfg in "${configs[@]}"; do
     # directory would otherwise be checked instead of the repository's.
     if cd "$MODELS_DIR" && "$JAVA_BIN" \
         -XX:+UseParallelGC \
+        "-Djava.io.tmpdir=$java_tmp" \
         "-DTLA-Library=$MODELS_DIR:$SPECS_DIR" \
         -cp "$JAR" \
         tlc2.TLC \
