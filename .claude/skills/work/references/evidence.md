@@ -115,7 +115,10 @@ edit when the Edit tool refuses, never for one you may not.
    `DenialReasonRenamed`; a scripted anchor's `grep -cF '<anchor>' <file>` is 1.
 5. Prove it landed: `git diff HEAD -- <file>` is non-empty and its hunk is in
    the declaration you meant; read the whole output, not a grep of it. For an
-   untracked file, grep it for the mutated text.
+   untracked file, grep it for the mutated text. The copy must differ from the
+   file now (`cmp -s "<scratch>/pre-mutation-<basename>" <file>` exits 1): one
+   that matches holds the mutant. Take a new one under another name from
+   `git show HEAD:<path>`; an untracked file has no such source: stop and report.
 6. Run the test's whole class, never the one test alone (an async or
    order-dependent false pass shows only beside its siblings), with
    `--rerun --no-build-cache` into `"<scratch>/mut.log"`, then `grep -aE
@@ -128,8 +131,10 @@ edit when the Edit tool refuses, never for one you may not.
    not the criterion discriminating: narrow the mutation until the criterion's
    own assertion fails. A mutant that passes at class scope does not count.
 8. Revert from your copy, never with `git stash` or `git checkout`, and prove
-   it: the `diff` prints nothing. If the mutation created the file, `rm` it.
-   `cp "<scratch>/pre-mutation-<basename>" <file> && diff "<scratch>/pre-mutation-<basename>" <file>`
+   it against the commit, since a copy always matches itself: the command
+   prints nothing and exits 0 (for an untracked file it always does; step 5 is
+   that file's only proof). If the mutation created the file, `rm` it.
+   `cp "<scratch>/pre-mutation-<basename>" <file> && git diff --exit-code HEAD -- <file>`
 9. Remove the marker; `ls <your-worktree>/.mutation-in-progress` must say no
    such file (`git status` cannot: it is gitignored).
 10. Run the confirming test green against the restored file.
