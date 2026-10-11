@@ -1,21 +1,23 @@
 ----------------------------- MODULE Frontier -----------------------------
 EXTENDS Waves
 
-CONSTANTS Frontier, Carries, IgnoreArm, WatermarkByMax,
+CONSTANTS Frontier, IgnoreArm, WatermarkByMax,
           FloorIgnored, CloseIgnored
 
 VARIABLES watermark, floor, open, suspended,
           pending, released, applied, flushedHigh,
-          releaseWitness, cutDone, closedWaiting
+          releaseWitness, cutDone, closedWaiting,
+          retired, received, baselines
 
 frontierVars ==
     <<watermark, floor, open, suspended, pending, released, applied, flushedHigh,
-      releaseWitness, cutDone, closedWaiting>>
+      releaseWitness, cutDone, closedWaiting, retired, received, baselines>>
 
 vars ==
     <<counter, channel, absorbed, acked, live, linked, cutSent,
+      liveSources, restartCount, swapped,
       watermark, floor, open, suspended, pending, released, applied, flushedHigh,
-      releaseWitness, cutDone, closedWaiting>>
+      releaseWitness, cutDone, closedWaiting, retired, received, baselines>>
 
 Expects(c, s) == {e \in InEdges(c) : s \in Carries[e]}
 
@@ -87,6 +89,9 @@ Init ==
     /\ releaseWitness = [c \in Frontier |-> {}]
     /\ cutDone = {}
     /\ closedWaiting = {}
+    /\ retired = [c \in Frontier |-> {}]
+    /\ received = [c \in Frontier |-> {}]
+    /\ baselines = [c \in Frontier |-> {}]
 
 EmitStep(s) ==
     /\ Emit(s)
@@ -114,19 +119,42 @@ CutStep(e) ==
     /\ Cut(e)
     /\ UNCHANGED frontierVars
 
-FrontierDataDelivery(e, i) ==
-    LET message == channel[e][i]
-        cell == To[e]
-        remaining == [edge \in Edges |->
-            IF edge = e THEN RemoveAt(channel[edge], i) ELSE channel[edge]]
+ReceivedAfter(cell, message) ==
+    IF message.kind = "delta"
+    THEN [received EXCEPT ![cell] = @ \cup {message.src}]
+    ELSE received
+
+BaselinesAfter(cell, e, message, fromBaseline) ==
+    IF fromBaseline
+    THEN [baselines EXCEPT ![cell] = @ \cup {<<message.src, e>>}]
+    ELSE baselines
+
+\* The CountBaselines control deliberately admits the baseline even though the
+\* just-processed EdgeOpen installed a floor at the producer's current counter.
+\* That is the fault under test: the production branch never calls this action
+\* with fromBaseline = TRUE.
+FrontierDataStep(e, message, remaining, fromBaseline) ==
+    LET cell == To[e]
+        nextReceived == ReceivedAfter(cell, message)
+        nextBaselines == BaselinesAfter(cell, e, message, fromBaseline)
     IN
     /\ message.kind \in {"delta", "progress"}
-    /\ IF message.t <= floor[e][message.src] /\ ~FloorIgnored
+    /\ IF \/ /\ message.kind = "delta"
+               /\ message.src \in retired[cell]
+           \/ /\ message.t <= floor[e][message.src]
+               /\ ~FloorIgnored
+               /\ ~fromBaseline
        THEN
-            \* Pre-join data and progress do not enter any frontier state.
+            \* Dead-lane and pre-join traffic do not enter frontier state.
             /\ channel' = remaining
+            /\ received' = nextReceived
+            /\ baselines' = nextBaselines
             /\ UNCHANGED
-                <<counter, absorbed, acked, live, linked, cutSent, frontierVars>>
+                <<counter, absorbed, acked, live, linked, cutSent,
+                  liveSources, restartCount, swapped,
+                  watermark, floor, open, suspended,
+                  pending, released, applied, flushedHigh, releaseWitness,
+                  cutDone, closedWaiting, retired>>
        ELSE
             LET oldWatermark == watermark[e][message.src]
                 nextWatermark ==
@@ -196,14 +224,47 @@ FrontierDataDelivery(e, i) ==
             /\ flushedHigh' = [flushedHigh EXCEPT ![cell] = highAtCell]
             /\ releaseWitness' =
                 [releaseWitness EXCEPT ![cell] = @ \cup witnesses]
+            /\ received' = nextReceived
+            /\ baselines' = nextBaselines
             /\ channel' = [edge \in Edges |->
                 IF edge \in OutEdges(cell) \cap live
                 THEN remaining[edge] \o emitted
                 ELSE remaining[edge]]
             /\ UNCHANGED
                 <<counter, absorbed, acked, live, linked, cutSent,
+                  liveSources, restartCount, swapped,
                   floor, open, suspended,
-                  cutDone, closedWaiting>>
+                  cutDone, closedWaiting, retired>>
+
+FrontierDataDelivery(e, i) ==
+    LET message == channel[e][i]
+        remaining == [edge \in Edges |->
+            IF edge = e THEN RemoveAt(channel[edge], i) ELSE channel[edge]]
+    IN FrontierDataStep(e, message, remaining, FALSE)
+
+FrontierBaselineDelivery(e, i) ==
+    LET message == channel[e][i]
+        cell == To[e]
+        remaining == [edge \in Edges |->
+            IF edge = e THEN RemoveAt(channel[edge], i) ELSE channel[edge]]
+    IN
+    /\ message.kind = "baseline"
+    /\ IF CountBaselines
+       THEN FrontierDataStep(
+                e, Delta(message.src, counter[message.src]), remaining, TRUE)
+       ELSE
+            /\ channel' = [edge \in Edges |->
+                IF edge \in OutEdges(cell) \cap live
+                THEN Append(remaining[edge], message)
+                ELSE remaining[edge]]
+            /\ baselines' =
+                [baselines EXCEPT ![cell] = @ \cup {<<message.src, e>>}]
+            /\ UNCHANGED
+                <<counter, absorbed, acked, live, linked, cutSent,
+                  liveSources, restartCount, swapped,
+                  watermark, floor, open, suspended,
+                  pending, released, applied, flushedHigh, releaseWitness,
+                  cutDone, closedWaiting, retired, received>>
 
 FrontierMarkerDelivery(e, i) ==
     LET message == channel[e][i]
@@ -274,7 +335,62 @@ FrontierMarkerDelivery(e, i) ==
         ELSE remaining[edge]]
     /\ UNCHANGED
         <<counter, absorbed, acked, live, linked, cutSent,
-          watermark, suspended>>
+          liveSources, restartCount, swapped,
+          watermark, suspended, retired, received, baselines>>
+
+FrontierReBaselineDelivery(e, i) ==
+    LET message == channel[e][i]
+        cell == To[e]
+        remaining == [edge \in Edges |->
+            IF edge = e THEN RemoveAt(channel[edge], i) ELSE channel[edge]]
+        retainedPending ==
+            {entry \in pending[cell] : entry[1] \notin message.supersedes}
+        ready == ReadyWaves(watermark, open, floor, cell, retainedPending)
+        ReadyCounters(source) ==
+            {t \in 1..WaveBound : <<source, t>> \in ready}
+        releasedAtCell ==
+            [source \in Sources |->
+                released[cell][source]
+                    \o SortedCounters(ReadyCounters(source))]
+        AppliedCandidates(edge, source) ==
+            {t \in ReadyCounters(source) :
+                <<source, t, edge>> \in retainedPending}
+        appliedAtCell ==
+            [edge \in Edges |-> [source \in Sources |->
+                LET candidates == AppliedCandidates(edge, source)
+                IN IF candidates = {}
+                   THEN applied[cell][edge][source]
+                   ELSE MaxNat(candidates)]]
+        highAtCell ==
+            [source \in Sources |->
+                LET counters == ReadyCounters(source)
+                IN IF counters = {}
+                   THEN flushedHigh[cell][source]
+                   ELSE MaxNat(counters)]
+        stillPending ==
+            {entry \in retainedPending :
+                <<entry[1], entry[2]>> \notin ready}
+        witnesses == ReleaseWitnesses(ready, cell, open, floor, watermark)
+        emitted == <<message>> \o ReadyMessages(ready)
+    IN
+    /\ message.kind = "reBaseline"
+    /\ pending' = [pending EXCEPT ![cell] = stillPending]
+    /\ released' = [released EXCEPT ![cell] = releasedAtCell]
+    /\ applied' = [applied EXCEPT ![cell] = appliedAtCell]
+    /\ flushedHigh' = [flushedHigh EXCEPT ![cell] = highAtCell]
+    /\ releaseWitness' =
+        [releaseWitness EXCEPT ![cell] = @ \cup witnesses]
+    /\ retired' =
+        [retired EXCEPT ![cell] = @ \cup message.supersedes]
+    /\ channel' = [edge \in Edges |->
+        IF edge \in OutEdges(cell) \cap live
+        THEN remaining[edge] \o emitted
+        ELSE remaining[edge]]
+    /\ UNCHANGED
+        <<counter, absorbed, acked, live, linked, cutSent,
+          liveSources, restartCount, swapped,
+          watermark, floor, open, suspended,
+          cutDone, closedWaiting, received, baselines>>
 
 NonFrontierMarkerDelivery(e, i) ==
     LET message == channel[e][i]
@@ -288,12 +404,16 @@ NonFrontierMarkerDelivery(e, i) ==
         IF message.kind = "edgeClose" THEN cutDone \cup {e} ELSE cutDone
     /\ UNCHANGED
         <<counter, absorbed, acked, live, linked, cutSent,
+          liveSources, restartCount, swapped,
           watermark, floor, open, suspended,
-          pending, released, applied, flushedHigh, releaseWitness, closedWaiting>>
+          pending, released, applied, flushedHigh, releaseWitness, closedWaiting,
+          retired, received, baselines>>
 
 FrontierDelivery(e, i) ==
     \/ FrontierDataDelivery(e, i)
     \/ FrontierMarkerDelivery(e, i)
+    \/ FrontierReBaselineDelivery(e, i)
+    \/ FrontierBaselineDelivery(e, i)
 
 \* The complete Deliver action lives here, rather than an abstract hook in
 \* Waves.tla: only this module can distinguish a frontier cell and update its
@@ -308,16 +428,29 @@ Deliver(e) ==
              \/ NonFrontierMarkerDelivery(e, i)
 
 Terminating ==
-    /\ \A s \in EmitFrom : counter[s] = WaveBound
+    /\ \A s \in liveSources :
+        Owner[s] \in EmitFrom => counter[s] = WaveBound
     /\ \A e \in Edges : channel[e] = <<>>
     /\ \A c \in Frontier : pending[c] = {}
+    /\ ~\E s \in Sources : RestartEnabled(s)
+    /\ ~\E c \in Cells : InstanceSwapEnabled(c)
     /\ UNCHANGED vars
+
+RestartStep(s) ==
+    /\ Restart(s)
+    /\ UNCHANGED frontierVars
+
+InstanceSwapStep(c) ==
+    /\ InstanceSwap(c)
+    /\ UNCHANGED frontierVars
 
 Next ==
     \/ \E s \in Sources : EmitStep(s)
     \/ \E e \in Edges : Deliver(e)
     \/ \E e \in Edges : LinkStep(e)
     \/ \E e \in Edges : CutStep(e)
+    \/ \E s \in Sources : RestartStep(s)
+    \/ \E c \in Cells : InstanceSwapStep(c)
     \/ Terminating
 
 =============================================================================
