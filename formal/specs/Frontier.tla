@@ -95,6 +95,14 @@ EmitStep(s) ==
 \* The BS-5 late-open scenario linearizes Link only at a consumer frontier:
 \* every already-emitted source counter has flushed there.  Link may still
 \* happen at counter zero, and data emitted after it queues behind EdgeOpen.
+\* This is a SCENARIO GUARD, not a kernel rule.  It excludes the interleaving
+\* where the new arm's producer consumed a wave before the link while that
+\* wave is still unflushed at the consumer: the consumer then installs a floor
+\* below the producer's position and expects the edge for a wave the edge
+\* never carries.  With the guard removed, MCFrontierCut-openLate (WaveBound
+\* 3) violates P01 and P05 (the join strands at quiescence) while P02, P03,
+\* P04, P09 and P16 still hold -- observed with TLC, review of
+\* computenet-tusn0.2.
 LinkStep(e) ==
     /\ IF To[e] \in Frontier
        THEN \A s \in Carries[e] : flushedHigh[To[e]][s] = counter[s]
