@@ -133,6 +133,22 @@ for cfg in "${configs[@]}"; do
             expectation_reason=missing-control-expectation
         elif (( expected_count != 1 )) || [[ -z "$expected_error" ]]; then
             expectation_reason="invalid-control-expectation count=$expected_count"
+        elif [[ "${expected_error:0:7}" != 'Error: ' ]] || \
+             [[ "$expected_error" == "Error: The behavior up to this point is:" ]] || \
+             [[ "$expected_error" == "Error: The following behavior constitutes a counter-example:" ]]; then
+            expectation_reason=invalid-control-expectation
+        elif [[ "$expected_error" == "Error: Temporal properties were violated." ]]; then
+            temporal_property_count="$(awk '
+                /^[[:space:]]*PROPERTY([[:space:]]|$)/ {
+                    for (field = 2; field <= NF; field++) {
+                        count++
+                    }
+                }
+                END { print count + 0 }
+            ' "$cfg")"
+            if (( temporal_property_count != 1 )); then
+                expectation_reason="invalid-temporal-property-count count=$temporal_property_count"
+            fi
         fi
     fi
 
