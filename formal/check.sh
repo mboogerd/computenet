@@ -110,9 +110,9 @@ fi
 
 meta_root="$(mktemp -d "${TMPDIR:-/tmp}/computenet-tlc.XXXXXX")" || \
     harness_error "could not create TLC metadata directory"
+trap 'rm -rf "$meta_root"' EXIT
 java_tmp="$meta_root/java-tmp"
 mkdir "$java_tmp" || harness_error "could not create TLC Java temporary directory"
-trap 'rm -rf "$meta_root"' EXIT
 
 overall=0
 for cfg in "${configs[@]}"; do
