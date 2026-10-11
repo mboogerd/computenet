@@ -18,6 +18,14 @@ OpenLateTo ==
 OpenLateCarries ==
     [e \in {"ab", "ac", "bd", "cd"} |-> {"A"}]
 
+RestartOwner == [s \in {"A", "A2"} |-> "A"]
+
+RestartSuccessor ==
+    [s \in {"A", "A2"} |-> IF s = "A" THEN "A2" ELSE "A2"]
+
+RestartCarries ==
+    [e \in {"ab", "ac", "bd", "cd"} |-> {"A", "A2"}]
+
 ChainFrom ==
     [e \in {"am", "md", "ab", "bd"} |->
         CASE e = "am" -> "A"
