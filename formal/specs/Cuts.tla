@@ -61,6 +61,20 @@ P13 ==
     /\ \A c \in Frontier :
         \A entry \in pending[c] : entry[1] \notin retired[c]
 
+\* Stall detector for a cfg in which a lane restarts (tusn0-D2); not an epic
+\* rule.  P05 cannot be listed there: ReBaseline resolves a superseded pending
+\* wave without releasing it, which P05's release-only consequent reads as a
+\* stall.  This is P05 with the consequent widened by exactly that case --
+\* the wave's source is retired at that frontier.  Where no lane restarts,
+\* retired stays empty and this is P05.
+EventuallyReleasedOrRetired ==
+    \A c \in Frontier :
+        \A s \in Sources :
+            \A t \in 1..WaveBound :
+                (\E entry \in pending[c] :
+                    entry[1] = s /\ entry[2] = t)
+                    ~> (t \in Range(released[c][s]) \/ s \in retired[c])
+
 \* [FRM1-P-14] PreservedEpochSwapInvisible.  This is intentionally near-
 \* definitional: the model checks the swap action's explicit wave-plane seam.
 P14 ==
