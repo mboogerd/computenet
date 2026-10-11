@@ -2,7 +2,7 @@
 
 ## What is modelled
 
-This directory holds executable TLA+ models of ComputeNet's dataflow semantics. The initial smoke pair checks the pinned TLC runner itself. The core model is split across `Waves.tla`, `Frontier.tla`, and `GlitchFree.tla`; see `ABSTRACTION.md` for the precise model-to-kernel mapping.
+This directory holds executable TLA+ models of ComputeNet's dataflow semantics. The initial smoke pair checks the pinned TLC runner itself. The core model is split across `Waves.tla`, `Frontier.tla`, and `GlitchFree.tla`; see `ABSTRACTION.md` for the precise model-to-kernel mapping. Counterexamples that require a specification decision are recorded in the append-only `doc/formal/findings.md` evidence ledger.
 
 ## Layout
 
@@ -63,6 +63,23 @@ Observed by `formal/check.sh` on 2026-10-11 CEST using an Apple M3 Max and OpenJ
 | `MCFrontierSmall-twoSources.cfg` | BS-4 independent silent source | P02, P04, P05, P08 | 146 | 16 | 1 |
 | `MCFrontierSmall.cfg` | BS-1 diamond | P01, P02, P03, P04 | 146 | 16 | 1 |
 
+The topology/restart cut family from the same run extends the state machine with
+late opens, cuts, source-epoch restart, preserved-epoch swap, and baselines:
+
+| config | BS | properties | distinct states | depth | seconds | verdict |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| `MCFrontierCut-baseline.cfg` | BS-9 catch-up baseline | P01, P02, P04, P05, P15 | 604 | 19 | 2 | `PASS model` |
+| `MCFrontierCut-chain2.cfg` | BS-7 two-hop cut | P01, P02, P04, P11 | 393 | — | 2 | `PASS model(expected-violation)` |
+| `MCFrontierCut-close.cfg` | BS-6 close unblocks | P01, P02, P04, P05, P10 | 692 | 18 | 2 | `PASS model` |
+| `MCFrontierCut-openLate.cfg` | BS-5 late open and floor | P01, P02, P03, P04, P05, P09, P16 | 604 | 19 | 1 | `PASS model` |
+| `MCFrontierCut-restart.cfg` | BS-8 fresh source epoch | P01, P02, P04, P12, P13, `EventuallyReleasedOrRetired` | 1,894 | 26 | 3 | `PASS model` |
+| `MCFrontierCut-swap.cfg` | preserved-epoch swap | P01, P02, P04, P05, P14 | 92 | 12 | 1 | `PASS model` |
+
+TLC does not print a complete-state-graph depth for the temporal violation in
+`MCFrontierCut-chain2.cfg`; the behavior it prints reaches the stuttering
+state at state 10. The direct `-workers 1` evidence and reduced trace are in
+`doc/formal/findings.md`.
+
 | property | model configuration(s) | control configuration(s) | observed TLC outcome for the control |
 | --- | --- | --- | --- |
 | P01 | `MCFrontierSmall.cfg`; `MCFrontierSmall-nested.cfg`; `MCFrontierSmall-absorb.cfg` | `MCTornRelease.cfg` | exit 12 — `Invariant P01 is violated.` |
@@ -73,6 +90,16 @@ Observed by `formal/check.sh` on 2026-10-11 CEST using an Apple M3 Max and OpenJ
 | P06 | `MCFrontierSmall-absorb.cfg` | `MCUnackedAbsorb.cfg` (load-bearing knob; `IgnoreArm = {"cd"}` lets TLC reach the named property) | exit 13 — `Error: Temporal properties were violated.` |
 | P07 | `MCFrontierSmall-absorb.cfg` (positive baseline; P07 is control-only) | `MCNoAbsorbAck.cfg` | exit 11 — `Deadlock reached.` |
 | P08 | `MCFrontierSmall-twoSources.cfg` | `MCOverAligned.cfg` | exit 12 — `Invariant P08 is violated.` |
+| P09 | `MCFrontierCut-openLate.cfg` | `MCFloorIgnored.cfg` | exit 12 — `Error: Invariant P09 is violated.` |
+| P10 | `MCFrontierCut-close.cfg` | `MCCloseIgnored.cfg` | exit 13 — `Error: Temporal properties were violated.` |
+| P11 | `MCFrontierCut-chain2.cfg` (the expected-violation model is its own falsifier) | no separate control | exit 13 — `Error: Temporal properties were violated.` |
+| P12 | `MCFrontierCut-restart.cfg` | `MCCounterReuse.cfg` | exit 13 — `Error: Action property P12 is violated.` |
+| P13 | `MCFrontierCut-restart.cfg` | `MCSilentRestart.cfg` | exit 12 — `Error: Invariant P13 is violated.` |
+| `EventuallyReleasedOrRetired` | `MCFrontierCut-restart.cfg` | no checked-in control; the reviewed successor-routing mutation violates the temporal property | not a control configuration |
+| P14 | `MCFrontierCut-swap.cfg` | `MCSwapEmitsMarker.cfg` | exit 13 — `Error: Action property P14 is violated.` |
+| P15 | `MCFrontierCut-baseline.cfg` | no dedicated checked-in control; the reviewed direct safe-branch mutation uses the same `CountBaselines` fault and violates P15 | `Error: Action property P15 is violated.` in the direct mutation run |
+| P16 | `MCFrontierCut-openLate.cfg` | `MCPreJoinReleased.cfg` | exit 12 — `Error: Invariant P16 is violated.` |
+| P17 | `MCFrontierCut-baseline.cfg` (positive baseline; P17 is control-only) | `MCBaselineCounted.cfg` (declares P01 to expose the torn release) | exit 12 — `Error: Invariant P01 is violated.` |
 
 Control state counts are omitted because violating runs under `-workers auto` are not stable. The outcomes above came from direct serial TLC runs and are declared in each control's `\* EXPECT Error: ...` header, which `check.sh` enforces. No control names P05: a wave left pending keeps `Terminating` disabled, so the stall is a deadlock, which TLC reports before it evaluates any temporal property (`ABSTRACTION.md`, "Property map"). Every default core configuration completed within the CI budget, so the deep configurations ledger stays empty ([FRM1-D-09]).
 
