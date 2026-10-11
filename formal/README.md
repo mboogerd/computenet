@@ -2,7 +2,7 @@
 
 ## What is modelled
 
-This directory holds executable TLA+ models of ComputeNet's dataflow semantics. The initial smoke pair checks the pinned TLC runner itself; the core model will describe the precise model-to-kernel abstraction in `ABSTRACTION.md` when it lands.
+This directory holds executable TLA+ models of ComputeNet's dataflow semantics. The initial smoke pair checks the pinned TLC runner itself. The core model is split across `Waves.tla`, `Frontier.tla`, and `GlitchFree.tla`; see `ABSTRACTION.md` for the precise model-to-kernel mapping.
 
 ## Layout
 
@@ -47,6 +47,30 @@ Models that legitimately finish their work instead provide an explicit stutterin
 `tools/tla2tools.version` pins the v1.7.4 tag and its official `tlaplus/tlaplus` GitHub release URL. `tools/tla2tools.sha256` pins SHA-256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`; `check.sh` verifies it before every TLC invocation. The GitHub release-asset API returned no independent digest for this older asset (`digest: null`) when the pin was created, so an API cross-check was not possible; the value was computed from the official HTTPS release asset before its first execution.
 
 To bump TLC, edit `tools/tla2tools.version`, delete `tools/tla2tools.jar`, run `formal/check.sh`, independently verify the new official asset digest where one is published, and replace the digest in `tools/tla2tools.sha256`. A mismatched jar is retained for inspection and is never executed.
+
+## Core model
+
+Observed by `formal/check.sh` on 2026-10-11 CEST using an Apple M3 Max and OpenJDK 25.0.2:
+
+| config | BS | properties | distinct states | depth | seconds |
+| --- | --- | --- | ---: | ---: | ---: |
+| `MCFrontierSmall-absorb.cfg` | BS-2 absorbing arm | P01, P02, P03, P04, P05, P06 | 608 | 16 | 1 |
+| `MCFrontierSmall-nested.cfg` | BS-1 nested diamond | P01, P02, P03, P04 | 586 | 22 | 1 |
+| `MCFrontierSmall-twoSources.cfg` | BS-4 independent silent source | P02, P04, P05, P08 | 146 | 16 | 1 |
+| `MCFrontierSmall.cfg` | BS-1 diamond | P01, P02, P03, P04 | 146 | 16 | 1 |
+
+| property | model configuration(s) | control configuration(s) | observed TLC outcome for the control |
+| --- | --- | --- | --- |
+| P01 | `MCFrontierSmall.cfg`; `MCFrontierSmall-nested.cfg`; `MCFrontierSmall-absorb.cfg` | `MCTornRelease.cfg` | exit 12 — `Invariant P01 is violated.` |
+| P02 | all four `MCFrontierSmall*.cfg` model configurations | `MCTornComplete.cfg` | exit 12 — `Invariant P02 is violated.` |
+| P03 | `MCFrontierSmall.cfg`; `MCFrontierSmall-nested.cfg`; `MCFrontierSmall-absorb.cfg` | `MCWatermarkRegress.cfg` | exit 13 — `Action property P03 is violated.` |
+| P04 | all four `MCFrontierSmall*.cfg` model configurations | `MCOutOfOrder.cfg` | exit 12 — `Invariant P04 is violated.` |
+| P05 | `MCFrontierSmall-absorb.cfg`; `MCFrontierSmall-twoSources.cfg` | `MCNoAbsorbAck.cfg` | exit 11 — `Deadlock reached.` |
+| P06 | `MCFrontierSmall-absorb.cfg` | `MCNoAbsorbAck.cfg` (load-bearing knob; the cfg does not list P06) | exit 11 — `Deadlock reached.` |
+| P07 | `MCFrontierSmall-absorb.cfg` (positive baseline; P07 is control-only) | `MCNoAbsorbAck.cfg` | exit 11 — `Deadlock reached.` |
+| P08 | `MCFrontierSmall-twoSources.cfg` | `MCOverAligned.cfg` | exit 12 — `Invariant P08 is violated.` |
+
+Control state counts are omitted because violating runs under `-workers auto` are not stable. The outcomes above came from direct serial TLC runs; `check.sh` accepts exits 11, 12, or 13 without checking which property fired (`computenet-nc0pg`). Every default core configuration completed within the CI budget, so the deep configurations ledger stays empty ([FRM1-D-09]).
 
 ## Deep configurations ledger
 
