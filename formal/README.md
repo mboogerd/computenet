@@ -32,9 +32,9 @@ On a violation, TLC prints an `Error:` block followed by `State N:` entries that
 
 ## Pass/fail contract
 
-A model passes only when TLC exits 0. A control passes the harness only when TLC exits 11 (deadlock), 12 (safety or action-property violation), or 13 (liveness violation). Exit 0 makes a control fail with `exit-0-control`; every other control status is a `crash`, never an expected violation. The harness exits 0 only when every selected configuration passes this contract, 1 when a model or control fails it, and 2 for a harness error.
+A model passes only when TLC exits 0. Every control declares its exact expected TLC error with a `\* EXPECT Error: ...` header. A control passes only when TLC exits 11, 12, or 13 and its log contains that exact error line. Exit 0 makes a control fail with `exit-0-control`; an allowed violation exit with a different error fails with `unexpected-control-error`; every other control status is a `crash`. A missing or malformed expectation fails with `missing-control-expectation` or `invalid-control-expectation` instead of falling back to any-violation behavior. The harness exits 0 only when every selected configuration passes this contract, 1 when a model or control fails it, and 2 for a harness error.
 
-With the v1.7.4 jar on Microsoft OpenJDK 21.0.11, direct probes observed exit 0 for the clean smoke model, 11 for a deadlock, 12 for the smoke invariant violation, and 13 for a liveness violation. TLC reported `5 states generated, 4 distinct states found` for the model, `4 states generated, 4 distinct states found` for the control, and `The depth of the complete state graph search is 4.` for both smoke runs.
+With the v1.7.4 jar on Microsoft OpenJDK 21.0.11, direct probes observed exit 0 for the clean smoke model, 11 for a deadlock, 12 for the smoke invariant violation, and 13 for a liveness violation. A direct `MCWatermarkRegress.cfg` probe on Darwin arm64 with OpenJDK 25.0.2 observed exit 13 and `Error: Action property P03 is violated.`; action-property violations are therefore not attributed to exit 12. TLC reported `5 states generated, 4 distinct states found` for the model, `4 states generated, 4 distinct states found` for the control, and `The depth of the complete state graph search is 4.` for both smoke runs.
 
 ## The `-deadlock` flag
 
@@ -70,7 +70,7 @@ Observed by `formal/check.sh` on 2026-10-11 CEST using an Apple M3 Max and OpenJ
 | P07 | `MCFrontierSmall-absorb.cfg` (positive baseline; P07 is control-only) | `MCNoAbsorbAck.cfg` | exit 11 — `Deadlock reached.` |
 | P08 | `MCFrontierSmall-twoSources.cfg` | `MCOverAligned.cfg` | exit 12 — `Invariant P08 is violated.` |
 
-Control state counts are omitted because violating runs under `-workers auto` are not stable. The outcomes above came from direct serial TLC runs; `check.sh` accepts exits 11, 12, or 13 without checking which property fired (`computenet-nc0pg`). Every default core configuration completed within the CI budget, so the deep configurations ledger stays empty ([FRM1-D-09]).
+Control state counts are omitted because violating runs under `-workers auto` are not stable. The outcomes above came from direct serial TLC runs and are declared in each control's `\* EXPECT Error: ...` header, which `check.sh` enforces. Every default core configuration completed within the CI budget, so the deep configurations ledger stays empty ([FRM1-D-09]).
 
 ## Deep configurations ledger
 

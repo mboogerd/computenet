@@ -124,6 +124,25 @@ for cfg in "${configs[@]}"; do
         kind=control
     fi
 
+    expected_error=''
+    expectation_reason=''
+    if [[ "$kind" == control ]]; then
+        expected_error="$(sed -n 's/^\\\* EXPECT //p' "$cfg")"
+        expected_count="$(sed -n '/^\\\* EXPECT /p' "$cfg" | wc -l | tr -d '[:space:]')"
+        if (( expected_count == 0 )); then
+            expectation_reason=missing-control-expectation
+        elif (( expected_count != 1 )) || [[ -z "$expected_error" ]]; then
+            expectation_reason="invalid-control-expectation count=$expected_count"
+        fi
+    fi
+
+    if [[ -n "$expectation_reason" ]]; then
+        printf 'FAIL control %s states=? depth=? 0s\n' "$cfg_name"
+        printf '  reason: %s\n' "$expectation_reason"
+        overall=1
+        continue
+    fi
+
     log="$meta_root/$cfg_name.log"
     start="$(date +%s)"
     # TLC resolves a bare module name against the working directory before
@@ -162,7 +181,11 @@ for cfg in "${configs[@]}"; do
         fi
     else
         if (( status == 11 || status == 12 || status == 13 )); then
-            verdict=PASS
+            if grep -Fqx -- "$expected_error" "$log"; then
+                verdict=PASS
+            else
+                reason="unexpected-control-error exit=$status expected=$expected_error"
+            fi
         elif (( status == 0 )); then
             reason=exit-0-control
         else
