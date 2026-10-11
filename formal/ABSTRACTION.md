@@ -65,10 +65,36 @@ This document maps the core model to the ComputeNet kernel at commit `bac06571`.
 | `P02` | `CompletenessSound` | All four `MCFrontierSmall*.cfg` model configurations | `MCTornComplete.cfg` | scenario-gap candidate; no corpus scenario directly asserts the completeness predicate. |
 | `P03` | `WatermarkMonotone` | `MCFrontierSmall.cfg`; `MCFrontierSmall-nested.cfg`; `MCFrontierSmall-absorb.cfg` | `MCWatermarkRegress.cfg` | scenario-gap candidate. |
 | `P04` | `ReleaseOrder` | All four `MCFrontierSmall*.cfg` model configurations | `MCOutOfOrder.cfg` | scenario-gap candidate. |
-| `P05` | `EventuallyReleased` | `MCFrontierSmall-absorb.cfg`; `MCFrontierSmall-twoSources.cfg` | `MCNoAbsorbAck.cfg` | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
-| `P06` | `AbsorbAckEmitted` | `MCFrontierSmall-absorb.cfg` | `MCNoAbsorbAck.cfg` is the load-bearing-knob control, but lists P05 and reaches deadlock rather than checking P06 directly | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
+| `P05` | `EventuallyReleased` | `MCFrontierSmall-absorb.cfg`; `MCFrontierSmall-twoSources.cfg` | `MCNoAbsorbAck.cfg` lists `PROPERTY P05`, but deadlock checking reports its stall before P05 is evaluated | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
+| `P06` | `AbsorbAckEmitted` | `MCFrontierSmall-absorb.cfg` | `MCUnackedAbsorb.cfg` is the load-bearing-knob control; it sets `IgnoreArm = {"cd"}` and lists only `PROPERTY P06`, so TLC reports a temporal-property violation instead of the no-ack deadlock | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
 | `P07` | `AbsorbAckLoadBearing` (control only; no TLA+ definition) | `MCFrontierSmall-absorb.cfg` is the positive baseline | `MCNoAbsorbAck.cfg` | Runtime sibling: `GlitchFreeStallTest`'s `a later wave's watermark retroactively completes an earlier wave an edge silently absorbed`. |
 | `P08` | `SilentSourceNeverBlocks` | `MCFrontierSmall-twoSources.cfg` | `MCOverAligned.cfg` | `22-LIVE-01`, with the unverified `Carries`/`WaveFrontier.expectedLocalEdges` divergence above; the corpus graph uses `QuorumSetCell`. |
+
+`P02` is a plain state invariant over the `released` history, not a snapshot of a
+history variable and not an action assertion. That is sound for these
+configurations because release is atomic with the completing delivery,
+watermarks are monotone, and `floor`, `open`, and `suspended` do not change.
+`P03` is an action property, written as `[][... ]_vars`; consequently its
+`MCWatermarkRegress.cfg` control reports an action-property violation (exit 13).
+
+The `MCNoAbsorbAck.cfg` deadlock is reported during TLC's safety pass before
+its listed `P05` temporal property is evaluated. It therefore remains the
+control for the load-bearing no-ack stall and names the deadlock as its
+expected outcome; `MCUnackedAbsorb.cfg` is the separate direct P06 control.
+
+No control names `P05`, and none can under the harness's flags without a spec
+change. `Terminating` requires every frontier's `pending` to be empty, and
+every other action is finite: emission is bounded by `WaveBound` and each
+delivery moves a message one hop down an acyclic graph. A wave that is still
+pending when emission and delivery are exhausted therefore leaves a state with
+no enabled action, which TLC reports as `Deadlock reached.` before it
+evaluates any temporal property. The device that frees `P06` does not carry
+over: with `IgnoreArm = {"cd"}` the frontier no longer waits on the unacked
+arm, no wave is stranded, and `P05` holds. Observed in direct serial TLC runs
+(`-workers 1`, Darwin arm64, OpenJDK 25.0.2, 2026-10-11): `MCNoAbsorbAck.cfg`'s
+constants with only `PROPERTY P05` exit 11; `MCUnackedAbsorb.cfg`'s constants
+with `PROPERTY P05` in place of `P06` exit 0; the former with TLC's
+`-deadlock` flag, which the harness must not pass, exits 13.
 
 ## Non-properties
 
