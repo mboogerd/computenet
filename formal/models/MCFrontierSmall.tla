@@ -39,4 +39,28 @@ NestedTo ==
 NestedCarries ==
     [e \in {"ab", "ac", "bd", "cd", "de", "ce"} |-> {"A"}]
 
+TwoSourcesFrom ==
+    [e \in {"ab", "ac", "bd", "cd", "sd"} |->
+        CASE e = "ab" -> "A"
+          [] e = "ac" -> "A"
+          [] e = "bd" -> "B"
+          [] e = "cd" -> "C"
+          [] e = "sd" -> "S"]
+
+TwoSourcesTo ==
+    [e \in {"ab", "ac", "bd", "cd", "sd"} |->
+        CASE e = "ab" -> "B"
+          [] e = "ac" -> "C"
+          [] e = "bd" -> "D"
+          [] e = "cd" -> "D"
+          [] e = "sd" -> "D"]
+
+TwoSourcesCarries ==
+    [e \in {"ab", "ac", "bd", "cd", "sd"} |->
+        IF e = "sd" THEN {"S"} ELSE {"A"}]
+
+OverAlignedCarries ==
+    [e \in {"ab", "ac", "bd", "cd", "sd"} |->
+        IF e = "sd" THEN {"A", "S"} ELSE {"A"}]
+
 =============================================================================
