@@ -2,7 +2,7 @@
 
 ## What is modelled
 
-This directory holds executable TLA+ models of ComputeNet's dataflow semantics. The initial smoke pair checks the pinned TLC runner itself. The core model is split across `Waves.tla`, `Frontier.tla`, and `GlitchFree.tla`; see `ABSTRACTION.md` for the precise model-to-kernel mapping. Counterexamples that require a specification decision are recorded in the append-only `doc/formal/findings.md` evidence ledger.
+This directory holds executable TLA+ models of ComputeNet's dataflow semantics. The initial smoke pair checks the pinned TLC runner itself. The core model is split across `Waves.tla`, `Frontier.tla`, and `GlitchFree.tla`; see `ABSTRACTION.md` for the precise model-to-kernel mapping. The cut family (late edge opens, cuts, fresh source epochs, preserved-epoch swaps, and catch-up baselines; P09–P17) adds `Cuts.tla` on top of those modules and is checked through `MCFrontierCut`. Counterexamples that require a specification decision are recorded in the append-only `doc/formal/findings.md` evidence ledger.
 
 ## Layout
 
