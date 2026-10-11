@@ -241,8 +241,11 @@ exists while `D` has not flushed them. Opening `cd` at floor zero then makes
 does not repair the wait: in the model it records catch-up arrival without
 advancing `watermark`, changing `pending`, or representing a wave position.
 
-`unverified:` this is the added-link half of the G-39 / 93 I-13 source-set
-dissemination residual.
+`unverified:` this is the added-link half of G-39 / 93 I-13's question of
+which wave a new edge counts from. The trace is not a source-set-dissemination
+counterexample: `OpenLateCarries` keeps `Carries[cd] = {"A"}` throughout; the
+join strands because `D` installs a floor below `C`'s already-consumed
+position.
 
 P05 exposes the liveness failure directly. P01 also fails because a later
 delivery on the new arm can advance it far enough to release an earlier wave
