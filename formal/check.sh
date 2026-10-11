@@ -126,9 +126,16 @@ for cfg in "${configs[@]}"; do
 
     expected_error=''
     expectation_reason=''
+    expected_violation=0
+    expected_count="$(sed -n '/^\\\* EXPECT /p' "$cfg" | wc -l | tr -d '[:space:]')"
     if [[ "$kind" == control ]]; then
+        expected_violation=1
+    elif (( expected_count > 0 )); then
+        expected_violation=1
+    fi
+
+    if (( expected_violation )); then
         expected_error="$(sed -n 's/^\\\* EXPECT //p' "$cfg")"
-        expected_count="$(sed -n '/^\\\* EXPECT /p' "$cfg" | wc -l | tr -d '[:space:]')"
         if (( expected_count == 0 )); then
             expectation_reason=missing-control-expectation
         elif (( expected_count != 1 )) || [[ -z "$expected_error" ]]; then
@@ -163,8 +170,13 @@ for cfg in "${configs[@]}"; do
         fi
     fi
 
+    summary_kind="$kind"
+    if (( expected_violation )) && [[ "$kind" == model ]]; then
+        summary_kind='model(expected-violation)'
+    fi
+
     if [[ -n "$expectation_reason" ]]; then
-        printf 'FAIL control %s states=? depth=? 0s\n' "$cfg_name"
+        printf 'FAIL %s %s states=? depth=? 0s\n' "$summary_kind" "$cfg_name"
         printf '  reason: %s\n' "$expectation_reason"
         overall=1
         continue
@@ -198,7 +210,7 @@ for cfg in "${configs[@]}"; do
 
     verdict=FAIL
     reason=''
-    if [[ "$kind" == model ]]; then
+    if [[ "$kind" == model ]] && (( expected_violation == 0 )); then
         if (( status == 0 )); then
             verdict=PASS
         elif (( status == 11 || status == 12 || status == 13 )); then
@@ -214,14 +226,18 @@ for cfg in "${configs[@]}"; do
                 reason="unexpected-control-error exit=$status expected=$expected_error"
             fi
         elif (( status == 0 )); then
-            reason=exit-0-control
+            if [[ "$kind" == control ]]; then
+                reason=exit-0-control
+            else
+                reason=exit-0-expected-violation
+            fi
         else
             reason="crash exit=$status"
         fi
     fi
 
     printf '%s %s %s states=%s depth=%s %ss\n' \
-        "$verdict" "$kind" "$cfg_name" "$states" "$depth" "$elapsed"
+        "$verdict" "$summary_kind" "$cfg_name" "$states" "$depth" "$elapsed"
     if [[ "$verdict" == FAIL ]]; then
         printf '  reason: %s\n' "$reason"
         cat "$log"
