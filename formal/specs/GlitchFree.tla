@@ -21,7 +21,8 @@ P01 ==
         \A s \in Sources :
             \A e1, e2 \in Expects(c, s) :
                 \A t \in (applied[c][e2][s] + 1)..applied[c][e1][s] :
-                    <<s, t>> \in absorbed[From[e2]]
+                    (open[e2] /\ floor[e2][s] < t)
+                        => <<s, t>> \in absorbed[From[e2]]
 
 \* [FRM1-P-02] CompletenessSound — completeness over silent or stuck edges
 P02 ==
