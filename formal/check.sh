@@ -126,7 +126,10 @@ for cfg in "${configs[@]}"; do
 
     log="$meta_root/$cfg_name.log"
     start="$(date +%s)"
-    if "$JAVA_BIN" \
+    # TLC resolves a bare module name against the working directory before
+    # TLA-Library, so run it from models/: a same-named .tla in the caller's
+    # directory would otherwise be checked instead of the repository's.
+    if cd "$MODELS_DIR" && "$JAVA_BIN" \
         -XX:+UseParallelGC \
         "-DTLA-Library=$MODELS_DIR:$SPECS_DIR" \
         -cp "$JAR" \
