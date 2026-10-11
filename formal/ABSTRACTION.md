@@ -65,10 +65,22 @@ This document maps the core model to the ComputeNet kernel at commit `bac06571`.
 | `P02` | `CompletenessSound` | All four `MCFrontierSmall*.cfg` model configurations | `MCTornComplete.cfg` | scenario-gap candidate; no corpus scenario directly asserts the completeness predicate. |
 | `P03` | `WatermarkMonotone` | `MCFrontierSmall.cfg`; `MCFrontierSmall-nested.cfg`; `MCFrontierSmall-absorb.cfg` | `MCWatermarkRegress.cfg` | scenario-gap candidate. |
 | `P04` | `ReleaseOrder` | All four `MCFrontierSmall*.cfg` model configurations | `MCOutOfOrder.cfg` | scenario-gap candidate. |
-| `P05` | `EventuallyReleased` | `MCFrontierSmall-absorb.cfg`; `MCFrontierSmall-twoSources.cfg` | `MCNoAbsorbAck.cfg` | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
-| `P06` | `AbsorbAckEmitted` | `MCFrontierSmall-absorb.cfg` | `MCNoAbsorbAck.cfg` is the load-bearing-knob control, but lists P05 and reaches deadlock rather than checking P06 directly | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
+| `P05` | `EventuallyReleased` | `MCFrontierSmall-absorb.cfg`; `MCFrontierSmall-twoSources.cfg` | `MCNoAbsorbAck.cfg` lists `PROPERTY P05`, but deadlock checking reports its stall before P05 is evaluated | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
+| `P06` | `AbsorbAckEmitted` | `MCFrontierSmall-absorb.cfg` | `MCUnackedAbsorb.cfg` is the load-bearing-knob control; it sets `IgnoreArm = {"cd"}` and lists only `PROPERTY P06`, so TLC reports a temporal-property violation instead of the no-ack deadlock | scenario-gap candidate; `22-LIVE-01` is the nearest corpus sibling but checks a `QuorumSetCell`. |
 | `P07` | `AbsorbAckLoadBearing` (control only; no TLA+ definition) | `MCFrontierSmall-absorb.cfg` is the positive baseline | `MCNoAbsorbAck.cfg` | Runtime sibling: `GlitchFreeStallTest`'s `a later wave's watermark retroactively completes an earlier wave an edge silently absorbed`. |
 | `P08` | `SilentSourceNeverBlocks` | `MCFrontierSmall-twoSources.cfg` | `MCOverAligned.cfg` | `22-LIVE-01`, with the unverified `Carries`/`WaveFrontier.expectedLocalEdges` divergence above; the corpus graph uses `QuorumSetCell`. |
+
+`P02` is a plain state invariant over the `released` history, not a snapshot of a
+history variable and not an action assertion. That is sound for these
+configurations because release is atomic with the completing delivery,
+watermarks are monotone, and `floor`, `open`, and `suspended` do not change.
+`P03` is an action property, written as `[][... ]_vars`; consequently its
+`MCWatermarkRegress.cfg` control reports an action-property violation (exit 13).
+
+The `MCNoAbsorbAck.cfg` deadlock is reported during TLC's safety pass before
+its listed `P05` temporal property is evaluated. It therefore remains the
+control for the load-bearing no-ack stall and names the deadlock as its
+expected outcome; `MCUnackedAbsorb.cfg` is the separate direct P06 control.
 
 ## Non-properties
 
