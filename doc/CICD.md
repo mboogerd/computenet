@@ -19,6 +19,7 @@ cached via `gradle/actions/setup-gradle@v4`. Six jobs, each with a
 | `concord-full` | full concord corpus (`core,dist,dur`) + `CONCORDANCE.md` regeneration must be a no-op | 30m |
 | `ui-test` | `inspect/ui` typecheck + tests | 15m |
 | `agora-ui-test` | `demo/agora/ui` typecheck + tests | 15m |
+| `formal-check` | `formal/check.sh` — every TLA+ model config must pass and every control must fail; advisory until added to the ruleset | 15m |
 
 Together these are `./gradlew test`'s superset — the split into fast/serial
 lanes exists because the multi-JVM tests fork real processes and starve when
