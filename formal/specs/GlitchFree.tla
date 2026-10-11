@@ -44,6 +44,36 @@ P04 ==
             \A i, j \in DOMAIN released[c][s] :
                 i < j => released[c][s][i] < released[c][s][j]
 
-\* [FRM1-P-05]..[FRM1-P-08] are added by the absorb/two-source task.
+\* [FRM1-P-05] EventuallyReleased — G-40 liveness
+P05 ==
+    \A c \in Frontier :
+        \A s \in Sources :
+            \A t \in 1..WaveBound :
+                (\E entry \in pending[c] :
+                    entry[1] = s /\ entry[2] = t)
+                    ~> t \in Range(released[c][s])
+
+\* [FRM1-P-06] AbsorbAckEmitted — [22-LIVE-01] absorb-ack rule
+P06 ==
+    \A c \in MayAbsorb :
+        \A s \in Sources :
+            \A t \in 1..WaveBound :
+                <<s, t>> \in absorbed[c]
+                    ~> \A e \in OutEdges(c) : <<s, t>> \in acked[e]
+
+\* [FRM1-P-07] AbsorbAckLoadBearing — BS-3 control only
+\* Defined by controls/MCNoAbsorbAck.cfg, where disabling absorb-acks must
+\* strand a pending wave through either a deadlock or a P05 violation.
+
+\* [FRM1-P-08] SilentSourceNeverBlocks — [22-LIVE-01]
+P08 ==
+    \A c \in Frontier :
+        \A s \in Sources :
+            \A t \in 1..WaveBound :
+                (\E entry \in pending[c] :
+                    entry[1] = s /\ entry[2] = t)
+                    => ~(\A e \in {edge \in InEdges(c) : s \in Upstream(edge)} :
+                        (open[e] /\ e \notin suspended /\ floor[e][s] < t)
+                            => watermark[e][s] >= t)
 
 =============================================================================
