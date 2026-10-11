@@ -119,7 +119,7 @@ This document maps the core model to the ComputeNet kernel at commit `dfd5faf7`.
 | `P13` | `ReBaselinePrecedesNewEpoch` + `CompletenessRecomputed` | `MCFrontierCut-restart.cfg` | `MCSilentRestart.cfg` | `22-SOURCE-ID-01`; `21-REBASE-01`; also `concord/corpus/21-propagation/24-WL-REBASE-01.yaml` covers `[21-REBASE-01]` together with waterline lifecycle requirements. |
 | — | `EventuallyReleasedOrRetired` (restart-aware stall detector, not an epic P-id) | `MCFrontierCut-restart.cfg` | No checked-in control; the reviewed successor-routing mutation strands the live epoch and violates it | Model bookkeeping; where no epoch retires it reduces to P05. |
 | `P14` | `PreservedEpochSwapInvisible` | `MCFrontierCut-swap.cfg` | `MCSwapEmitsMarker.cfg` | scenario-gap candidate. |
-| `P15` | `BaselineNeverCounted` | `MCFrontierCut-baseline.cfg` | `MCBaselineCounted.cfg` uses the same faulty knob but declares P01 for P17; the reviewed direct mutation of the safe baseline branch reports `Action property P15 is violated.` | scenario-gap candidate. |
+| `P15` | `BaselineNeverCounted` | `MCFrontierCut-baseline.cfg` | `MCBaselineAdvances.cfg` | scenario-gap candidate. |
 | `P16` | `GlitchFreedomResumesPostInstall` | `MCFrontierCut-openLate.cfg` | `MCPreJoinReleased.cfg` | scenario-gap candidate. |
 | `P17` | `BaselineCountedTears` (control only; no TLA+ definition) | `MCFrontierCut-baseline.cfg` is the positive baseline | `MCBaselineCounted.cfg` lists P01 and exhibits the required torn release | scenario-gap candidate. |
 
