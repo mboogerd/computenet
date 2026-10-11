@@ -1,10 +1,10 @@
 # Core-model abstraction
 
-This document maps the core model to the ComputeNet kernel at commit `874069e9`. The mapping is anchored to named symbols rather than line numbers: when the kernel changes, re-verify every row against the named symbol before treating the mapping as current. The model deliberately checks the decided semantics; this map is not evidence that the implementation already conforms to every modelled rule.
+This document maps the core model to the ComputeNet kernel at commit `dfd5faf7`. The mapping is anchored to named symbols rather than line numbers: when the kernel changes, re-verify every row against the named symbol before treating the mapping as current. The model deliberately checks the decided semantics; this map is not evidence that the implementation already conforms to every modelled rule.
 
 ## Model symbols
 
-| Model name | ComputeNet concept | Kernel path and symbol at `874069e9` | Abstracted away |
+| Model name | ComputeNet concept | Kernel path and symbol at `dfd5faf7` | Abstracted away |
 | --- | --- | --- | --- |
 | `Sources` | Outlet emission epochs; a model source is the `sourceId` half of a wave identity. | `kernel/src/main/kotlin/civictech/cell/MessageContext.kt`: `Timestamp.sourceId`; minting in `cell/port/FanOutlet.kt`: `sourceId` | UUID generation and epoch succession. |
 | `Cells` | Runtime cell identities. | `kernel/src/main/kotlin/civictech/cell/CellRef.kt`: `CellRef` | Cell APIs, descriptors, hosting, and lifecycle. |
@@ -166,7 +166,7 @@ No P01–P17 entry is dropped: P01–P06 and P08–P16 are stated in TLA+, while
 
 - A non-frontier pass-through cell forwards `Progress` unconditionally. The kernel's `relayAbsorbAcks` unary form relays only while the hop has exactly one open `LinkRole.Consume` input edge. Every pass-through cell in these configurations is unary, so the behaviors coincide here.
 - G-36 single-hop edge markers are modelled faithfully: `NonFrontierMarkerDelivery` consumes `EdgeOpen`/`EdgeClose` without forwarding. The BS-7 stranding in `doc/formal/findings.md` is the point of that fidelity, not an abstraction accident.
-- `ReBaseline` does ride reactive re-emission: `FanOutlet.call` copies `MessageContext` while changing only `sourcePort`, `hop`, and (when absent) `baseline`, so `reBaseline` is preserved. `WaveFrontier.kt` has no ReBaseline/supersession consumer at `874069e9`; the model's frontier-side `retired` transition realizes the decided 20/22 rule, while `WaterlineCell.forget` is the concrete kernel consumer inspected here.
+- `ReBaseline` does ride reactive re-emission: `FanOutlet.call` copies `MessageContext` while changing only `sourcePort`, `hop`, and (when absent) `baseline`, so `reBaseline` is preserved. `WaveFrontier.kt` has no ReBaseline/supersession consumer at `dfd5faf7`; the model's frontier-side `retired` transition realizes the decided 20/22 rule, while `WaterlineCell.forget` is the concrete kernel consumer inspected here.
 - The model emits one abstract `Delta(s,t)` per release per outgoing edge. `WaveFrontier.flushReady` instead invokes every buffered contribution's release callback under the shared timestamp.
 - A wave absorbed on every arm creates no pending delta, is never released, and emits no downstream acknowledgement. The nested all-absorbing case remains a scenario-gap candidate.
 - A `Progress` delivered to a frontier advances its watermark and is consumed; it is never forwarded. This matches the `Protocols.Progress` handler in `WaveFrontier.registerHandlers`.
@@ -177,6 +177,6 @@ No P01–P17 entry is dropped: P01–P06 and P08–P16 are stated in TLA+, while
 - Floors are exact maps for every model source. Their representation and retention/compaction horizon — the open G-39 question — are not modelled. `floor` and `open` move; `suspended` remains inert.
 - `CutSpec` adds `QuiescentStutter` only for the cut family so an empty-channel stall with pending waves is a named liveness counterexample. Core `Spec`/`Terminating` behavior is unchanged for the original family.
 - A source excluded from `EmitFrom` stays silent for the whole run. The model does not cover a source that emits in one wave and then becomes silent.
-- `FrontierDelivery` advances the watermark before its late-delta branch. At `874069e9`, `WaveFrontier.offer` releases a delta at or below `flushedHighWater` without calling `advanceWatermark` or `flushReady`. P01 compares only last-applied counters, so a two-wave flush in one transition could mask a torn earlier wave; per-link FIFO makes that behavior unreachable in the default configurations.
+- `FrontierDelivery` advances the watermark before its late-delta branch. At `dfd5faf7`, `WaveFrontier.offer` releases a delta at or below `flushedHighWater` without calling `advanceWatermark` or `flushReady`. P01 compares only last-applied counters, so a two-wave flush in one transition could mask a torn earlier wave; per-link FIFO makes that behavior unreachable in the default configurations.
 - The `Carries` mismatch is an unverified code-reading divergence, not a reproduced runtime failure or a formal-model finding (`computenet-pu4fi`).
 - The harness accepts only exits 11/12/13 whose log contains the cfg's exact declared `Error:` line; a temporal expectation must name exactly one `PROPERTY`. TLC still does not name which temporal property failed, so the one-property rule is the attribution boundary.
