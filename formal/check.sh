@@ -138,10 +138,21 @@ for cfg in "${configs[@]}"; do
              [[ "$expected_error" == "Error: The following behavior constitutes a counter-example:" ]]; then
             expectation_reason=invalid-control-expectation
         elif [[ "$expected_error" == "Error: Temporal properties were violated." ]]; then
+            # A cfg section runs from its keyword to the next keyword, across
+            # lines, and TLC accepts PROPERTY and PROPERTIES alike, repeated.
+            # Count every name in every such section. A (* block comment *)
+            # inside one is counted as names, which can only fail the control.
             temporal_property_count="$(awk '
-                /^[[:space:]]*PROPERTY([[:space:]]|$)/ {
-                    for (field = 2; field <= NF; field++) {
-                        count++
+                {
+                    sub(/\\\*.*/, "")
+                    for (field = 1; field <= NF; field++) {
+                        if ($field == "PROPERTY" || $field == "PROPERTIES") {
+                            in_properties = 1
+                        } else if ($field ~ /^(CONSTANTS?|INIT|NEXT|SPECIFICATION|INVARIANTS?|CONSTRAINTS?|ACTION[_-]CONSTRAINTS?|SYMMETRY|VIEW|CHECK_DEADLOCK|POSTCONDITION|ALIAS|TYPE|TYPE_CONSTRAINT)$/) {
+                            in_properties = 0
+                        } else if (in_properties) {
+                            count++
+                        }
                     }
                 }
                 END { print count + 0 }
