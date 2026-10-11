@@ -26,6 +26,8 @@ formal/check.sh --deep             # deep configurations only, never the default
 
 Named configurations are searched in `models/`, `controls/`, then `models/deep/`. An unknown name or option is a harness error with exit status 2. Each `.cfg` starts with `\* MODULE Name`; controls reuse the corresponding module in `models/`.
 
+`JAVA` may name the Java launcher, including a relative path containing a slash; the harness resolves such a path before changing into `models/`. Each harness invocation also gives TLC a private `java.io.tmpdir`. TLC 1.7.4 extracts jar-bundled standard modules such as `Naturals.tla` to fixed filenames directly under `java.io.tmpdir` and registers them with `deleteOnExit`, so concurrent JVMs sharing the system temp directory can delete one another's modules during parsing. The private directory removes that race. On 2026-10-12, a Darwin arm64 host with 16 logical cores and JetBrains Runtime 25.0.2 completed 200 concurrent `MCSmoke` runs in 25 batches of 8 with zero `crash` or failure verdicts.
+
 ## Reading a trace
 
 On a violation, TLC prints an `Error:` block followed by `State N:` entries that show the shortest behavior leading to the failure. The harness writes each full TLC stream to `<temporary-metadir>/<config>.log`, prints that log for a failed configuration, and removes the temporary metadata directory when the run exits. The printed failure output is therefore the durable trace to retain.
