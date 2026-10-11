@@ -97,7 +97,7 @@ state at state 10. The direct `-workers 1` evidence and reduced trace are in
 | P13 | `MCFrontierCut-restart.cfg` | `MCSilentRestart.cfg` | exit 12 — `Error: Invariant P13 is violated.` |
 | `EventuallyReleasedOrRetired` | `MCFrontierCut-restart.cfg` | no checked-in control; the reviewed successor-routing mutation violates the temporal property | not a control configuration |
 | P14 | `MCFrontierCut-swap.cfg` | `MCSwapEmitsMarker.cfg` | exit 13 — `Error: Action property P14 is violated.` |
-| P15 | `MCFrontierCut-baseline.cfg` | no dedicated checked-in control; the reviewed direct safe-branch mutation uses the same `CountBaselines` fault and violates P15 | `Error: Action property P15 is violated.` in the direct mutation run |
+| P15 | `MCFrontierCut-baseline.cfg` | `MCBaselineAdvances.cfg` | exit 13 — `Error: Action property P15 is violated.` |
 | P16 | `MCFrontierCut-openLate.cfg` | `MCPreJoinReleased.cfg` | exit 12 — `Error: Invariant P16 is violated.` |
 | P17 | `MCFrontierCut-baseline.cfg` (positive baseline; P17 is control-only) | `MCBaselineCounted.cfg` (declares P01 to expose the torn release) | exit 12 — `Error: Invariant P01 is violated.` |
 
