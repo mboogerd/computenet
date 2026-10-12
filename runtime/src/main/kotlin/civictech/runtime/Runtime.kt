@@ -766,7 +766,10 @@ object Runtime {
             }
         }
 
-        /** Close endpoints, then the inspector, then drain the bridge and application hosts. */
+        /**
+         * Stop the budget checkpoint ticker, close endpoints, then the inspector, then drain the bridge and
+         * application hosts, and last write the final budget checkpoint.
+         */
         @Synchronized
         override fun close() {
             if (closed) return
