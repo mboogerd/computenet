@@ -132,6 +132,40 @@ class ReplicationConcurrencyTest {
     }
 
     @Test
+    fun `re-announced catch-up does not block concurrent retirement`() {
+        val fixture = Fixture()
+        fixture.registry.publishFromPeer(fixture.remote, fixture.sink, peer = REMOTE) shouldBe null
+
+        val catchUpEntered = CountDownLatch(1)
+        val releaseCatchUp = CountDownLatch(1)
+        val blockedSink = InvocationSink {
+            catchUpEntered.countDown()
+            check(releaseCatchUp.await(20, TimeUnit.SECONDS)) { "the retirement path never released catch-up" }
+        }
+        val reannouncing = FutureTask<Unit> {
+            fixture.registry.publish(fixture.remote, blockedSink, peer = REMOTE)
+            Unit
+        }
+        Thread.ofVirtual().start(reannouncing)
+        check(catchUpEntered.await(20, TimeUnit.SECONDS)) { "re-announcement never re-fired catch-up" }
+
+        val retiring = FutureTask<Unit> {
+            fixture.registry.unpublish(fixture.remote)
+            Unit
+        }
+        Thread.ofVirtual().start(retiring)
+        try {
+            retiring.get(2, TimeUnit.SECONDS)
+        } finally {
+            releaseCatchUp.countDown()
+        }
+        reannouncing.get(20, TimeUnit.SECONDS)
+
+        fixture.registry.location(fixture.remote) shouldBe null
+        fixture.replication.linkCountAmong(setOf(fixture.local.ref, fixture.remote)) shouldBe 0
+    }
+
+    @Test
     fun `formation paused before eviction cannot resurrect the evicted side`() {
         val fixture = Fixture()
         val paused = fixture.pauseFormation()

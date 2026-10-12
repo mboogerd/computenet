@@ -1137,24 +1137,12 @@ class Replication(
         var pending: RetentionHold? = null
         var chargeHost: ManagedHost? = null
         var chargeAnnouncer: PeerStamp? = null
+        var catchUp: Pair<Replicable<*>, Link>? = null
         synchronized(linkLifecycle) {
             if (!linkEndpointsLiveLocked(local, other)) return
             linked[key]?.let { (cell, link) ->
-                // Anti-entropy on re-announce (M10.1): a re-announced replica may
-                // be RECOVERING from a crash — frames the transport had already
-                // swallowed at crash time were never journaled on its side, so
-                // parked replay alone cannot restore them. Re-fire the catch-up
-                // hook through the existing link: the full state-as-delta unicast
-                // is idempotent (tags / pointwise max), so a plain re-announce
-                // costs one redundant delta at worst.
-                //
-                // The crash half of that claim only holds because [replicate] drops
-                // a superseded instance's entry first ([supersedeLocalInstance],
-                // computenet-h50w): `cell` here is whatever object was linked, and
-                // re-firing a DISCARDED one's outlet reaches nobody.
-                @Suppress("UNCHECKED_CAST")
-                gossipOutlet(cell).linking.fireLinked(link)
-                return
+                catchUp = cell to link
+                return@synchronized
             }
 
             if (local !is WatermarkCell) {
@@ -1182,6 +1170,28 @@ class Replication(
                 installLinkCheckedLocked(local, other, targetInterest, key)
                 return
             }
+        }
+
+        catchUp?.let { (cell, link) ->
+            // Anti-entropy on re-announce (M10.1): a re-announced replica may
+            // be RECOVERING from a crash — frames the transport had already
+            // swallowed at crash time were never journaled on its side, so
+            // parked replay alone cannot restore them. Re-fire the catch-up
+            // hook through the existing link: the full state-as-delta unicast
+            // is idempotent (tags / pointwise max), so a plain re-announce
+            // costs one redundant delta at worst.
+            //
+            // The crash half of that claim only holds because [replicate] drops
+            // a superseded instance's entry first ([supersedeLocalInstance],
+            // computenet-h50w): `cell` here is whatever object was linked, and
+            // re-firing a DISCARDED one's outlet reaches nobody.
+            //
+            // The lookup is lifecycle-serialized, but transport delivery is not:
+            // an echo can synchronously re-enter this Replication, and retirement
+            // must remain able to drop the captured link while catch-up is in flight.
+            @Suppress("UNCHECKED_CAST")
+            gossipOutlet(cell).linking.fireLinked(link)
+            return
         }
 
         val expected = requireNotNull(pending)
