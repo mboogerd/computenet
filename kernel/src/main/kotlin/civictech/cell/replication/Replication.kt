@@ -82,7 +82,24 @@ class Replication(
         val deltaInlet: Use<Propagate<Any?>>
     }
 
+    /**
+     * Serializes the complete outbound-link lifecycle: local residency,
+     * formation, reconciliation, rollback, eviction, rebind, crash supersede,
+     * Retention holds, and the test reads over [linked].
+     *
+     * [installLink] deliberately runs while this reentrant monitor is held.
+     * Its catch-up can synchronously unpublish a dead transport on this same
+     * thread; the post-install liveness check then observes that callback and
+     * removes the entry which the assignment could only write afterwards.
+     */
+    private val linkLifecycle = Any()
+
+    /** Guarded by [linkLifecycle]. */
     private val localReplicas = mutableMapOf<UUID, MutableList<Replicable<*>>>()
+
+    /** Deterministic overlap seam; invoked immediately before formation enters [linkLifecycle]. */
+    @Volatile
+    internal var beforeLinkLifecycle: ((Replicable<*>, CellRef) -> Unit)? = null
 
     private data class AuthorityBinding(
         val authority: WriteAuthority,
@@ -107,7 +124,10 @@ class Replication(
     /** The local authority adapter for [ref], or null on the byte-identical open path. */
     fun authorityOf(ref: CellRef): AuthorityGossip? = adapters[ref]
 
-    /** The host each local replica was spawned on — needed to suspend/despawn it later (eviction). */
+    /**
+     * The host each local replica was spawned on — needed to suspend/despawn it
+     * later (eviction). Guarded by [linkLifecycle].
+     */
     private val hostOf = mutableMapOf<CellRef, ManagedHost>()
 
     /**
@@ -115,17 +135,18 @@ class Replication(
      * was reachable at eviction time (the suspend-when-partitioned gate,
      * G-45). Cleared, and the replica resumed, on the next re-announce that
      * makes a peer of the same logical id visible again (heal).
+     * Guarded by [linkLifecycle].
      */
     private val partitionSuspended = mutableSetOf<CellRef>()
 
-    /** Established gossip links per (local replica → remote replica) pair. */
+    /** Established gossip links per (local replica → remote replica) pair. Guarded by [linkLifecycle]. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
 
     /**
      * One Retention reservation for a charged gossip pair. A pending slot is
      * installed before either ledger call, so a concurrent release can mark the
      * admission as obsolete before its undo handle exists. All slot transitions
-     * happen under [retentionHolds]' monitor.
+     * happen under [linkLifecycle].
      */
     private class RetentionHold {
         private var undo: (() -> Unit)? = null
@@ -147,9 +168,9 @@ class Replication(
 
     /**
      * Retention reservations held for charged gossip links, keyed by the same
-     * pair as [linked]. The map is also its lifecycle monitor: [maybeLink]
+     * pair as [linked]. [linkLifecycle] is their shared monitor: [maybeLink]
      * installs a pending slot before charging, while unlink/rollback/eviction
-     * remove that same slot through [releaseHoldsMatching]. Thus a release that
+     * remove that same slot through [releaseHoldsMatchingLocked]. Thus a release that
      * overlaps admission either releases an installed hold or causes the later
      * admission to undo both charges without forming a link.
      */
@@ -390,7 +411,8 @@ class Replication(
             }
             for (notice in detector.evaluate(rows, open, closed)) {
                 stabilityStallListeners[logicalId]?.toList()?.forEach { it(notice) }
-                localReplicas[logicalId]?.toList()?.forEach { replica -> notifyDownstream(replica, notice) }
+                val replicas = synchronized(linkLifecycle) { localReplicas[logicalId]?.toList().orEmpty() }
+                replicas.forEach { replica -> notifyDownstream(replica, notice) }
             }
         }, PortRef.generate()))
     }
@@ -492,8 +514,9 @@ class Replication(
         // [rebind], and it is the derived key, not this call site, that makes
         // re-linking idempotent no matter which path dropped the entry.
         registry.onUnpublish { ref ->
-            releaseHoldsMatching { it.second == ref }
-            linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) }
+            synchronized(linkLifecycle) {
+                releaseHoldsMatchingLocked { it.second == ref }
+            }
         }
     }
 
@@ -584,8 +607,10 @@ class Replication(
         // behaviour, unchanged. `continueTagLaneAbove` never lowers, so a cell restored
         // from a checkpoint (which carries its own counter) is not disturbed.
         departedTagLanes[cell.ref]?.let { high -> (cell as? TagLaneContinuity)?.continueTagLaneAbove(high) }
-        localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
-        hostOf[cell.ref] = host
+        synchronized(linkLifecycle) {
+            localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
+            hostOf[cell.ref] = host
+        }
         if (adapter == null) {
             adapters.remove(cell.ref)
             authorityBindings.remove(cell.ref)
@@ -603,13 +628,14 @@ class Replication(
                 } catch (cleanupFailure: Throwable) {
                     failure.addSuppressed(cleanupFailure)
                 }
-                localReplicas[cell.ref.id]?.let { replicas ->
-                    replicas.remove(cell)
-                    if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
+                synchronized(linkLifecycle) {
+                    localReplicas[cell.ref.id]?.let { replicas ->
+                        replicas.remove(cell)
+                        if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
+                    }
+                    if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
+                    releaseHoldsMatchingLocked { it.first == cell.ref }
                 }
-                if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
-                releaseHoldsMatching { it.first == cell.ref }
-                linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
                 if (adapters[cell.ref] === adapter) {
                     adapters.remove(cell.ref)
                     authorityBindings.remove(cell.ref)
@@ -688,16 +714,21 @@ class Replication(
     }
 
     private fun supersedeLocalInstance(cell: Replicable<*>): Boolean {
-        val locals = localReplicas[cell.ref.id] ?: return false
-        if (!locals.any { it !== cell && it.ref == cell.ref }) return false
-        // computenet-uju5: the superseded instance is a departing incarnation of this ref
-        // — the crash-and-rebuild shape — so its tag lane is carried the same way
-        // [evict]'s is. See [departedTagLanes].
-        locals.filter { it !== cell && it.ref == cell.ref }.forEach { rememberTagLane(it) }
-        locals.removeAll { it !== cell && it.ref == cell.ref }
-        linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
-        if (partitionSuspended.remove(cell.ref)) watermarks[cell.ref.id]?.resume()
-        return true
+        var resumeWatermark = false
+        val superseded = synchronized(linkLifecycle) {
+            val locals = localReplicas[cell.ref.id] ?: return@synchronized false
+            if (!locals.any { it !== cell && it.ref == cell.ref }) return@synchronized false
+            // computenet-uju5: the superseded instance is a departing incarnation of this ref
+            // — the crash-and-rebuild shape — so its tag lane is carried the same way
+            // [evict]'s is. See [departedTagLanes].
+            locals.filter { it !== cell && it.ref == cell.ref }.forEach { rememberTagLane(it) }
+            locals.removeAll { it !== cell && it.ref == cell.ref }
+            dropLinksMatchingLocked { it.first == cell.ref }
+            resumeWatermark = partitionSuspended.remove(cell.ref)
+            true
+        }
+        if (resumeWatermark) watermarks[cell.ref.id]?.resume()
+        return superseded
     }
 
     /**
@@ -729,7 +760,8 @@ class Replication(
             fresh = true
             WatermarkCell(watermarkRef(cell.ref)).also { replicate(it, host) }
         }
-        if (rehome && !fresh && hostOf[companion.ref] !== host) rehomeCompanion(companion, host)
+        val companionNeedsRehome = synchronized(linkLifecycle) { hostOf[companion.ref] !== host }
+        if (rehome && !fresh && companionNeedsRehome) rehomeCompanion(companion, host)
         // FU-2 converged-membership barrier: announce this covering member's
         // existence on the companion mesh (a transitively-gossiped CRDT), so a
         // settling peer holds keyed waves until its own membership view has caught
@@ -809,7 +841,7 @@ class Replication(
      * frontier is now provided. It is not; see E3.6(c) above.
      */
     private fun rehomeCompanion(companion: WatermarkCell, host: ManagedHost) {
-        hostOf[companion.ref] = host
+        synchronized(linkLifecycle) { hostOf[companion.ref] = host }
         host.managementInlet.call.spawn(companion)
     }
 
@@ -913,7 +945,8 @@ class Replication(
     fun evict(cell: Replicable<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
         val reachablePeers = registry.instances.replicasOf(cell.ref.id) - cell.ref
         if (reachablePeers.isEmpty()) {
-            if (partitionSuspended.add(cell.ref)) {
+            val newlySuspended = synchronized(linkLifecycle) { partitionSuspended.add(cell.ref) }
+            if (newlySuspended) {
                 host.managementInlet.call.suspend(cell.ref)
                 // PN-19: publish the recoverable Stall on the watermark mesh so a
                 // DEGRADE covering-quorum read drops this parked member (restored
@@ -926,7 +959,9 @@ class Replication(
         // step 2; 93 I-3 §4.6). The link to catch up on is captured HERE, in the
         // caller's frame, because the local bookkeeping below drops `linked`
         // synchronously while the drain runs on the host's scheduler thread.
-        val catchUpTarget = linked.entries.firstOrNull { it.key.first == cell.ref }?.value?.second
+        val catchUpTarget = synchronized(linkLifecycle) {
+            linked.entries.firstOrNull { it.key.first == cell.ref }?.value?.second
+        }
         host.drainCellThenDespawn(cell.ref) {
             // Final push-catch-up to one reachable peer: anti-entropy for state
             // this replica holds that the peer may not have absorbed, idempotent
@@ -944,15 +979,17 @@ class Replication(
         // counter space their rows already cover. Recorded on the DESPAWN path only — the
         // suspend branch above returns early and keeps the very same object, so its lane
         // never restarts. See [departedTagLanes].
-        rememberTagLane(cell)
-        localReplicas[cell.ref.id]?.remove(cell)
+        val closeWatermarkRow = synchronized(linkLifecycle) {
+            rememberTagLane(cell)
+            localReplicas[cell.ref.id]?.remove(cell)
+            hostOf.remove(cell.ref)
+            releaseHoldsMatchingLocked { it.first == cell.ref }
+            partitionSuspended.remove(cell.ref)
+            closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()
+        }
         // clean-departure watermark close: only once the last local replica of
         // this id leaves (the companion carries this peer's single row).
-        if (closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()) watermarks[cell.ref.id]?.close()
-        hostOf.remove(cell.ref)
-        releaseHoldsMatching { it.first == cell.ref }
-        linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
-        partitionSuspended.remove(cell.ref)
+        if (closeWatermarkRow) watermarks[cell.ref.id]?.close()
         adapters.remove(cell.ref)?.let { adapter -> host.managementInlet.call.despawn(adapter.ref) }
         authorityBindings.remove(cell.ref)
         return true
@@ -1019,9 +1056,11 @@ class Replication(
         }
         // drop the incumbent's local bookkeeping + outbound gossip, but NEVER the
         // watermark row (this peer is not departing — the same ref returns).
-        localReplicas[ref.id]?.remove(incumbent)
-        hostOf.remove(ref)
-        linked.keys.filter { it.first == ref }.toList().forEach { linked.remove(it) }
+        synchronized(linkLifecycle) {
+            localReplicas[ref.id]?.remove(incumbent)
+            hostOf.remove(ref)
+            dropLinksMatchingLocked { it.first == ref }
+        }
         // Promotion COMMIT is an explicit management operation (spec 34
         // decision 5, [ECO1-DEN-08]), not a new resource request by the peer
         // whose stamp happens to surround promoteReplica. The caller's
@@ -1051,16 +1090,29 @@ class Replication(
      * watermark companions the mesh also links — the assertion is "one link per
      * overlapping instance pair", the one-linker invariant.
      */
-    internal fun linkCountAmong(refs: Set<CellRef>): Int =
+    internal fun linkCountAmong(refs: Set<CellRef>): Int = synchronized(linkLifecycle) {
         linked.keys.count { it.first in refs && it.second in refs }
+    }
 
     private fun linkOut(newRef: CellRef) {
-        localReplicas[newRef.id]?.forEach { local ->
+        val locals = synchronized(linkLifecycle) { localReplicas[newRef.id]?.toList().orEmpty() }
+        locals.forEach { local ->
             maybeLink(local, newRef)
             // heal (G-45): a newly visible peer un-partitions a locally suspended replica
-            if (local.ref in partitionSuspended && (registry.instances.replicasOf(local.ref.id) - local.ref).isNotEmpty()) {
-                partitionSuspended -= local.ref
-                hostOf[local.ref]?.managementInlet?.call?.resume(local.ref)
+            val resumeHost = synchronized(linkLifecycle) {
+                if (
+                    localReplicas[local.ref.id]?.any { it === local } == true &&
+                    local.ref in partitionSuspended &&
+                    (registry.instances.replicasOf(local.ref.id) - local.ref).isNotEmpty()
+                ) {
+                    partitionSuspended -= local.ref
+                    hostOf[local.ref]
+                } else {
+                    null
+                }
+            }
+            if (resumeHost != null) {
+                resumeHost.managementInlet.call.resume(local.ref)
                 // PN-19: retract the recoverable Stall — the DEGRADE covering quorum
                 // re-admits this member; its post-resume catch-up (PN-2 baseline /
                 // anti-entropy) advances the row it froze while parked.
@@ -1080,94 +1132,143 @@ class Replication(
         val targetInterest = registry.instances.interestOf(other)
         if (!registry.instances.interestOf(local.ref).overlaps(targetInterest)) return
         val key = local.ref to other
-        linked[key]?.let { (cell, link) ->
-            // Anti-entropy on re-announce (M10.1): a re-announced replica may
-            // be RECOVERING from a crash — frames the transport had already
-            // swallowed at crash time were never journaled on its side, so
-            // parked replay alone cannot restore them. Re-fire the catch-up
-            // hook through the existing link: the full state-as-delta unicast
-            // is idempotent (tags / pointwise max), so a plain re-announce
-            // costs one redundant delta at worst.
-            //
-            // The crash half of that claim only holds because [replicate] drops
-            // a superseded instance's entry first ([supersedeLocalInstance],
-            // computenet-h50w): `cell` here is whatever object was linked, and
-            // re-firing a DISCARDED one's outlet reaches nobody.
-            @Suppress("UNCHECKED_CAST")
-            gossipOutlet(cell).linking.fireLinked(link)
-            return
-        }
-        if (local !is WatermarkCell) {
-            val host = hostOf[local.ref]
-            val announcer = (registry.location(other) as? LocationRegistry.Remote)?.announcer
-            if (host != null && announcer != null) {
-                val pending = synchronized(retentionHolds) {
-                    linked[key]?.let { (cell, link) ->
-                        @Suppress("UNCHECKED_CAST")
-                        gossipOutlet(cell).linking.fireLinked(link)
-                        return
-                    }
+        beforeLinkLifecycle?.invoke(local, other)
+
+        var pending: RetentionHold? = null
+        var chargeHost: ManagedHost? = null
+        var chargeAnnouncer: PeerStamp? = null
+        synchronized(linkLifecycle) {
+            if (!linkEndpointsLiveLocked(local, other)) return
+            linked[key]?.let { (cell, link) ->
+                // Anti-entropy on re-announce (M10.1): a re-announced replica may
+                // be RECOVERING from a crash — frames the transport had already
+                // swallowed at crash time were never journaled on its side, so
+                // parked replay alone cannot restore them. Re-fire the catch-up
+                // hook through the existing link: the full state-as-delta unicast
+                // is idempotent (tags / pointwise max), so a plain re-announce
+                // costs one redundant delta at worst.
+                //
+                // The crash half of that claim only holds because [replicate] drops
+                // a superseded instance's entry first ([supersedeLocalInstance],
+                // computenet-h50w): `cell` here is whatever object was linked, and
+                // re-firing a DISCARDED one's outlet reaches nobody.
+                @Suppress("UNCHECKED_CAST")
+                gossipOutlet(cell).linking.fireLinked(link)
+                return
+            }
+
+            if (local !is WatermarkCell) {
+                val host = localHostIfLiveLocked(local)
+                val announcer = (registry.location(other) as? LocationRegistry.Remote)?.announcer
+                if (host != null && announcer != null) {
                     retentionHolds[key]?.let { hold ->
                         if (hold.installed) {
-                            installLink(local, other, targetInterest, key)
-                            dropLinkIfHoldReleased(key, hold)
+                            installLinkCheckedLocked(local, other, targetInterest, key, hold)
                         }
                         return
                     }
                     if (!host.anyLedgerOnChain()) {
-                        installLink(local, other, targetInterest, key)
+                        installLinkCheckedLocked(local, other, targetInterest, key)
                         return
                     }
-                    RetentionHold().also { retentionHolds[key] = it }
+                    pending = RetentionHold().also { retentionHolds[key] = it }
+                    chargeHost = host
+                    chargeAnnouncer = announcer
+                } else {
+                    installLinkCheckedLocked(local, other, targetInterest, key)
+                    return
                 }
-                val interestClaim = budgetClaim(announcer, ClaimClass.Interest, key = key)
-                when (val interest = host.chargeThroughAncestors(interestClaim)) {
+            } else {
+                installLinkCheckedLocked(local, other, targetInterest, key)
+                return
+            }
+        }
+
+        val expected = requireNotNull(pending)
+        val host = requireNotNull(chargeHost)
+        val announcer = requireNotNull(chargeAnnouncer)
+        val interestClaim = budgetClaim(announcer, ClaimClass.Interest, key = key)
+        when (val interest = host.chargeThroughAncestors(interestClaim)) {
+            is BudgetOutcome.Refused -> {
+                synchronized(linkLifecycle) {
+                    if (retentionHolds[key] === expected) retentionHolds.remove(key)
+                }
+                denyLinkBudget(host, interest, interestClaim, key)
+            }
+            is BudgetOutcome.Admitted -> {
+                val stillPending = synchronized(linkLifecycle) {
+                    val live = retentionHolds[key] === expected && linkEndpointsLiveLocked(local, other)
+                    if (!live && retentionHolds[key] === expected) retentionHolds.remove(key)
+                    live
+                }
+                if (!stillPending) {
+                    interest.undo()
+                    return
+                }
+                val retentionClaim = budgetClaim(announcer, ClaimClass.Retention, hold = true)
+                when (val retention = host.chargeThroughAncestors(retentionClaim)) {
                     is BudgetOutcome.Refused -> {
-                        synchronized(retentionHolds) {
-                            if (retentionHolds[key] === pending) retentionHolds.remove(key)
+                        synchronized(linkLifecycle) {
+                            if (retentionHolds[key] === expected) retentionHolds.remove(key)
                         }
-                        denyLinkBudget(host, interest, interestClaim, key)
-                        return
+                        interest.undo()
+                        denyLinkBudget(host, retention, retentionClaim, key)
                     }
                     is BudgetOutcome.Admitted -> {
-                        val stillPending = synchronized(retentionHolds) { retentionHolds[key] === pending }
-                        if (!stillPending) {
-                            interest.undo()
-                            return
+                        val formed = synchronized(linkLifecycle) {
+                            if (
+                                retentionHolds[key] !== expected ||
+                                !linkEndpointsLiveLocked(local, other)
+                            ) {
+                                if (retentionHolds[key] === expected) retentionHolds.remove(key)
+                                false
+                            } else {
+                                expected.install(retention.undo)
+                                installLinkCheckedLocked(local, other, targetInterest, key, expected)
+                                true
+                            }
                         }
-                        val retentionClaim = budgetClaim(announcer, ClaimClass.Retention, hold = true)
-                        when (val retention = host.chargeThroughAncestors(retentionClaim)) {
-                            is BudgetOutcome.Refused -> {
-                                synchronized(retentionHolds) {
-                                    if (retentionHolds[key] === pending) retentionHolds.remove(key)
-                                }
-                                interest.undo()
-                                denyLinkBudget(host, retention, retentionClaim, key)
-                                return
-                            }
-                            is BudgetOutcome.Admitted -> {
-                                val formed = synchronized(retentionHolds) {
-                                    if (retentionHolds[key] !== pending) {
-                                        false
-                                    } else {
-                                        pending.install(retention.undo)
-                                        installLink(local, other, targetInterest, key)
-                                        dropLinkIfHoldReleased(key, pending)
-                                        true
-                                    }
-                                }
-                                if (!formed) {
-                                    retention.undo()
-                                    interest.undo()
-                                }
-                                return
-                            }
+                        if (!formed) {
+                            retention.undo()
+                            interest.undo()
                         }
                     }
                 }
             }
         }
+    }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun localHostIfLiveLocked(local: Replicable<*>): ManagedHost? {
+        if (localReplicas[local.ref.id]?.any { it === local } != true) return null
+        return hostOf[local.ref]
+    }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun linkEndpointsLiveLocked(local: Replicable<*>, other: CellRef): Boolean =
+        localHostIfLiveLocked(local) != null && registry.location(other) != null
+
+    /**
+     * Install while [linkLifecycle] is held, then re-check both endpoints and
+     * an optional carried hold. [installLink]'s synchronous catch-up can
+     * re-enter retirement before its map assignment completes; that callback
+     * changes one of these facts, so the just-written stale entry is removed.
+     */
+    private fun installLinkCheckedLocked(
+        local: Replicable<*>,
+        other: CellRef,
+        targetInterest: Interest,
+        key: Pair<CellRef, CellRef>,
+        hold: RetentionHold? = null,
+    ) {
+        if (!linkEndpointsLiveLocked(local, other)) return
         installLink(local, other, targetInterest, key)
+        if (
+            !linkEndpointsLiveLocked(local, other) ||
+            (hold != null && retentionHolds[key] !== hold)
+        ) {
+            linked.remove(key)
+        }
     }
 
     private fun installLink(
@@ -1192,21 +1293,6 @@ class Replication(
         linked[key] = local to gossipOutlet(local).streamTo(sink, at = gossipRef(local.ref, other))
     }
 
-    /**
-     * Called under [retentionHolds]' monitor right after [installLink] for a
-     * charged pair. The monitor is reentrant, so it does not exclude the one
-     * release that runs on THIS thread inside [installLink]: the link's
-     * catch-up is sent while the link installs, and a transport that finds its
-     * socket dead on that send unpublishes the peer's refs from the sending
-     * thread (`LocationRegistry.unpublishRemotes`) before failing the send.
-     * That release ran before [linked] had the entry, so it found no link to
-     * drop; without this the pair would stay in [linked] with no reservation
-     * and the peer's next announcement would re-use it uncharged.
-     */
-    private fun dropLinkIfHoldReleased(key: Pair<CellRef, CellRef>, hold: RetentionHold) {
-        if (retentionHolds[key] !== hold) linked.remove(key)
-    }
-
     private fun budgetClaim(
         announcer: PeerStamp,
         claimClass: ClaimClass,
@@ -1228,15 +1314,16 @@ class Replication(
         )
     }
 
-    private inline fun releaseHoldsMatching(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
-        synchronized(retentionHolds) {
-            // Default-off: do not build a filtered key list when no ledger ever
-            // installed a hold ([ECO1-BUD-04]).
-            if (retentionHolds.isEmpty()) return
-            retentionHolds.keys.filter(predicate).forEach { key ->
-                linked.remove(key)
-                retentionHolds.remove(key)?.release()
-            }
+    /** Must be called under [linkLifecycle]; drops links but carries Retention holds. */
+    private fun dropLinksMatchingLocked(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
+        linked.keys.filter(predicate).toList().forEach { linked.remove(it) }
+    }
+
+    /** Must be called under [linkLifecycle]; retirement drops links and releases holds together. */
+    private fun releaseHoldsMatchingLocked(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
+        dropLinksMatchingLocked(predicate)
+        retentionHolds.keys.filter(predicate).toList().forEach { key ->
+            retentionHolds.remove(key)?.release()
         }
     }
 
