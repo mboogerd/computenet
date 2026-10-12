@@ -8229,6 +8229,31 @@ artifact, or kept as a separate orchestrator input.
 > `OutletHighWaterRecoveryTest` (`a metadata-plane RESTART that overtakes a coalesced staged
 > entry survives crash recovery without dropping the post-recovery frame`), which asserts
 > EXACTLY-ONCE (not merely never-zero) for its per-element handler, per the council's caveat.
+>
+> Checkpoint-carry amendment (2026-10-12, `computenet-p7ggw`): **DECIDED / LANDED** —
+> `precedesFrameCount` always names the `RECORD_FRAME`s the journal CURRENTLY holds for
+> the staged entry, not the number it held before its latest compaction. A checkpoint
+> re-encodes one staged Coalesce merge as one carried `RECORD_FRAME`, so after the reset
+> `HostDurability` rebases both its pending-record provenance and `IntakeControl`'s
+> Coalesce lineage from the merge's k pre-checkpoint originals to the carried merge
+> itself: the next triggerless type-8 record counts it as ONE. If another original is
+> accepted and coalesces into that still-staged merge after the checkpoint, the lineage
+> is `[carried merge, new original]` and the boundary counts TWO — exactly the two records
+> then present. Every later checkpoint repeats the same rebase. Recovery-time checkpoint
+> carry uses this same rule for its staged data records. The type-8 payload and journal
+> format are unchanged; the fix corrects in-memory identity bookkeeping only. Pinned by
+> `OutletHighWaterRecoveryTest` for the carried-only, coalesce-again, and repeated-checkpoint
+> interleavings. The same journal-aware representation covers atomic durable-input batches:
+> although type 7 stores a batch's frames nested inside one `RECORD_INPUT`, recovery expands
+> them individually, so an overtaking type-8 boundary counts each staged nested frame.
+> For a trigger-bearing type-8 record, the existing `precedesFrameCount` field also counts
+> the same-cell records that were still pending *behind* the failing trigger when the record
+> was appended. Recovery binds the restart to the one decoded frame immediately ahead of
+> that suffix, and uses `triggerFramePayload` only to validate the binding. The association
+> is identity-keyed before replay dispatch and survives checkpoint carry until that frame
+> finishes, so a later byte-identical frame cannot consume the historical restart after a
+> transiently successful replay. A zero count retains the original no-pending-tail encoding;
+> neither the type-8 record shape nor the journal format changes.
 
 #### 1. Challenge restatement
 

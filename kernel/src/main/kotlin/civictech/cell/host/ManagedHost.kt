@@ -996,6 +996,7 @@ open class ManagedHost(
         // built) — the same forward-reference pattern `cellsView = { cells }` above
         // already relies on, not a bound method reference evaluated eagerly here.
         coalesceOriginals = { invocation -> intakeControl.coalesceOriginalsOf(invocation) },
+        checkpointCarriedCoalesce = { invocation -> intakeControl.checkpointCarried(invocation) },
     )
 
     /**
@@ -1675,9 +1676,22 @@ open class ManagedHost(
             // One critical section makes append-before-stage atomic with checkpoint's pending
             // read/reset and with ordinary intake acceptance. `accept` re-enters this JVM monitor.
             synchronized(dataLock) {
-                hostDurability.journalInput(journal, cellRef, name, cursor, capture.frames)
+                val records = hostDurability.journalInput(journal, cellRef, name, cursor, capture.frames)
                 appended = true
-                capture.frames.forEach { frame -> accept(frame.copy(replayOf = journal)) }
+                capture.frames.zip(records).forEach { (captured, record) ->
+                    val frame = captured.copy(replayOf = journal)
+                    // RECORD_INPUT contains these exact encoded frames. They are staged
+                    // with replay provenance so the ordinary tee does not append them
+                    // again, but a triggerless RESTART still has to count them as the
+                    // journal frames it overtakes.
+                    hostDurability.rememberJournaledFrame(frame, record)
+                    try {
+                        accept(frame)
+                    } catch (failure: Throwable) {
+                        hostDurability.forgetJournaledFrame(frame)
+                        throw failure
+                    }
+                }
             }
         } catch (failure: Throwable) {
             if (!appended) {
@@ -2395,9 +2409,10 @@ open class ManagedHost(
         }
         } finally {
             if (hostedInvocation.replayOf != null) hostDurability.forgetReplayedFrame(hostedInvocation)
-            if (portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) != null) {
-                hostDurability.forgetJournaledFrame(hostedInvocation)
-            }
+            // Usually populated by the ordinary port-journal tee. Checkpoint carry may
+            // also represent a pending volatile-port frame in the cell's journal, so the
+            // cleanup is deliberately unconditional (a no-op when nothing was tracked).
+            hostDurability.forgetJournaledFrame(hostedInvocation)
             // computenet-ggxrq: drop coalesce bookkeeping once the merged entry is
             // delivered — a no-op for the common (non-merged) invocation.
             intakeControl.forgetCoalesceOriginals(hostedInvocation)
