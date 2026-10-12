@@ -59,7 +59,10 @@ import java.util.UUID
 class OutletHighWaterRecoveryTest {
 
     /** The journaled source whose outlet wave identity must survive the crash. */
-    class RelayCell(override val ref: CellRef) : Cell, ReBaselineEmitting {
+    class RelayCell(
+        override val ref: CellRef,
+        private val restartRequested: (Int) -> Boolean = { it == Int.MIN_VALUE },
+    ) : Cell, ReBaselineEmitting {
         val outlet = registerPort("outlet", FanOutlet.create<Consumer<Int>>())
         val restartOutlet = registerPort("restartOutlet", FanOutlet.create<Consumer<String>>())
         val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
@@ -67,7 +70,7 @@ class OutletHighWaterRecoveryTest {
         init {
             inlet.serve(object : Consumer<Int> {
                 override fun provide(input: Int) {
-                    if (input == Int.MIN_VALUE) throw IllegalStateException("restart requested")
+                    if (restartRequested(input)) throw IllegalStateException("restart requested")
                     outlet.call.provide(input)
                 }
             })
@@ -112,9 +115,10 @@ class OutletHighWaterRecoveryTest {
         relayRef: CellRef,
         notifierRef: CellRef,
         val effects: MutableList<Int>,
+        restartRequested: (Int) -> Boolean = { it == Int.MIN_VALUE },
     ) {
         val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
-        val relay = RelayCell(relayRef)
+        val relay = RelayCell(relayRef, restartRequested)
         val notifier = NotifierCell(notifierRef, effects)
 
         init {
@@ -900,6 +904,71 @@ class OutletHighWaterRecoveryTest {
         after.feed(5)
         controller.runToIdle()
         effects shouldBe liveEffects + 5
+    }
+
+    @Test
+    fun `a transient replay failure cannot transfer a RESTART record to a later identical frame`() {
+        identicalPayloadRestartDoesNotTransfer(checkpointDuringRecovery = false)
+    }
+
+    @Test
+    fun `a recovery-time checkpoint keeps a RESTART record bound to its identical trigger frame`() {
+        identicalPayloadRestartDoesNotTransfer(checkpointDuringRecovery = true)
+    }
+
+    /**
+     * A trigger-bearing type-8 record belongs to one historical frame, not to any
+     * later frame whose encoded payload happens to be byte-identical. The original
+     * trigger fails live but succeeds transiently during recovery; the later equal
+     * frame succeeds live but fails for the first time during recovery. That later
+     * failure must mint a new epoch rather than adopting the historical record's.
+     */
+    private fun identicalPayloadRestartDoesNotTransfer(checkpointDuringRecovery: Boolean) {
+        val controller = SimulationController(seed = if (checkpointDuringRecovery) 67 else 65)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val liveFailures = ArrayDeque(listOf(true, false))
+        val before = World(controller, journal, relayRef, notifierRef, effects) { input ->
+            input == Int.MIN_VALUE && liveFailures.removeFirst()
+        }
+        controller.runToIdle()
+        before.feed(1)
+        before.feed(2)
+        controller.runToIdle()
+        before.host.checkpoint(journal)
+
+        before.feed(Int.MIN_VALUE)
+        if (checkpointDuringRecovery) {
+            // Queue the equal frame before the trigger fails. The type-8 record must
+            // say that its trigger precedes this one-frame pending suffix; payload
+            // equality alone cannot distinguish the two records.
+            before.feed(Int.MIN_VALUE)
+            controller.runToIdle()
+        } else {
+            controller.runToIdle()
+            before.feed(Int.MIN_VALUE)
+            controller.runToIdle()
+        }
+        before.host.supervisionAccounting().restarts shouldBe 1
+        val historicalRestart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        historicalRestart.precedesFrameCount shouldBe if (checkpointDuringRecovery) 1 else 0
+        val historicalSource = historicalRestart.outlets.single { it.portName == "outlet" }.sourceId
+
+        // CRASH. Reverse the transient outcomes: the historical trigger now succeeds,
+        // while the later byte-identical frame fails for the first time.
+        val replayFailures = ArrayDeque(listOf(false, true))
+        val after = World(controller, journal, relayRef, notifierRef, effects) { input ->
+            input == Int.MIN_VALUE && replayFailures.removeFirst()
+        }
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        if (checkpointDuringRecovery) after.host.checkpoint(journal)
+        controller.runToIdle()
+
+        after.host.supervisionAccounting().restarts shouldBe 1
+        (after.relay.outlet.waveState().sourceId != historicalSource).shouldBeTrue()
     }
 
     private fun checkpointCarriedCoalesce(extraElementAfterCheckpoint: Int?, checkpointAgain: Boolean) {

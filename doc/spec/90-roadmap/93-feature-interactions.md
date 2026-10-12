@@ -8246,6 +8246,14 @@ artifact, or kept as a separate orchestrator input.
 > interleavings. The same journal-aware representation covers atomic durable-input batches:
 > although type 7 stores a batch's frames nested inside one `RECORD_INPUT`, recovery expands
 > them individually, so an overtaking type-8 boundary counts each staged nested frame.
+> For a trigger-bearing type-8 record, the existing `precedesFrameCount` field also counts
+> the same-cell records that were still pending *behind* the failing trigger when the record
+> was appended. Recovery binds the restart to the one decoded frame immediately ahead of
+> that suffix, and uses `triggerFramePayload` only to validate the binding. The association
+> is identity-keyed before replay dispatch and survives checkpoint carry until that frame
+> finishes, so a later byte-identical frame cannot consume the historical restart after a
+> transiently successful replay. A zero count retains the original no-pending-tail encoding;
+> neither the type-8 record shape nor the journal format changes.
 
 #### 1. Challenge restatement
 
