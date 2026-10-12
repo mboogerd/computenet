@@ -444,6 +444,11 @@ export const DENIAL_REASONS = [
   'UNSIGNED',
   'BAD_SIGNATURE',
   'REPLAY',
+  /** Seam 3 replication write authority: the signature is valid, but its
+   *  author does not own the declared principal slice or every element the
+   *  delta touches. Refused before `deltaInlet` delivery at the inbound
+   *  `PORT_API` integrity seam (INT3, computenet-ermvz). */
+  'UNAUTHORIZED_WRITER',
   /** Seam 1 hello: the side's policy is `RequireAuthenticated` and the hello
    *  did not carry the key material or signature that policy demands — a
    *  legacy name-only `HELLO`, or a `HELLO2` never followed by a `PROOF`

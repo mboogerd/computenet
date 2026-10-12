@@ -3,10 +3,13 @@ package civictech.cell.host
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.link.PeerId
+import civictech.cell.link.Interest
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.control.ParkQueue
+import civictech.cell.wire.AnonymousOwnership
 import java.lang.ref.WeakReference
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -32,17 +35,25 @@ import java.util.concurrent.ConcurrentHashMap
  *    [24-PART-04], CP-D4, 93 I-19) belongs to [DeliveryHold], held at
  *    [holds].
  *
- * [setInterest]/[interestOf]/[isHeld] and friends remain as compatibility
- * delegates onto those two for out-of-kernel callers (kernel main-source
- * reads [instances]/[holds] directly, OQ-1 computenet-iyi.4) — see each
- * delegate's own KDoc. `ExtractionFenceTest` (BS-18) pins the shape: exactly
+ * [interestOf]/[isHeld] and friends remain as compatibility delegates onto
+ * those two for out-of-kernel callers (kernel main-source reads
+ * [instances]/[holds] directly, OQ-1 computenet-iyi.4). [setInterest] records
+ * through [instances] too, then owns the post-admission notification seam for
+ * interest-driven families — see its KDoc. `ExtractionFenceTest` (BS-18) pins
+ * the shape: exactly
  * one [InstanceIndex]- and one [DeliveryHold]-typed field, and no other field
  * whose name contains `byLogicalId`, `interest`, `held` or `holds`. That
  * second clause is a four-substring heuristic, not a judgement about names:
  * `heldRefs` is caught, `parkedForFlip` is not (both measured 2026-08-15),
  * so a second home under any other name survives it.
  */
-class LocationRegistry {
+class LocationRegistry internal constructor(
+    private val beforeSharedRemoteRemoval: (() -> Unit)?,
+    private val onPerConnectionWait: (() -> Unit)?,
+    private val betweenPerConnectionRetirementScans: (() -> Unit)? = null,
+) {
+
+    constructor() : this(null, null, null)
 
     private val topology = TopologyIndex()
 
@@ -67,8 +78,134 @@ class LocationRegistry {
      */
     data class Remote(val sink: InvocationSink, val peer: PeerId? = null) : Location
 
+    /**
+     * Why a peer-originated remote publication or retraction was refused. The incumbent is
+     * captured under the same per-ref lock that guards installation, so the
+     * caller can account the refusal without a racy second registry read.
+     */
+    internal data class RemotePublishRefusal(
+        val incumbent: Location,
+        val deferred: Boolean = false,
+    )
+
     private val locations = ConcurrentHashMap<CellRef, Location>()
     private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
+
+    /**
+     * Latest refused anonymous claimant per ref under
+     * [AnonymousOwnership.PerConnection]. A claim is live only while its
+     * [InvocationSink] connection is live; every mutation is made under the
+     * ref's [parked] queue monitor. The default Shared path never writes here.
+     */
+    private val deferredAnonymousClaims = ConcurrentHashMap<CellRef, InvocationSink>()
+
+    /**
+     * A lock-free mode latch plus the number of Shared retirements already in
+     * their monitor-free scan. The sign bit means PerConnection has been used;
+     * the remaining bits count scans that won the Shared path just before that
+     * first transition. The first PerConnection admission waits for those scans
+     * to leave before it can record a deferred claim, closing the first-use
+     * remove-after-record race without putting a park-queue monitor on Shared.
+     */
+    private val anonymousOwnershipState = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Park-queue monitors may nest reentrantly while a sink delivers. Cleanup
+     * that needs a *different* ref's monitor must wait until the sender has
+     * left the outermost one, or two senders can each wait for the other's ref.
+     * The state is per-thread and shared by every registry so a sink cannot
+     * escape the rule by retiring through another registry.
+     */
+    private class QueueMonitorState {
+        var depth = 0
+        var draining = false
+        val afterUnlock = java.util.ArrayDeque<() -> Unit>()
+    }
+
+    private companion object {
+        private const val PER_CONNECTION = Int.MIN_VALUE
+        private val queueMonitorState = ThreadLocal.withInitial(::QueueMonitorState)
+    }
+
+    private fun enterSharedRetirement(): Boolean {
+        while (true) {
+            val state = anonymousOwnershipState.get()
+            if (state < 0) return false
+            if (anonymousOwnershipState.compareAndSet(state, state + 1)) return true
+        }
+    }
+
+    private fun enablePerConnectionOwnership() {
+        while (true) {
+            val state = anonymousOwnershipState.get()
+            if (state < 0) {
+                awaitSharedRetirements()
+                return
+            }
+            if (anonymousOwnershipState.compareAndSet(state, state or PER_CONNECTION)) {
+                if (state != 0) onPerConnectionWait?.invoke()
+                awaitSharedRetirements()
+                return
+            }
+        }
+    }
+
+    private fun awaitSharedRetirements() {
+        var spins = 0
+        while (anonymousOwnershipState.get() != PER_CONNECTION) {
+            if (++spins and 0xff == 0) Thread.yield() else Thread.onSpinWait()
+        }
+    }
+
+    private inline fun <T> withParkQueueMonitor(
+        queue: ParkQueue<HostedPortInvocation>,
+        action: () -> T,
+    ): T {
+        val state = queueMonitorState.get()
+        state.depth += 1
+        var failure: Throwable? = null
+        try {
+            return synchronized(queue) { action() }
+        } catch (thrown: Throwable) {
+            failure = thrown
+            throw thrown
+        } finally {
+            state.depth -= 1
+            if (state.depth == 0) {
+                try {
+                    drainAfterQueueUnlock(state)
+                } catch (cleanupFailure: Throwable) {
+                    if (failure == null) throw cleanupFailure
+                    failure.addSuppressed(cleanupFailure)
+                }
+            }
+        }
+    }
+
+    private fun afterOutermostQueueMonitor(action: () -> Unit) {
+        val state = queueMonitorState.get()
+        state.afterUnlock.addLast(action)
+        if (state.depth == 0) drainAfterQueueUnlock(state)
+    }
+
+    private fun drainAfterQueueUnlock(state: QueueMonitorState) {
+        if (state.draining) return
+        state.draining = true
+        var failure: Throwable? = null
+        try {
+            while (state.depth == 0 && state.afterUnlock.isNotEmpty()) {
+                try {
+                    state.afterUnlock.removeFirst().invoke()
+                } catch (thrown: Throwable) {
+                    if (failure == null) failure = thrown else failure.addSuppressed(thrown)
+                }
+            }
+        } finally {
+            state.draining = false
+            if (state.depth == 0 && state.afterUnlock.isEmpty()) queueMonitorState.remove()
+        }
+        failure?.let { throw it }
+    }
 
     /**
      * Refs deliberately [retire]d: [deliver] refuses an invocation addressed to
@@ -99,12 +236,12 @@ class LocationRegistry {
     fun retiredRefs(): Set<CellRef> = tombstones.toSet()
 
     /**
-     * How many times [install] has replaced this registry's own [Local]
-     * binding for a ref with a peer-announced [Remote] one (computenet-rfbt),
+     * How many times the low-level [install] path has replaced this registry's
+     * own [Local] binding for a ref with a [Remote] one (computenet-rfbt),
      * following the `RegistryMirrorCell.refusedAnnouncements` precedent
      * (computenet-dqy.40) — a counter plus one diagnostic line, nothing reads
-     * it to decide anything, and the overwrite itself is unchanged
-     * (computenet-mx6p, [install]'s KDoc). Checked before copying: that
+     * it to decide anything, and trusted low-level overwrite semantics remain
+     * unchanged (computenet-mx6p, [install]'s KDoc). Checked before copying: that
      * precedent's own `refuse()` turned out to be counter-only, with no
      * `System.err` line anywhere near it — the `System.err` half of the
      * shape belongs to *other* silent-drop sites on that same path
@@ -118,7 +255,9 @@ class LocationRegistry {
      * *expected*, non-colliding transitions [install]'s KDoc documents as
      * depended upon, not identity collisions. Only `Local -> Remote` is a
      * `CellRef` uniqueness violation (G-8, gap G-57) with no legitimate
-     * in-tree producer, which is what makes it a clean diagnostic.
+     * in-tree producer, which is what makes it a clean diagnostic. A live
+     * peer announcement for an actively hosted ref is now refused by
+     * [publishFromPeer] before this counter can move (computenet-zlm2).
      */
     val localOverwrittenByRemote: Long get() = localOverwrittenByRemoteCount.get()
 
@@ -166,11 +305,30 @@ class LocationRegistry {
 
     /**
      * Declare [ref]'s interest (the interest-assignment table entry,
-     * CP-D2/CP-D3) — compatibility delegate onto [instances] for out-of-kernel
-     * callers; see [InstanceIndex.setInterest]. Kernel main-source reads
-     * [instances] directly (OQ-1, computenet-iyi.4).
+     * CP-D2/CP-D3), then notify every [onInterest] participant. Recording is
+     * always first and survives a participant's exceptional completion.
+     * [InterestAdmission.spawned] joins the refs materialized by every
+     * participant; a declaration made before any participant exists records
+     * normally and completes with an empty set.
      */
-    fun setInterest(ref: CellRef, interest: civictech.cell.link.Interest) = instances.setInterest(ref, interest)
+    fun setInterest(ref: CellRef, interest: Interest): InterestAdmission {
+        instances.setInterest(ref, interest)
+        val futures = admissionListeners.mapNotNull { listener ->
+            try {
+                listener(ref, interest)
+            } catch (failure: Exception) {
+                CompletableFuture.failedFuture<Set<CellRef>>(failure)
+            }
+        }
+        val spawned: CompletableFuture<Set<CellRef>> = if (futures.isEmpty()) {
+            CompletableFuture.completedFuture(emptySet<CellRef>())
+        } else {
+            CompletableFuture.allOf(*futures.toTypedArray()).thenApply<Set<CellRef>> {
+                futures.flatMapTo(linkedSetOf()) { it.join() }
+            }
+        }
+        return InterestAdmission(ref, interest, spawned)
+    }
 
     /**
      * [ref]'s declared interest, or [civictech.cell.link.Interest.Total] when
@@ -189,6 +347,14 @@ class LocationRegistry {
 
     /** Fire after *any* publish (local or remote) — the replica-discovery seam (M7.2, spec 42). */
     private val onPublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
+
+    /**
+     * Post-record interest participants. The field deliberately says
+     * "admission" rather than duplicating [InstanceIndex]'s interest table:
+     * this is a listener list, never a second store for assignments.
+     */
+    private val admissionListeners =
+        java.util.concurrent.CopyOnWriteArrayList<(CellRef, Interest) -> CompletableFuture<Set<CellRef>>?>()
 
     /** Fire after a *local* unpublish — the eviction-announcement seam (spec 42, G-45). */
     private val onLocalUnpublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
@@ -245,6 +411,18 @@ class LocationRegistry {
     fun onPublish(listener: (CellRef) -> Unit): AutoCloseable {
         onPublish += listener
         return AutoCloseable { onPublish -= listener }
+    }
+
+    /**
+     * Participate in interests admitted through [setInterest]. Returning
+     * `null` means the listener does not own the declaration. A declaration
+     * made before any interested family subscribes is still recorded, but its
+     * [InterestAdmission.spawned] result is immediately empty; declarations
+     * are not replayed to later listeners.
+     */
+    fun onInterest(listener: (CellRef, Interest) -> CompletableFuture<Set<CellRef>>?): AutoCloseable {
+        admissionListeners += listener
+        return AutoCloseable { admissionListeners -= listener }
     }
 
     /** Returns a deregistration handle — mirrors [onLocalPublish]'s reconnect contract. */
@@ -426,7 +604,7 @@ class LocationRegistry {
 
     /** Parked invocations awaiting a [publish] for [ref] (test/introspection surface). */
     fun parkedFor(ref: CellRef): List<HostedPortInvocation> =
-        parked[ref]?.let { synchronized(it) { it.snapshot() } } ?: emptyList()
+        parked[ref]?.let { queue -> withParkQueueMonitor(queue) { queue.snapshot() } } ?: emptyList()
 
     /**
      * Drain everything parked at [ref] and return it, in park order, leaving
@@ -445,7 +623,7 @@ class LocationRegistry {
      * rely on via the per-ref `synchronized` monitor).
      */
     fun unpark(ref: CellRef): List<HostedPortInvocation> =
-        parked[ref]?.let { synchronized(it) { it.drain() } } ?: emptyList()
+        parked[ref]?.let { queue -> withParkQueueMonitor(queue) { queue.drain() } } ?: emptyList()
 
     /**
      * Optimistic send with lazy re-resolution: enqueue on the located host or
@@ -463,7 +641,7 @@ class LocationRegistry {
     fun deliver(invocation: HostedPortInvocation) {
         if (!holds.isHeld(invocation.cellRef) && send(locations[invocation.cellRef], invocation)) return
         val queue = parked.computeIfAbsent(invocation.cellRef) { ParkQueue() }
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             if (invocation.cellRef in tombstones) {
                 refuseRetired(invocation)
                 return
@@ -506,7 +684,7 @@ class LocationRegistry {
     private fun replay(ref: CellRef, expected: Location) {
         if (holds.isHeld(ref)) return // parked deliberately for the flip window — [release] drains it
         val queue = parked[ref] ?: return
-        synchronized(queue) {
+        withParkQueueMonitor(queue) {
             if (locations[ref] != expected) return
             queue.drainWhile { send(expected, it) }
         }
@@ -578,13 +756,86 @@ class LocationRegistry {
      * `Peering.Side` still gets. It is recorded, never consulted by routing:
      * [deliver] resolves through [Remote.sink] alone, as before.
      *
-     * **This overrides an existing [Local] binding for the same ref**,
-     * by design — see [install]'s location-precedence note (computenet-mx6p)
-     * for why.
+     * This low-level, unattributed publication keeps [install]'s last-writer-
+     * wins contract for mobility/recovery callers and compatibility tests.
+     * A live peer announcement does not use this overload: the per-connection
+     * mirror calls [publishFromPeer], which refuses an active local binding or
+     * a binding already held by another peer (computenet-zlm2).
      */
     fun publish(ref: CellRef, sink: InvocationSink, peer: PeerId? = null) {
         install(ref, Remote(sink, peer))
         onPublish.forEach { notify(it, ref) }
+    }
+
+    /**
+     * Admit one peer's mirrored location announcement atomically with its
+     * installation (computenet-zlm2, spec 40/43 admission boundary).
+     *
+     * A peer may install a fresh ref and may refresh a ref already attributed
+     * to that same [peer] (a reconnect supplies a fresh [sink]). It may not
+     * replace another peer's live attribution, nor a [Local] whose host still
+     * actually [ManagedHost.hosts] the ref. The latter check deliberately
+     * distinguishes an active local cell from a stale local registry entry:
+     * recovery remains able to replace stale placement state, while a peer
+     * cannot shadow a cell this process is currently serving.
+     *
+     * Returns the incumbent on refusal and makes **no** location or publish-
+     * hook change (a `PerConnection` refusal may record a deferred claim, see
+     * below). The caller owns typed boundary accounting because it knows the
+     * announcing connection's principal.
+     *
+     * [anonymousOwnership] defaults to [AnonymousOwnership.Shared], whose
+     * [Remote] conflict expression remains exactly `incumbent.peer != peer`:
+     * every null-[PeerId] connection shares one owner. Under
+     * [AnonymousOwnership.PerConnection], two anonymous locations conflict
+     * when their sinks differ. The refused publication remains observable, and
+     * its latest claim is deferred until the incumbent connection retracts the
+     * ref or retires through [unpublishRemotes]. Named ownership is unchanged.
+     *
+     * **A cross-peer handover is ordered**: a ref moving from peer q to peer r
+     * is admitted here only once q's retraction ([unpublishFromPeer]) or q's
+     * disconnect ([unpublishRemotes]) has removed q's binding; an announcement
+     * by r that arrives first is refused and not retried, so the ref stays
+     * unlocated here until r announces again.
+     */
+    internal fun publishFromPeer(
+        ref: CellRef,
+        sink: InvocationSink,
+        peer: PeerId?,
+        anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
+    ): RemotePublishRefusal? {
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) enablePerConnectionOwnership()
+        val incoming = Remote(sink, peer)
+        val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+        val refusal = withParkQueueMonitor(queue) {
+            val incumbent = locations[ref]
+            val conflicts = when (incumbent) {
+                is Local -> incumbent.host.hosts(ref)
+                is Remote -> when (anonymousOwnership) {
+                    AnonymousOwnership.Shared -> incumbent.peer != peer
+                    AnonymousOwnership.PerConnection ->
+                        if (incumbent.peer == null && peer == null) incumbent.sink !== sink
+                        else incumbent.peer != peer
+                }
+                null -> false
+            }
+            if (conflicts) {
+                val deferred = anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    peer == null && incumbent is Remote && incumbent.peer == null
+                if (deferred) deferredAnonymousClaims[ref] = sink
+                RemotePublishRefusal(incumbent!!, deferred)
+            } else {
+                installLocked(ref, incoming, queue)
+                if (anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    deferredAnonymousClaims[ref] === sink
+                ) {
+                    deferredAnonymousClaims.remove(ref)
+                }
+                null
+            }
+        }
+        if (refusal == null) onPublish.forEach { notify(it, ref) }
+        return refusal
     }
 
     /**
@@ -690,78 +941,62 @@ class LocationRegistry {
      * is assigned, so the immediate and the deferred wake-up alike find
      * [replay]'s `locations[ref] == expected` guard satisfied.
      *
-     * **Location precedence: last writer wins, unconditionally, in every
-     * direction** — a peer-announced [Remote] replaces this host's own [Local]
-     * binding for the same ref, after which sends for a cell this host is
-     * itself serving leave for the wire and the local instance never hears
-     * from its own process again. That is *deliberate* (computenet-mx6p),
-     * decided after two peered `demo/tiering` nodes lost every routed write;
-     * `LocationRegistryLocationPrecedenceTest` pins each transition and this
-     * paragraph is the answer to the question it re-opens.
+     * **Low-level location precedence is last writer wins, unconditionally, in
+     * every direction.** That remains the contract of [install] and the public
+     * [publish] overloads for trusted in-process mobility/recovery callers.
+     * Peer-originated announcements are the deliberate exception: they enter
+     * through [publishFromPeer], which performs its ownership check under this
+     * same queue lock before calling [installLocked] (computenet-zlm2).
      *
-     * Two transitions actually depend on the overwrite, both pinned by that
-     * test: **Remote → Local**, inbound mobility — a ref mirrored here becomes
-     * local the moment [ManagedHost] spawns it here, with no intervening
-     * [unpublish] on *this* registry (the retraction is the departing host's
-     * own announcement, a separate message); and **Remote → Remote**, the
-     * reconnect/heal catch-up — every re-announcement is a full [localRefs]
-     * sweep through a *fresh* mirror, so landing on a ref this registry already
-     * has a location for is the normal case, not the exception.
+     * Two trusted transitions still depend on overwrite. **Remote → Local** is
+     * inbound mobility: a ref mirrored here becomes local when [ManagedHost]
+     * spawns it. **Remote → Remote** is reconnect/heal catch-up: a fresh sink
+     * must replace the stale connection. [publishFromPeer] preserves the latter
+     * when both locations carry the same [PeerId], and [install] preserves both
+     * for trusted low-level callers.
      *
-     * **Neither of those is what a "local wins" guard would block, and the
-     * measurement says so**: inserting `if (locations[ref] is Local && location
-     * is Remote) return` here leaves `:kernel:test` (1281 tests on this branch) and
-     * `:wire:test` (91) entirely green except the one test that pins this
-     * behaviour. So the case for the current shape is *not* "a guard would
-     * break repartition or mobility" — nothing in either suite exercises
-     * Remote-replacing-Local at all.
+     * The peer guard is deliberately narrower than "local always wins". It
+     * asks [ManagedHost.hosts] whether the incumbent local host still serves
+     * the ref, so a stale [Local] does not fence recovery forever. It likewise
+     * records no permanent owner after unpublish. This is an admission rule for
+     * a live collision, not a solution to G-57's collision-free identity-
+     * minting gap: two cells that mint the same [CellRef] remain a cluster-level
+     * identity defect even though one can no longer capture the other's traffic.
      *
-     * The case is that the state a guard would arbitrate cannot legitimately
-     * exist. [CellRef] is a globally unique identity — "instance ids must be
-     * minted collision-free without coordination" (G-8/M7.1), and replicas of
-     * one logical cell are distinct instances (spec 42) — so two `Local`
-     * bindings for one ref on two peers is a violated precondition, and its
-     * *unenforcedness* is already filed as spec gap **G-57**
-     * (`doc/spec/40-distribution/41-location-transparency.md`: "instanceId
-     * minting has no stated collision discipline across hosts"), not as
-     * registry behaviour. A guard would not repair that collision — two
-     * distinct cells still share one identity, and links, replication
-     * membership and quorum are wrong regardless; it would only mask G-57.
-     *
-     * And it would cost one recovery, by *argument, not measurement* (nothing
-     * in-tree exercises it): announcements are the only channel by which a host
-     * learns where a ref lives, so a host holding a stale `Local` for a ref the
-     * cluster has since placed elsewhere would refuse every catch-up that could
-     * tell it otherwise — a permanent, silent split with no repair path.
-     * Spec 42 models registry state as an "eventually-consistent local fold of
-     * announcements"; last-writer-wins is what makes that fold converge.
-     *
-     * What the incident did expose is now fixed by computenet-rfbt: a
-     * `Local -> Remote` replacement is counted
+     * What the earlier incident did expose was fixed by computenet-rfbt: a
+     * low-level `Local -> Remote` replacement is counted
      * ([localOverwrittenByRemote]) and printed to `System.err`, naming the
-     * ref, so "never arrived, and stderr was silent" can no longer hide which
-     * ref lost its local binding. The overwrite itself — including the
-     * `Remote -> Local` and `Remote -> Remote` transitions above, neither of
-     * which is counted (see [localOverwrittenByRemote]'s KDoc) — is
-     * unchanged.
+     * ref. A refused peer announcement never reaches that diagnostic because
+     * it does not overwrite anything; its caller emits a typed boundary denial
+     * instead. The trusted low-level overwrite itself — including the
+     * `Remote -> Local` and `Remote -> Remote` transitions above — is unchanged.
      */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-        synchronized(queue) {
-            val previous = locations[ref]
-            if (previous is Local && location is Remote) {
-                localOverwrittenByRemoteCount.incrementAndGet()
-                System.err.println("[LocationRegistry] peer announcement overwrote local binding for $ref")
-            }
-            // Deliberately does NOT consult [holds]: unlike deliver/replay, a
-            // publish during an active flip window drains the parked queue into
-            // the new location anyway. Pinned by RepartitionHoldTest's "BS-10
-            // install drains despite an active hold", filed as OQ-3 — not fixed.
-            queue.drainWhile { send(location, it) }
-            locations[ref] = location
-            instances.add(ref)
-            if (!queue.isEmpty()) (location as? Local)?.host?.onIntakeAvailable { replay(ref, location) }
+        withParkQueueMonitor(queue) {
+            installLocked(ref, location, queue)
         }
+    }
+
+    /** [install]'s body once the caller holds [queue]'s monitor. */
+    private fun installLocked(
+        ref: CellRef,
+        location: Location,
+        queue: ParkQueue<HostedPortInvocation>,
+    ) {
+        val previous = locations[ref]
+        if (previous is Local && location is Remote) {
+            localOverwrittenByRemoteCount.incrementAndGet()
+            System.err.println("[LocationRegistry] remote publication overwrote local binding for $ref")
+        }
+        // Deliberately does NOT consult [holds]: unlike deliver/replay, a
+        // publish during an active flip window drains the parked queue into
+        // the new location anyway. Pinned by RepartitionHoldTest's "BS-10
+        // install drains despite an active hold", filed as OQ-3 — not fixed.
+        queue.drainWhile { send(location, it) }
+        locations[ref] = location
+        instances.add(ref)
+        if (!queue.isEmpty()) (location as? Local)?.host?.onIntakeAvailable { replay(ref, location) }
     }
 
     /**
@@ -794,7 +1029,7 @@ class LocationRegistry {
     fun retire(refs: Collection<CellRef>) {
         refs.forEach { ref ->
             val queue = parked.computeIfAbsent(ref) { ParkQueue() }
-            synchronized(queue) {
+            withParkQueueMonitor(queue) {
                 tombstones += ref
                 queue.drain().forEach(::refuseRetired)
             }
@@ -814,7 +1049,7 @@ class LocationRegistry {
     fun unretire(refs: Collection<CellRef>) {
         refs.forEach { ref ->
             val queue = parked[ref]
-            if (queue == null) tombstones -= ref else synchronized(queue) { tombstones -= ref }
+            if (queue == null) tombstones -= ref else withParkQueueMonitor(queue) { tombstones -= ref }
         }
     }
 
@@ -843,6 +1078,91 @@ class LocationRegistry {
         onUnpublish.forEach { notify(it, ref) }
     }
 
+    /**
+     * The retraction half of [publishFromPeer]'s admission rule
+     * (computenet-zlm2): a peer may retract only a binding it may also
+     * (re)publish — an absent ref, or a [Remote] attributed to the same
+     * [peer]. It may not drop another peer's attribution, nor a [Local] whose
+     * host still [ManagedHost.hosts] the ref. Without this half the publish
+     * guard is bypassed in two announcements: unpublish the incumbent, then
+     * publish the now-fresh ref.
+     *
+     * [anonymousOwnership] has the same rule as [publishFromPeer]. Shared keeps
+     * the exact nullable-[PeerId] equality used by the Open path. PerConnection
+     * compares anonymous [sink] identities; a refused retraction also drops a
+     * deferred claim made by that sink, while an owning connection's admitted
+     * retraction installs the latest surviving claim after [onUnpublish].
+     *
+     * Returns the incumbent on refusal and changes no location (a refused
+     * PerConnection retraction may withdraw that sink's own deferred claim);
+     * otherwise removes the binding under the ref's queue lock and fires
+     * [onUnpublish] as [mirrorUnpublish] does.
+     */
+    internal fun unpublishFromPeer(
+        ref: CellRef,
+        peer: PeerId?,
+        sink: InvocationSink,
+        anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
+    ): RemotePublishRefusal? {
+        if (anonymousOwnership == AnonymousOwnership.PerConnection) enablePerConnectionOwnership()
+        val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+        var applyDeferred = false
+        val refusal = withParkQueueMonitor(queue) {
+            val incumbent = locations[ref]
+            val conflicts = when (incumbent) {
+                is Local -> incumbent.host.hosts(ref)
+                is Remote -> when (anonymousOwnership) {
+                    AnonymousOwnership.Shared -> incumbent.peer != peer
+                    AnonymousOwnership.PerConnection ->
+                        if (incumbent.peer == null && peer == null) incumbent.sink !== sink
+                        else incumbent.peer != peer
+                }
+                null -> false
+            }
+            if (conflicts) {
+                if (anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    peer == null && incumbent is Remote && incumbent.peer == null &&
+                    deferredAnonymousClaims[ref] === sink
+                ) {
+                    deferredAnonymousClaims.remove(ref)
+                }
+                RemotePublishRefusal(incumbent!!)
+            } else {
+                applyDeferred = anonymousOwnership == AnonymousOwnership.PerConnection &&
+                    peer == null && incumbent is Remote && incumbent.peer == null
+                locations.remove(ref)
+                instances.remove(ref)
+                descriptions.remove(ref)
+                null
+            }
+        }
+        if (refusal == null) {
+            onUnpublish.forEach { notify(it, ref) }
+            if (applyDeferred) applyDeferredAnonymousClaim(ref)
+        }
+        return refusal
+    }
+
+    /** Install and consume a still-live deferred claimant, if [ref] remains free. */
+    private fun applyDeferredAnonymousClaim(ref: CellRef) {
+        val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+        val installed = withParkQueueMonitor(queue) {
+            if (locations[ref] != null) {
+                false
+            } else {
+                val claimant = deferredAnonymousClaims[ref]
+                if (claimant == null) {
+                    false
+                } else {
+                    installLocked(ref, Remote(claimant, peer = null), queue)
+                    deferredAnonymousClaims.remove(ref)
+                    true
+                }
+            }
+        }
+        if (installed) onPublish.forEach { notify(it, ref) }
+    }
+
     /** Announcement-fed remote unpublish; deliberately does not re-announce (mirrors [mirrorLink]). */
     fun mirrorUnpublish(ref: CellRef) {
         locations.remove(ref)
@@ -867,17 +1187,89 @@ class LocationRegistry {
      * terminates, instead of recursing through a half-emptied map. The batch is
      * also what makes a listener's own re-read of this registry answer about a
      * fully disconnected peer rather than an arbitrary prefix of one.
+     *
+     * Location removal is lock-free even after
+     * [AnonymousOwnership.PerConnection] has been used. Deferred-claim cleanup
+     * still runs under each ref's park-queue monitor, but when this send-failure
+     * path is entered from a replay or publish drain it is queued until the
+     * sender exits its outermost monitor. Thus a sender holding queue X never
+     * waits for queue Y; an ordinary close-path call that holds no queue still
+     * finishes the same reconciliation synchronously before returning. A
+     * registry that has never used `PerConnection` keeps the original body
+     * below and takes no park-queue monitor at all.
      */
     fun unpublishRemotes(via: InvocationSink) {
-        val dropped = mutableListOf<CellRef>()
-        locations.entries.removeIf { entry ->
-            ((entry.value as? Remote)?.sink === via).also {
-                if (it) {
-                    instances.remove(entry.key)
-                    dropped += entry.key
+        if (enterSharedRetirement()) {
+            val dropped = mutableListOf<CellRef>()
+            try {
+                beforeSharedRemoteRemoval?.invoke()
+                locations.entries.removeIf { entry ->
+                    ((entry.value as? Remote)?.sink === via).also {
+                        if (it) {
+                            instances.remove(entry.key)
+                            dropped += entry.key
+                        }
+                    }
                 }
+            } finally {
+                anonymousOwnershipState.decrementAndGet()
+            }
+            dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
+            return
+        }
+
+        val candidates = linkedSetOf<CellRef>()
+        val dropped = linkedSetOf<CellRef>()
+        // A claim can be consumed by installing [via] while the location scan
+        // is in progress. Snapshot claims first so either this pass sees the
+        // claim or the following pass sees the installed Remote.
+        deferredAnonymousClaims.forEach { (ref, claimant) ->
+            if (claimant === via) candidates += ref
+        }
+        betweenPerConnectionRetirementScans?.invoke()
+        locations.forEach { (ref, location) ->
+            if ((location as? Remote)?.sink === via && removeRemoteLocation(ref, via)) {
+                candidates += ref
+                dropped += ref
+            }
+        }
+        afterOutermostQueueMonitor {
+            finishRemoteRetirement(via, candidates, dropped)
+        }
+    }
+
+    /** Finish one lock-free retirement once this thread holds no park-queue monitor. */
+    private fun finishRemoteRetirement(
+        via: InvocationSink,
+        candidates: Set<CellRef>,
+        initiallyDropped: Set<CellRef>,
+    ) {
+        val dropped = initiallyDropped.toMutableSet()
+        candidates.forEach { ref ->
+            val queue = parked.computeIfAbsent(ref) { ParkQueue() }
+            withParkQueueMonitor(queue) {
+                if (deferredAnonymousClaims[ref] === via) {
+                    deferredAnonymousClaims.remove(ref)
+                }
+                if (removeRemoteLocation(ref, via)) dropped += ref
+                if (locations[ref] == null) instances.remove(ref)
             }
         }
         dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
+        dropped.forEach(::applyDeferredAnonymousClaim)
+    }
+
+    /** Remove only the binding still routed through [via], despite a concurrent replacement. */
+    private fun removeRemoteLocation(ref: CellRef, via: InvocationSink): Boolean {
+        var removed = false
+        locations.computeIfPresent(ref) { _, current ->
+            if (current is Remote && current.sink === via) {
+                removed = true
+                null
+            } else {
+                current
+            }
+        }
+        return removed
     }
 }

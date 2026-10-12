@@ -3,17 +3,24 @@ package civictech.runtime
 import civictech.cell.BudgetLedger
 import civictech.cell.CellRef
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.EvolutionAuthority
+import civictech.cell.evolve.PromotionJudge
 import civictech.cell.graph.AppliedGraph
 import civictech.cell.graph.ApplyContext
+import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DurableInput
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RoutedPropagate
+import civictech.cell.link.IdentityResolution
 import civictech.cell.link.LinkResult
+import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.link.PeerId
+import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
@@ -22,6 +29,8 @@ import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.StateRequest
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.replication.Replication
+import civictech.cell.replication.WriteAuthorityBytes
+import civictech.cell.replication.WriteSigner
 import civictech.cell.wire.PeerAddress
 import civictech.cell.wire.BridgeInstallMode
 import civictech.cell.wire.PeerConnection
@@ -35,12 +44,28 @@ import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
+import civictech.identity.Ed25519SignatureVerifier
+import civictech.identity.FilePeerIncarnationStore
+import civictech.identity.FilePeerKeyStore
+import civictech.identity.PeerIdentity
+import civictech.identity.fingerprint
 import civictech.inspect.InspectorFlag
 import civictech.inspect.InspectorFlag.serve
 import civictech.inspect.InspectorServer
+import civictech.wire.durableIncarnation
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.security.PublicKey
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+
+private fun peerIdForKey(publicKey: PublicKey): PeerId =
+    when (val resolution = PeerIdentityBinding.Interim.resolve(fingerprint(publicKey), emptyList())) {
+        is IdentityResolution.Bound -> resolution.peer
+        is IdentityResolution.Unbound -> error(
+            "PeerIdentityBinding.Interim refused the manifest principal key: ${resolution.reason}",
+        )
+    }
 
 /** Builds one manifest node without exposing host, journal or transport construction to its caller. */
 object Runtime {
@@ -176,6 +201,44 @@ object Runtime {
         return expected.values.toList()
     }
 
+    /**
+     * A journaled promotion retires the incumbent handle while activating its recorded shadow
+     * candidate. Accept that one missing original-spec handle without aliasing it back into
+     * [ApplyContext.handles]: the journal's post-promotion fold remains the live topology exposed
+     * through [Node.refs]. Requiring the same logical identity plus a recovered shadow-to-active
+     * transition keeps unrelated stale specs loud and also covers candidates introduced by a
+     * journaled [Node.apply] delta. The recovered active spawn's promotion provenance is the
+     * durable evidence after topology checkpoint compaction, where the historical swap itself can
+     * no longer be re-applied. A checkpoint compacted before that provenance was retained carries
+     * no Promote at all; it is still accepted when [declared] names the same-logical shadow
+     * candidate and the fold shows it active, so journals written by earlier builds keep recovering.
+     */
+    private fun retiredByRecoveredPromotion(
+        missing: SpawnStep,
+        declared: List<SpawnStep>,
+        context: ApplyContext,
+    ): Boolean {
+        val logicalId = missing.identity.declaredLogicalId() ?: return false
+        val live = context.live()
+        val provenance = live.promotions.any { (retired, event) ->
+            retired.id == logicalId &&
+                event.candidate.id == logicalId &&
+                live.spawns[event.candidate]?.shadow == false
+        }
+        return provenance || declared.any { candidate ->
+            candidate.handle != missing.handle &&
+                candidate.shadow &&
+                candidate.identity.declaredLogicalId() == logicalId &&
+                context.handles[candidate.handle]?.let { ref -> live.spawns[ref]?.shadow == false } == true
+        }
+    }
+
+    private fun IdentityBinding.declaredLogicalId(): UUID? = when (this) {
+        IdentityBinding.FreshLogical -> null
+        is IdentityBinding.NewInstanceOf -> logicalId
+        is IdentityBinding.Exact -> ref.id
+    }
+
     /** Drain every host built by a boot that failed before it could return a [Node]. */
     private fun closeFailedBootHosts(hosts: Collection<ManagedHost>, failure: Throwable) {
         hosts.forEach { host ->
@@ -212,13 +275,22 @@ object Runtime {
      * A recovered placed node reinstalls its physical bridge halves before [Node.open]
      * without reopening the logical edge or duplicating its edge-event accounting.
      *
+     * For an unplaced node, recovery takes the original bootstrap [spec]. Its topology journal is
+     * the complete authority for later successful [Node.apply] deltas, including cells and links
+     * introduced by a declarative evolution; callers do not rebuild a cumulative spec after each
+     * delta. The original declaration is still checked against the recovered fold, with a
+     * journal-proven promotion allowed to retire one of its handles.
+     *
      * For a placed node, [spec] on recovery MUST be the cumulative ordered graph history: the
      * original boot spec followed by every successfully applied [Node.apply] delta. Local cells
      * recover from the topology journal, but cross-node halves are deliberately not journaled, so
      * the cumulative spec is their recovery source and becomes [Node.placement]. Recovery refuses
      * a spec whose active local handles or pinned refs disagree with the journal, naming this
      * contract; an ordered spawn followed by an isolated despawn is valid and remains absent.
-     * The check is limited to what the local journal records: a stale spec that omits only
+     * A journaled promotion may retire an incumbent declared by that cumulative spec: recovery
+     * accepts it only when the fold shows the same-logical declared shadow candidate became active,
+     * and exposes only that candidate handle. The check is limited to what the local journal records:
+     * a stale spec that omits only
      * cross-node edges (or spawns placed on other nodes) is not detected, and boots without them.
      */
     fun boot(
@@ -233,6 +305,29 @@ object Runtime {
         val nodeSpec = requireNotNull(manifest.nodes[node]) { "manifest has no node '$node'" }
         require(transport == null || transport.scheme == nodeSpec.transport) {
             "transport override scheme '${transport?.scheme}' does not match node '$node' scheme '${nodeSpec.transport}'"
+        }
+        val keyStorePath = nodeSpec.keyStore?.let { keyStore -> File(keyStore).toPath() }
+        val identity = keyStorePath?.let { keyStore ->
+            FilePeerKeyStore(keyStore).loadOrGenerate()
+        }
+        val writeSigner = identity?.let { loaded ->
+            val counterIncarnationSource = durableIncarnation(
+                FilePeerIncarnationStore(checkNotNull(keyStorePath)),
+            )
+            object : WriteSigner {
+                override val peerId: PeerId = loaded.peerId
+                override val counterIncarnation: () -> Long = counterIncarnationSource
+                override fun sign(input: ByteArray): ByteArray = loaded.sign(input)
+            }
+        }
+        val signatureVerifier = identity?.let { loaded ->
+            val publicKeys = buildMap {
+                nodeSpec.principals
+                    .map(::decodePrincipalPublicKey)
+                    .forEach { key -> put(peerIdForKey(key), key) }
+                put(loaded.peerId, loaded.publicKey)
+            }
+            Ed25519SignatureVerifier(publicKeys::get, WriteAuthorityBytes.canonicalBytes)
         }
         val registry = LocationRegistry()
         val budget = nodeSpec.budget?.let { policyFile ->
@@ -266,6 +361,8 @@ object Runtime {
                 journals = nodeJournals,
                 journalDirs = journalDirs.toMap(),
                 topology = topology,
+                writeSigner = writeSigner,
+                signatureVerifier = signatureVerifier,
             )
             val placement = PlacementPlan.of(spec, manifest, node)
             val recovered = topology?.replay()?.isNotEmpty() == true
@@ -277,17 +374,22 @@ object Runtime {
                 val declaredSpawns = if (placement != null) {
                     recoveredPlacementSpawns(placement, applyContext, journalDir)
                 } else {
-                    spec.lowered()
+                    val spawns = spec.lowered()
                         .filterIsInstance<SpawnStep>()
                         .filter { it.family == null }
-                        .also { spawns ->
-                            spawns.firstOrNull { it.handle !in applyContext.handles }?.let { missing ->
+                    spawns
+                        .also { declared ->
+                            declared.firstOrNull { missing ->
+                                missing.handle !in applyContext.handles &&
+                                    !retiredByRecoveredPromotion(missing, declared, applyContext)
+                            }?.let { missing ->
                                 throw IllegalStateException(
                                     "recovered topology is missing handle '${missing.handle}' declared by " +
                                         "the GraphSpec in journal directory '$journalDir'",
                                 )
                             }
                         }
+                        .filter { it.handle in applyContext.handles }
                 }
                 if (placement != null) installHalves(placement, mainHost, registry, recovered = true)
                 inputs = declaredSpawns
@@ -325,6 +427,7 @@ object Runtime {
                 replication = replication,
                 replica = nodeSpec.replica,
                 budget = budget,
+                identity = identity,
                 overrides = overrides.toMap(),
                 inspectorOptions = inspector,
                 transportOverride = transport,
@@ -368,6 +471,8 @@ object Runtime {
         val replication: Replication,
         val replica: Long?,
         val budget: BudgetLedger,
+        /** The node's key-store identity, or null when this manifest node is unsigned. */
+        val identity: PeerIdentity?,
         private val overrides: Map<String, String>,
         private val inspectorOptions: InspectorFlag.Options?,
         private val transportOverride: PeerTransport?,
@@ -376,7 +481,9 @@ object Runtime {
 
         private var opened = false
         private var closed = false
-        private var bridgeHost: ManagedHost? = null
+        /** The peering bridge host, sharing [budget], after [open] (null before [open]). */
+        var bridgeHost: ManagedHost? = null
+            private set
         private var listener: PeerListener? = null
         private val connectionEndpoints = mutableListOf<PeerConnection>()
         private var inspectorExtras = InspectorExtras()
@@ -442,6 +549,89 @@ object Runtime {
             return applied
         }
 
+        /**
+         * Journaled T0/T1 promotion of the incumbent behind [incumbent] to the shadow cell behind
+         * [candidate], resolved through [refs] and delegated to [ApplyContext.promote]. On a
+         * `journalTopology` node the swap is checkpointed and recorded as a `TopoEvent.Promote`, so
+         * a re-[Runtime.boot] on the same journal directory recovers the post-promotion topology.
+         * [downstream] names `(handle, inletName)` pairs the candidate's outlet takes over.
+         */
+        fun promote(
+            gate: String,
+            incumbent: String,
+            candidate: String,
+            outletName: String,
+            downstream: List<Pair<String, String>>,
+            judge: PromotionJudge? = null,
+        ) = promote(
+            gate = gate,
+            incumbent = incumbent,
+            candidate = candidate,
+            outletName = outletName,
+            downstream = downstream,
+            authority = EvolutionAuthority.LocalTrustedOnly,
+            judge = judge,
+        )
+
+        /** Direct promotion under an explicit per-runtime authority policy. */
+        fun promote(
+            gate: String,
+            incumbent: String,
+            candidate: String,
+            outletName: String,
+            downstream: List<Pair<String, String>>,
+            authority: EvolutionAuthority,
+            judge: PromotionJudge? = null,
+        ) {
+            applyContext.promote(
+                gate = handleRef(gate),
+                incumbent = handleRef(incumbent),
+                candidate = handleRef(candidate),
+                outletName = outletName,
+                downstream = downstream.map { (handle, inlet) -> handleRef(handle) to inlet },
+                authorityRefusal = { authority.refuse(currentPrincipal()) },
+                judge = judge,
+            )
+        }
+
+        /**
+         * Journaled rolling promotion of this node's replica behind [handle] to [candidate], reusing
+         * the replica's ref ([ApplyContext.promoteReplica]); each peer promotes and journals its own
+         * rebind.
+         */
+        fun promoteReplica(
+            handle: String,
+            candidate: CellFactory,
+            outletName: String = "outlet",
+            judge: PromotionJudge? = null,
+        ) = promoteReplica(
+            handle = handle,
+            candidate = candidate,
+            authority = EvolutionAuthority.LocalTrustedOnly,
+            outletName = outletName,
+            judge = judge,
+        )
+
+        /** Direct rolling promotion under an explicit per-runtime authority policy. */
+        fun promoteReplica(
+            handle: String,
+            candidate: CellFactory,
+            authority: EvolutionAuthority,
+            outletName: String = "outlet",
+            judge: PromotionJudge? = null,
+        ) {
+            applyContext.promoteReplica(
+                ref = handleRef(handle),
+                candidateFactory = candidate,
+                authorityRefusal = { authority.refuse(currentPrincipal()) },
+                outletName = outletName,
+                judge = judge,
+            )
+        }
+
+        private fun handleRef(handle: String): CellRef =
+            requireNotNull(applyContext.handles[handle]) { "runtime node '$name' has no live handle '$handle'" }
+
         /** Register inspector naming/link extras; only meaningful before [open]. */
         @Synchronized
         fun customizeInspector(extras: InspectorExtras) {
@@ -470,7 +660,7 @@ object Runtime {
             opened = true
 
             try {
-                val bridge = ManagedHost(registry = registry).also { bridgeHost = it }
+                val bridge = ManagedHost(registry = registry, budget = budget).also { bridgeHost = it }
                 val side = Peering.Side(
                     registry = registry,
                     bridgeHost = bridge,

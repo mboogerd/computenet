@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
+import civictech.cell.data.Replicable
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.Identity
 import civictech.cell.link.Link
@@ -17,8 +18,10 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
+import civictech.cell.port.OutletWaveState
 import civictech.cell.port.Use
 import civictech.cell.proxy.Proxy
+import civictech.cell.replication.Replication
 import civictech.nature.ContractRegistry
 import java.io.Serializable
 
@@ -39,6 +42,21 @@ interface Effectful
 interface StateMigrating {
     /** [prior] is the previous instance's [Stateful.snapshot] output. */
     fun importFrom(prior: Serializable)
+}
+
+/**
+ * Durability seam for the two journal boundaries inside a promotion COMMIT.
+ * The owner checkpoints after PREPARE has closed the gate but before state is
+ * handed off, then records the completed swap after every relink and the gate
+ * drop succeeded but before green replays buffered traffic (uwt8b-D7..D10).
+ *
+ * This interface deliberately lives in `cell.evolve`: the swap protocol stays
+ * independent of the graph/journal representation that implements the seam.
+ */
+interface PromotionJournal {
+    fun checkpointBeforeStateHandoff()
+
+    fun recordCommittedSwap(waveState: OutletWaveState)
 }
 
 /**
@@ -126,7 +144,9 @@ object Shadow {
 }
 
 /**
- * Promotion as the four-phase swap transaction (spec 53 §The promotion swap,
+ * Promotion as the low-level four-phase swap transaction used by [Evolve],
+ * the shadow → invariant gates → judge → swap composition entry point
+ * (spec 53 §The promotion swap,
  * decided 93 I-11, G-49): PRECHECK (no side effects, freely abortable) →
  * PREPARE (red, drain) → COMMIT (non-vetoing state handoff + relink) →
  * RETIRE (despawn). Every step is an existing kernel primitive — traffic
@@ -138,6 +158,14 @@ object Shadow {
  * the reverse direction — not this function's concern.
  */
 object Promotion {
+
+    /**
+     * Whether [cell] is promotion-control state that must share a topology
+     * journal even when its GraphSpec spawn has no explicit data journal.
+     * ApplyContext calls through this seam so graph does not acquire a
+     * graph-to-membrane package edge merely to recognize the gate type.
+     */
+    internal fun isDurableGate(cell: Cell): Boolean = cell is TrafficLightApi<*>
 
     /**
      * Declares that this cell's downstream merge is non-idempotent under a
@@ -162,6 +190,39 @@ object Promotion {
         RuntimeException("promotion aborted at $phase: $message", cause)
 
     /**
+     * Graph/runtime entry point that keeps the concrete membrane type behind
+     * the evolution package boundary. The typed overload below remains the
+     * protocol implementation used by callers that already hold a gate API.
+     */
+    internal fun promote(
+        host: ManagedHost,
+        gate: Cell,
+        incumbent: Cell,
+        candidate: Cell,
+        outletName: String,
+        downstream: List<Use<*>>,
+        judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
+    ) {
+        @Suppress("UNCHECKED_CAST")
+        val trafficLight = gate as? TrafficLightApi<Any>
+            ?: throw PromotionAborted("PRECHECK", "gate ${gate.ref} is not a live TrafficLightApi")
+        promote(host, trafficLight, incumbent, candidate, outletName, downstream, judge, journal)
+    }
+
+    /**
+     * Complete the green step represented by a recovered single-instance Promote record.
+     * The graph package calls through this seam rather than depending directly on membrane:
+     * TrafficLight ownership remains here with the promotion protocol.
+     */
+    internal fun completeRecoveredGate(gate: Cell) {
+        @Suppress("UNCHECKED_CAST")
+        val trafficLight = gate as? TrafficLightApi<Any>
+            ?: error("promotion replay gate ${gate.ref} is not a live TrafficLightApi")
+        trafficLight.controlInlet.call.setGreen()
+    }
+
+    /**
      * Promote [candidate] over [incumbent] behind [gate], despawning the
      * retired incumbent from [host] only after a successful COMMIT.
      *
@@ -180,6 +241,7 @@ object Promotion {
         outletName: String,
         downstream: List<Use<*>>,
         judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
     ) {
         // 1. PRECHECK — no side effects, freely abortable. Admission is
         // decided strictly before the window, so mid-swap rejection cannot
@@ -227,6 +289,7 @@ object Promotion {
             // 3. COMMIT — non-vetoing: the admission decision was PRECHECK's,
             // so nothing here may newly reject; a thrown exception here is an
             // infrastructure fault, not a veto, and triggers rollback below.
+            journal?.checkpointBeforeStateHandoff()
             if (migrates) {
                 (candidate as StateMigrating).importFrom((incumbent as Stateful).snapshot())
                 // preserved-epoch adoption (spec 20/22 §Source identity, 93
@@ -258,6 +321,11 @@ object Promotion {
             // all future traffic reach the candidate only
             dropIncumbentFromGate(gate, incumbent)
             droppedIncumbentFromGate = true
+
+            // The durability record is the last fallible COMMIT step. A
+            // failure here still reverses every relink and restores the gate;
+            // success means the journal can only describe the complete swap.
+            journal?.recordCommittedSwap(to.waveState())
 
             // 4a. green: replay the parked window and remove the gate from
             // the per-message path.
@@ -291,8 +359,7 @@ object Promotion {
      * This is additive: single-instance [promote] is unchanged.
      *
      * PRECHECK (no side effects, freely abortable), then COMMIT via
-     * [civictech.cell.replication.Replication.rebind] (fully qualified because
-     * `Replication` is not imported in this file — T11-D):
+     * [Replication.rebind] (the same rebind API passed below):
      *  - [judge], when supplied, must return [PromotionVerdict.Accept] (same
      *    contract as [promote]).
      *  - the candidate MUST reuse the incumbent's [CellRef]. A fresh ref re-mints
@@ -313,11 +380,12 @@ object Promotion {
      */
     fun promoteReplica(
         host: ManagedHost,
-        replication: civictech.cell.replication.Replication,
-        incumbent: civictech.cell.data.Replicable<*>,
-        candidate: civictech.cell.data.Replicable<*>,
+        replication: Replication,
+        incumbent: Replicable<*>,
+        candidate: Replicable<*>,
         outletName: String = "outlet",
         judge: PromotionJudge? = null,
+        journal: PromotionJournal? = null,
     ) {
         // PRECHECK — decided strictly before any state mutation.
         if (judge != null) {
@@ -356,8 +424,13 @@ object Promotion {
             )
         }
         // COMMIT — the rebind (reuse-ref crash-recovery); surviving replicas play
-        // the retained incumbent and re-feed the candidate.
+        // the retained incumbent and re-feed the candidate. A journaled caller
+        // checkpoints only after every PRECHECK has passed, then records only a
+        // completed rebind. With no seam this remains the original two-statement
+        // path: no checkpoint, no topology record, no durability cost.
+        journal?.checkpointBeforeStateHandoff()
         replication.rebind(incumbent, candidate, host)
+        journal?.recordCommittedSwap(to.waveState())
     }
 
     /**

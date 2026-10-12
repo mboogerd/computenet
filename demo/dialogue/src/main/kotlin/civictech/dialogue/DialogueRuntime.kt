@@ -4,8 +4,6 @@ import civictech.agora.AgoraService
 import civictech.cell.CellRef
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.data.SetOps
-import civictech.cell.data.delta.MapDelta
-import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -13,17 +11,15 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.durability.Journal
 import civictech.cell.graph.ApplyContext
-import civictech.cell.link.LinkResult
-import civictech.cell.observe.ObserveCell
-import civictech.cell.observe.View
+import civictech.cell.observe.Observation
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
 import civictech.dialogue.apply.BindingTable
 import civictech.dialogue.apply.GraphApplier
 import civictech.dialogue.apply.ReconcileReport
 import civictech.dialogue.extract.ExtractionAccounting
 import civictech.dialogue.extract.Extractor
-import civictech.dialogue.mint.ClaimProvenanceEntry
 import civictech.dialogue.mint.ProvenanceIndex
-import civictech.dialogue.mint.RelationProvenanceEntry
 import java.io.File
 import java.util.UUID
 
@@ -60,14 +56,12 @@ import java.util.UUID
  *    cells sit under the refs last run's journal frames were written against.
  * 4. [AgoraService] shares that context, and [BindingTable] reads its
  *    read-only live topology fold.
- * 5. [GraphApplier], which spawns its three deterministic-ref observation
- *    sinks and connects them.
- * 6. The utterances sink below — a `View.set` over `refs.utterances` under
- *    `dialogue:sink:utterances`, spawned for one purpose only: to read back
- *    what the WAL restored into the ingress `SetCell`, so [completeRecovery]
- *    can seed the driver's ledger from it. Alongside it, the two
- *    ProvenanceIndex read sinks (`dialogue:sink:claimProvenance` and
- *    `…:relationProvenance`) behind [claimProvenance]/[relationProvenance].
+ * 5. [GraphApplier], which registers its direct typed observation views under
+ *    deterministic group refs.
+ * 6. The observation below, whose `utterances` view reads back what the WAL
+ *    restored into the ingress `SetCell`, so [completeRecovery] can seed the
+ *    driver's ledger; its other two views back [claimProvenance] and
+ *    [relationProvenance].
  *
  * Only then may the caller run [recover] (step 7), drain the host, and call
  * [completeRecovery] (step 8). The drain between them is the caller's because
@@ -174,56 +168,38 @@ class DialogueRuntime(
     // (5) the applier, which spawns its own deterministic-ref sinks.
     val applier = GraphApplier(host, refs, service, bindings)
 
+    // Keep these as separate one-view observations. A multi-view group can
+    // hold at rest when these folds share a root through pure hops; the split
+    // is the disclosed interim for computenet-6ovpx, while each view still
+    // reads the canonical fold rather than rebuilding it at the app edge.
+    private val utterancesObservation: Observation = host.observation(groupRef = ::sinkRef) {
+        set("utterances", refs.utterances)
+    }
+
+    private val claimProvenanceObservation: Observation = host.observation(groupRef = ::sinkRef) {
+        map("claimProvenance", refs.claimProvenance.ref)
+    }
+
+    private val relationProvenanceObservation: Observation = host.observation(groupRef = ::sinkRef) {
+        map("relationProvenance", refs.relationProvenance.ref)
+    }
+
+    internal val observationGroups: Map<String, String>
+        get() = mapOf(
+            "utterances" to utterancesObservation.groups.single(),
+            "claimProvenance" to claimProvenanceObservation.groups.single(),
+            "relationProvenance" to relationProvenanceObservation.groups.single(),
+        )
+
+    internal val observationGroupRefs: Map<String, CellRef>
+        get() = mapOf(
+            "utterances" to utterancesObservation.group("utterances").ref,
+            "claimProvenance" to claimProvenanceObservation.group("claimProvenance").ref,
+            "relationProvenance" to relationProvenanceObservation.group("relationProvenance").ref,
+        )
+
     /** The ingress handle the driver writes through. */
     private val utteranceOps: SetOps<Utterance> = DialoguePipeline.utteranceOps(host, refs)
-
-    // (6) the recovery-only ingress sink. Spawned in every mode (its ref must
-    //     be stable across restarts whether or not this run recovers), read
-    //     only by completeRecovery().
-    private val utterancesSink: ObserveCell<SetDelta<Utterance>, Set<Utterance>> =
-        sink("utterances", refs.utterances.ref, View.set())
-
-    // (6b) the two ProvenanceIndex read sinks (2aw.5-D9, [AGO1-PROV-01]).
-    //
-    //      Spawned here rather than in GraphApplier because they are a *read*
-    //      surface, not part of the write path: the applier deliberately holds
-    //      only what it reconciles from. Both names are in SINK_NAMES, so both
-    //      refs are volatile: their MapDelta payloads carry
-    //      Claim/RelationProvenanceEntry, which have no polymorphic WireCodec
-    //      registration, so a journaled frame of theirs could not encode.
-    //      See SINK_NAMES for why that is design intent here rather than an
-    //      enforced guard — a linked sink's frames never reach the WAL to be
-    //      encoded in the first place.
-    private val claimProvenanceSink:
-        ObserveCell<MapDelta<ClaimKey, Set<ClaimProvenanceEntry>>, Map<ClaimKey, Set<ClaimProvenanceEntry>>> =
-        sink("claimProvenance", refs.claimProvenance.ref, View.map())
-
-    private val relationProvenanceSink:
-        ObserveCell<MapDelta<RelationKey, Set<RelationProvenanceEntry>>, Map<RelationKey, Set<RelationProvenanceEntry>>> =
-        sink("relationProvenance", refs.relationProvenance.ref, View.map())
-
-    /**
-     * Spawn one [ObserveCell] under the deterministic ref [sinkRef] gives
-     * [name] and connect it to [source]'s outlet — `GraphApplier.sink`'s
-     * idiom, with the same rationale for the deterministic ref (a journalled
-     * host replaying frames addressed to last run's random sink ref would
-     * dead-letter every one of them).
-     *
-     * Every name passed here should also be in [SINK_NAMES], so [isDurable]
-     * calls the sink volatile. Note that omitting one does **not** fail
-     * loudly — see [SINK_NAMES].
-     */
-    private fun <D : Any, S> sink(name: String, source: CellRef, view: View<D, S>): ObserveCell<D, S> {
-        val cell = ObserveCell(view, sinkRef(name))
-        val management = host.managementInlet.call
-        management.spawn(cell)
-        val result = management.connect(source, "outlet", cell.ref, "inlet")
-        check(result !is LinkResult.Rejected) {
-            "DialogueRuntime: link $source.outlet -> $name sink rejected: " +
-                "${(result as LinkResult.Rejected).reason}"
-        }
-        return cell
-    }
 
     /**
      * The utterance ids justifying claim [key] ([AGO1-PROV-01], read side).
@@ -232,15 +208,17 @@ class DialogueRuntime(
      * distinct from an empty set, which the caller can then report as "bound,
      * no sources" rather than "unknown key" ([AGO1-PROV-04]'s distinction).
      *
-     * Safe to call from an HTTP thread: [ObserveCell.current] is a `@Volatile`
+     * Safe to call from an HTTP thread: the canonical observation exposes an
      * immutable snapshot.
      */
-    fun claimProvenance(key: ClaimKey): Set<String>? =
-        claimProvenanceSink.current()[key]?.let(ProvenanceIndex::claimProvenance)
+    fun claimProvenance(key: ClaimKey): Set<String>? = claimProvenanceObservation
+        .get<Map<ClaimKey, Set<civictech.dialogue.mint.ClaimProvenanceEntry>>>("claimProvenance")[key]
+        ?.let(ProvenanceIndex::claimProvenance)
 
     /** The relation-leg mirror of [claimProvenance]. */
-    fun relationProvenance(key: RelationKey): Set<String>? =
-        relationProvenanceSink.current()[key]?.let(ProvenanceIndex::relationProvenance)
+    fun relationProvenance(key: RelationKey): Set<String>? = relationProvenanceObservation
+        .get<Map<RelationKey, Set<civictech.dialogue.mint.RelationProvenanceEntry>>>("relationProvenance")[key]
+        ?.let(ProvenanceIndex::relationProvenance)
 
     private var recovered: TranscriptSource? =
         if (journalDir == null) TranscriptSource(utteranceOps, transcript, recovered = emptyList()) else null
@@ -285,7 +263,11 @@ class DialogueRuntime(
         if (journalDir == null || recovered != null) return
         service.repairTornRemovals()
         service.rebuildIndex()
-        recovered = TranscriptSource(utteranceOps, transcript, recovered = utterancesSink.current())
+        recovered = TranscriptSource(
+            utteranceOps,
+            transcript,
+            recovered = utterancesObservation.get("utterances"),
+        )
     }
 
     /**
@@ -399,9 +381,10 @@ class DialogueRuntime(
         )
 
         /**
-         * [GraphApplier]'s three observation sinks, plus this class's own
-         * three: the recovery-only `utterances` sink and the two
-         * ProvenanceIndex read sinks (2aw.5-D9).
+         * Deterministic ids used by the observation groups in [GraphApplier]
+         * and this class. Each view has its own one-view group so a shared
+         * extraction root cannot make one canonical fold hold another at rest
+         * (computenet-6ovpx).
          *
          * Every name here becomes a volatile ref via [isDurable].
          *
@@ -420,7 +403,14 @@ class DialogueRuntime(
          * `DialogueRuntimeSurfaceTest` pins the property and says the same.
          */
         private val SINK_NAMES =
-            listOf("claims", "relations", "stances", "utterances", "claimProvenance", "relationProvenance")
+            listOf(
+                "claims",
+                "relations",
+                "stances",
+                "utterances",
+                "claimProvenance",
+                "relationProvenance",
+            )
 
         /**
          * The pipeline's cell-ref namespace. Fixed, not a parameter: two runs

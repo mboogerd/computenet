@@ -1,5 +1,6 @@
 package civictech.concord.schema
 
+import civictech.concord.value.Value
 import civictech.concord.yaml.ConcordYaml
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -61,6 +62,10 @@ class ScenarioParseTest {
         // stopped asserting lane continuity across the crash — the one thing it
         // exists to assert.
         "corpus/15-durability/DUR-STAMPED-01.yaml",
+        // computenet-ermvz.5: deliberate security-vocabulary schema change.
+        "corpus/43-security/43-FLOW-AUTH-01.yaml",
+        "corpus/43-security/43-FLOW-AUTH-02.yaml",
+        "corpus/43-security/43-FLOW-INTEGRITY-01.yaml",
     )
 
     @TestFactory
@@ -244,6 +249,49 @@ class ScenarioParseTest {
         s.graph!!.cells.forEach { it.lateness shouldBe null }
         val runner = civictech.concord.runner.CorpusRunner()
         s.graph!!.cells.forEach { runner.params(it).containsKey("lateness") shouldBe false }
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `authority signed steps and write-denials are typed and lowered`() {
+        val s = load("corpus/43-security/43-FLOW-AUTH-02.yaml")
+        val replicas = s.graph!!.cells.filter { it.replicaOf == "slice" }
+        replicas.map { it.authority } shouldContainExactly listOf(AuthoritySpec("alice"), AuthoritySpec("alice"))
+        s.script.filterIsInstance<SignedApplyStep>().map { it.actor } shouldContainExactly
+            listOf("alice", "bob", "alice")
+        s.script.filterIsInstance<TransferAuthorityStep>().single() shouldBe
+            TransferAuthorityStep("r1", "alice", "bob")
+        s.checks.filterIsInstance<WriteDenials>() shouldContainExactly listOf(
+            WriteDenials("r1", exactly = 1, principal = "alice"),
+            WriteDenials("r2", exactly = 0),
+        )
+
+        val params = civictech.concord.runner.CorpusRunner().params(replicas.first())
+        params["authority"] shouldBe civictech.concord.value.Value.MapVal(
+            mapOf("principal" to civictech.concord.value.Value.StrVal("alice")),
+        )
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `forged and replayed signed steps are typed`() {
+        val s = load("corpus/43-security/43-FLOW-INTEGRITY-01.yaml")
+
+        s.script.filterIsInstance<ForgeSignedApplyStep>().single() shouldBe
+            ForgeSignedApplyStep("r1", "alice", "add", Value.StrVal("forged"))
+        s.script.filterIsInstance<ReplaySignedApplyStep>().single() shouldBe
+            ReplaySignedApplyStep("r1", "alice", "add", Value.StrVal("x"))
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `authority without replica-of is a schema error rather than an ignored attribute`() {
+        val plain = CellSpec(
+            id = "plain",
+            type = "set-source",
+            authority = AuthoritySpec("alice"),
+        )
+        val error = org.junit.jupiter.api.assertThrows<IllegalArgumentException> {
+            civictech.concord.runner.CorpusRunner().params(plain)
+        }
+        error.message shouldBe "cell 'plain': parameter 'authority' requires 'replica-of'"
     }
 
     private fun load(path: String): Scenario =

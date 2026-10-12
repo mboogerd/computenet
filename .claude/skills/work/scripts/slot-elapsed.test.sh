@@ -147,6 +147,8 @@ says "$d" "wake: 20m" "wake is the earliest bound when it precedes the next rung
 says "$d" "sleep 1200; echo wake" "wake prints the Monitor command in seconds"
 d=$(slot 100 300)
 says "$d" "wake: 95m" "with no agents, wake is the time to the next rung (T-90m at 195m)"
+says "$d" "sleep 1800; echo wake" "a wake past the Monitor's 30m cap is armed as 30m (computenet-fug9p)"
+says "$d" "re-run this clock and re-arm" "a capped wake says to re-arm"
 d=$(slot 100 300); echo junk > "$d/dispatched-bad"
 says "$d" "100m of 300m elapsed" "an unreadable dispatch file does not suppress the elapsed line"
 says "$d" "agent bad: dispatch time unreadable" "an unreadable dispatch file is reported"

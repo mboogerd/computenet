@@ -79,7 +79,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `sweep-stale-claims.sh` | `[--hours N] [--dry-run]` — reopens this machine's task claims abandoned by a dead run |
 | `sweep-merged-prs.sh` | `[--dry-run] [--limit N]` — closes beads whose PR merged after their session; removes their worktrees (holder-blind) |
 | `reclaim-worktrees.sh` | `[--dry-run] [--min-age-minutes N]` — removes worktrees of closed beads, when provably safe |
-| `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 15min reads LIVE, not STALE) |
+| `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 2h reads LIVE, not STALE) |
 | `resumable-epics.sh` | `(no arguments)` — epics holding a feature left `in_progress` |
 | `undefer-unblocked.sh` | `[--dry-run]` — reopens deferred epics whose `undefers:<epic>` blockers all closed |
 | `close-bead.sh` | `<bead-id> [bd-close-args...]` — closes a bead, then immediately runs the undefer sweep so a blocked epic reopens at close time, not at the next session's startup check |
@@ -200,7 +200,7 @@ Background jobs you start are supervised by nothing: bound each, record it in
 
 ## 3. Sync and claim one epic
 
-`bd dolt pull` (timeout >= 300s). A failed pull stops the session, except the
+`bd dolt pull` (Bash timeout ≥ 300000 ms). A failed pull stops the session, except the
 conflicts [recovery.md](references/recovery.md) "Dolt pull conflicts" covers. If
 `git hash-object .claude/skills/work/SKILL.md` differs from `git rev-parse
 origin/main:.claude/skills/work/SKILL.md`, read the skill from `origin/main`.
@@ -260,7 +260,7 @@ than make it up (say so in the prompt). `twin-scan.py <epic>` flags children
 filed twice: one twin closed soon after creation with no comments → trust the
 survivor; otherwise treat it as a collision ([recovery.md](references/recovery.md), "Collisions").
 
-Before dispatching, run `breakdown-marker.sh acquire <epic>` (timeout >= 300s;
+Before dispatching, run `breakdown-marker.sh acquire <epic>` (Bash timeout ≥ 300000 ms;
 it pushes). Exit 0 → read capacity, bound the agent (5b) and dispatch below with
 the printed `TOKEN`; 11 (FOREIGN) → already broken down elsewhere: list children
 again and continue at step 5, or park per "Still no children" below if that

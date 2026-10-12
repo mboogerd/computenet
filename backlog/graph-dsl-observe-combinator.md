@@ -1,5 +1,7 @@
 # Idea: an `observe` / `tap` combinator in the `graph { }` DSL
 
+> **Status: ABSORBED** — computenet-axcyk (`civictech.cell.observe.observation`), 2026-10.
+
 > Type: API change for more understandable implementations
 > Origin: `:demo:slotfinder` — the asymmetry between declarative pipeline construction and
 > imperative observation wiring

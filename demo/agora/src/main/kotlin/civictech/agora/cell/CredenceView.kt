@@ -1,37 +1,31 @@
 package civictech.agora.cell
 
 import civictech.cell.CellRef
-import civictech.cell.observe.ObservationSink
-import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import java.io.Serializable
 
 /**
- * The read-model fold behind agora's hub, run by the kernel observation sink
- * ([ObserveCell]). Folds every claim/edge's [CredenceUpdate] stream into one
- * immutable `{ source -> credence }` map (replacing the hand-rolled
- * `GraphHubCell` + `ConcurrentHashMap`). Removed claims are filtered against the
+ * The read-model fold behind agora's canonical credence observation. The
+ * `CredenceObservationSource`'s inlet handler drives it with every claim/edge
+ * [CredenceUpdate], and the app reads the resulting immutable
+ * `{ source -> credence }` map through the canonical `Observation` rather than
+ * through a separate observation sink. Removed claims are filtered against the
  * service index at read time, never pruned here.
  *
  * [onUpdate] preserves agora's per-source credence seam: the app wires it to the
  * SSE broadcast and `MagnitudePriorityTest` uses it to observe read-model
  * arrival order. It fires once per applied delta with `(source, credence)` —
  * matching `GraphHubCell.onUpdate` — while [apply]'s return value reports
- * *effective* change so the sink fires `onChange` only on a real value change.
+ * *effective* change so the source publishes only a real value change.
  *
- * Threading (computenet-ecso): in normal use, [apply] and [current] are only
- * ever invoked by the [ObserveCell] wrapping this view — always under its own
- * lock, from its host scheduler thread — and every cross-thread read of the
- * fold (agora's `graph()` on the HTTP dispatcher / `dialogue-driver` thread)
- * goes through `ObservationSink.current()`, i.e. [ObserveCell]'s own
- * `@Volatile latest`, not through this class's [current] directly. That
- * already gives `graph()` readers a safe publication of whatever [apply] last
- * wrote here, by the ordinary "plain write before a volatile write, volatile
- * read before the dependent plain read" JMM argument. [credences] is still
+ * Threading (computenet-ecso): in normal use, [apply] runs in the source's
+ * host-scheduler inlet handler and [current] is used for source catch-up.
+ * Cross-thread reads of the fold (agora's `graph()` on the HTTP dispatcher /
+ * `dialogue-driver` thread) go through the canonical `Observation`'s current
+ * frame, not through this class's [current] directly. [credences] is still
  * marked `@Volatile` here, independently, so this class is safe to publish
- * across threads on its own terms — e.g. a future caller that holds a
- * `CredenceView` directly rather than only its wrapping `ObservationSink` —
- * rather than relying on every future caller going through [ObserveCell].
+ * across threads on its own terms if a future caller holds a `CredenceView`
+ * directly.
  */
 class CredenceView(
     private val onUpdate: (CellRef, Double) -> Unit = { _, _ -> },
@@ -56,6 +50,3 @@ class CredenceView(
         credences = HashMap(state as Map<CellRef, Double>)
     }
 }
-
-/** The former `GraphHubCell.credenceOf`, now a read over the sink's snapshot. */
-fun ObservationSink<Map<CellRef, Double>>.credenceOf(ref: CellRef): Double? = current()[ref]

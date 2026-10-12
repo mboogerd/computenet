@@ -163,6 +163,15 @@ enum class DenialReason {
     REPLAY,
 
     /**
+     * Seam 3 replication write authority (`computenet-ermvz`): a validly
+     * signed write names an author that does not own the declared principal
+     * slice or every element the delta touches. Refused before `deltaInlet`
+     * delivery by the replication-local twin of 93 I-28 §4.3's inbound
+     * `PORT_API` integrity seam.
+     */
+    UNAUTHORIZED_WRITER,
+
+    /**
      * Seam 1 hello: the side's policy is
      * `civictech.cell.wire.PeerAuthPolicy.RequireAuthenticated` and the hello
      * did not carry the key material or the signature that policy demands —

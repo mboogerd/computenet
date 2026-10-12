@@ -90,6 +90,10 @@ class AlignedDrainBarrier internal constructor(
  * frontier, `[22-OBS-01]`/`[22-OBS-02]`; 96 §E2.3): several named outlets folded
  * into one composite read that is never assembled from mixed waves.
  *
+ * This is the lower-level equal-root-group specialization; apps normally enter
+ * through [observation], which creates one of these per equal structural root
+ * set and discloses cross-root staleness without over-aligning the groups.
+ *
  * [CompositeSink] — behind [observeAll] — is the honest *point-consistent*
  * fallback: each named outlet is folded by its own [ObserveCell] and the
  * composite republishes on every per-outlet change, so a read can pair `items`
@@ -120,6 +124,16 @@ class AlignedDrainBarrier internal constructor(
  * `max`). Completed waves are applied in per-source counter order, and each
  * publishes **one** composite snapshot — effective-only: a completed wave in
  * which no view's [View.apply] reported a change publishes nothing.
+ * Transparent operators between an absorber and this sink forward that exact
+ * watermark through [civictech.cell.control.relayAbsorbAcks]; the relay
+ * preserves source/counter identity and stops when an intermediate frontier
+ * consumes the acknowledgement. `FilterCell`/`FlatMapSetCell` use its bounded
+ * unary form. `QuorumSetCell` and `GroupByCell` use its fan-in form, which
+ * mirrors this per-edge watermark condition across their open input edges —
+ * narrowed, where the edge's source is resolvable
+ * ([civictech.cell.control.SourceProvenance]), to the edges that can actually
+ * carry the wave's source — and relays only after all of those settle the
+ * wave by data or `Progress`.
  *
  * The condition is [civictech.cell.consistency.WaveFrontier]'s, *mirrored at
  * cell scope* rather than installed as an inlet policy — the same structural
@@ -179,7 +193,10 @@ class AlignedDrainBarrier internal constructor(
  * `byDay` shape of one pipeline); two views fed by *independent* roots will each
  * hold the other's waves until an ack, a later wave, or an unlink shrinks the
  * condition. Same caveat, same cause, as `WaveFrontier` and
- * `CoalescingCombineCell` both document.
+ * `CoalescingCombineCell` both document. An ack remains sufficient across the
+ * relay-enabled `FilterCell` / `FlatMapSetCell` / `GroupByCell` chain (and a
+ * downstream `QuorumSetCell` hop); an unrecognised transparent hop that does
+ * not opt into relay is still part of the wider G-40/G-13 residual.
  *
  * **Catch-up is arm state, not a wave.** Unwaved traffic (push catch-up, the
  * `onLinked` state-as-delta, context-free sends) and pull-catch-up baselines
@@ -187,9 +204,19 @@ class AlignedDrainBarrier internal constructor(
  * are admitted to no completeness set — `WaveFrontier.offer`'s two catch-up
  * arms. A late-attached sink therefore catches each arm up as that arm's
  * baseline arrives, which can transiently expose arms seeded at different
- * points; from the first waved delta onward, every published composite is
- * aligned. Attach before the graph starts writing if the very first snapshot
- * must be aligned too.
+ * points. `AlignedComposite.alignedFrom` is the observable for when the
+ * guarantee starts: for each source `s`, a reader checks on one immutable
+ * composite that `alignedFrom[s] != null && frontier[s] >= alignedFrom[s]`.
+ * The release that first writes `alignedFrom` also advances `frontier` to at
+ * least that counter; a composite failing the check for `s` may still carry
+ * arms catch-up-seeded at different points for `s`. An install-only
+ * publication keeps the previous
+ * `alignedFrom` and `frontier`. A wave released while [observeAligned] is still
+ * connecting its named arms advances `frontier` but cannot set `alignedFrom`;
+ * the guarantee starts at the first completeness-set release after every named
+ * arm has an open `Consume` edge. From that release onward, every composite
+ * passing the reader check is aligned. Attach before the graph starts writing
+ * if the very first snapshot must be aligned too.
  *
  * **Bridged (two-host frame-bridge) coverage.** `AlignedObserveBridgedTest`
  * proves the remote-arm invariant over the in-process `BridgeEgressCell` /
@@ -213,8 +240,9 @@ class AlignedDrainBarrier internal constructor(
  * dispatch. Every submission is made while holding [lock], so submission order
  * is a strict total order and a single-consumer executor executes it in that
  * order — a fresh subscriber's catch-up never interleaves out of order with a
- * change. [onDeactivate]/[onActivate] close and reopen the dispatcher across a
- * `SupervisionPolicy.RESTART` or a migration, as [ObserveCell] does.
+ * change. [onDeactivate]/[onActivate] pause and reopen the dispatcher across a
+ * `SupervisionPolicy.RESTART` or a migration, as [ObserveCell] does; [close]
+ * is the separate terminal application-shutdown boundary.
  *
  * **The dispatcher is minted lazily, on the first submission** — and a
  * submission only ever happens when at least one listener is registered
@@ -321,6 +349,9 @@ class AlignedCompositeCell(
 
     /** Highest flushed wave per source: a straggler installs late, it never re-buffers. */
     private val flushedHighWater = mutableMapOf<UUID, Long>()
+
+    /** First wave per source released through the completeness set; written once per source, never rewritten. */
+    private val alignedFrom = mutableMapOf<UUID, Long>()
 
     /** A delta held for its wave, tagged with the arm it arrived on (structural view identity). */
     private class Buffered(val arm: Arm, val delta: Any)
@@ -733,6 +764,11 @@ class AlignedCompositeCell(
 
     private fun ready(timestamp: Timestamp): Boolean = expectedEdges(timestamp).all { isSettled(it, timestamp) }
 
+    /** Whether every named arm has joined the completeness set through an open Consume edge. */
+    private fun allArmsLinked(): Boolean = arms.values.all { arm ->
+        edges.values.any { edge -> edge.arm === arm && edge.open && edge.link.role == LinkRole.Consume }
+    }
+
     /**
      * Records [edge] as dropped from every wave it is expected for and has not
      * settled — every pending wave, or (with [through]) the pending waves of that
@@ -800,6 +836,7 @@ class AlignedCompositeCell(
             .sortedWith(compareBy({ it.sourceId }, { it.counter }))
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue
+            if (allArmsLinked()) alignedFrom.putIfAbsent(timestamp.sourceId, timestamp.counter)
             val dropped = LinkedHashSet<DroppedEdge>()
             exclusions.remove(timestamp)?.let { dropped += it }
             edges.values
@@ -869,7 +906,7 @@ class AlignedCompositeCell(
         views = arms.entries.associateTo(LinkedHashMap()) { (name, arm) -> name to arm.view.current() },
         frontier = flushedHighWater.toMap(),
         droppedEdges = dropped.toSet(),
-        alignedFrom = emptyMap(),
+        alignedFrom = alignedFrom.toMap(),
     )
 
     /**
@@ -905,51 +942,62 @@ class AlignedCompositeCell(
     // ---- lifecycle ----
 
     /**
-     * Stops the listener-dispatch executor if one was ever minted (a
-     * never-observed sink has no thread to stop, so this is a pure flag flip).
-     * Idempotent. Wired into [onDeactivate] (which the host calls on despawn),
-     * so a despawned sink's dispatch thread does not outlive it; a caller that
-     * never despawns the sink may call this directly at shutdown.
+     * Terminally closes the listener-dispatch executor if one was ever minted.
+     * Idempotent. A later [onActivate] is deliberately a no-op: terminal close
+     * is the application-shutdown boundary, while [onDeactivate] is the
+     * reopenable host pause used by restart and migration.
      *
      * Every outstanding write-visibility handle is abandoned with
      * [VisibilityAbandoned.Reason.SINK_CLOSED] (zvq3e-D6); [onDeactivate]
      * abandons them first with `HOST_SHUTDOWN`, so this finds none on that path.
      */
     fun close() {
-        close(Lifecycle.CLOSED, VisibilityAbandoned.Reason.SINK_CLOSED)
-    }
-
-    private fun close(state: Lifecycle, handleReason: VisibilityAbandoned.Reason) {
         val closed = synchronized(lock) {
-            if (lifecycle != Lifecycle.OPEN) return
-            lifecycle = state
+            if (lifecycle == Lifecycle.CLOSED) return
+            lifecycle = Lifecycle.CLOSED
             dispatcher to drainHandles()
         }
         val (doomed, abandoned) = closed
         doomed?.shutdown()
-        abandon(abandoned, handleReason)
+        abandon(abandoned, VisibilityAbandoned.Reason.SINK_CLOSED)
     }
 
     /**
-     * Reopens a [close]d sink so it can dispatch again — [ObserveCell.reopen]'s
-     * reason verbatim: [onDeactivate] is not only a despawn hook (`RESTART` and
-     * migration drain call it too), and without this one restart would leave the
-     * sink permanently deaf.
+     * Waits for every listener invocation accepted before terminal [close] to
+     * return. The shared timeout includes both the current dispatcher and a
+     * predecessor parked by a deactivate/activate cycle.
+     *
+     * @throws IllegalStateException if terminal [close] has not happened.
+     */
+    fun awaitTermination(timeoutMillis: Long): Boolean {
+        val executors = synchronized(lock) {
+            check(lifecycle == Lifecycle.CLOSED) { "awaitTermination requires close() first" }
+            listOf(dispatcher, draining)
+        }
+        return awaitExecutorsTermination(executors, timeoutMillis)
+    }
+
+    /**
+     * Reopens a sink paused by [onDeactivate] — [ObserveCell]'s reason
+     * verbatim: deactivation is not only a despawn hook (`RESTART` and migration
+     * drain call it too), and without this one restart would leave the sink
+     * permanently deaf. A terminally [close]d sink never reopens.
      *
      * Ordering across the reopen: the replacement dispatcher's first act is to
      * wait for the old one to drain, so a listener invocation queued before the
      * restart can never be overtaken by one submitted after it.
      *
-     * The replacement is *not* minted here: reopen only clears the closed flag
-     * and parks the superseded executor in [draining], leaving the mint to the
-     * next actual submission ([dispatchIfOpen], which chains the drain-wait
-     * there). A restart or migration of an aligned view nobody observes
-     * therefore stays thread-free, exactly as its first activation was.
+     * The replacement is *not* minted here: reopen only restores the open
+     * lifecycle and parks the superseded executor in [draining], leaving the
+     * mint to the next actual submission ([dispatchIfOpen], which chains the
+     * drain-wait there). A restart or migration of an aligned view nobody
+     * observes therefore stays thread-free, exactly as its first activation
+     * was.
      */
     private fun reopen() {
         synchronized(lock) {
-            if (lifecycle == Lifecycle.OPEN) return
-            // Whatever close() shut down becomes the next mint's predecessor.
+            if (lifecycle != Lifecycle.DEACTIVATED) return
+            // Whatever onDeactivate() shut down becomes the next mint's predecessor.
             // Only overwrite when there is something to hand off, so a
             // close/reopen cycle that dispatches nothing in between cannot lose
             // an earlier still-draining executor.
@@ -972,16 +1020,16 @@ class AlignedCompositeCell(
      * [close] runs, and [snapshot]/[restore] never carry them.
      */
     override fun onDeactivate(ctx: CellContext) {
-        val (doomed, abandoned) = synchronized(lock) {
+        val deactivated = synchronized(lock) {
             pending.clear()
             if (lifecycle == Lifecycle.OPEN) {
                 lifecycle = Lifecycle.DEACTIVATED
                 dispatcher to drainHandles()
             } else {
-                lifecycle = Lifecycle.DEACTIVATED
-                null to emptyList()
+                null
             }
-        }
+        } ?: return
+        val (doomed, abandoned) = deactivated
         doomed?.shutdown()
         abandon(abandoned, VisibilityAbandoned.Reason.HOST_SHUTDOWN)
     }
@@ -1010,8 +1058,10 @@ class AlignedCompositeCell(
  * @property droppedEdges every contributing edge this composite was released
  *   without (see [AlignedCompositeCell]'s class doc, §Stalled edges); empty for
  *   a fully aligned composite.
- * @property alignedFrom always empty in this delivery: F5 (`computenet-zvdt1`)
- *   adds the one write that fills it.
+ * @property alignedFrom the first wave per source released through the
+ *   completeness set after every named arm has an open `Consume` edge,
+ *   monotone and absent for a source never released under that condition; not
+ *   serialized in `snapshot()`.
  */
 data class AlignedComposite(
     val views: Map<String, Any?>,
@@ -1031,14 +1081,25 @@ data class AlignedComposite(
  * [civictech.cell.graph.refAs] at graph-build time, so wiring a wrong-shaped
  * source is a compile error rather than an `Any?` fold. As there, a JVM
  * signature clash forces a distinct `@JvmName` per typed overload.
+ *
+ * Admission rejects an ungated non-monotone cell in any named view's upstream
+ * Consume ancestry, and rejects a re-origination point that divides shared
+ * provenance across the view set. [unchecked] exempts one view from the
+ * ungated-cell rule only; divergent origination is never unchecked.
  */
 class AlignedObserveBuilder internal constructor() {
 
     internal class Spec(val source: CellRef, val outletName: String, val view: View<*, *>, val kind: String)
 
     internal val specs = LinkedHashMap<String, Spec>()
+    internal val unchecked = LinkedHashSet<String>()
 
-    private fun add(name: String, source: CellRef, outletName: String, view: View<*, *>, kind: String) {
+    /** Skip ungated-ancestor admission for the registered view [name] only. */
+    fun unchecked(name: String) {
+        unchecked += name
+    }
+
+    internal fun add(name: String, source: CellRef, outletName: String, view: View<*, *>, kind: String) {
         require(specs.put(name, Spec(source, outletName, view, kind)) == null) { "duplicate observe name '$name'" }
     }
 
@@ -1093,6 +1154,9 @@ class AlignedObserveBuilder internal constructor() {
  * view.current()   // { items, filtered, byDay } — never assembled from mixed waves
  * ```
  *
+ * This equal-root aligned specialization remains behaviorally unchanged. Apps
+ * should normally use [observation] as the canonical app-edge entry point.
+ *
  * Spawns one [AlignedCompositeCell] carrying one inlet per named view and
  * connects each source outlet to its own inlet (whose `onLinked` catch-up seeds
  * that view's arm state). Every published composite is the correct composite for
@@ -1107,6 +1171,15 @@ class AlignedObserveBuilder internal constructor() {
  * settles it (see its class doc for the phantom-expected-edge caveat); pass
  * [mode] `DEGRADE` to shrink the frontier on a recoverable stall instead, with
  * the dropped edges disclosed on [AlignedCompositeCell.composite].
+ *
+ * Before constructing or spawning the sink, this builder inspects each view's
+ * current local Consume ancestry. It rejects ungated non-monotone contributors
+ * and re-origination points that split shared provenance; remote producers are
+ * opaque and admitted. [AlignedObserveBuilder.unchecked] opts one view out of
+ * the ungated rule only. The complete build-time check runs as one awaited
+ * host-executor turn, so a concurrent topology mutation orders before or after
+ * its verdict. Later links are not rechecked, and bypass wiring the host cannot
+ * see reads as a root.
  */
 fun Use<HostManagementApi>.observeAligned(
     maxOutstandingHandles: Int = 1024,
@@ -1115,6 +1188,14 @@ fun Use<HostManagementApi>.observeAligned(
     block: AlignedObserveBuilder.() -> Unit,
 ): AlignedCompositeCell {
     val builder = AlignedObserveBuilder().apply(block)
+    require(builder.unchecked.all { it in builder.specs }) {
+        "observeAligned: unchecked views must be registered: " +
+            builder.unchecked.filterNot { it in builder.specs }
+    }
+    when (val verdict = admitAligned(call, builder.specs, builder.unchecked)) {
+        is AdmissionVerdict.Rejected -> throw AlignedAdmissionException(verdict)
+        is AdmissionVerdict.Admitted -> Unit
+    }
     val cell = AlignedCompositeCell(
         views = builder.specs.mapValues { it.value.view },
         registeredAs = builder.specs.mapValues { it.value.kind },

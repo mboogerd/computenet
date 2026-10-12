@@ -1,5 +1,6 @@
 package civictech.cell.link
 
+import civictech.cell.CurrentContext
 import civictech.cell.control.Magnitude
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeOpen
@@ -334,7 +335,11 @@ internal fun <Api> handshake(
             link.toPort?.let { port ->
                 val protocols = ProtocolSupport.of(port)
                 if (protocols.handles(Protocols.TopologyOrder)) {
-                    protocols.deliver(Protocols.TopologyOrder, link, EdgeClose)
+                    // Edge markers are metadata-plane traffic, not a reactive
+                    // continuation of whichever wave requested this unlink.
+                    CurrentContext.with(null) {
+                        protocols.deliver(Protocols.TopologyOrder, link, EdgeClose)
+                    }
                 }
             }
             uninstall(link)
@@ -385,7 +390,9 @@ internal fun <Api> handshake(
                 link.toPort?.let { port ->
                     val protocols = ProtocolSupport.of(port)
                     if (protocols.handles(Protocols.TopologyOrder)) {
-                        protocols.deliver(Protocols.TopologyOrder, link, EdgeOpen)
+                        CurrentContext.with(null) {
+                            protocols.deliver(Protocols.TopologyOrder, link, EdgeOpen)
+                        }
                     }
                 }
                 support.onLinked(link)
@@ -504,7 +511,9 @@ internal fun handshake(
             if (fireEdgeOpen) {
                 // Only topology-interested peers pay: crosses the wire iff the
                 // remote inlet handles TopologyOrder, exactly as the local path.
-                Protocols.sendDownstream(link, Protocols.TopologyOrder, EdgeOpen)
+                CurrentContext.with(null) {
+                    Protocols.sendDownstream(link, Protocols.TopologyOrder, EdgeOpen)
+                }
             }
             support.onLinked(link)
             // computenet-7u22s: same policy for onLinkedListeners.

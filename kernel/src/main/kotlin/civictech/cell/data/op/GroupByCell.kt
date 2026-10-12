@@ -17,6 +17,7 @@ import java.util.*
 import civictech.cell.data.Aggregator
 import civictech.cell.data.Windows
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
@@ -198,6 +199,10 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         require((lateness == null) == (keyTime == null)) {
             "GroupByCell needs both lateness and keyTime, or neither (lateness=$lateness, keyTime=$keyTime)"
         }
+        // Data and waterline share one per-edge settlement fold. Progress on
+        // either input waits for every open sibling edge; a real emission on
+        // `outlet` or `late` suppresses that output's ack for the wave.
+        inlet.relayAbsorbAcks(listOf(outlet, late), waterline)
         // late-join catch-up (G-22): current aggregates as a delta-from-empty
         outlet.catchUpOnLinked {
             if (groups.isEmpty()) null

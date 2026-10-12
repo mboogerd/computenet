@@ -40,3 +40,6 @@ runtime/src/main/kotlin/civictech/runtime/Runtime.kt
 
 economy/src/main/kotlin/civictech/economy/TokenBucketLedger.kt
 # checkpoint restore — `restoreState` reads back `BucketRecord.peer`, the stable name `checkpointTo` wrote from `PeerId.name`; a persisted name, never derived from key material (xbs8t-D1, 66m-D9).
+
+concord/src/main/kotlin/civictech/concord/driver/kernel/StubWriteSigning.kt
+# configured name — a Concord scenario's actor handle becomes the stub signer's PeerId; the stub secret is derived from that name, never the name from key material (computenet-ermvz.5, ermvz-D18).

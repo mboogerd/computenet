@@ -12,6 +12,8 @@ import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.link.LinkPolicy
+import civictech.cell.link.LinkResult
 import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
@@ -75,11 +77,17 @@ interface SemiJoinApi<A, B> {
  * shared-source diamond (both inlets descending from one root, the only topology
  * in which the within-wave flicker exists at all), not two independent roots.
  * **One root is necessary and not sufficient** — each arm must also *carry* the
- * root's waves onto the gated edge, and where it structurally cannot, its
- * absorb-ack rescues the wave only when the absorbing operator links directly
- * into this cell's inlet; a pure hop in between swallows the ack and the gate
- * withholds output at rest. [WaveGate]'s "One root is NOT sufficient" section
- * has the mechanism and the measurement (computenet-23bf).
+ * root's waves onto the gated edge. Where it structurally cannot, its
+ * absorb-ack rescues the wave when the absorbing operator links directly into
+ * this cell's inlet or when the ack crosses the single-input, transparent
+ * relay-enabled hops added by computenet-6ovpx. A hop with multiple open
+ * `LinkRole.Consume` inputs must itself opt into output settlement: a gated
+ * instance constructed with `requireSettledFanIn = true` rejects a known
+ * ungated [QuorumSetCell] or [UnionSetCell] outlet at link time, naming the
+ * operator. Their opt-in fan-in gate supplies the per-edge settlement needed
+ * before this cell may treat their one output edge as a complete frontier edge.
+ * [WaveGate]'s "One root is NOT sufficient" section has the mechanism and the
+ * measurements (computenet-23bf and computenet-6ovpx).
  *
  * ### Lateness: the `waterline` inlet and the `lateLeft`/`lateRight` outlets (KE4.5)
  *
@@ -167,6 +175,14 @@ class SemiJoinCell<A, B, K>(
      * unchanged.
      */
     emitOnFrontier: Boolean = false,
+    /**
+     * When true, link-time admission refuses a known ungated Quorum/Union
+     * fan-in outlet. Kept separate from [emitOnFrontier] for compatibility:
+     * existing gated joins that deliberately accept an eager upstream keep
+     * their wiring, while a topology relying on transitive settlement can
+     * require the stronger edge explicitly.
+     */
+    requireSettledFanIn: Boolean = false,
     /** The left inlet's lateness declaration (`[24-WL-01]`); `null` = never guarded, never evicted (`[24-WL-16]`). */
     private val leftLateness: Windows.Lateness<A>? = null,
     /** The right inlet's lateness declaration; `null` = never guarded, never evicted. */
@@ -221,6 +237,23 @@ class SemiJoinCell<A, B, K>(
     val lateRight = registerPort("lateRight", FanOutlet.create<Propagate<SetDelta<B>>>())
 
     init {
+        require(!requireSettledFanIn || emitOnFrontier) {
+            "requireSettledFanIn needs emitOnFrontier = true"
+        }
+        if (requireSettledFanIn) {
+            listOf(left, right).forEach { inlet ->
+                inlet.linking.policies += LinkPolicy { request ->
+                    FanInSettlementCapabilities[request.from]
+                        ?.takeUnless { it.frontierGated }
+                        ?.let { capability ->
+                            LinkResult.Rejected(
+                                "frontier-gated SemiJoinCell rejects ungated ${capability.operator} " +
+                                    "outlet ${request.from}; construct the fan-in with emitOnFrontier = true",
+                            )
+                        }
+                }
+            }
+        }
         // late-join catch-up (G-22): the advertised output as a delta-from-empty
         outlet.catchUpOnLinked { if (ledger.isEmpty) null else ledger.asDelta() }
         waterline.serve(object : Propagate<WaterlineDelta> {

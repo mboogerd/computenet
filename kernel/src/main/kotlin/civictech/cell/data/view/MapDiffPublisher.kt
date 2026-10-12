@@ -7,6 +7,7 @@ import civictech.cell.data.delta.MapDelta
  * the published map, recomputes touched keys, and returns only the delta
  * that actually changes downstream state — or null (emit nothing).
  * [changed] customizes the value comparison (e.g. epsilon floats).
+ * Not an app-edge API; apps read through [civictech.cell.observe.observation].
  */
 class MapDiffPublisher<K, V>(
     private val changed: (V, V) -> Boolean = { a, b -> a != b },

@@ -127,7 +127,7 @@ class StagedApplierTest {
         val plan = record.plan.shouldNotBeNull()
         plan.appliable shouldBe false
         plan.steps.map { it.key } shouldContainExactly listOf(
-            "e", "e2", "e.outlet->${a.ref}.inlet", "e2.outlet->$unknown.inlet",
+            "e", "e2", "e.outlet->${InspectorServer.encodeRef(a.ref)}.inlet", "e2.outlet->${InspectorServer.encodeRef(unknown)}.inlet",
         )
         plan.steps.map { it.refusal?.code } shouldContainExactly listOf(null, null, null, "UNKNOWN_REF")
         plan.steps[3].touches shouldContainExactly listOf(InspectorServer.encodeRef(unknown))
@@ -252,7 +252,7 @@ class StagedApplierTest {
         record.outcome shouldBe ApplyOutcome.UnwoundClean
         f.registry.swapSet(a.ref) shouldBe swapBefore
         f.events.none { it.startsWith("link:") && "A" in it } shouldBe true
-        record.steps.getValue("e.outlet->${a.ref}.inlet") shouldBe StepOutcome.NotRun
+        record.steps.getValue("e.outlet->${InspectorServer.encodeRef(a.ref)}.inlet") shouldBe StepOutcome.NotRun
     }
 
     // ---- [WKB2-18] -----------------------------------------------------------

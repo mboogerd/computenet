@@ -45,6 +45,10 @@ class QuiescenceTimeout(message: String) : IllegalStateException(message)
  * [IllegalStateException] if its recovery record loop is active. Serialize external
  * fences and drain/migration calls after `recoverFrom` returns, then use
  * [Recovery.awaitApplied], whose fence is taken only after the gate has lifted.
+ * Passive kernel observers that can wait across recovery use ManagedHost's internal
+ * recovery-aware fence instead: it defers completion while the gate is raised and
+ * re-arms only after staged delivery has been reactivated. That narrower seam is not a
+ * public replacement for this host-wide external-barrier contract.
  *
  * **Starvation cannot fake it.** A host denied CPU does not run the fence, so
  * [await] blocks; the answer arrives late rather than wrong. The timeout is a

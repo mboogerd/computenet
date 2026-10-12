@@ -16,6 +16,7 @@ import civictech.cell.host.HostedCellProxy
 import civictech.cell.DenialReason
 import civictech.cell.host.DeadLetter
 import civictech.cell.link.PeerId
+import civictech.cell.wire.AnonymousOwnership
 import civictech.cell.wire.PeerAuthPolicy
 import civictech.cell.wire.Peering
 import civictech.cell.wire.ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
@@ -118,11 +119,49 @@ class WsReconnectSmokeTest {
         }
     }
 
-    private class Stack {
+    private class Stack(
+        anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
+    ) {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
-        val side = Peering.Side(registry, bridgeHost)
+        val deadLetters: MutableList<DeadLetter> = Collections.synchronizedList(mutableListOf())
+        val side = Peering.Side(
+            registry,
+            bridgeHost,
+            anonymousOwnership = anonymousOwnership,
+        )
+
+        init {
+            listOf(host, bridgeHost).forEach { h ->
+                h.deadLetterOutlet.subscribe(
+                    Use.fixed(
+                        object : Propagate<DeadLetter> {
+                            override fun propagate(value: DeadLetter) {
+                                deadLetters += value
+                            }
+                        },
+                        PortRef.generate(),
+                    ),
+                )
+            }
+        }
+
+        fun announcementDenials(ref: CellRef): List<DeadLetter> =
+            deadLetters.toList().filter { letter ->
+                letter.denial?.exposure == "announcement-admission" &&
+                    letter.description.contains(ref.toString())
+            }
+    }
+
+    private fun senderFor(target: CellRef, stack: Stack): SetOps<String> {
+        val writer = SetCell<String>()
+        stack.host.managementInlet.call.spawn(writer)
+        val remoteInlet = (HostedCellProxy.create(target, stack.registry, DeltaInletProxy::class.java)
+                as DeltaInletProxy).inlet.call
+        writer.outlet.subscribe(Use.fixed(remoteInlet, PortRef.generate()))
+        return (HostedCellProxy.create(writer.ref, stack.registry, SetInletProxy::class.java)
+                as SetInletProxy).inlet.call
     }
 
     /**
@@ -180,6 +219,108 @@ class WsReconnectSmokeTest {
         /** Every dead letter whose denial names a replay — the thing BS-13 forbids. */
         fun replayDeadLetters(): List<DeadLetter> =
             deadLetters.toList().filter { it.denial?.reason == DenialReason.REPLAY }
+    }
+
+    @Test
+    fun `computenet-ddurc - PerConnection over WebSocket a stranger is refused and an overlapping reconnect regains the ref`() {
+        val listenerStack = Stack(AnonymousOwnership.PerConnection)
+        val clientA = Stack()
+        val clientB = Stack()
+        val endpoint = HeldPort()
+        val port = endpoint.port
+        val listener = endpoint.serve(listenerStack.side)
+        val connectionA = WsTransport.connect(URI("ws://localhost:$port"), clientA.side) { 0L }
+        var connectionB: WsTransport.WsConnection? = null
+        try {
+            val collectorA = CollectorCell()
+            clientA.host.managementInlet.call.spawn(collectorA)
+            await("client A's collector announced") {
+                listenerStack.registry.location(collectorA.ref) is LocationRegistry.Remote
+            }
+            val incumbent = listenerStack.registry.location(collectorA.ref) as LocationRegistry.Remote
+
+            val collectorB = CollectorCell(collectorA.ref)
+            clientB.host.managementInlet.call.spawn(collectorB)
+            connectionB = WsTransport.connect(URI("ws://localhost:$port"), clientB.side) { 0L }
+
+            await("client B's overlapping announcement refused and deferred") {
+                listenerStack.announcementDenials(collectorA.ref).isNotEmpty()
+            }
+            val denial = listenerStack.announcementDenials(collectorA.ref).single()
+            denial.denial!!.reason shouldBe DenialReason.NOT_ADMITTED
+            denial.denial!!.principal shouldBe null
+            denial.cause shouldBe null
+            val locationDuringOverlap =
+                listenerStack.registry.location(collectorA.ref) as LocationRegistry.Remote
+            (locationDuringOverlap.sink === incumbent.sink) shouldBe true
+
+            val sender = senderFor(collectorA.ref, listenerStack)
+            sender.add("to-a")
+            await("the incumbent client receives the listener's send") {
+                membership(collectorA.arrivals.toList()) == setOf("to-a")
+            }
+            collectorB.arrivals.shouldBeEmpty()
+
+            connectionA.shutdown()
+            await("the deferred replacement owns the ref after the incumbent closes") {
+                val replacement = listenerStack.registry.location(collectorA.ref) as? LocationRegistry.Remote
+                replacement != null && replacement.sink !== incumbent.sink
+            }
+
+            sender.add("to-b")
+            await("the replacement client receives the listener's send") {
+                membership(collectorB.arrivals.toList()) == setOf("to-b")
+            }
+            membership(collectorA.arrivals.toList()) shouldBe setOf("to-a")
+        } finally {
+            connectionB?.shutdown()
+            connectionA.shutdown()
+            runCatching { listener.stop(1000) }
+            endpoint.close()
+        }
+    }
+
+    @Test
+    fun `computenet-ddurc - Shared over WebSocket lets a second anonymous socket re-aim the ref`() {
+        val listenerStack = Stack()
+        val clientA = Stack()
+        val clientB = Stack()
+        val endpoint = HeldPort()
+        val port = endpoint.port
+        val listener = endpoint.serve(listenerStack.side)
+        val connectionA = WsTransport.connect(URI("ws://localhost:$port"), clientA.side) { 0L }
+        var connectionB: WsTransport.WsConnection? = null
+        try {
+            val collectorA = CollectorCell()
+            clientA.host.managementInlet.call.spawn(collectorA)
+            await("client A's collector announced") {
+                listenerStack.registry.location(collectorA.ref) is LocationRegistry.Remote
+            }
+            val firstLocation = listenerStack.registry.location(collectorA.ref) as LocationRegistry.Remote
+
+            val collectorB = CollectorCell(collectorA.ref)
+            clientB.host.managementInlet.call.spawn(collectorB)
+            connectionB = WsTransport.connect(URI("ws://localhost:$port"), clientB.side) { 0L }
+
+            await("client B's catch-up re-aims the shared anonymous ref") {
+                val replacement = listenerStack.registry.location(collectorA.ref) as? LocationRegistry.Remote
+                replacement != null && replacement.sink !== firstLocation.sink
+            }
+            listenerStack.announcementDenials(collectorA.ref).shouldBeEmpty()
+
+            val sender = senderFor(collectorA.ref, listenerStack)
+            sender.add("to-b")
+            await("the second anonymous client receives the listener's send") {
+                membership(collectorB.arrivals.toList()) == setOf("to-b")
+            }
+            collectorA.arrivals.shouldBeEmpty()
+            listenerStack.announcementDenials(collectorA.ref).shouldBeEmpty()
+        } finally {
+            connectionB?.shutdown()
+            connectionA.shutdown()
+            runCatching { listener.stop(1000) }
+            endpoint.close()
+        }
     }
 
     @Test

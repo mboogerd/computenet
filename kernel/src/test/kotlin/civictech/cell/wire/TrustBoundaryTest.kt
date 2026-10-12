@@ -25,15 +25,18 @@ import civictech.cell.link.allowPeers
 import civictech.cell.port.input
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.IntakeClosedException
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.InvocationSink
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
@@ -435,7 +438,11 @@ class TrustBoundaryTest {
      * the q→P peering: nothing supplies a [PeerId] to the invocation, so the
      * only identity in play is the one P's [BridgeIngressCell] stamped.
      */
-    private class RedirectRig {
+    private class RedirectRig(
+        private val requesterPeer: PeerId? = REQUESTER_Q,
+        private val thirdPeer: PeerId? = THIRD_R,
+        private val ownership: AnonymousOwnership = AnonymousOwnership.Shared,
+    ) {
         val controller = SimulationController(0)
         val registryP = LocationRegistry()
         val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
@@ -463,11 +470,16 @@ class TrustBoundaryTest {
 
         val pq: Peering.Loopback
         val pr: Peering.Loopback
+        private val p = Peering.Side(
+            registryP,
+            bridgeP,
+            peer = PEER_P,
+            anonymousOwnership = ownership,
+        )
+        private val q = Peering.Side(registryQ, bridgeQ, peer = requesterPeer)
+        private val r = Peering.Side(registryR, bridgeR, peer = thirdPeer)
 
         init {
-            val p = Peering.Side(registryP, bridgeP, peer = PEER_P)
-            val q = Peering.Side(registryQ, bridgeQ, peer = REQUESTER_Q)
-            val r = Peering.Side(registryR, bridgeR, peer = THIRD_R)
             listOf(hostP, bridgeP).forEach { h ->
                 h.deadLetterOutlet.subscribe(Use.fixed(object : Propagate<DeadLetter> {
                     override fun propagate(value: DeadLetter) {
@@ -487,6 +499,12 @@ class TrustBoundaryTest {
         /** P's ingress for q's frames — where a refusal of q's request is accounted. */
         val ingressFromQ: BridgeIngressCell get() = pq.ingressOnA!!
 
+        /** P's ingress for r's frames — the link-request half of the local-shadowing arm. */
+        val ingressFromR: BridgeIngressCell get() = pr.ingressOnA!!
+
+        /** P's per-connection mirror that applies r's announcements. */
+        val mirrorFromR: CellRef get() = pr.mirrorRefOnA
+
         /**
          * q asks P's [source] outlet to link to [consumer], as a real frame:
          * encoded by the peering's q→P [BridgeEgressCell], decoded and
@@ -501,6 +519,48 @@ class TrustBoundaryTest {
             )
             controller.runToIdle()
         }
+
+        /** The same real-frame request as [requestFromQ], sent by r. */
+        fun requestFromR(consumer: PortAddress) {
+            RemoteLinkRequests.requestLinkTo(
+                sink = pr.bToA,
+                target = PortAddress(source.ref, "outlet"),
+                consumer = consumer,
+                api = Consumer::class.java,
+            )
+            controller.runToIdle()
+        }
+
+        /** Host a cell on r under an already-used ref, causing r to announce that ref to P. */
+        fun announceImpostorFromR(ref: CellRef): CollectingCell = CollectingCell(ref).also {
+            hostR.managementInlet.call.spawn(it)
+            controller.runToIdle()
+        }
+
+        /** Have r retract q's ref directly, without first publishing an impostor. */
+        fun retractFromR(ref: CellRef) {
+            val announce = (HostedCellProxy.create(
+                mirrorFromR,
+                pr.bToA,
+                Peering.AnnounceInletProxy::class.java,
+            ) as Peering.AnnounceInletProxy).inlet.call
+            announce.unpublished(ref)
+            controller.runToIdle()
+        }
+
+        /** Have q — the owning connection — retract its own ref over [pq]. */
+        fun retractFromQ(ref: CellRef) {
+            val announce = (HostedCellProxy.create(
+                pq.mirrorRefOnA,
+                pq.bToA,
+                Peering.AnnounceInletProxy::class.java,
+            ) as Peering.AnnounceInletProxy).inlet.call
+            announce.unpublished(ref)
+            controller.runToIdle()
+        }
+
+        /** Open q's replacement while [pq] is still live; the caller advances the scheduler. */
+        fun overlappingQ(): Peering.Loopback = Peering.loopback(p, q)
 
         fun emit(value: String) {
             source.outlet.call.provide(value)
@@ -535,6 +595,678 @@ class TrustBoundaryTest {
         letter.description shouldContain "requester-q"
 
         bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
+     * The announcement-collision refusal shared by computenet-zlm2's three
+     * arms: one typed ADMISSION denial names r, and the mirror's RESTART policy
+     * never fires because a boundary refusal is not a cell fault.
+     */
+    private fun RedirectRig.assertImpostorAnnouncementRefused(
+        lettersBefore: Int,
+        faultLettersBefore: Long,
+        expectedPrincipal: PeerId? = RedirectRig.THIRD_R,
+    ) {
+        val letters = deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+        letters.size shouldBe 1
+        val letter = letters.single()
+        val denial = letter.denial!!
+        denial.seam shouldBe BoundarySeam.ADMISSION
+        denial.reason shouldBe DenialReason.NOT_ADMITTED
+        denial.principal shouldBe expectedPrincipal
+        letter.cause shouldBe null
+        letter.description shouldContain (expectedPrincipal?.name ?: "<anonymous>")
+
+        bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
+        bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
+     * computenet-zlm2 arm 1: q first establishes a legitimate RemoteLink to
+     * its own consumer. A later announcement by r for the same full ref must
+     * not re-aim that already-live link at r.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot re-aim an established RemoteLink`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        rig.requestFromQ(PortAddress(rig.consumerOnQ.ref, "inlet"))
+        rig.emit("first")
+        rig.consumerOnQ.received shouldBe listOf("first")
+
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+        val impostorOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).peer shouldBe
+            RedirectRig.REQUESTER_Q
+        rig.emit("q-only-secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret")
+        impostorOnR.received.shouldBeEmpty()
+        rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
+    }
+
+    /**
+     * computenet-4f55i, council option D: Open-mode anonymous announcements
+     * deliberately share the null [PeerId] owner. P has two independent
+     * loopback connections to anonymous peers q and r; r's announcement of
+     * q's full ref is admitted and the already-linked proxy follows the new
+     * sink. This pins non-protection rather than treating null equality as an
+     * accidental implementation detail.
+     */
+    @Test
+    fun `computenet-4f55i - anonymous peers may re-aim each other's announcements`() {
+        val rig = RedirectRig(requesterPeer = null, thirdPeer = null)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        rig.consumerOnQ.received shouldBe listOf("first")
+
+        val lettersBefore = rig.deadLettersP.size
+        val consumerOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("re-aimed")
+
+        rig.consumerOnQ.received shouldBe listOf("first")
+        consumerOnR.received shouldBe listOf("re-aimed")
+        val location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        location.peer shouldBe null
+        (location.sink === rig.pr.aToB).shouldBeTrue()
+        rig.deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+            .shouldBeEmpty()
+    }
+
+    @Test
+    fun `computenet-ddurc - PerConnection another anonymous connection cannot re-aim an announcement`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+
+        val impostor = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "secret")
+        impostor.received.shouldBeEmpty()
+        val location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        (location.sink === rig.pq.aToB).shouldBeTrue()
+        rig.assertImpostorAnnouncementRefused(
+            lettersBefore,
+            faultLettersBefore,
+            expectedPrincipal = null,
+        )
+        rig.deadLettersP.last().description shouldContain
+            "the claim is deferred until the incumbent connection retires"
+    }
+
+    @Test
+    fun `computenet-ddurc - PerConnection another anonymous connection cannot retract then re-claim`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+
+        rig.retractFromR(rig.consumerOnQ.ref)
+        val impostor = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "secret")
+        impostor.received.shouldBeEmpty()
+        val location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        (location.sink === rig.pq.aToB).shouldBeTrue()
+        val denials = rig.deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+        denials.map { it.denial!!.subject } shouldBe listOf(
+            "RegistryAnnounce.unpublished",
+            "RegistryAnnounce.published",
+        )
+        denials.forEach {
+            it.denial!!.seam shouldBe BoundarySeam.ADMISSION
+            it.denial!!.reason shouldBe DenialReason.NOT_ADMITTED
+            it.denial!!.principal shouldBe null
+            it.cause shouldBe null
+        }
+        denials.last().description shouldContain
+            "the claim is deferred until the incumbent connection retires"
+        rig.bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
+        rig.bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    @Test
+    fun `computenet-ddurc - PerConnection an overlapping anonymous reconnect regains its refs when the old connection retires`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+
+        val replacement = rig.overlappingQ()
+        rig.bridgeP.managementInlet.call.supervise(
+            replacement.mirrorRefOnA,
+            SupervisionPolicy.RESTART,
+        )
+        rig.controller.runToIdle()
+
+        val refDenials = rig.deadLettersP.drop(lettersBefore)
+            .filter { letter ->
+                letter.denial?.exposure == "announcement-admission" &&
+                    letter.description.contains(rig.consumerOnQ.ref.toString())
+            }
+        refDenials.size shouldBe 1
+        refDenials.single().denial!!.reason shouldBe DenialReason.NOT_ADMITTED
+        refDenials.single().denial!!.principal shouldBe null
+        refDenials.single().cause shouldBe null
+        refDenials.single().description shouldContain
+            "the claim is deferred until the incumbent connection retires"
+        var location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        (location.sink === rig.pq.aToB).shouldBeTrue()
+        rig.emit("during-overlap")
+        rig.consumerOnQ.received shouldBe listOf("first", "during-overlap")
+
+        rig.pq.partition()
+        rig.controller.runToIdle()
+
+        location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        location.peer shouldBe null
+        (location.sink === replacement.aToB).shouldBeTrue()
+        rig.emit("after")
+        rig.consumerOnQ.received shouldBe listOf("first", "during-overlap", "after")
+        rig.bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
+        rig.bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
+     * ddurc-D4 rule 4 (review addition): the owner freeing its ref on purpose
+     * admits the deferred claimant as an ordinary publication — `onPublish`
+     * fires once, with no further announcement from the claimant.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection the owner's own retraction admits the deferred claimant`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        val claimant = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).sink shouldBeSameInstanceAs
+            rig.pq.aToB
+        val published = mutableListOf<CellRef>()
+        rig.registryP.onPublish { published += it }
+
+        rig.retractFromQ(rig.consumerOnQ.ref)
+
+        val location = rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote
+        location.peer shouldBe null
+        location.sink shouldBeSameInstanceAs rig.pr.aToB
+        published.filter { it == rig.consumerOnQ.ref } shouldBe listOf(rig.consumerOnQ.ref)
+        rig.emit("after")
+        rig.consumerOnQ.received shouldBe listOf("first")
+        claimant.received shouldBe listOf("after")
+    }
+
+    /**
+     * ddurc-D4 rule 2 (review addition): a refused claimant that then retracts
+     * the ref no longer wants it, so the incumbent's retirement installs nothing.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection a refused claimant's retraction withdraws its deferred claim`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        val claimant = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.retractFromR(rig.consumerOnQ.ref)
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).sink shouldBeSameInstanceAs
+            rig.pq.aToB
+
+        rig.pq.partition()
+        rig.controller.runToIdle()
+
+        rig.registryP.location(rig.consumerOnQ.ref) shouldBe null
+        claimant.received.shouldBeEmpty()
+    }
+
+    /**
+     * ddurc-D4 rule 3(a) (review addition): a claim lives only as long as its
+     * claimant's connection. A replacement that retires before the incumbent
+     * must not be installed afterwards — its sink is dead.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection a claimant that retires first is never installed`() {
+        val rig = RedirectRig(null, null, AnonymousOwnership.PerConnection)
+        val lettersBefore = rig.deadLettersP.size
+        val replacement = rig.overlappingQ()
+        rig.controller.runToIdle()
+        rig.deadLettersP.drop(lettersBefore).count { letter ->
+            letter.denial?.exposure == "announcement-admission" &&
+                letter.description.contains(rig.consumerOnQ.ref.toString()) &&
+                letter.description.contains("the claim is deferred")
+        } shouldBe 1
+
+        replacement.partition()
+        rig.controller.runToIdle()
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).sink shouldBeSameInstanceAs
+            rig.pq.aToB
+        rig.pq.partition()
+        rig.controller.runToIdle()
+
+        rig.registryP.location(rig.consumerOnQ.ref) shouldBe null
+    }
+
+    /**
+     * `unpublishRemotes` is the transport's send-failure path: a sink that
+     * notices its socket is dead calls it from inside `deliver`, on a sender
+     * thread that may already hold one ref's park-queue monitor (a hold
+     * release replaying, a publish draining). Two such senders, each holding a
+     * different ref routed through the same dead sink, must both finish — the
+     * retire must not wait on a monitor the other sender holds.
+     */
+    @Test
+    fun `computenet-ddurc - two senders that notice one dead sink mid-replay both retire it`() {
+        // The losing interleaving is a race (both senders must scan the
+        // registry before either removes its ref), so it is attempted many
+        // times; one stuck round fails the test.
+        repeat(500) { round ->
+            val registry = LocationRegistry()
+            val refs = listOf(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()))
+            val bothMidReplay = java.util.concurrent.CyclicBarrier(2)
+            val dead = object : InvocationSink {
+                override fun deliver(invocation: HostedPortInvocation) {
+                    bothMidReplay.await(20, java.util.concurrent.TimeUnit.SECONDS)
+                    registry.unpublishRemotes(this)
+                    throw IntakeClosedException(invocation.cellRef)
+                }
+            }
+            refs.forEach { ref ->
+                registry.hold(ref)
+                registry.publish(ref, dead)
+                registry.deliver(
+                    HostedPortInvocation(
+                        ref, "inlet", HostedPortInvocation.Type.PORT_API,
+                        Invocation("provide", listOf("java.lang.Object"), listOf("parked")),
+                    ),
+                )
+            }
+
+            val senders = refs.map { ref ->
+                Thread { registry.release(ref) }.apply { isDaemon = true; start() }
+            }
+            senders.forEach { it.join(10_000) }
+
+            (round to senders.map { it.isAlive }) shouldBe (round to listOf(false, false))
+            refs.forEach { ref ->
+                registry.location(ref) shouldBe null
+                registry.parkedFor(ref).size shouldBe 1
+            }
+        }
+    }
+
+    /**
+     * The same two-sender failure with PerConnection state active and a live
+     * deferred claimant on each ref. Retirement still removes locations
+     * immediately, but claim reconciliation waits until each sender has left
+     * the park-queue monitor it entered through replay.
+     */
+    @Test
+    fun `computenet-ddurc - PerConnection two senders mid-replay retire and admit deferred claims`() {
+        repeat(500) { round ->
+            val registry = LocationRegistry()
+            val refs = listOf(CellRef(UUID.randomUUID()), CellRef(UUID.randomUUID()))
+            val bothMidReplay = java.util.concurrent.CyclicBarrier(2)
+            val dead = object : InvocationSink {
+                override fun deliver(invocation: HostedPortInvocation) {
+                    bothMidReplay.await(20, java.util.concurrent.TimeUnit.SECONDS)
+                    registry.unpublishRemotes(this)
+                    throw IntakeClosedException(invocation.cellRef)
+                }
+            }
+            val claimants = refs.associateWith { InvocationSink { } }
+            refs.forEach { ref ->
+                registry.hold(ref)
+                registry.publishFromPeer(
+                    ref,
+                    dead,
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                ) shouldBe null
+                registry.publishFromPeer(
+                    ref,
+                    claimants.getValue(ref),
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                )!!.deferred.shouldBeTrue()
+                registry.deliver(
+                    HostedPortInvocation(
+                        ref, "inlet", HostedPortInvocation.Type.PORT_API,
+                        Invocation("provide", listOf("java.lang.Object"), listOf("parked")),
+                    ),
+                )
+            }
+
+            val senders = refs.map { ref ->
+                Thread { registry.release(ref) }.apply { isDaemon = true; start() }
+            }
+            senders.forEach { it.join(10_000) }
+
+            (round to senders.map { it.isAlive }) shouldBe (round to listOf(false, false))
+            refs.forEach { ref ->
+                val location = registry.location(ref) as LocationRegistry.Remote
+                location.sink shouldBeSameInstanceAs claimants.getValue(ref)
+                registry.parkedFor(ref).shouldBeEmpty()
+            }
+        }
+    }
+
+    /**
+     * A Shared retirement may have selected its monitor-free path immediately
+     * before the registry's first PerConnection admission. The admission waits
+     * for that already-entered scan, so it observes the ref as free and installs
+     * directly instead of recording a claim the Shared scan would strand.
+     */
+    @Test
+    fun `computenet-ddurc - first PerConnection admission cannot race behind a Shared retire scan`() {
+        val sharedScanEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseSharedScan = java.util.concurrent.CountDownLatch(1)
+        val perConnectionWaiting = java.util.concurrent.CountDownLatch(1)
+        val registry = LocationRegistry(
+            beforeSharedRemoteRemoval = {
+                sharedScanEntered.countDown()
+                releaseSharedScan.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+            },
+            onPerConnectionWait = perConnectionWaiting::countDown,
+        )
+        val ref = CellRef(UUID.randomUUID())
+        val owner = InvocationSink { }
+        val claimant = InvocationSink { }
+        registry.publish(ref, owner)
+
+        val retirer = Thread { registry.unpublishRemotes(owner) }.apply {
+            isDaemon = true
+            start()
+        }
+        sharedScanEntered.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        val refusal = java.util.concurrent.atomic.AtomicReference<LocationRegistry.RemotePublishRefusal?>()
+        val publisher = Thread {
+            refusal.set(
+                registry.publishFromPeer(
+                    ref,
+                    claimant,
+                    peer = null,
+                    anonymousOwnership = AnonymousOwnership.PerConnection,
+                ),
+            )
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        perConnectionWaiting.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        releaseSharedScan.countDown()
+        retirer.join(10_000)
+        publisher.join(10_000)
+
+        listOf(retirer.isAlive, publisher.isAlive) shouldBe listOf(false, false)
+        refusal.get() shouldBe null
+        registry.location(ref) shouldBe LocationRegistry.Remote(claimant, peer = null)
+    }
+
+    /**
+     * A claimant retirement must not miss a ref when the incumbent retracts
+     * between the retirement's two candidate scans and promotes that claimant.
+     * The hook sits between the scans, so it pins the interleaving in either
+     * scan order instead of relying on thread timing.
+     */
+    @Test
+    fun `computenet-ilcg6 - claimant retirement covers promotion between candidate scans`() {
+        val firstScanFinished = java.util.concurrent.CountDownLatch(1)
+        val releaseRetirement = java.util.concurrent.CountDownLatch(1)
+        val registry = LocationRegistry(
+            beforeSharedRemoteRemoval = null,
+            onPerConnectionWait = null,
+            betweenPerConnectionRetirementScans = {
+                firstScanFinished.countDown()
+                releaseRetirement.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+            },
+        )
+        val ref = CellRef(UUID.randomUUID())
+        val incumbent = InvocationSink { }
+        val retiringClaimant = InvocationSink { }
+        registry.publishFromPeer(
+            ref,
+            incumbent,
+            peer = null,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.publishFromPeer(
+            ref,
+            retiringClaimant,
+            peer = null,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        )!!.deferred.shouldBeTrue()
+
+        val retirer = Thread { registry.unpublishRemotes(retiringClaimant) }.apply {
+            isDaemon = true
+            start()
+        }
+        firstScanFinished.await(20, java.util.concurrent.TimeUnit.SECONDS).shouldBeTrue()
+
+        registry.unpublishFromPeer(
+            ref,
+            peer = null,
+            sink = incumbent,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.location(ref) shouldBe LocationRegistry.Remote(retiringClaimant, peer = null)
+        releaseRetirement.countDown()
+        retirer.join(10_000)
+
+        retirer.isAlive shouldBe false
+        registry.location(ref) shouldBe null
+
+        // A stale deferred claim would be resurrected when this probe owner retracts.
+        val probeOwner = InvocationSink { }
+        registry.publishFromPeer(
+            ref,
+            probeOwner,
+            peer = null,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.unpublishFromPeer(
+            ref,
+            peer = null,
+            sink = probeOwner,
+            anonymousOwnership = AnonymousOwnership.PerConnection,
+        ) shouldBe null
+        registry.location(ref) shouldBe null
+    }
+
+    /**
+     * The named/anonymous boundary remains protected in both directions even
+     * though two anonymous connections share ownership: concrete [PeerId] and
+     * null never compare equal. Both arms use independent loopback peerings and
+     * prove delivery stays with the incumbent after the refused announcement.
+     */
+    @Test
+    fun `computenet-4f55i - named and anonymous peers cannot capture each other's announcements`() {
+        val anonymousOwner = RedirectRig(requesterPeer = null, thirdPeer = RedirectRig.THIRD_R)
+        anonymousOwner.bridgeP.managementInlet.call.supervise(
+            anonymousOwner.mirrorFromR,
+            SupervisionPolicy.RESTART,
+        )
+        val anonymousConsumer = HostedCellProxy.create(
+            anonymousOwner.consumerOnQ.ref,
+            anonymousOwner.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        anonymousOwner.source.outlet.linkTo(anonymousConsumer.inlet)
+        val namedLettersBefore = anonymousOwner.deadLettersP.size
+        val namedFaultLettersBefore = anonymousOwner.bridgeP.supervisionAccounting().deadLetters
+        val namedImpostor = anonymousOwner.announceImpostorFromR(anonymousOwner.consumerOnQ.ref)
+        anonymousOwner.emit("anonymous-owner")
+
+        anonymousOwner.consumerOnQ.received shouldBe listOf("anonymous-owner")
+        namedImpostor.received.shouldBeEmpty()
+        anonymousOwner.assertImpostorAnnouncementRefused(
+            namedLettersBefore,
+            namedFaultLettersBefore,
+        )
+
+        val namedOwner = RedirectRig(requesterPeer = RedirectRig.REQUESTER_Q, thirdPeer = null)
+        namedOwner.bridgeP.managementInlet.call.supervise(
+            namedOwner.mirrorFromR,
+            SupervisionPolicy.RESTART,
+        )
+        val namedConsumer = HostedCellProxy.create(
+            namedOwner.consumerOnQ.ref,
+            namedOwner.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        namedOwner.source.outlet.linkTo(namedConsumer.inlet)
+        val anonymousLettersBefore = namedOwner.deadLettersP.size
+        val anonymousFaultLettersBefore = namedOwner.bridgeP.supervisionAccounting().deadLetters
+        val anonymousImpostor = namedOwner.announceImpostorFromR(namedOwner.consumerOnQ.ref)
+        namedOwner.emit("named-owner")
+
+        namedOwner.consumerOnQ.received shouldBe listOf("named-owner")
+        anonymousImpostor.received.shouldBeEmpty()
+        namedOwner.assertImpostorAnnouncementRefused(
+            anonymousLettersBefore,
+            anonymousFaultLettersBefore,
+            expectedPrincipal = null,
+        )
+    }
+
+    /**
+     * computenet-zlm2 arm 2, the control: no RemoteLink request participates.
+     * P links its own outlet to q through the ordinary registry-resolving
+     * HostedCellProxy; r still cannot capture the proxy's later deliveries by
+     * announcing q's ref.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot capture an ordinary HostedCellProxy link`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        rig.consumerOnQ.received shouldBe listOf("first")
+
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+        val impostorOnR = rig.announceImpostorFromR(rig.consumerOnQ.ref)
+        rig.emit("q-only-secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "q-only-secret")
+        impostorOnR.received.shouldBeEmpty()
+        rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
+    }
+
+    /**
+     * computenet-zlm2 arm 3: r cannot shadow a ref P hosts locally. Retaining
+     * P's Local binding also means r's subsequent real-frame RemoteLink request
+     * names an address it does not own and is refused by the existing gate.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot shadow a locally hosted ref`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        rig.bridgeP.managementInlet.call.supervise(rig.ingressFromR.ref, SupervisionPolicy.RESTART)
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+        val impostorOnR = rig.announceImpostorFromR(rig.victimOnP.ref)
+
+        rig.registryP.location(rig.victimOnP.ref) shouldBe LocationRegistry.Local(rig.hostP)
+        rig.requestFromR(PortAddress(rig.victimOnP.ref, "inlet"))
+        rig.emit("p-internal-secret")
+
+        rig.victimOnP.received.shouldBeEmpty()
+        impostorOnR.received.shouldBeEmpty()
+        rig.source.outlet.linking.links.shouldBeEmpty()
+        rig.assertImpostorAnnouncementRefused(lettersBefore, faultLettersBefore)
+    }
+
+    /**
+     * computenet-zlm2, review arm: the publish guard alone is bypassed in two
+     * announcements — r retracts the incumbent (its own despawn of the
+     * impostor announces `unpublished`), then re-announces the now-fresh ref.
+     * Measured against 795abe6e before the retraction half existed: P resolved
+     * q's ref as `Remote(peer=third-party-r)` and r received `q-only-secret`;
+     * P's own victim ref resolved the same way and r received
+     * `p-internal-secret`. Each of the three refused announcements (publish,
+     * unpublish, re-publish) is one typed ADMISSION denial naming r.
+     */
+    @Test
+    fun `computenet-zlm2 - another peer cannot retract then re-claim a ref it does not own`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.mirrorFromR, SupervisionPolicy.RESTART)
+        val consumer = HostedCellProxy.create(
+            rig.consumerOnQ.ref,
+            rig.registryP,
+            CollectorProxy::class.java,
+        ) as CollectorProxy
+        rig.source.outlet.linkTo(consumer.inlet)
+        rig.emit("first")
+        val lettersBefore = rig.deadLettersP.size
+        val faultLettersBefore = rig.bridgeP.supervisionAccounting().deadLetters
+
+        val impostors = listOf(rig.consumerOnQ.ref, rig.victimOnP.ref).flatMap { ref ->
+            val first = rig.announceImpostorFromR(ref)
+            rig.hostR.managementInlet.call.despawn(ref)
+            rig.controller.runToIdle()
+            listOf(first, rig.announceImpostorFromR(ref))
+        }
+
+        (rig.registryP.location(rig.consumerOnQ.ref) as LocationRegistry.Remote).peer shouldBe
+            RedirectRig.REQUESTER_Q
+        rig.registryP.location(rig.victimOnP.ref) shouldBe LocationRegistry.Local(rig.hostP)
+        rig.requestFromR(PortAddress(rig.victimOnP.ref, "inlet"))
+        rig.emit("secret")
+
+        rig.consumerOnQ.received shouldBe listOf("first", "secret")
+        rig.victimOnP.received.shouldBeEmpty()
+        impostors.forEach { it.received.shouldBeEmpty() }
+
+        val denials = rig.deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.exposure == "announcement-admission" }
+        denials.map { it.denial!!.subject } shouldBe List(2) {
+            listOf("RegistryAnnounce.published", "RegistryAnnounce.unpublished", "RegistryAnnounce.published")
+        }.flatten()
+        denials.forEach {
+            it.denial!!.principal shouldBe RedirectRig.THIRD_R
+            it.cause shouldBe null
+        }
+        rig.bridgeP.supervisionAccounting().deadLetters shouldBe faultLettersBefore
+        rig.bridgeP.supervisionAccounting().restarts shouldBe 0L
     }
 
     /**

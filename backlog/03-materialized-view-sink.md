@@ -1,5 +1,7 @@
 # Materialize / ObserveCell — a first-class observation sink
 
+> **Status: ABSORBED** — computenet-axcyk (`civictech.cell.observe.observation`), 2026-10.
+
 **Type:** API change / DX (remove per-demo boilerplate)
 **Origin:** `:demo:skillmatch` `SetHubCell`, `MapHubCell`, `SetFold`; the same
 trio reappears in every incremental demo.

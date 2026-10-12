@@ -18,7 +18,9 @@ import civictech.concord.schema.DriveStampedStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
+import civictech.concord.schema.FamilyHolds
 import civictech.concord.schema.IncrementalEqualsBatch
+import civictech.concord.schema.InterestRefusals
 import civictech.concord.schema.LateJoinEqualsEarly
 import civictech.concord.schema.NoDeadLetters
 import civictech.concord.schema.ObservationsAllSatisfy
@@ -34,6 +36,7 @@ import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.ViewsConverge
+import civictech.concord.schema.WriteDenials
 import civictech.concord.value.Value
 
 /**
@@ -61,12 +64,15 @@ object Checks {
         is ObservationsWholeWaves -> observationsWholeWaves(check, ctx)
         is CompositeWholeWaves -> compositeWholeWaves(check, ctx)
         is ReplicasConverge -> replicasConverge(check, ctx)
+        is FamilyHolds -> familyHolds(check, ctx)
+        is InterestRefusals -> interestRefusals(check, ctx)
         is NoDeadLetters -> noDeadLetters(ctx)
         is EffectCount -> effectCount(check, ctx)
         is WavePlaneUnchanged -> wavePlaneUnchanged(check, ctx)
         is PagesEqualView -> pagesEqualView(check, ctx)
         is EmissionCount -> emissionCount(check, ctx)
         is RefusalCount -> refusalCount(check, ctx)
+        is WriteDenials -> writeDenials(check, ctx)
     }
 
     /** At quiescence, `readView(view)` equals the golden value. */
@@ -1118,6 +1124,75 @@ object Checks {
             CheckResult.Passed
         } else {
             CheckResult.Failed("$where: expected exactly ${check.exactly} refusal(s) but observed $observed")
+        }
+    }
+
+    /** An authority adapter denied exactly the declared number of writes. */
+    fun writeDenials(check: WriteDenials, ctx: CheckContext): CheckResult {
+        val principal = check.principal?.let { ", principal=$it" }.orEmpty()
+        val where = "write-denials(${check.cell}$principal)"
+        val observed = try {
+            ctx.driver.writeDenials(check.cell, check.principal)
+        } catch (e: Exception) {
+            return CheckResult.Failed(
+                "$where: the driver refused to observe write-authority denials at '${check.cell}' — " +
+                    "${e.message}. A count of 0 would have been a passing answer for `exactly: 0`, so an " +
+                    "unobserved authority adapter is reported here rather than counted as zero",
+            )
+        }
+        if (observed < 0L) {
+            return CheckResult.Failed(
+                "$where: the driver reported $observed denials — a write-authority denial tally only ascends",
+            )
+        }
+        return if (observed == check.exactly.toLong()) {
+            CheckResult.Passed
+        } else {
+            CheckResult.Failed(
+                "$where: expected exactly ${check.exactly} denial(s) but observed $observed",
+            )
+        }
+    }
+
+    /** The family holds exactly the declared long-key set, independent of order. */
+    fun familyHolds(check: FamilyHolds, ctx: CheckContext): CheckResult {
+        val where = "family-holds(${check.family})"
+        val actual = try {
+            ctx.driver.familyKeys(check.family).toSet()
+        } catch (e: Exception) {
+            return CheckResult.Failed("$where: the driver refused to read the family — ${e.message}")
+        }
+        val expected = check.keys.toSet()
+        return if (actual == expected) {
+            CheckResult.Passed
+        } else {
+            CheckResult.Failed(
+                "$where: expected ${expected.sorted()} but held ${actual.sorted()}",
+            )
+        }
+    }
+
+    /** A family accounted exactly the declared number of refused interests. */
+    fun interestRefusals(check: InterestRefusals, ctx: CheckContext): CheckResult {
+        val where = "interest-refusals(${check.family})"
+        val observed = try {
+            ctx.driver.interestRefusalCount(check.family)
+        } catch (e: Exception) {
+            return CheckResult.Failed(
+                "$where: the driver refused to observe interest refusals at '${check.family}' — ${e.message}. " +
+                    "A count of 0 is a passing answer, so an unobserved family is reported rather than " +
+                    "counted as zero",
+            )
+        }
+        if (observed < 0L) {
+            return CheckResult.Failed(
+                "$where: the driver reported $observed refusals — an interest-refusal tally only ascends",
+            )
+        }
+        return if (observed == check.count) {
+            CheckResult.Passed
+        } else {
+            CheckResult.Failed("$where: expected ${check.count} refusal(s) but observed $observed")
         }
     }
 

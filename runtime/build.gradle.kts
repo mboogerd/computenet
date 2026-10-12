@@ -12,6 +12,7 @@ dependencies {
     implementation(project(":iroh"))
     implementation(project(":inspect"))
     implementation(project(":economy"))
+    implementation(project(":identity"))
     implementation(libs.kotlinx.serialization)
 
     testImplementation(project(":testkit"))

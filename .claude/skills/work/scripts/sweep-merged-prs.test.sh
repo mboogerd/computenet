@@ -84,7 +84,8 @@ cat <<'JSON'
  {"number":105,"headRefName":"feature/branchonly"},
  {"number":106,"headRefName":"feature/unrelated"},
  {"number":107,"headRefName":"feature/extra"},
- {"number":108,"headRefName":"feature/spaced"}]
+ {"number":108,"headRefName":"feature/spaced"},
+ {"number":109,"headRefName":"feature/numeric"}]
 JSON
 EOF
   # BD_MODE: ok | listfail-pr | listfail-branch | closefail | closeblocked.
@@ -114,7 +115,8 @@ case "\$3" in
  {"id":"t-foreignrepo","status":"in_progress","metadata":{"pr":"https://github.com/someoneelse/otherproj/pull/106","branch":"feature/foreignrepo","worktree":"$WTS/foreignrepo"}},
  {"id":"t-extra","status":"in_progress","metadata":{"pr":"https://github.com/mboogerd/computenet/pull/107","branch":"feature/extra","worktree":"$WTS/extra"}},
  {"id":"t-spaces","status":"in_progress","metadata":{"pr":"https://github.com/mboogerd/computenet/pull/108","branch":"feature/spaced","worktree":"$WTS/with spaces"}},
- {"id":"t-emptypr","status":"in_progress","metadata":{"pr":"","branch":"feature/branchonly"}}]
+ {"id":"t-emptypr","status":"in_progress","metadata":{"pr":"","branch":"feature/branchonly"}},
+ {"id":"t-numpr","status":"in_progress","metadata":{"pr":109}}]
 JSON
     ;;
   branch)
@@ -218,6 +220,10 @@ git -C "$CO" show-ref --quiet --verify refs/heads/feature/extra \
   && ok "local commit: commit C still reachable by name" \
   || bad "local commit: C lost"
 hasnt "$out" "deleted local branch" "no branch deletion is announced"
+
+# 9. metadata.pr stored as a JSON NUMBER (what `--set-metadata pr=1299`
+#    writes) joins as that PR number instead of aborting the sweep.
+has "$out" "closed: t-numpr" "numeric pr: joined and closed"
 
 # 8. Paths with spaces survive quoting end to end.
 has "$out" "removed worktree: $WTS/with spaces" "spaces: worktree removed"

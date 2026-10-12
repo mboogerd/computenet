@@ -1,5 +1,7 @@
 # Idea: consumer-side materialized views (`SetView` / `MapView` / `CountView`)
 
+> **Status: ABSORBED** — computenet-axcyk (`civictech.cell.observe.observation`), 2026-10.
+
 > Type: missing primitive (small, high-leverage DX) + demo op that belongs in the framework
 > Origin: `:demo:slotfinder` — `SlotMembership` and the day-count fold, re-implemented per demo
 > Relates to: `TagState` (internal), `SetDelta`/`MapDelta`, demo-findings **F-3**;

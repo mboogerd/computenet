@@ -101,12 +101,13 @@ class AlignedObserveStallTest {
         f.addA(1)
         f.sink.bufferedWaves shouldBe 1 // held on b, as in WAIT, until the stall
 
+        val firstWave = f.sink.heldWaves().keys.single()
         f.notifyB(StallNotice.Stall(StallReason.SUSPENDED))
 
         f.sink.bufferedWaves shouldBe 0
         f.sink.current() shouldBe mapOf("a" to setOf(1), "b" to emptySet<Int>())
         f.sink.composite().droppedEdges shouldBe setOf(f.droppedB)
-        f.sink.composite().alignedFrom shouldBe emptyMap()
+        f.sink.composite().alignedFrom shouldBe mapOf(firstWave.sourceId to firstWave.counter)
         f.sink.violations shouldBe 0L
         f.violations.shouldBeEmpty()
 
@@ -125,7 +126,11 @@ class AlignedObserveStallTest {
         f.sink.bufferedWaves shouldBe 0
         f.sink.current() shouldBe mapOf("a" to setOf(1, 2), "b" to emptySet<Int>())
         f.sink.composite().droppedEdges shouldBe emptySet()
-        f.sink.composite().alignedFrom shouldBe emptyMap()
+        val composite = f.sink.composite()
+        composite.alignedFrom.keys shouldBe composite.frontier.keys
+        composite.alignedFrom.forEach { (source, firstWave) ->
+            (firstWave <= composite.frontier.getValue(source)) shouldBe true
+        }
         f.sink.close()
     }
 
@@ -179,7 +184,7 @@ class AlignedObserveStallTest {
             f.sink.bufferedWaves shouldBe 0
             f.sink.current() shouldBe mapOf("a" to setOf(1), "b" to emptySet<Int>())
             f.sink.composite().droppedEdges shouldBe setOf(f.droppedB)
-            f.sink.composite().alignedFrom shouldBe emptyMap()
+            f.sink.composite().alignedFrom shouldBe mapOf(wave.sourceId to wave.counter)
             f.sink.violations shouldBe 1L
             f.violations.single().shouldBeInstanceOf<GlitchViolation>()
 
@@ -254,6 +259,7 @@ class AlignedObserveStallTest {
         val beforeCopy = before.copy(views = LinkedHashMap(before.views), droppedEdges = before.droppedEdges.toSet())
         before.views["a"] shouldBe setOf(10)
         before.droppedEdges shouldBe emptySet()
+        before.alignedFrom shouldBe emptyMap()
 
         f.addA(1)
         f.notifyB(StallNotice.Stall(StallReason.SUSPENDED))
@@ -273,7 +279,14 @@ class AlignedObserveStallTest {
         composites.forEach { c ->
             val waved = (c.views["a"] as Set<*>) != setOf(10)
             c.droppedEdges shouldBe (if (waved) setOf(f.droppedB) else emptySet())
-            c.alignedFrom shouldBe emptyMap()
+            if (waved) {
+                c.alignedFrom.keys shouldBe c.frontier.keys
+                c.alignedFrom.forEach { (source, firstWave) ->
+                    (firstWave <= c.frontier.getValue(source)) shouldBe true
+                }
+            } else {
+                c.alignedFrom shouldBe emptyMap()
+            }
         }
         f.sink.close()
     }
@@ -303,8 +316,9 @@ class AlignedObserveStallTest {
         sink.get<Set<Int>>("left") shouldBe setOf(1, 2)
         sink.composite().views shouldBeSameInstanceAs sink.current()
         sink.composite().droppedEdges shouldBe emptySet()
-        sink.composite().alignedFrom shouldBe emptyMap()
-        sink.composite().frontier.keys.size shouldBe 1 // one source, flushed
+        val sourceId = sink.composite().frontier.keys.single()
+        sink.composite().alignedFrom shouldBe mapOf(sourceId to 1L)
+        sink.composite().frontier shouldBe mapOf(sourceId to 2L)
         awaitUntil("catch-up plus two waves") { seen.size >= 3 }
         seen.last() shouldBe current
         sink.bufferedWaves shouldBe 0
@@ -412,11 +426,19 @@ class AlignedObserveStallTest {
                 next.frontier.forEach { (source, counter) ->
                     counter shouldBe maxOf(counter, prev.frontier[source] ?: Long.MIN_VALUE)
                 }
+                prev.alignedFrom.all { (source, firstWave) -> next.alignedFrom[source] == firstWave } shouldBe true
                 // no wave un-applied or re-ordered: items only grows
                 (next.views["items"] as Set<*>).containsAll(prev.views["items"] as Set<*>) shouldBe true
             }
             recorded.forEach { c ->
-                c.alignedFrom shouldBe emptyMap()
+                if (c.frontier.isEmpty()) {
+                    c.alignedFrom shouldBe emptyMap()
+                } else {
+                    c.alignedFrom.keys shouldBe c.frontier.keys
+                    c.alignedFrom.forEach { (source, firstWave) ->
+                        (firstWave <= c.frontier.getValue(source)) shouldBe true
+                    }
+                }
                 c.droppedEdges.forEach { it shouldBe dropped }
                 val items = c.views["items"] as Set<*>
                 items shouldBe (1..items.size).toSet() // a prefix of the writes, never a gap

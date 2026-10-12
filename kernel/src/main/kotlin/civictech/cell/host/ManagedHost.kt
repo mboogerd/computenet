@@ -21,6 +21,7 @@ import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.CheckpointReplayPositions
 import civictech.cell.Provenance
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.StateRead
@@ -32,6 +33,7 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
+import java.nio.charset.StandardCharsets.UTF_8
 import civictech.cell.control.AttentionBand
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionScheduler
@@ -119,6 +121,14 @@ open class ManagedHost(
      * journal named for an outlet alone, or one disagreeing with the inlets',
      * is refused the same way — outlet-side journaling of spontaneous
      * emissions is undecided (spec 90 roadmap I-7 §8). See [cellJournal].
+     *
+     * Exception: this selector is never consulted for the authority companion
+     * [civictech.cell.replication.Replication.replicate] spawns beside an
+     * authority-bearing replica. The companion takes its owner's journal
+     * unconditionally ([spawnDurabilityCompanion]), so its outlet-only port set
+     * is not refused under a blanket selector, and no answer for the companion's
+     * ref can make it volatile or journal it apart from its owner
+     * (computenet-yx36a).
      */
     private val journalForPort: ((CellRef, String) -> Journal?)? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
@@ -220,6 +230,15 @@ open class ManagedHost(
      */
     private val cellJournals = ConcurrentHashMap<CellRef, Journal>()
 
+    /**
+     * One-call journal overrides for lifecycle companions. The wrapper is
+     * needed because [ConcurrentHashMap] cannot store the meaningful volatile
+     * (`null`) selection.
+     */
+    private data class SpawnJournalOverride(val journal: Journal?)
+
+    private val spawnJournalOverrides = ConcurrentHashMap<CellRef, SpawnJournalOverride>()
+
     /** Namespace registry used by journaled [TopoEvent.FamilyKey] recovery. */
     private val topologyFamilies = ConcurrentHashMap<String, KeyedCells<*>>()
 
@@ -263,6 +282,7 @@ open class ManagedHost(
      * spawn; the result is cached in [cellJournals].
      */
     private fun cellJournal(cellRef: CellRef, cell: Cell): Journal? {
+        spawnJournalOverrides[cellRef]?.let { return it.journal }
         // An explicit journalFor's null wins outright (volatile), exactly as pre-D4's
         // `journalFor ?: { journal }` — never a fallback to the whole-host journal.
         val explicit = journalForPort ?: return if (journalFor != null) journalFor.invoke(cellRef) else journal
@@ -297,6 +317,13 @@ open class ManagedHost(
     }
 
     internal fun subtreeCellCount(): Int = cells.size + childHosts.sumOf { it.subtreeCellCount() }
+
+    /**
+     * True when [ref] is hosted directly by this host — the exact membership test
+     * [HostManagementApi.declareWrite] applies. Unlike [lookup], a ref the
+     * [LocationRegistry] places on a remote peer answers false (computenet-4vxtr.1).
+     */
+    internal fun hosts(ref: CellRef): Boolean = cells.containsKey(ref)
 
     /**
      * Charges [claim] once at every scope of this host's ancestor chain —
@@ -399,6 +426,9 @@ open class ManagedHost(
     val color: HostColor get() = scheduler.color
 
     private val cells = ConcurrentHashMap<CellRef, Cell>()
+
+    /** Host-local declared ingress lanes; their counters are intentionally volatile. */
+    private val declaredWrites = ConcurrentHashMap<String, DeclaredWrite>()
 
     /** `spawnBound`'s recorded `parent` association (93 I-21 §4.3): bookkeeping only —
      * membrane/exposure enforcement over this is G-9, unbuilt. */
@@ -767,6 +797,22 @@ open class ManagedHost(
     /** External fences/drains claimed atomically against [recoveryRecordLoops]. Guarded by [dataLock]. */
     private var externalBarriersInFlight = 0
 
+    /**
+     * Internal queue-drain observers deferred until recovery has restored every record and
+     * re-armed delivery of the frames staged behind its gate. Unlike [externalBarriersInFlight],
+     * these do not exclude recovery: their scheduler tasks re-check [recoveryRecordLoops] and
+     * return here instead of claiming that a gated frame has drained. Guarded by [dataLock].
+     */
+    private val recoveryAwareFences = ArrayDeque<CompletableFuture<Unit>>()
+
+    /**
+     * Times the recovery gate has been lowered to zero. A recovery-aware fence records it
+     * at submission and re-submits instead of completing when it changed: a fence task the
+     * scheduler dequeued under the gate may reach its check only after the lift, while the
+     * re-armed data tasks submitted under that same lock are still queued. Guarded by [dataLock].
+     */
+    private var recoveryGateLifts = 0L
+
     private fun requireRecoveryIdleLocked(operation: String) {
         check(recoveryRecordLoops == 0) {
             "$operation is unavailable while journal recovery is restoring records; " +
@@ -970,6 +1016,7 @@ open class ManagedHost(
 
     /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
     private fun clearSupervision(cellRef: CellRef, cell: Cell) {
+        hostDurability.discardCheckpointReplayPositions(cellRef)
         policies.remove(cellRef)
         checkpoints.remove(cellRef)
         generations.remove(cellRef)
@@ -979,7 +1026,7 @@ open class ManagedHost(
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
         synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach { (_, parked) ->
-            if (consumeStagedLinkCloseMarker(parked)) return@forEach
+            if (isTeardownBookkeepingMarker(parked)) return@forEach
             synchronized(dataLock) { checkpointSequences.remove(parked) }
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", parked)
@@ -1113,6 +1160,53 @@ open class ManagedHost(
     }
 
     /**
+     * Submit one spawn on the management band without awaiting it. The caller
+     * owns the returned outcome, so a refusal completes it exceptionally rather
+     * than entering this host's dead-letter stream.
+     */
+    internal fun spawnAsync(cell: Cell): CompletableFuture<CellRef> =
+        spawnAsync(cell) { }
+
+    /**
+     * Submit one spawn and run [afterSpawn] inside the same management task,
+     * after admission/activation succeeds and before the returned future
+     * completes. Interest-driven keyed families use this to append membership
+     * after a successful budgeted spawn without opening a second claim site.
+     */
+    internal fun spawnAsync(
+        cell: Cell,
+        afterSpawn: (CellRef) -> Unit,
+    ): CompletableFuture<CellRef> {
+        val stamp = CurrentPeer.stamp()
+        val future = CompletableFuture<CellRef>()
+        try {
+            scheduler.submit(0) {
+                try {
+                    val spawned = CurrentPeer.withStamp(stamp) { internalApi.spawn(cell) }
+                    afterSpawn(spawned)
+                    future.complete(spawned)
+                } catch (failure: Throwable) {
+                    future.completeExceptionally(failure)
+                }
+            }
+        } catch (failure: Throwable) {
+            future.completeExceptionally(failure)
+        }
+        return future
+    }
+
+    /** Synchronous teardown used to roll back a multi-cell spawn before its failure escapes. */
+    internal fun rollbackSpawn(ref: CellRef) {
+        enqueueAwaiting(0) { internalApi.despawn(ref) }
+    }
+
+    /** Await a caller-owned management future using this host's scheduler semantics. */
+    internal fun <T> awaitManagement(future: CompletableFuture<T>): T = scheduler.await(future)
+
+    /** The registry that admits interest for families hosted here, when configured. */
+    internal fun interestRegistry(): LocationRegistry? = registry
+
+    /**
      * Test seam for `DurableGlitchFreeReplayTest`'s control (PN-2); forwards to
      * [HostDurability.replayAsBaseline] (RS-8.2). Production always replays as
      * baseline; see [HostDurability]'s KDoc for the full semantics.
@@ -1244,6 +1338,16 @@ open class ManagedHost(
 
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
         synchronized(dataLock) { stagedLinkCloseMarkers.remove(hostedInvocation) }
+
+    /**
+     * Terminal protocol bookkeeping has no payload fate to account for when a
+     * cell leaves the host. In-process EdgeClose markers are tracked by
+     * [stagedLinkCloseMarkers]; bridged frontier markers arrive independently
+     * over a [civictech.cell.wire.WireEdgeLink] and are identified by their
+     * protocol/link shape instead. Both follow the same teardown rule.
+     */
+    private fun isTeardownBookkeepingMarker(hostedInvocation: HostedPortInvocation): Boolean =
+        consumeStagedLinkCloseMarker(hostedInvocation) || isBridgedFrontierMarker(hostedInvocation)
 
     /**
      * True only for the bridged frontier markers that spec 20/22 requires to
@@ -1623,6 +1727,56 @@ open class ManagedHost(
      */
     fun recoverFrom(journal: Journal): Recovery = recoverFrom(journal, ApplyContext(this))
 
+    /**
+     * Spawn [companion] with the same per-cell journal already selected for
+     * [ownerRef].
+     *
+     * A lifecycle companion has its own ref so it is not a replica-set member,
+     * while its checkpoint state is part of the guarded cell's durability
+     * boundary. An exact selector such as `ApplyContext.journalFor` cannot infer
+     * that relationship from the companion's derived ref, so the owner journal
+     * is copied into the spawn-time cache before the ordinary spawn path asks
+     * [cellJournal]. A plain [journalFor] function cannot reveal whether its
+     * answer came from an explicit binding or a default fallback, so the owner
+     * selection wins unconditionally for the companion. The same applies to an
+     * explicit [journalForPort]: the companion has no independent durability
+     * choice to validate, and evaluating a blanket selector against its
+     * outlet-only shape would mistake the owner's selection for unsupported
+     * outlet-side journaling. Ordinary cells still take the validating
+     * [cellJournal] path.
+     */
+    internal fun spawnDurabilityCompanion(companion: Cell, ownerRef: CellRef) {
+        require(cells.containsKey(ownerRef)) {
+            "durability companion ${companion.ref} requires live owner $ownerRef"
+        }
+        val ownerJournal = journalSelector(ownerRef)
+
+        val override = SpawnJournalOverride(ownerJournal)
+        check(spawnJournalOverrides.putIfAbsent(companion.ref, override) == null) {
+            "durability companion ${companion.ref} already has a spawn journal override"
+        }
+        val previousJournal = cellJournals[companion.ref]
+        val wasHosted = cells.containsKey(companion.ref)
+        if (ownerJournal == null) cellJournals.remove(companion.ref)
+        else cellJournals[companion.ref] = ownerJournal
+        try {
+            managementInlet.call.spawn(companion)
+        } catch (failure: Throwable) {
+            if (!wasHosted && cells.containsKey(companion.ref)) {
+                try {
+                    rollbackSpawn(companion.ref)
+                } catch (cleanupFailure: Throwable) {
+                    failure.addSuppressed(cleanupFailure)
+                }
+            }
+            if (previousJournal == null) cellJournals.remove(companion.ref)
+            else cellJournals[companion.ref] = previousJournal
+            throw failure
+        } finally {
+            spawnJournalOverrides.remove(companion.ref, override)
+        }
+    }
+
     /** Recover with the services and cumulative topology fold supplied by [context]. */
     fun recoverFrom(journal: Journal, context: ApplyContext): Recovery {
         require(context.host === this) { "recovery ApplyContext belongs to a different ManagedHost" }
@@ -1654,22 +1808,37 @@ open class ManagedHost(
             enqueueAwaiting(0) { }
             return action()
         } finally {
-            val pending = synchronized(dataLock) {
+            var deferredFences = emptyList<CompletableFuture<Unit>>()
+            var rearmFailure: Throwable? = null
+            synchronized(dataLock) {
                 check(recoveryRecordLoops > 0) { "recovery record-loop gate underflow" }
                 recoveryRecordLoops--
                 if (recoveryRecordLoops == 0) {
-                    attentionScheduler.dataQueues.values.sumOf { it.size }
-                } else {
-                    0
+                    recoveryGateLifts++
+                    val pending = attentionScheduler.dataQueues.values.sumOf { it.size }
+                    deferredFences = recoveryAwareFences.toList()
+                    recoveryAwareFences.clear()
+                    try {
+                        // Submit reactivated data work before publishing the lifted gate.
+                        // A recovery-aware fence cannot then overtake a staged frame in the
+                        // caller/scheduler hand-off: data is priority 20, the fence MAX_VALUE.
+                        if (pending > 0) {
+                            if (dispatchBatch == 1) {
+                                repeat(pending) { enqueue(20) { dispatchOneWhenRecoveryReady() } }
+                            } else {
+                                armBatchDispatch()
+                            }
+                        }
+                    } catch (failure: Throwable) {
+                        rearmFailure = failure
+                    }
                 }
             }
-            if (pending > 0) {
-                if (dispatchBatch == 1) {
-                    repeat(pending) { enqueue(20) { dispatchOneWhenRecoveryReady() } }
-                } else {
-                    armBatchDispatch()
-                }
+            rearmFailure?.let { failure ->
+                deferredFences.forEach { it.completeExceptionally(failure) }
+                throw failure
             }
+            deferredFences.forEach { submitRecoveryAwareFence(it, throwOnFailure = false, liftsAtSubmit = null) }
         }
     }
 
@@ -1748,6 +1917,65 @@ open class ManagedHost(
     }
 
     /**
+     * Kernel-internal queue fence for observation settlement that coexists with journal
+     * recovery. It never completes while a recovery record loop is active. A request made
+     * during recovery, or a previously submitted fence that reaches the scheduler after
+     * recovery raised its gate, is deferred and re-submitted after the last loop lowers the
+     * gate and re-arms every staged data frame.
+     *
+     * This is deliberately not the public [quiescence] contract: callers that drain, move,
+     * checkpoint around, or otherwise act on a host-wide empty-queue claim still need the
+     * two-sided external-barrier exclusion. The seam exists only for passive kernel
+     * observers whose one pending fence may safely wait across recovery.
+     */
+    internal fun recoveryAwareQuiescence(): Quiescence {
+        val future = CompletableFuture<Unit>()
+        val liftsAtSubmit = synchronized(dataLock) {
+            if (recoveryRecordLoops > 0) {
+                recoveryAwareFences.addLast(future)
+                null
+            } else {
+                recoveryGateLifts
+            }
+        }
+        if (liftsAtSubmit != null) submitRecoveryAwareFence(future, throwOnFailure = true, liftsAtSubmit)
+        return Quiescence(future)
+    }
+
+    /**
+     * Submit or re-submit one internal fence; its task must re-check the recovery gate.
+     * [liftsAtSubmit] is [recoveryGateLifts] as read under [dataLock] when the gate was
+     * known lowered, or null to read it now (a re-submission after the lift).
+     */
+    private fun submitRecoveryAwareFence(
+        future: CompletableFuture<Unit>,
+        throwOnFailure: Boolean,
+        liftsAtSubmit: Long?,
+    ) {
+        val lifts = liftsAtSubmit ?: synchronized(dataLock) { recoveryGateLifts }
+        try {
+            scheduler.submit(Int.MAX_VALUE) {
+                // Defer while the gate is raised; re-submit behind the re-armed data tasks
+                // when a lift happened since submission; complete only when neither did.
+                val outcome = synchronized(dataLock) {
+                    when {
+                        recoveryRecordLoops > 0 -> recoveryAwareFences.addLast(future).let { 0 }
+                        recoveryGateLifts != lifts -> 1
+                        else -> 2
+                    }
+                }
+                when (outcome) {
+                    1 -> submitRecoveryAwareFence(future, throwOnFailure = false, liftsAtSubmit = null)
+                    2 -> future.complete(Unit)
+                }
+            }
+        } catch (failure: Throwable) {
+            future.completeExceptionally(failure)
+            if (throwOnFailure) throw failure
+        }
+    }
+
+    /**
      * Checkpoint (M10.2, extended G-59). See [HostDurability.checkpoint] for
      * the full behavior; delegates there (RS-8.2). Callable on a live host at
      * any time: frames accepted and not yet delivered are carried into the
@@ -1755,6 +1983,17 @@ open class ManagedHost(
      * fence is needed for safety.
      */
     fun checkpoint(journal: Journal) = hostDurability.checkpoint(journal)
+
+    /**
+     * Compact [journal] inline when the caller already owns this host's management task.
+     * Unlike [checkpoint], this never self-submits or self-awaits. The post-spawn callback
+     * used by [KeyedCells] is the only production caller.
+     */
+    internal fun checkpointInManagementTask(journal: Journal) =
+        hostDurability.checkpointInManagementTask(journal)
+
+    internal fun retainedCheckpointReplayPositionCount(): Int =
+        hostDurability.retainedCheckpointReplayPositionCount()
 
     private fun bandOf(cellRef: CellRef): AttentionBand = when {
         attention == null -> AttentionBand.NORMAL
@@ -2062,16 +2301,20 @@ open class ManagedHost(
                             // computenet-xy7w4 D1: likewise re-install the frame's replay
                             // provenance, so every frame this handler emits into an intake
                             // inherits it (and is not re-journaled into the replayed journal).
-                            civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
-                                civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
-                                    val inletOffer = (port as? FanInlet<*>)?.let { inlet ->
-                                        synchronized(dataLock) { checkpointSequences[hostedInvocation] }
-                                            ?.let { sequence ->
-                                                inlet.offerHosted(hostedInvocation.invocation, sequence)
-                                            }
-                                    } ?: false
-                                    if (!inletOffer) {
-                                        hostedInvocation.invocation.invokeSuspending(port.call)
+                            CheckpointReplayPositions.withCurrentSuspending(
+                                hostDurability.checkpointReplayPositions,
+                            ) {
+                                civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
+                                    civictech.cell.ReplayProvenance.withSuspending(hostedInvocation.replayOf) {
+                                        val inletOffer = (port as? FanInlet<*>)?.let { inlet ->
+                                            synchronized(dataLock) { checkpointSequences[hostedInvocation] }
+                                                ?.let { sequence ->
+                                                    inlet.offerHosted(hostedInvocation.invocation, sequence)
+                                                }
+                                        } ?: false
+                                        if (!inletOffer) {
+                                            hostedInvocation.invocation.invokeSuspending(port.call)
+                                        }
                                     }
                                 }
                             }
@@ -2267,6 +2510,73 @@ open class ManagedHost(
      * the queue, only of the band choice.
      */
     private lateinit var internalApi: HostManagementApi
+
+    /**
+     * Add source-side-only Consume links to the ordinary target-side ancestry.
+     *
+     * `streamTo`'s routed/bypass branch deliberately has no [Link.toPort], so
+     * the ordinary inbound walk cannot encounter it. Two identities recover
+     * enough structure without pretending the bypass was admitted topology:
+     *
+     * - a source-side link whose destination is the stable ref of a hosted port
+     *   contributes its producer ref;
+     * - a [RoutedPropagate] attached to an outlet hosted by this host contributes
+     *   a target-derived ingress-family ref, independent of `streamTo`'s
+     *   anonymous attachment ref.
+     *
+     * Both stay opaque. In particular, even a hosted producer is not traversed:
+     * the bypass has no target-side topology record on which to base that walk.
+     * This is conservative for a managed `S -> W` plus bypass `W -> U`
+     * diamond: `W.outlet` remains an extra root of `U`, so `S` and `U` form
+     * separate observation groups rather than risking the over-alignment
+     * `[22-LIVE-01]` forbids.
+     */
+    private fun upstreamConsumeAncestorsIncludingBypasses(ref: CellRef): UpstreamAncestry {
+        val ancestry = civictech.cell.host.upstreamConsumeAncestors(cells, ref)
+        if (ancestry.self == null) return ancestry
+
+        val reachable = linkedSetOf(ref).apply { addAll(ancestry.local.keys) }
+        val reachablePorts = reachable.flatMapTo(linkedSetOf()) { cellRef ->
+            val cell = cells[cellRef] ?: return@flatMapTo emptyList()
+            val ports = PortRegistry.of(cell)
+            ports.names().mapNotNull(ports::get)
+        }.mapTo(linkedSetOf()) { it.ref }
+        val routedRoots = linkedSetOf<PortRef>()
+        val bypassRoots = linkedSetOf<PortRef>()
+        cells.values.forEach { cell ->
+            val ports = PortRegistry.of(cell)
+            ports.names().forEach { name ->
+                val port = ports[name] ?: return@forEach
+                if (port is FanOutlet<*>) {
+                    port.attachedConsumerApis().forEach attachment@{ api ->
+                        val ingress = (api as? RoutedPropagate<*>)?.ingress ?: return@attachment
+                        if (ingress.cellRef !in reachable) return@attachment
+                        val target = cells[ingress.cellRef] ?: return@attachment
+                        if (PortRegistry.of(target)[ingress.portName] != null) {
+                            routedRoots += ingress.root
+                        }
+                    }
+                }
+                val linked = port as? Linked ?: return@forEach
+                linked.linking.links.forEach { link ->
+                    if (link.role == LinkRole.Consume && link.toPort == null && link.to in reachablePorts) {
+                        bypassRoots += link.from
+                    }
+                }
+            }
+        }
+        if (bypassRoots.isEmpty() && routedRoots.isEmpty()) return ancestry
+        return UpstreamAncestry(
+            ancestry.self,
+            ancestry.local,
+            ancestry.opaque + bypassRoots + routedRoots,
+        )
+    }
+
+    private val topologyView = object : HostTopologyView {
+        override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
+            upstreamConsumeAncestorsIncludingBypasses(ref)
+    }
 
     /**
      * Spec 33's drain protocol (`33 §The drain protocol` steps 1–3) applied at
@@ -2526,6 +2836,38 @@ open class ManagedHost(
                 return this@ManagedHost.lookup(ref, clazz)
             }
 
+            override fun upstreamConsumeAncestors(ref: CellRef): UpstreamAncestry =
+                upstreamConsumeAncestorsIncludingBypasses(ref)
+
+            override fun <T> inspectTopology(inspection: HostTopologyInspection<T>): T =
+                inspection.inspect(topologyView)
+
+            override fun declareWrite(name: String, cells: Set<CellRef>): DeclaredWrite {
+                val declaredCells = cells.toSet()
+                val missing = declaredCells.filterNot(this@ManagedHost.cells::containsKey)
+                require(missing.isEmpty()) {
+                    "declared write '$name' contains refs not hosted by ${this@ManagedHost.ref}: $missing"
+                }
+                return declaredWrites.compute(name) { _, existing ->
+                    when {
+                        existing == null -> DeclaredWrite(
+                            name = name,
+                            actorId = UUID.nameUUIDFromBytes(
+                                "computenet:declared-write:${this@ManagedHost.ref.id}:$name".toByteArray(UTF_8),
+                            ),
+                            cells = declaredCells,
+                        )
+                        existing.cells == declaredCells -> existing
+                        else -> throw IllegalStateException(
+                            "declared write '$name' already exists with cells ${existing.cells}, " +
+                                "cannot redeclare it with $declaredCells",
+                        )
+                    }
+                }!!
+            }
+
+            override fun declaredWrite(name: String): DeclaredWrite? = declaredWrites[name]
+
             override fun despawn(ref: CellRef) {
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
                 registry?.unpublish(ref)
@@ -2703,6 +3045,10 @@ open class ManagedHost(
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
+            } else if (method.name == "upstreamConsumeAncestors" || method.name == "inspectTopology") {
+                enqueueAwaiting(0) { invocation.invoke() }
+            } else if (method.name == "declareWrite" || method.name == "declaredWrite") {
+                enqueueAwaiting(0) { invocation.invoke() }
             } else if (method.name.startsWith("connect")) {
                 // surfaces the LinkResult (management calls may await, spec 31 rule 4)
                 enqueueAwaiting(0) { invocation.invoke() }

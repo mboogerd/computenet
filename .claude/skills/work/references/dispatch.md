@@ -27,7 +27,7 @@ waits. Agents `slot-elapsed.sh` flags OVER, or dying with no side effects →
 implementer builds on it literally. Run [pre-dispatch.md](pre-dispatch.md)'s
 checklist (acceptance placement, load-bearing claims, files claim, `AMENDS`) on each.
 
-Claim, record, attach — one command per call, timeout at least 300s:
+Claim, record, attach — one command per call, Bash timeout ≥ 300000 ms:
 
 ```bash
 .claude/skills/work/scripts/claim-item.sh <task-id>

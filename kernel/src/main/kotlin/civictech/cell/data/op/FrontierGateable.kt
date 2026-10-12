@@ -8,8 +8,10 @@ package civictech.cell.data.op
  * at completeness.
  *
  * The family is six cells — [SemiJoinCell], [CombineLatestCell],
- * [JoinSetCell], [IntersectSetCell], `JoinCell` and `LookupJoinCell` — and
- * [frontierGated] is `true` iff the instance was constructed with
+ * [JoinSetCell], [IntersectSetCell], `JoinCell` and `LookupJoinCell` — plus
+ * the two single-inlet set fan-ins [QuorumSetCell] and [UnionSetCell], whose
+ * opt-in gate is a `FanInSettlementGate` over their input edges rather than a
+ * [WaveGate] (computenet-ar6c6). [frontierGated] is `true` iff the instance was constructed with
  * `emitOnFrontier = true`. It is a marker for readers, not an operator: F3's
  * admission check (`computenet-lw0mv`) walks a live graph's ancestors and needs
  * to ask "is this cell gated?" without knowing the concrete class, and
