@@ -1,0 +1,35 @@
+{
+  "id": "WV-ADDITIVE-NATURES-ABSENT-01",
+  "title": "An EdgeOpen frame omits a default nature vector",
+  "category": "frames/additive",
+  "kind": "frame",
+  "covers": ["WIR1-C06", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I11", "WIR1-I19", "41 point 4"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": 0,
+      "methodId": 0,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000043"},
+      "portName": "inlet",
+      "type": "PORT_PROTOCOL",
+      "protocolId": "topology-order",
+      "protocolMessage": {"type": "EdgeOpen", "fields": {}},
+      "edge": {
+        "id": "00000000-0000-0000-0000-00000000e001",
+        "fromRef": {"id": "00000000-0000-0000-0000-0000000000c1", "cell": {"id": "00000000-0000-0000-0000-000000000042"}},
+        "fromCell": {"id": "00000000-0000-0000-0000-000000000042"},
+        "fromPortName": "outlet",
+        "toRef": {"id": "00000000-0000-0000-0000-0000000000c2", "cell": {"id": "00000000-0000-0000-0000-000000000043"}},
+        "toCell": {"id": "00000000-0000-0000-0000-000000000043"},
+        "toPortName": "inlet"
+      }
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":0,\"methodId\":0,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"portName\":\"inlet\",\"type\":\"PORT_PROTOCOL\",\"protocolId\":\"topology-order\",\"protocolMessage\":[\"EdgeOpen\",{}],\"edge\":{\"id\":\"00000000-0000-0000-0000-00000000e001\",\"fromRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c1\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"}},\"fromCell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"fromPortName\":\"outlet\",\"toRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c2\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"}},\"toCell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"toPortName\":\"inlet\"}}",
+    "base64": "eyJjb250cmFjdElkIjowLCJtZXRob2RJZCI6MCwiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfUFJPVE9DT0wiLCJwcm90b2NvbElkIjoidG9wb2xvZ3ktb3JkZXIiLCJwcm90b2NvbE1lc3NhZ2UiOlsiRWRnZU9wZW4iLHt9XSwiZWRnZSI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwZTAwMSIsImZyb21SZWYiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYzEiLCJjZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQyIn19LCJmcm9tQ2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJmcm9tUG9ydE5hbWUiOiJvdXRsZXQiLCJ0b1JlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBjMiIsImNlbGwiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDMifX0sInRvQ2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9LCJ0b1BvcnROYW1lIjoiaW5sZXQifX0="
+  },
+  "notes": "E1' EdgeOpen with the default NatureVector omitted. The natures key is absent by [WIR1-I19]; the decode-only explicit-empty and unknown-axis twins are WV-ADDITIVE-NATURES-EMPTY-01 and WV-ADDITIVE-NATURES-UNKNOWN-AXIS-01."
+}
