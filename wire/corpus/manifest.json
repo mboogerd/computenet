@@ -413,7 +413,6 @@
     {"discriminator": "Attention", "owedBy": "computenet-ncz.4"},
     {"discriminator": "Progress", "owedBy": "computenet-ncz.4"},
     {"discriminator": "SaturationSignal", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "EdgeOpen", "owedBy": "computenet-ncz.4"},
     {"discriminator": "EdgeClose", "owedBy": "computenet-ncz.4"},
     {"discriminator": "StateRequest", "owedBy": "computenet-ncz.4"}
   ]
