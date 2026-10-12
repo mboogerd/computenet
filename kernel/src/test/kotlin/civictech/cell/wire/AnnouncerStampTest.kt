@@ -175,7 +175,10 @@ class AnnouncerStampTest {
 
         rig.link.heal()
         rig.controller.runToIdle()
-        (rig.registryB.location(ref) as LocationRegistry.Remote).announcer shouldBe original
+        val healed = (rig.registryB.location(ref) as LocationRegistry.Remote).announcer
+        healed shouldBe original
+        // Not only equal to the original: two lost stamps are equal too.
+        healed shouldBe PeerStamp(PeerId("a"), AuthLevel.TransportVouched, issuer = null)
     }
 
     @Test
