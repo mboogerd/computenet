@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "19 passed, 0 failed".
+# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "20 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-ready.sh"}
@@ -76,6 +76,8 @@ check "status=blocked label=human is PARKED, not READY (n2jwi)" p1 PARKED
 check "status=blocked alone is PARKED (zw4d0)" p2 PARKED
 : > "$ROOT/deps.p3"; echo "e task deferred" > "$ROOT/show.p3"
 check "a deferred bead is PARKED" p3 PARKED
+: > "$ROOT/deps.p4"; echo "e task open" > "$ROOT/show.p4"; echo '"human"' > "$ROOT/labels.p4"
+check "label=human on an open bead is PARKED" p4 PARKED
 sh "$SCRIPT" p1 p2 p3 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 1 ] && { pass=$((pass+1)); echo "  PASS only parked ids exits 1 (none ready)"; } \
   || { fail=$((fail+1)); echo "  FAIL only parked ids: exit $rc, wanted 1"; }
