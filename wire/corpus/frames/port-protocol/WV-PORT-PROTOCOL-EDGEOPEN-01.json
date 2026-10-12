@@ -1,0 +1,33 @@
+{
+  "id": "WV-PORT-PROTOCOL-EDGEOPEN-01",
+  "title": "EdgeOpen crosses as a topology-order PORT_PROTOCOL frame",
+  "category": "frames/port-protocol",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "41 point 4", "WIR1-C04", "WIR1-I10", "WIR1-C06", "WIR1-I11"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": 0,
+      "methodId": 0,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000043"},
+      "portName": "inlet",
+      "type": "PORT_PROTOCOL",
+      "protocolId": "topology-order",
+      "protocolMessage": {"type": "EdgeOpen", "fields": {}},
+      "edge": {
+        "id": "00000000-0000-0000-0000-00000000e001",
+        "fromRef": {"id": "00000000-0000-0000-0000-0000000000c1", "cell": {"id": "00000000-0000-0000-0000-000000000042"}},
+        "fromCell": {"id": "00000000-0000-0000-0000-000000000042"},
+        "fromPortName": "outlet",
+        "toRef": {"id": "00000000-0000-0000-0000-0000000000c2", "cell": {"id": "00000000-0000-0000-0000-000000000043"}},
+        "toCell": {"id": "00000000-0000-0000-0000-000000000043"},
+        "toPortName": "inlet"
+      },
+      "natures": [0, 1, 2, 2]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":0,\"methodId\":0,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"portName\":\"inlet\",\"type\":\"PORT_PROTOCOL\",\"protocolId\":\"topology-order\",\"protocolMessage\":[\"EdgeOpen\",{}],\"edge\":{\"id\":\"00000000-0000-0000-0000-00000000e001\",\"fromRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c1\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"}},\"fromCell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"fromPortName\":\"outlet\",\"toRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c2\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"}},\"toCell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"toPortName\":\"inlet\"},\"natures\":[0,1,2,2]}", "base64": "eyJjb250cmFjdElkIjowLCJtZXRob2RJZCI6MCwiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfUFJPVE9DT0wiLCJwcm90b2NvbElkIjoidG9wb2xvZ3ktb3JkZXIiLCJwcm90b2NvbE1lc3NhZ2UiOlsiRWRnZU9wZW4iLHt9XSwiZWRnZSI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwZTAwMSIsImZyb21SZWYiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYzEiLCJjZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQyIn19LCJmcm9tQ2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJmcm9tUG9ydE5hbWUiOiJvdXRsZXQiLCJ0b1JlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBjMiIsImNlbGwiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDMifX0sInRvQ2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9LCJ0b1BvcnROYW1lIjoiaW5sZXQifSwibmF0dXJlcyI6WzAsMSwyLDJdfQ=="},
+  "notes": "Pins the downstream delivery target (consumer cell …43/inlet) for the shared edge per ncz.4-D7. contractId/methodId are required 0/0 and emitted; protocolId, protocolMessage, and the full edge are present. The encoder's observed key order, absent args/context/version keys, sparse natures literal [0,1,2,2] (OWNERSHIP:EXCLUSIVE, COLOR:SUSPENDING), and polymorphic EdgeOpen form [\"EdgeOpen\",{}] are transcribed by the generator."
+}
