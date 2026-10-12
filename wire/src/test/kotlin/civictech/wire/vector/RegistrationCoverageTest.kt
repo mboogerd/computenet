@@ -239,7 +239,7 @@ class RegistrationCoverageTest {
             val unknown = pendingSet - registered
             if (unknown.isNotEmpty()) add("pending names a discriminator the codec does not register — a rename or removal happened: ${unknown.sorted()}")
             if (strict && pending.isNotEmpty()) {
-                add("strict mode (wire.vectors.strict=true) requires an empty pending list; ${pending.size} pending: $pending")
+                add("strict mode (the default; -Dwire.vectors.strict=false opts out) requires an empty pending list; ${pending.size} pending: $pending")
             }
         }
     }
