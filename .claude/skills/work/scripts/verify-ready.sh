@@ -42,8 +42,14 @@
 # and re-derives what main already has. Checked here rather than left to prose
 # because the check has to happen at selection, which is when this runs.
 #
-# Output: one line per id, `READY <id>` or `BLOCKED <id> by: <lines>`, plus one
-# note under either when metadata.base_branch is set:
+# PARKED. An id that is itself `status=blocked`, `status=deferred` or labelled
+# `human` is not ready whatever its edges say: a park carries no blocking edge,
+# so the edge test alone printed READY for work waiting on a person
+# (computenet-2ubdj). It prints `PARKED <id> (<why>)` and counts as not ready.
+#
+# Output: one line per id, `READY <id>`, `PARKED <id> (<why>)` or
+# `BLOCKED <id> by: <lines>`, plus one note under READY/BLOCKED when
+# metadata.base_branch is set:
 #   STALE-BASE     its PR has MERGED, or is CLOSED unmerged — do not cut from it
 #   LIVE-BASE      its PR is open — cut from it and target the PR at it
 #   UNCHECKED-BASE no PR state available (no PR, or `gh` failed) — check by hand
@@ -51,7 +57,7 @@
 # stale is still ready, it just has to be cut from origin/main with the field
 # cleared.
 # Exit: 0 = at least one READY; 1 = none ready; 2 = bad usage;
-#       3 = a `bd dep list` (or this id's `bd show`) call failed — NOTHING was checked, do not route
+#       3 = a `bd dep list` or this id's `bd show` call failed — NOTHING was checked, do not route
 #           on this (the ready-in-epic.sh exit-3 class).
 set -eu
 
@@ -61,6 +67,11 @@ any_ready=1
 for id in "$@"; do
   deps=$(bd dep list "$id" 2>/dev/null) \
     || { echo "verify-ready: 'bd dep list $id' failed; NOTHING was checked" >&2; exit 3; }
+  self=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' | jq -c '.[0] // empty' 2>/dev/null || true)
+  [ -n "$self" ] || { echo "verify-ready: 'bd show $id' failed; NOTHING was checked" >&2; exit 3; }
+  parked=$(printf '%s' "$self" | jq -r '[(.status // "" | select(. == "blocked" or . == "deferred") | "status=" + .),
+                                        ((.labels // [])[] | select(. == "human") | "label=human")] | join(" ")')
+  [ -z "$parked" ] || { echo "PARKED $id ($parked)"; continue; }
   # Blocking edges whose target is not closed and not pinned.
   live=$(printf '%s\n' "$deps" \
          | grep -E 'via (blocks|conditional-blocks)$' \
@@ -68,12 +79,9 @@ for id in "$@"; do
   own_parent=
   for dep in $(printf '%s\n' "$deps" | grep -E 'via (blocks|conditional-blocks)$' \
                | grep -E '\(closed\) via ' | sed -E 's/^ *([^: ]+):.*/\1/'); do
-    if [ -z "$own_parent" ]; then
-      own_parent=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' | jq -r '.[0].parent // "" | if . == "" then "-" else . end')
-      # Empty = the lookup failed; comparing against "" would flag a blocker
-      # under this task's OWN open feature as unmerged.
-      [ -n "$own_parent" ] || { echo "verify-ready: 'bd show $id' failed; NOTHING was checked" >&2; exit 3; }
-    fi
+    # "-" for no parent: comparing against "" would flag a blocker under this
+    # task's OWN open feature as unmerged.
+    [ -n "$own_parent" ] || own_parent=$(printf '%s' "$self" | jq -r '.parent // "" | if . == "" then "-" else . end')
     dep_parent=$(bd show "$dep" --json 2>/dev/null | sed -n '/^[[{]/,$p' | jq -r '.[0].parent // empty')
     [ -n "$dep_parent" ] && [ "$dep_parent" != "$own_parent" ] || continue
     fp=$(bd show "$dep_parent" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
@@ -90,8 +98,7 @@ for id in "$@"; do
     any_ready=0
   fi
 
-  base=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
-         | jq -r '.[0].metadata.base_branch // empty' 2>/dev/null || true)
+  base=$(printf '%s' "$self" | jq -r '.metadata.base_branch // empty' 2>/dev/null || true)
   [ -n "$base" ] || continue
   # The branch's PR STATE, not its git ancestry. A squash merge writes a new
   # commit that is not a descendant of the branch tip, so
