@@ -13,6 +13,9 @@
 # an explicit `parent` that overrides its id (see that script's header). A
 # feature whose epic will not resolve is SKIPPED with a note on stderr — it
 # cannot be ranked, and guessing its epic would rank the wrong one.
+#
+# A DEFERRED epic is not listed: claim-epic.sh refuses it, so listing it only
+# costs the caller a lookup. undefer-unblocked.sh is what brings it back.
 set -uo pipefail
 
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -31,4 +34,9 @@ for f in $features; do
   fi
 done
 
-printf '%s' "$epics" | jq -R -s 'split("\n") | map(select(length > 0)) | unique'
+deferred=$(bd list --type=epic --status=deferred --limit 0 --json 2>/dev/null \
+             | sed -n '/^[[{]/,/^[]}]/p' \
+             | jq -c '[(if type=="array" then . else (.issues // []) end)[].id]' 2>/dev/null)
+
+printf '%s' "$epics" | jq -R -s --argjson d "${deferred:-[]}" \
+  'split("\n") | map(select(length > 0)) | unique - $d'
