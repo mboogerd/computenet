@@ -121,8 +121,39 @@ class Replication(
     /** Established gossip links per (local replica → remote replica) pair. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
 
-    /** Retention reservations held for charged gossip links, keyed by the same pair as [linked]. */
-    private val retentionHolds = mutableMapOf<Pair<CellRef, CellRef>, () -> Unit>()
+    /**
+     * One Retention reservation for a charged gossip pair. A pending slot is
+     * installed before either ledger call, so a concurrent release can mark the
+     * admission as obsolete before its undo handle exists. All slot transitions
+     * happen under [retentionHolds]' monitor.
+     */
+    private class RetentionHold {
+        private var undo: (() -> Unit)? = null
+        private var released = false
+
+        val installed: Boolean get() = undo != null
+
+        fun install(action: () -> Unit) {
+            check(!released && undo == null) { "cannot install a released Retention hold" }
+            undo = action
+        }
+
+        fun release() {
+            if (released) return
+            released = true
+            undo?.also { undo = null }?.invoke()
+        }
+    }
+
+    /**
+     * Retention reservations held for charged gossip links, keyed by the same
+     * pair as [linked]. The map is also its lifecycle monitor: [maybeLink]
+     * installs a pending slot before charging, while unlink/rollback/eviction
+     * remove that same slot through [releaseHoldsMatching]. Thus a release that
+     * overlaps admission either releases an installed hold or causes the later
+     * admission to undo both charges without forming a link.
+     */
+    private val retentionHolds = mutableMapOf<Pair<CellRef, CellRef>, RetentionHold>()
 
     /**
      * The tag-lane high-water of a replica that LEFT this peer, kept against the
@@ -461,7 +492,7 @@ class Replication(
         // [rebind], and it is the derived key, not this call site, that makes
         // re-linking idempotent no matter which path dropped the entry.
         registry.onUnpublish { ref ->
-            if (retentionHolds.isNotEmpty()) retentionHolds.keys.filter { it.second == ref }.toList().forEach(::releaseHold)
+            releaseHoldsMatching { it.second == ref }
             linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) }
         }
     }
@@ -577,7 +608,7 @@ class Replication(
                     if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
                 }
                 if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
-                if (retentionHolds.isNotEmpty()) retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
+                releaseHoldsMatching { it.first == cell.ref }
                 linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
                 if (adapters[cell.ref] === adapter) {
                     adapters.remove(cell.ref)
@@ -919,7 +950,7 @@ class Replication(
         // this id leaves (the companion carries this peer's single row).
         if (closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()) watermarks[cell.ref.id]?.close()
         hostOf.remove(cell.ref)
-        if (retentionHolds.isNotEmpty()) retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
+        releaseHoldsMatching { it.first == cell.ref }
         linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
         partitionSuspended.remove(cell.ref)
         adapters.remove(cell.ref)?.let { adapter -> host.managementInlet.call.despawn(adapter.ref) }
@@ -1069,27 +1100,78 @@ class Replication(
         if (local !is WatermarkCell) {
             val host = hostOf[local.ref]
             val announcer = (registry.location(other) as? LocationRegistry.Remote)?.announcer
-            if (host != null && announcer != null && host.anyLedgerOnChain() && key !in retentionHolds) {
+            if (host != null && announcer != null) {
+                val pending = synchronized(retentionHolds) {
+                    linked[key]?.let { (cell, link) ->
+                        @Suppress("UNCHECKED_CAST")
+                        gossipOutlet(cell).linking.fireLinked(link)
+                        return
+                    }
+                    retentionHolds[key]?.let { hold ->
+                        if (hold.installed) installLink(local, other, targetInterest, key)
+                        return
+                    }
+                    if (!host.anyLedgerOnChain()) {
+                        installLink(local, other, targetInterest, key)
+                        return
+                    }
+                    RetentionHold().also { retentionHolds[key] = it }
+                }
                 val interestClaim = budgetClaim(announcer, ClaimClass.Interest, key = key)
                 when (val interest = host.chargeThroughAncestors(interestClaim)) {
                     is BudgetOutcome.Refused -> {
+                        synchronized(retentionHolds) {
+                            if (retentionHolds[key] === pending) retentionHolds.remove(key)
+                        }
                         denyLinkBudget(host, interest, interestClaim, key)
                         return
                     }
                     is BudgetOutcome.Admitted -> {
+                        val stillPending = synchronized(retentionHolds) { retentionHolds[key] === pending }
+                        if (!stillPending) {
+                            interest.undo()
+                            return
+                        }
                         val retentionClaim = budgetClaim(announcer, ClaimClass.Retention, hold = true)
                         when (val retention = host.chargeThroughAncestors(retentionClaim)) {
                             is BudgetOutcome.Refused -> {
+                                synchronized(retentionHolds) {
+                                    if (retentionHolds[key] === pending) retentionHolds.remove(key)
+                                }
                                 interest.undo()
                                 denyLinkBudget(host, retention, retentionClaim, key)
                                 return
                             }
-                            is BudgetOutcome.Admitted -> retentionHolds[key] = retention.undo
+                            is BudgetOutcome.Admitted -> {
+                                val formed = synchronized(retentionHolds) {
+                                    if (retentionHolds[key] !== pending) {
+                                        false
+                                    } else {
+                                        pending.install(retention.undo)
+                                        installLink(local, other, targetInterest, key)
+                                        true
+                                    }
+                                }
+                                if (!formed) {
+                                    retention.undo()
+                                    interest.undo()
+                                }
+                                return
+                            }
                         }
                     }
                 }
             }
         }
+        installLink(local, other, targetInterest, key)
+    }
+
+    private fun installLink(
+        local: Replicable<*>,
+        other: CellRef,
+        targetInterest: Interest,
+        key: Pair<CellRef, CellRef>,
+    ) {
         // the proxy resolves the port by name; delta types are erased on this
         // path and re-checked at the receiving inlet's serve
         val routed = (HostedCellProxy.create(other, registry, ReplicaDeltaInlet::class.java)
@@ -1127,8 +1209,16 @@ class Replication(
         )
     }
 
-    private fun releaseHold(key: Pair<CellRef, CellRef>) {
-        retentionHolds.remove(key)?.invoke()
+    private inline fun releaseHoldsMatching(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
+        synchronized(retentionHolds) {
+            // Default-off: do not build a filtered key list when no ledger ever
+            // installed a hold ([ECO1-BUD-04]).
+            if (retentionHolds.isEmpty()) return
+            retentionHolds.keys.filter(predicate).forEach { key ->
+                linked.remove(key)
+                retentionHolds.remove(key)?.release()
+            }
+        }
     }
 
     @Suppress("UNCHECKED_CAST")
