@@ -19,6 +19,7 @@ import civictech.cell.link.Link
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
 import civictech.cell.link.PeerIdentityBinding
+import civictech.cell.link.PeerStamp
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
@@ -63,8 +64,8 @@ interface RegistryAnnounce {
  * local senders reach the remote ref transparently (parked traffic replays).
  *
  * One mirror per peer connection, so it is the right place to hold *whose*
- * announcements these are ([peer], V4-PEERID): the announcement path already
- * carries the peer's identity as a stamp on every decoded invocation
+ * announcements these are ([announcer], V4-PEERID): the announcement path
+ * already carries the peer's admission stamp on every decoded invocation
  * (`BridgeIngressCell`), but a served [RegistryAnnounce] method cannot see it,
  * and reading an ambient on the per-message path is what P2 forbids. Holding
  * it on the connection's own cell costs one volatile read per *announcement*
@@ -106,7 +107,7 @@ interface RegistryAnnounce {
 class RegistryMirrorCell(
     private val registry: LocationRegistry,
     private val toPeer: InvocationSink,
-    initialPeer: PeerId? = null,
+    initialAnnouncer: PeerStamp? = null,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
     private val anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
 ) : Cell, BoundaryDenialAccounting {
@@ -120,13 +121,14 @@ class RegistryMirrorCell(
     private val announcementSink = boundaryDenials.sinkFor("announcement-admission")
 
     /**
-     * The peer whose announcements this mirror serves; null = anonymous
-     * (V4-PEERID). Recorded on every [LocationRegistry.Remote] this mirror
-     * installs, so the peer's hull keeps one identity across a reconnect that
-     * mints a new bridge egress.
+     * The admission stamp whose announcements this mirror serves; null = an
+     * anonymous or otherwise unattributed connection. Recorded on every
+     * [LocationRegistry.Remote] this mirror installs, so the peer's hull keeps
+     * the admission identity and strength across a reconnect that mints a new
+     * bridge egress.
      *
      * **Assignable after construction, and why that is safe.** [Peering.loopback]
-     * knows both names up front and passes `initialPeer`. A socket transport
+     * knows both stamps up front and passes `initialAnnouncer`. A socket transport
      * cannot: `WsTransport.Session` spawns its mirror in its own constructor,
      * because the hello it must send carries [ref] — and the *remote* name only
      * arrives in the peer's hello, later. The late bind is nonetheless ordered
@@ -149,13 +151,16 @@ class RegistryMirrorCell(
      * reader is the bridge host's scheduler thread. A `var` rather than a
      * constructor-only value because of the late bind above, not because it is
      * re-written: since computenet-dqy.14 every socket connection instance mints
-     * its own mirror, so a transport mirror's name is written once, by the hello
-     * of the instance that owns it. (The setter stays capable of a re-bind — a
-     * peer that re-hellos on one socket is served, `PeerIdentityTest` covers it
-     * — but no transport path in this repository reaches that any more.)
+     * its own mirror, so a transport mirror's stamp is written once, by the
+     * hello of the instance that owns it. The whole stamp is assigned
+     * atomically so its derived [peer] cannot disagree with its admission
+     * strength or issuer.
      */
     @Volatile
-    var peer: PeerId? = initialPeer
+    var announcer: PeerStamp? = initialAnnouncer
+
+    /** The announcing peer's identity, derived from the admission stamp. */
+    val peer: PeerId? get() = announcer?.id
 
     /**
      * The connection gate: whether this mirror is currently authorized to speak
@@ -224,7 +229,14 @@ class RegistryMirrorCell(
         inlet.serve(object : RegistryAnnounce {
             override fun published(ref: CellRef) = synchronized(gate) {
                 if (attached) {
-                    registry.publishFromPeer(ref, toPeer, peer, anonymousOwnership)
+                    val stamp = announcer
+                    registry.publishFromPeer(
+                        ref,
+                        toPeer,
+                        stamp?.id,
+                        anonymousOwnership,
+                        announcer = stamp,
+                    )
                         ?.let { refuseCollision(ref, it) }
                 } else {
                     refuse()
@@ -927,8 +939,15 @@ object Peering {
      * because a socket binding learns what each needs at different moments of
      * its hello.
      */
-    fun openInstance(side: Side, toPeer: InvocationSink, peer: PeerId? = null): ConnectionInstance =
-        ConnectionInstance(side, spawnMirror(side, toPeer, peer))
+    fun openInstance(
+        side: Side,
+        toPeer: InvocationSink,
+        peer: PeerId? = null,
+        announcer: PeerStamp? = peer?.let { PeerStamp(it) },
+    ): ConnectionInstance = ConnectionInstance(
+        side,
+        spawnMirror(side, toPeer, peer = peer, announcer = announcer),
+    )
 
     /**
      * Handle on an established loopback peering — enough to sever it
@@ -1051,11 +1070,23 @@ object Peering {
 
         private fun open() {
             closeInstance()
-            // V4-PEERID: the mirror on B serves A's announcements, so its peer
-            // is A's name (and symmetrically). Both names are known here, so the
-            // loopback path is a pure constructor value — it never uses the setter.
-            instanceOnB = openInstance(b, toPeer = bToA, peer = a.peer)
-            instanceOnA = openInstance(a, toPeer = aToB, peer = b.peer)
+            // The mirror on B serves A's announcements, so its stamp is A's
+            // admission verdict (and symmetrically). Both sides are known here,
+            // so the loopback path binds a whole stamp before announcing.
+            val aToBAdmission = loopbackAdmission(sender = a, receiver = b)
+            val bToAAdmission = loopbackAdmission(sender = b, receiver = a)
+            instanceOnB = openInstance(
+                b,
+                toPeer = bToA,
+                peer = a.peer,
+                announcer = a.peer?.let { PeerStamp(it, aToBAdmission.auth, aToBAdmission.issuer) },
+            )
+            instanceOnA = openInstance(
+                a,
+                toPeer = aToB,
+                peer = b.peer,
+                announcer = b.peer?.let { PeerStamp(it, bToAAdmission.auth, bToAAdmission.issuer) },
+            )
             instanceOnA.announceTo(peerMirror = instanceOnB.mirrorRef, via = aToB)
             instanceOnB.announceTo(peerMirror = instanceOnA.mirrorRef, via = bToA)
         }
@@ -1374,21 +1405,29 @@ object Peering {
 
     /**
      * Spawn the mirror that turns the peer's announcements into Remote
-     * locations routed via [toPeer]. [peer] names the peer whose announcements
-     * it will serve, when the caller already knows it (V4-PEERID); omitting it
-     * spawns an anonymous mirror, the pre-V4-PEERID shape.
+     * locations routed via [toPeer]. [announcer] names and vouches for the peer
+     * whose announcements it will serve, when the caller already knows it
+     * (V4-PEERID); omitting it spawns an anonymous mirror, the pre-V4-PEERID
+     * shape. The [peer] parameter remains as a compatibility shorthand for a
+     * transport-vouched [PeerStamp].
      *
      * Returns the cell rather than its [CellRef] — the richer handle a
      * transport needs, because a socket session must spawn its mirror before
      * the peer's hello has named it and then late-bind
-     * [RegistryMirrorCell.peer] (see that property's happens-before argument).
+     * [RegistryMirrorCell.announcer] (see that property's happens-before
+     * argument).
      * Callers that only wanted the ref read `.ref`.
      */
-    fun spawnMirror(side: Side, toPeer: InvocationSink, peer: PeerId? = null): RegistryMirrorCell {
+    fun spawnMirror(
+        side: Side,
+        toPeer: InvocationSink,
+        peer: PeerId? = null,
+        announcer: PeerStamp? = peer?.let { PeerStamp(it) },
+    ): RegistryMirrorCell {
         val mirror = RegistryMirrorCell(
             side.registry,
             toPeer,
-            peer,
+            initialAnnouncer = announcer,
             anonymousOwnership = side.anonymousOwnership,
         )
         side.bridgeHost.managementInlet.call.spawn(mirror)

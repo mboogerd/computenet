@@ -3,6 +3,7 @@ package civictech.cell.host
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerStamp
 import civictech.cell.link.Interest
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
@@ -66,17 +67,29 @@ class LocationRegistry internal constructor(
      *
      * [peer] is the announcing connection's transport identity (V4-PEERID) —
      * the name the peer put in its transport hello, captured by the
-     * `RegistryMirrorCell` that served the announcement. Null when the peer is
-     * anonymous, which is every peering that never names a `Peering.Side`, so
-     * omitting it is exactly the pre-V4-PEERID shape.
+     * `RegistryMirrorCell` that served the announcement. [announcer] is the
+     * complete admission stamp that ingress applied to deliveries from that
+     * connection. It is retained here rather than resolved again later, so a
+     * reconnect or an ambient message cannot change the attribution of an
+     * already-installed location. Both are null when the peer is anonymous.
      *
      * It exists because [sink] is per-*connection*, not per-peer: a reconnect
      * builds a new bridge egress, so anything identifying a peer by its sink
      * renames it on every reconnect. [peer] is the peer's own claim and
-     * survives. It is **transport-vouched, not authenticated** ([PeerId]) —
-     * a stable label, never a verified principal.
+     * survives; [announcer] preserves the admission strength and issuer that
+     * vouched for it. It is bound once, never read from a frame.
      */
-    data class Remote(val sink: InvocationSink, val peer: PeerId? = null) : Location
+    data class Remote(
+        val sink: InvocationSink,
+        val peer: PeerId? = null,
+        val announcer: PeerStamp? = null,
+    ) : Location {
+        init {
+            require(announcer == null || announcer.id == peer) {
+                "remote announcer ${announcer?.id} does not match peer $peer"
+            }
+        }
+    }
 
     /**
      * Why a peer-originated remote publication or retraction was refused. The incumbent is
@@ -797,15 +810,20 @@ class LocationRegistry internal constructor(
      * disconnect ([unpublishRemotes]) has removed q's binding; an announcement
      * by r that arrives first is refused and not retried, so the ref stays
      * unlocated here until r announces again.
+     *
+     * [announcer] is the admission stamp captured by the mirror for this
+     * connection. It is retained with the installed location and is never
+     * recovered from a later delivery.
      */
     internal fun publishFromPeer(
         ref: CellRef,
         sink: InvocationSink,
         peer: PeerId?,
         anonymousOwnership: AnonymousOwnership = AnonymousOwnership.Shared,
+        announcer: PeerStamp? = null,
     ): RemotePublishRefusal? {
         if (anonymousOwnership == AnonymousOwnership.PerConnection) enablePerConnectionOwnership()
-        val incoming = Remote(sink, peer)
+        val incoming = Remote(sink, peer, announcer)
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         val refusal = withParkQueueMonitor(queue) {
             val incumbent = locations[ref]
