@@ -1,0 +1,33 @@
+{
+  "id": "WV-PORT-PROTOCOL-ATTENTION-01",
+  "title": "Attention crosses as an upstream PORT_PROTOCOL frame",
+  "category": "frames/port-protocol",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "41 point 4", "WIR1-C04", "WIR1-I10", "WIR1-C06", "WIR1-I11"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": 0,
+      "methodId": 0,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "outlet",
+      "type": "PORT_PROTOCOL",
+      "protocolId": "attention",
+      "protocolMessage": {"type": "Attention", "fields": {"level": 0.5, "version": 3}},
+      "edge": {
+        "id": "00000000-0000-0000-0000-00000000e001",
+        "fromRef": {"id": "00000000-0000-0000-0000-0000000000c1", "cell": {"id": "00000000-0000-0000-0000-000000000042"}},
+        "fromCell": {"id": "00000000-0000-0000-0000-000000000042"},
+        "fromPortName": "outlet",
+        "toRef": {"id": "00000000-0000-0000-0000-0000000000c2", "cell": {"id": "00000000-0000-0000-0000-000000000043"}},
+        "toCell": {"id": "00000000-0000-0000-0000-000000000043"},
+        "toPortName": "inlet"
+      },
+      "natures": [0, 1, 2, 2]
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":0,\"methodId\":0,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"outlet\",\"type\":\"PORT_PROTOCOL\",\"protocolId\":\"attention\",\"protocolMessage\":[\"Attention\",{\"level\":0.5,\"version\":3}],\"edge\":{\"id\":\"00000000-0000-0000-0000-00000000e001\",\"fromRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c1\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"}},\"fromCell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"fromPortName\":\"outlet\",\"toRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c2\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"}},\"toCell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"toPortName\":\"inlet\"},\"natures\":[0,1,2,2]}", "base64": "eyJjb250cmFjdElkIjowLCJtZXRob2RJZCI6MCwiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6Im91dGxldCIsInR5cGUiOiJQT1JUX1BST1RPQ09MIiwicHJvdG9jb2xJZCI6ImF0dGVudGlvbiIsInByb3RvY29sTWVzc2FnZSI6WyJBdHRlbnRpb24iLHsibGV2ZWwiOjAuNSwidmVyc2lvbiI6M31dLCJlZGdlIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDBlMDAxIiwiZnJvbVJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBjMSIsImNlbGwiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDIifX0sImZyb21DZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQyIn0sImZyb21Qb3J0TmFtZSI6Im91dGxldCIsInRvUmVmIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGMyIiwiY2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9fSwidG9DZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQzIn0sInRvUG9ydE5hbWUiOiJpbmxldCJ9LCJuYXR1cmVzIjpbMCwxLDIsMl19"},
+  "notes": "Pins the upstream delivery target (producer cell …42/outlet) for the shared edge per ncz.4-D7. contractId/methodId are required 0/0 and emitted; protocolId, protocolMessage, and the full edge are present. The encoder's observed Attention Float rendering is 0.5; sparse natures [0,1,2,2] means OWNERSHIP:EXCLUSIVE and COLOR:SUSPENDING. Default args/context/version are absent."
+}

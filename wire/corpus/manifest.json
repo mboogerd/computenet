@@ -407,13 +407,43 @@
       "category": "frames/additive",
       "kind": "frame",
       "file": "frames/additive/WV-ADDITIVE-SIGNED-DECODE-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-EDGEOPEN-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-EDGEOPEN-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-EDGECLOSE-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-EDGECLOSE-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-ATTENTION-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-ATTENTION-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-PROGRESS-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-PROGRESS-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-SATURATION-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-SATURATION-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-STATEREQUEST-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-STATEREQUEST-01.json"
     }
   ],
-  "pending": [
-    {"discriminator": "Attention", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "Progress", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "SaturationSignal", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "EdgeClose", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "StateRequest", "owedBy": "computenet-ncz.4"}
-  ]
+  "pending": []
 }

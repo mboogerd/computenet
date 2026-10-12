@@ -175,7 +175,7 @@ class NeutralValuesTest {
         assertEquals(root, VectorLoader.locateRoot(root.parent)) // wire/
         assertEquals(root, VectorLoader.locateRoot(root.parent.parent)) // repository root
         assertEquals(loader.documents().map { it.id }, VectorLoader(root).documents().map { it.id })
-        assertTrue(loader.pending().isNotEmpty())
+        assertEquals(emptyList<PendingEntry>(), loader.pending())
     }
 
     private fun copyCorpus(dir: Path): Path {
