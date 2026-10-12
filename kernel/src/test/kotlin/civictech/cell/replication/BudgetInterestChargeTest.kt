@@ -14,6 +14,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.IntakeClosedException
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -265,6 +266,93 @@ class BudgetInterestChargeTest {
         recording.balance(P, ClaimClass.Retention) shouldBe N
         recording.balance(P, ClaimClass.Interest) shouldBe N
         counting.undoCalls.get() shouldBe 2
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
+    }
+
+    @Test
+    fun `a send that fails during link catch-up releases the hold and leaves no uncharged link`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = counting)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        replication.replicate(local, host)
+        // non-empty state, so installing the link sends a catch-up delta
+        (HostedCellProxy.create(local.ref, registry, SetInletProxy::class.java) as SetInletProxy).inlet.call.add("x")
+        controller.runToIdle()
+
+        val remote = CellRef(logicalId, 0)
+        val failedSends = AtomicInteger()
+        // A transport egress that finds its socket dead: it unpublishes the
+        // peer's refs on the sending thread, then fails the send (the shape of
+        // WsTransport's and IrohTransport's send-failure path).
+        lateinit var dead: InvocationSink
+        dead = InvocationSink { invocation ->
+            failedSends.incrementAndGet()
+            registry.unpublishRemotes(via = dead)
+            throw IntakeClosedException(invocation.cellRef)
+        }
+        registry.publishFromPeer(remote, dead, peer = P, announcer = PeerStamp(P)) shouldBe null
+        controller.runToIdle()
+
+        failedSends.get() shouldBe 1
+        registry.location(remote) shouldBe null
+        recording.balance(P, ClaimClass.Retention) shouldBe N
+        recording.balance(P, ClaimClass.Interest) shouldBe N - 1
+        counting.undoCalls.get() shouldBe 1
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
+
+        // the peer reconnects: the re-announced pair is charged like any fresh link
+        registry.publishFromPeer(remote, InvocationSink { }, peer = P, announcer = PeerStamp(P)) shouldBe null
+        controller.runToIdle()
+
+        recording.charges.map { it.claimClass } shouldBe
+            listOf(ClaimClass.Interest, ClaimClass.Retention, ClaimClass.Interest, ClaimClass.Retention)
+        recording.balance(P, ClaimClass.Retention) shouldBe N - 1
+        counting.undoCalls.get() shouldBe 1
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 1
+    }
+
+    @Test
+    fun `a send that fails while a rebind re-links a carried hold releases it and leaves no link`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = counting)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        replication.replicate(local, host)
+        (HostedCellProxy.create(local.ref, registry, SetInletProxy::class.java) as SetInletProxy).inlet.call.add("x")
+        controller.runToIdle()
+
+        val remote = CellRef(logicalId, 0)
+        var socketDead = false
+        lateinit var sink: InvocationSink
+        sink = InvocationSink { invocation ->
+            if (socketDead) {
+                registry.unpublishRemotes(via = sink)
+                throw IntakeClosedException(invocation.cellRef)
+            }
+        }
+        registry.publishFromPeer(remote, sink, peer = P, announcer = PeerStamp(P)) shouldBe null
+        controller.runToIdle()
+        recording.balance(P, ClaimClass.Retention) shouldBe N - 1
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 1
+
+        // the rebind carries the hold over and re-links; its catch-up meets the dead socket
+        socketDead = true
+        replication.rebind(local, SetCell<String>(local.ref), host)
+        controller.runToIdle()
+
+        registry.location(remote) shouldBe null
+        recording.balance(P, ClaimClass.Retention) shouldBe N
+        counting.undoCalls.get() shouldBe 1
+        recording.charges.size shouldBe 2
         replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
     }
 

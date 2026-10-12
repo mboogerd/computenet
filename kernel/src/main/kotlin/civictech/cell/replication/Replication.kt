@@ -1108,7 +1108,10 @@ class Replication(
                         return
                     }
                     retentionHolds[key]?.let { hold ->
-                        if (hold.installed) installLink(local, other, targetInterest, key)
+                        if (hold.installed) {
+                            installLink(local, other, targetInterest, key)
+                            dropLinkIfHoldReleased(key, hold)
+                        }
                         return
                     }
                     if (!host.anyLedgerOnChain()) {
@@ -1149,6 +1152,7 @@ class Replication(
                                     } else {
                                         pending.install(retention.undo)
                                         installLink(local, other, targetInterest, key)
+                                        dropLinkIfHoldReleased(key, pending)
                                         true
                                     }
                                 }
@@ -1186,6 +1190,21 @@ class Replication(
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
         linked[key] = local to gossipOutlet(local).streamTo(sink, at = gossipRef(local.ref, other))
+    }
+
+    /**
+     * Called under [retentionHolds]' monitor right after [installLink] for a
+     * charged pair. The monitor is reentrant, so it does not exclude the one
+     * release that runs on THIS thread inside [installLink]: the link's
+     * catch-up is sent while the link installs, and a transport that finds its
+     * socket dead on that send unpublishes the peer's refs from the sending
+     * thread (`LocationRegistry.unpublishRemotes`) before failing the send.
+     * That release ran before [linked] had the entry, so it found no link to
+     * drop; without this the pair would stay in [linked] with no reservation
+     * and the peer's next announcement would re-use it uncharged.
+     */
+    private fun dropLinkIfHoldReleased(key: Pair<CellRef, CellRef>, hold: RetentionHold) {
+        if (retentionHolds[key] !== hold) linked.remove(key)
     }
 
     private fun budgetClaim(
