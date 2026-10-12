@@ -1322,6 +1322,9 @@ class Replication(
     /** Must be called under [linkLifecycle]; retirement drops links and releases holds together. */
     private fun releaseHoldsMatchingLocked(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
         dropLinksMatchingLocked(predicate)
+        // Default-off: do not build a filtered key list when no ledger ever
+        // installed a hold ([ECO1-BUD-04]).
+        if (retentionHolds.isEmpty()) return
         retentionHolds.keys.filter(predicate).toList().forEach { key ->
             retentionHolds.remove(key)?.release()
         }
