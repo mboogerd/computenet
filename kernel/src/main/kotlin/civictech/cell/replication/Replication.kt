@@ -461,7 +461,7 @@ class Replication(
         // [rebind], and it is the derived key, not this call site, that makes
         // re-linking idempotent no matter which path dropped the entry.
         registry.onUnpublish { ref ->
-            retentionHolds.keys.filter { it.second == ref }.toList().forEach(::releaseHold)
+            if (retentionHolds.isNotEmpty()) retentionHolds.keys.filter { it.second == ref }.toList().forEach(::releaseHold)
             linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) }
         }
     }
@@ -577,7 +577,7 @@ class Replication(
                     if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
                 }
                 if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
-                retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
+                if (retentionHolds.isNotEmpty()) retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
                 linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
                 if (adapters[cell.ref] === adapter) {
                     adapters.remove(cell.ref)
@@ -919,7 +919,7 @@ class Replication(
         // this id leaves (the companion carries this peer's single row).
         if (closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()) watermarks[cell.ref.id]?.close()
         hostOf.remove(cell.ref)
-        retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
+        if (retentionHolds.isNotEmpty()) retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
         linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
         partitionSuspended.remove(cell.ref)
         adapters.remove(cell.ref)?.let { adapter -> host.managementInlet.call.despawn(adapter.ref) }
