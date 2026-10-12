@@ -14,6 +14,7 @@ import civictech.cell.link.IdentityStatement
 import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerStamp
 import civictech.cell.link.UnboundReason
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -1189,7 +1190,7 @@ object IrohTransport {
             // Bind BEFORE announcing, so every Remote location this link installs
             // — including the peer's own catch-up burst, which cannot start
             // before it has seen our hello — records the peer's name (V4-PEERID).
-            opened.mirror.peer = peer
+            opened.mirror.announcer = PeerStamp(peer, AuthLevel.Authenticated, issuer)
             attributedPeer = peer
             // The level is a parameter fixed HERE, at the admission decision,
             // before the ingress exists — never read from a frame. See the class
