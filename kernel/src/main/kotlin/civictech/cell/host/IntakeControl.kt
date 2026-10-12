@@ -129,6 +129,25 @@ internal class IntakeControl(
         synchronized(coalesceOriginals) { coalesceOriginals[invocation] } ?: emptyList()
 
     /**
+     * Checkpoint compaction replaces every pending staged entry with one newly encoded
+     * journal record. If [invocation] is a Coalesce result, its pre-checkpoint originals
+     * therefore stop being the records that represent it; the staged invocation itself
+     * becomes the one representative. Keeping that representative in this lineage also
+     * makes a later coalesce flatten to `[carried merge, new original]`, matching the two
+     * records the journal then actually holds.
+     *
+     * Caller holds [dataLock], as [coalesce] does. The map monitor is still taken because
+     * delivery cleanup does not hold [dataLock].
+     */
+    fun checkpointCarried(invocation: HostedPortInvocation) {
+        synchronized(coalesceOriginals) {
+            if (coalesceOriginals.containsKey(invocation)) {
+                coalesceOriginals[invocation] = listOf(invocation)
+            }
+        }
+    }
+
+    /**
      * Drops bookkeeping once [invocation] is delivered or discarded — mirrors
      * `HostDurability.forgetJournaledFrame`/`forgetReplayedFrame`, synchronizing on the
      * map itself rather than requiring the caller to hold [dataLock] (the delivery

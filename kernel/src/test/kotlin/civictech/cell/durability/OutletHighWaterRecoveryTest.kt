@@ -5,10 +5,12 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.MessageContext
 import civictech.cell.ReBaselineEmitting
+import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.evolve.Effectful
 import civictech.cell.control.Attention
+import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.IntakeBound
 import civictech.cell.host.JournalRecords
@@ -31,6 +33,7 @@ import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import java.io.Serializable
 import java.util.UUID
 
 /**
@@ -548,7 +551,7 @@ class OutletHighWaterRecoveryTest {
      * mechanism) makes replay reproduce live EXACTLY for this shape — see the test's
      * own KDoc for the weaker-guarantee carve-out this shape does NOT need.
      */
-    class CoalesceRelayCell(override val ref: CellRef) : Cell, ReBaselineEmitting {
+    class CoalesceRelayCell(override val ref: CellRef) : Cell, ReBaselineEmitting, Stateful {
         val outlet = registerPort("outlet", FanOutlet.create<Consumer<Int>>())
         val restartOutlet = registerPort("restartOutlet", FanOutlet.create<Consumer<String>>())
         val inlet = registerPort("inlet", FanInlet.create<CoalesceRelayApi>())
@@ -574,6 +577,10 @@ class OutletHighWaterRecoveryTest {
         override fun reBaseline(supersedes: Set<UUID>, supersede: Boolean) {
             restartOutlet.reBaseline(supersedes, supersede) { provide("restart") }
         }
+
+        override fun snapshot(): Serializable = "coalesce-relay"
+
+        override fun restore(state: Serializable) = Unit
     }
 
     /**
@@ -748,6 +755,179 @@ class OutletHighWaterRecoveryTest {
         effects shouldBe liveEffects + 4
         // The council's caveat: exactly-once for a per-element/single-emit handler,
         // not merely "at least once".
+        effects.count { it == 4 } shouldBe 1
+    }
+
+    /**
+     * computenet-p7ggw: checkpoint compaction re-encodes one staged Coalesce merge as
+     * one `RECORD_FRAME`, replacing the two original frame records that represented it.
+     * The later type-8 boundary must therefore count that ONE carried journal record,
+     * rather than the merge's two pre-checkpoint originals.
+     */
+    @Test
+    fun `a checkpoint-carried coalesced entry is one preceding record for a later RESTART`() {
+        checkpointCarriedCoalesce(extraElementAfterCheckpoint = null, checkpointAgain = false)
+    }
+
+    /**
+     * After the checkpoint collapsed the first two originals into one carried frame, a
+     * third original may coalesce into that still-staged entry. The type-8 boundary then
+     * precedes TWO records: the carried merge plus the post-checkpoint original.
+     */
+    @Test
+    fun `a checkpoint-carried merge that coalesces again keeps its later RESTART count exact`() {
+        checkpointCarriedCoalesce(extraElementAfterCheckpoint = 222, checkpointAgain = false)
+    }
+
+    @Test
+    fun `a second checkpoint collapses a post-checkpoint coalesce back to one preceding record`() {
+        checkpointCarriedCoalesce(extraElementAfterCheckpoint = 222, checkpointAgain = true)
+    }
+
+    /**
+     * A durable-input commit stores its batch as nested frames in one `RECORD_INPUT`
+     * and stages each frame with replay provenance, bypassing the ordinary journal tee.
+     * Recovery expands those nested frames individually, so an overtaking type-8 boundary
+     * must count both of them just like two ordinary `RECORD_FRAME`s.
+     */
+    @Test
+    fun `a metadata RESTART counts every staged frame in a durable-input batch`() {
+        val controller = SimulationController(seed = 59)
+        val journalA = InMemoryJournal()
+        val journalB = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val world = CoalesceWorld(controller, journalA, journalB, relayRef, notifierRef, effects)
+        controller.runToIdle()
+
+        world.feed(1, counter = 1)
+        controller.runToIdle()
+        ProtocolSupport.of(world.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = world.relay.inlet.ref
+            override val to = world.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+
+        world.hostA.durableInput(relayRef, "restart-count").commit {
+            world.feed(2, counter = 7)
+            world.feed(22, counter = 8)
+            1
+        }
+        world.hostA.enqueueHostedInvocation(
+            HostedPortInvocation(
+                world.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+
+        val restartRecord = journalA.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        restartRecord.precedesFrameCount shouldBe 2
+        world.feed(3, counter = 9)
+        controller.runToIdle()
+        val liveEffects = effects.toList()
+        liveEffects shouldBe listOf(1, 2, 22, 3)
+        val liveWave = world.relay.outlet.waveState()
+
+        val after = CoalesceWorld(controller, journalA, journalB, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.hostB.recoverFrom(journalB)
+        after.hostA.recoverFrom(journalA)
+        controller.runToIdle()
+
+        effects shouldBe liveEffects
+        after.relay.outlet.waveState() shouldBe liveWave
+        after.feed(4, counter = 10)
+        controller.runToIdle()
+        effects shouldBe liveEffects + 4
+    }
+
+    private fun checkpointCarriedCoalesce(extraElementAfterCheckpoint: Int?, checkpointAgain: Boolean) {
+        val controller = SimulationController(seed = 53)
+        val journalA = InMemoryJournal()
+        val journalB = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val world = CoalesceWorld(controller, journalA, journalB, relayRef, notifierRef, effects)
+        controller.runToIdle()
+
+        world.feed(1, counter = 1)
+        controller.runToIdle()
+        effects shouldBe listOf(1)
+
+        ProtocolSupport.of(world.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = world.relay.inlet.ref
+            override val to = world.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+
+        world.feed(2, counter = 7)
+        world.feed(22, counter = 7)
+        world.hostA.checkpoint(journalA)
+
+        // The two original records were compacted to the one currently staged merge.
+        journalA.replay().count { JournalRecords.decode(it) is DecodedJournalRecord.Frame } shouldBe 1
+
+        extraElementAfterCheckpoint?.let { world.feed(it, counter = 7) }
+        val beforeSecondCheckpoint = if (extraElementAfterCheckpoint == null) 1 else 2
+        journalA.replay().count { JournalRecords.decode(it) is DecodedJournalRecord.Frame } shouldBe
+            beforeSecondCheckpoint
+        if (checkpointAgain) world.hostA.checkpoint(journalA)
+        val expectedPrecedingRecords = if (checkpointAgain) 1 else beforeSecondCheckpoint
+        journalA.replay().count { JournalRecords.decode(it) is DecodedJournalRecord.Frame } shouldBe
+            expectedPrecedingRecords
+
+        world.hostA.enqueueHostedInvocation(
+            HostedPortInvocation(
+                world.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+
+        world.hostA.supervisionAccounting().restarts shouldBe 1
+        val restartRecord = journalA.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        restartRecord.triggerFramePayload shouldBe null
+        restartRecord.precedesFrameCount shouldBe expectedPrecedingRecords
+
+        world.feed(3, counter = 8)
+        controller.runToIdle()
+        val expectedMergedEffects = listOfNotNull(1, 2, 22, extraElementAfterCheckpoint, 3)
+        val liveEffects = effects.toList()
+        liveEffects shouldBe expectedMergedEffects
+        val liveWave = world.relay.outlet.waveState()
+
+        val after = CoalesceWorld(controller, journalA, journalB, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.hostB.recoverFrom(journalB)
+        after.hostA.recoverFrom(journalA)
+        controller.runToIdle()
+
+        effects shouldBe liveEffects
+        after.relay.outlet.waveState() shouldBe liveWave
+        after.feed(4, counter = 9)
+        controller.runToIdle()
+        effects shouldBe liveEffects + 4
         effects.count { it == 4 } shouldBe 1
     }
 }

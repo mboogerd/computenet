@@ -499,6 +499,11 @@ internal class HostDurability(
      * `ManagedHost` always passes its own `intakeControl::coalesceOriginalsOf`.
      */
     private val coalesceOriginals: (HostedPortInvocation) -> List<HostedPortInvocation> = { emptyList() },
+    /**
+     * Rebase a staged Coalesce entry's lineage after checkpoint compaction replaces
+     * all of its old journal records with one carried `RECORD_FRAME`.
+     */
+    private val checkpointCarriedCoalesce: (HostedPortInvocation) -> Unit = {},
 ) {
 
     /**
@@ -541,8 +546,11 @@ internal class HostDurability(
 
     private val replayedFrames = IdentityHashMap<HostedPortInvocation, ReplayedFrame>()
 
-    /** Exact payload appended for a live frame, retained only until its delivery finishes. */
-    private val journaledFrames = IdentityHashMap<HostedPortInvocation, ByteArray>()
+    /** One journal record currently representing an accepted, undelivered frame. */
+    private data class JournaledFrame(val journal: Journal, val payload: ByteArray)
+
+    /** Exact payload and journal provenance, retained only until delivery finishes. */
+    private val journaledFrames = IdentityHashMap<HostedPortInvocation, JournaledFrame>()
 
     /**
      * Trigger-bearing type-8 events decoded during recovery, held until the exact
@@ -860,8 +868,11 @@ internal class HostDurability(
     /** Remember the already-serialized intake frame so RESTART never re-serializes consumed exclusives. */
     fun rememberJournaledFrame(frame: HostedPortInvocation, record: ByteArray) {
         check(record.firstOrNull() == RECORD_FRAME) { "journaled invocation is not a frame record" }
+        val journal = checkNotNull(journalSelector(frame.cellRef, frame.portName)) {
+            "journaled invocation has no selected journal"
+        }
         synchronized(journaledFrames) {
-            journaledFrames[frame] = record.copyOfRange(1, record.size)
+            journaledFrames[frame] = JournaledFrame(journal, record.copyOfRange(1, record.size))
         }
     }
 
@@ -936,7 +947,7 @@ internal class HostDurability(
         // FIFO makes the pending frames a suffix, so the count is enough to recover their
         // exact position even when two invocations have byte-identical payloads.
         underIntakeLock { pending ->
-            val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger] }
+            val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger]?.payload }
             val precedesFrameCount = if (triggerPayload != null) {
                 0
             } else {
@@ -960,10 +971,10 @@ internal class HostDurability(
                 synchronized(journaledFrames) {
                     synchronized(replayedFrames) {
                         fun isJournaledOrReplayed(invocation: HostedPortInvocation): Boolean =
-                            journaledFrames.containsKey(invocation) || replayedFrames[invocation]?.journal === journal
+                            journaledFrames[invocation]?.journal === journal ||
+                                replayedFrames[invocation]?.journal === journal
                         pending.sumOf { (_, invocation) ->
                             if (invocation.cellRef != trigger.cellRef) return@sumOf 0
-                            if (journalSelector(invocation.cellRef, invocation.portName) !== journal) return@sumOf 0
                             val originals = coalesceOriginals(invocation)
                             if (originals.isEmpty()) {
                                 if (isJournaledOrReplayed(invocation)) 1 else 0
@@ -998,6 +1009,8 @@ internal class HostDurability(
     /**
      * Serialize the complete batch before touching [journal], append it as one record, then make
      * its cursor visible in memory. If serialization or append fails, the cursor is unchanged.
+     * Returns the exact nested `RECORD_FRAME`s so the caller can associate them with the staged
+     * invocation identities without serializing an `Owned` argument a second time.
      */
     fun journalInput(
         journal: Journal,
@@ -1005,13 +1018,15 @@ internal class HostDurability(
         name: String,
         cursor: Serializable,
         frames: List<HostedPortInvocation>,
-    ) {
+    ): List<ByteArray> {
+        val encodedFrames = frames.map(::journalFrame)
         val record = journalRecord(
             RECORD_INPUT,
-            InputRecord(cellRef, name, cursor, frames.map(::journalFrame)),
+            InputRecord(cellRef, name, cursor, encodedFrames),
         )
         journal.append(record)
         cursors[cellRef to name] = cursor
+        return encodedFrames
     }
 
     /** Append one resolved graph delta before its first host operation. */
@@ -1328,8 +1343,27 @@ internal class HostDurability(
                             cellJournalSelector(it.invocation.cellRef) === journal
                     }
                     .sortedBy(CheckpointFrame::sequence)
-                    .map { journalFrame(it.invocation) }
-                journal.reset(compacted + cellHeld + hostHeld)
+                    .map { it.invocation to journalFrame(it.invocation) }
+                journal.reset(compacted + cellHeld + hostHeld.map { it.second })
+
+                // The reset above changes how the journal represents every still-pending
+                // host entry. Old live/replay associations name records that no longer
+                // exist; each carried invocation now has exactly one freshly encoded
+                // RECORD_FRAME in this journal. Rebase the identity bookkeeping only
+                // after reset succeeds, while dataLock still excludes intake changes.
+                synchronized(journaledFrames) {
+                    synchronized(replayedFrames) {
+                        journaledFrames.entries.removeIf { it.value.journal === journal }
+                        replayedFrames.entries.removeIf { it.value.journal === journal }
+                        hostHeld.forEach { (invocation, record) ->
+                            journaledFrames[invocation] = JournaledFrame(
+                                journal,
+                                record.copyOfRange(1, record.size),
+                            )
+                            checkpointCarriedCoalesce(invocation)
+                        }
+                    }
+                }
             }
         }
     }
