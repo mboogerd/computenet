@@ -248,7 +248,7 @@ class BudgetDenialRoutingRatchetTest {
         ) {
             "BudgetClaim( construction sites drifted from the four landed sites. BS-05's re-scoped form " +
                 "(2zasa-D1) depends on this set: a fifth site is either an accident to revert, or a genuine " +
-                "new budget seam that needs its own denial-path test and, if it sits on a delta " +
+                "new budget seam that needs its own BS-06-shaped discharge test and, if it sits on a delta " +
                 "path, reopens BS-05's premise; found: $claimSites"
         }
         assertTrue(
