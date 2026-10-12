@@ -50,9 +50,9 @@ import kotlin.reflect.KClass
  *
  * ## Strict mode (ncz.2-D6)
  *
- * With `-Dwire.vectors.strict=true` (forwarded by `wire/build.gradle.kts`) a
- * non-empty `pending` also fails. It is OFF by default until the last feature
- * draining `pending` lands and makes it the committed default.
+ * Strict mode is ON by default now that this feature drains `pending`; a
+ * non-empty `pending` fails. `-Dwire.vectors.strict=false` (forwarded by
+ * `wire/build.gradle.kts`) opts out for an explicitly staged corpus.
  */
 class RegistrationCoverageTest {
 
@@ -67,7 +67,7 @@ class RegistrationCoverageTest {
             registrations = registrations,
             vectored = vectoredDiscriminators(loader.documents()),
             pending = loader.pending().map { it.discriminator },
-            strict = System.getProperty("wire.vectors.strict") == "true",
+            strict = System.getProperty("wire.vectors.strict") != "false",
         )
         if (findings.isNotEmpty()) {
             fail(

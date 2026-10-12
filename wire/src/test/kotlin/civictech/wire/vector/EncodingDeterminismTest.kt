@@ -16,11 +16,11 @@ import org.junit.jupiter.api.Test
  * [SELECTED_TYPES] is the set of discriminators whose backing collections have
  * historically been the source of JVM iteration-order nondeterminism —
  * unordered maps/sets folded during merge, or a floating-point rendering that
- * can differ across JIT/locale states. `kotlin.Double` is included because
- * `Double.toString` is the other documented source of cross-runtime variance
- * (SCHEMA.md's Double call-out); it is not a collection, but the same "encode
- * this 100x and compare bytes" check applies and this is where the corpus
- * first pins a Double vector.
+ * can differ across JIT/locale states. `kotlin.Double` and `Attention` are
+ * included because JVM floating-point rendering is the other documented source
+ * of cross-runtime variance (SCHEMA.md's Double call-out); they are not
+ * collections, but the same "encode this 100x and compare bytes" check applies
+ * and this is where the corpus first pins those renderings.
  *
  * A variation MUST be recorded in `NONDETERMINISM.md`, never silently
  * tolerated by loosening this test (`wire/corpus/NONDETERMINISM.md` "What
@@ -67,9 +67,9 @@ class EncodingDeterminismTest {
          * `TaggedMapDelta` are the structured-key-map vectors this task adds,
          * whose `puts`/`groups` iterate a `LinkedHashMap`; `PnCounterDelta`/
          * `RoutedCommand` are the map-bearing vectors added by this task;
-         * `kotlin.Double` because JVM `Double.toString` rendering is the other documented
-         * source of cross-run/cross-runtime byte variation (SCHEMA.md's Double
-         * call-out, [WIR1-C16]).
+         * `kotlin.Double` and `Attention` because JVM floating-point rendering
+         * is the other documented source of cross-run/cross-runtime byte
+         * variation (SCHEMA.md's Double call-out, [WIR1-C16]).
          */
         val SELECTED_TYPES: Set<String> = setOf(
             "SetDelta",
@@ -79,6 +79,7 @@ class EncodingDeterminismTest {
             "PnCounterDelta",
             "RoutedCommand",
             "kotlin.Double",
+            "Attention",
         )
 
         private fun typeNodesOf(decoded: kotlinx.serialization.json.JsonElement): Set<String> =

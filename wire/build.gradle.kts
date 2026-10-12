@@ -72,8 +72,8 @@ dependencies {
 // `./gradlew :wire:test -Dwire.stress.artifacts=DIR` was silently ignored —
 // the same defect, found by the guard on its first run.
 //
-// `wire.vectors.strict` is `RegistrationCoverageTest`'s strict mode (an empty
-// `pending` list in wire/corpus/manifest.json is required when it is `true`).
+// `wire.vectors.strict` is `RegistrationCoverageTest`'s strict mode (ON by
+// default; `-Dwire.vectors.strict=false` opts out of the empty-pending check).
 val forwardedSystemProperties = listOf(
     "wire.burst.iterations",
     "wire.burst.refs",
