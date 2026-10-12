@@ -33,6 +33,7 @@ class ManifestTest {
                     replica = 7,
                     peerName = "peer-a",
                     budget = policyFile.toFile().absolutePath,
+                    budgetCheckpointDir = tempDir.resolve("budget-checkpoints").toString(),
                     journalTopology = true,
                 ),
             ),
@@ -57,6 +58,32 @@ class ManifestTest {
             File(tempDir.toFile(), "policy.json").path,
             loaded.nodes.getValue("a").budget,
         )
+    }
+
+    @Test
+    fun `a relative budget checkpoint directory resolves against the manifest directory`() {
+        Files.writeString(tempDir.resolve("policy.json"), "{}")
+        val manifestFile = tempDir.resolve("manifest.json")
+        Files.writeString(
+            manifestFile,
+            """{"nodes":{"a":{"budget":"policy.json","budgetCheckpointDir":"budget-ckpt"}}}""",
+        )
+
+        val loaded = Manifest.load(manifestFile.toFile())
+
+        assertEquals(
+            tempDir.resolve("budget-ckpt").toFile().path,
+            loaded.nodes.getValue("a").budgetCheckpointDir,
+        )
+    }
+
+    @Test
+    fun `a budget checkpoint directory without a budget is refused`() {
+        val failure = invalid(
+            """{"nodes":{"a":{"budgetCheckpointDir":"budget-ckpt"}}}""",
+        )
+
+        assertViolation(failure, "nodes[a].budgetCheckpointDir", "requires budget")
     }
 
     @Test
