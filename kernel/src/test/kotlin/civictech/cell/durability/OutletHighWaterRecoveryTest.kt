@@ -971,6 +971,49 @@ class OutletHighWaterRecoveryTest {
         (after.relay.outlet.waveState().sourceId != historicalSource).shouldBeTrue()
     }
 
+    /**
+     * The mirror of [identicalPayloadRestartDoesNotTransfer] (computenet-p7ggw task
+     * review): here the historical trigger is the LATER of two byte-identical frames.
+     * The earlier one succeeds live and fails for the first time during recovery, so
+     * it must mint a new epoch; binding the record to the first payload-equal frame
+     * instead of the one its pending-suffix count names would hand it the historical one.
+     */
+    @Test
+    fun `a RESTART record stays with the later of two identical frames`() {
+        val controller = SimulationController(seed = 69)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val liveFailures = ArrayDeque(listOf(false, true))
+        val before = World(controller, journal, relayRef, notifierRef, effects) { input ->
+            input == Int.MIN_VALUE && liveFailures.removeFirst()
+        }
+        controller.runToIdle()
+        before.feed(1)
+        controller.runToIdle()
+        before.host.checkpoint(journal)
+        before.feed(Int.MIN_VALUE)
+        before.feed(Int.MIN_VALUE)
+        controller.runToIdle()
+        before.host.supervisionAccounting().restarts shouldBe 1
+        val historicalRestart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        historicalRestart.precedesFrameCount shouldBe 0
+        val historicalSource = historicalRestart.outlets.single { it.portName == "outlet" }.sourceId
+
+        // CRASH. The earlier equal frame now fails; the historical trigger succeeds.
+        val replayFailures = ArrayDeque(listOf(true, false))
+        val after = World(controller, journal, relayRef, notifierRef, effects) { input ->
+            input == Int.MIN_VALUE && replayFailures.removeFirst()
+        }
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        after.host.supervisionAccounting().restarts shouldBe 1
+        (after.relay.outlet.waveState().sourceId != historicalSource).shouldBeTrue()
+    }
+
     private fun checkpointCarriedCoalesce(extraElementAfterCheckpoint: Int?, checkpointAgain: Boolean) {
         val controller = SimulationController(seed = 53)
         val journalA = InMemoryJournal()
