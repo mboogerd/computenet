@@ -852,6 +852,56 @@ class OutletHighWaterRecoveryTest {
         effects shouldBe liveEffects + 4
     }
 
+    /**
+     * computenet-p7ggw task review: the checkpoint-carry rebase must not sever a
+     * REPLAYED trigger frame from its decoded type-8 record. A checkpoint taken
+     * during recovery — after `recoverFrom` staged the tail, before the frame that
+     * originally failed is re-delivered — carries that frame; when it then fails
+     * again, supervision still has to adopt the recorded epoch rather than mint a
+     * recovery-only one. Measured with the association dropped (Darwin arm64):
+     * effects `[1, 2, 3, 4, 3, 4]` and a fresh outlet `sourceId`, where the feature
+     * branch before the rebase reproduced live exactly.
+     */
+    @Test
+    fun `a recovery-time checkpoint keeps a replayed trigger frame matched to its RESTART record`() {
+        val controller = SimulationController(seed = 61)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        before.feed(1)
+        before.feed(2)
+        controller.runToIdle()
+        before.host.checkpoint(journal)
+        before.feed(Int.MIN_VALUE)
+        controller.runToIdle()
+        before.host.supervisionAccounting().restarts shouldBe 1
+        before.feed(3)
+        before.feed(4)
+        controller.runToIdle()
+        val liveEffects = effects.toList()
+        liveEffects shouldBe listOf(1, 2, 3, 4)
+        val liveWave = before.relay.outlet.waveState()
+        checkNotNull(journal.replay().mapNotNull(JournalRecords::decodeRestart).single().triggerFramePayload)
+
+        // CRASH. Recovery only stages the tail; the checkpoint runs before any of it is
+        // delivered, so the replayed trigger frame is carried by the compaction.
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        after.host.checkpoint(journal)
+        controller.runToIdle()
+
+        effects shouldBe liveEffects
+        after.relay.outlet.waveState() shouldBe liveWave
+        after.feed(5)
+        controller.runToIdle()
+        effects shouldBe liveEffects + 5
+    }
+
     private fun checkpointCarriedCoalesce(extraElementAfterCheckpoint: Int?, checkpointAgain: Boolean) {
         val controller = SimulationController(seed = 53)
         val journalA = InMemoryJournal()

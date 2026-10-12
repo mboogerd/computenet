@@ -1347,21 +1347,28 @@ internal class HostDurability(
                 journal.reset(compacted + cellHeld + hostHeld.map { it.second })
 
                 // The reset above changes how the journal represents every still-pending
-                // host entry. Old live/replay associations name records that no longer
-                // exist; each carried invocation now has exactly one freshly encoded
+                // host entry. Old live associations name records that no longer exist;
+                // each carried invocation now has exactly one freshly encoded
                 // RECORD_FRAME in this journal. Rebase the identity bookkeeping only
                 // after reset succeeds, while dataLock still excludes intake changes.
+                //
+                // [replayedFrames] is deliberately NOT cleared (computenet-p7ggw task
+                // review): it is also [takeReplayedRestart]'s key. A replayed trigger
+                // frame carried by a recovery-time checkpoint must still match its
+                // decoded type-8 record on delivery and adopt the recorded epoch;
+                // dropping the association made that recovery mint a fresh epoch and
+                // double-fire the tail. Keeping it cannot overcount: [journalRestart]
+                // ORs the two maps per invocation, and a carried merge's lineage is
+                // rebased to the merge itself, so its replayed originals are no longer
+                // consulted.
                 synchronized(journaledFrames) {
-                    synchronized(replayedFrames) {
-                        journaledFrames.entries.removeIf { it.value.journal === journal }
-                        replayedFrames.entries.removeIf { it.value.journal === journal }
-                        hostHeld.forEach { (invocation, record) ->
-                            journaledFrames[invocation] = JournaledFrame(
-                                journal,
-                                record.copyOfRange(1, record.size),
-                            )
-                            checkpointCarriedCoalesce(invocation)
-                        }
+                    journaledFrames.entries.removeIf { it.value.journal === journal }
+                    hostHeld.forEach { (invocation, record) ->
+                        journaledFrames[invocation] = JournaledFrame(
+                            journal,
+                            record.copyOfRange(1, record.size),
+                        )
+                        checkpointCarriedCoalesce(invocation)
                     }
                 }
             }
