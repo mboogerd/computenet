@@ -69,14 +69,6 @@ class AdditiveFieldPairsTest {
                 decodeDoc.direction,
                 "${pair.decodeId} [WIR1-I02]: a decode-only pair member must use direction decode",
             )
-            val decodeInvocation = WireEquality.normalize(NeutralValues.frameOf(decodeDoc)).invocation
-            val absentInvocation = WireEquality.normalize(NeutralValues.frameOf(absentDoc)).invocation
-            assertEquals(
-                absentInvocation,
-                decodeInvocation,
-                "${pair.decodeId} / ${pair.absentId} [WIR1-I02]: normalized invocations differ across the additive twin",
-            )
-
             val reencoded = WireCodec.encode(NeutralValues.frameOf(decodeDoc).invocation).decodeToString()
             assertEquals(
                 checkNotNull(absentDoc.encoded).utf8,
@@ -89,6 +81,14 @@ class AdditiveFieldPairsTest {
                     "${pair.decodeId} / ${pair.absentId} [WIR1-I19]: re-encoding unexpectedly carries \"$field\"",
                 )
             }
+
+            val decodeInvocation = WireEquality.normalize(NeutralValues.frameOf(decodeDoc)).invocation
+            val absentInvocation = WireEquality.normalize(NeutralValues.frameOf(absentDoc)).invocation
+            assertEquals(
+                absentInvocation,
+                decodeInvocation,
+                "${pair.decodeId} / ${pair.absentId} [WIR1-I02]: normalized invocations differ across the additive twin",
+            )
         }
     }
 
