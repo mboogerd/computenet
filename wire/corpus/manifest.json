@@ -347,6 +347,66 @@
       "category": "payloads",
       "kind": "frame",
       "file": "payloads/WV-PAYLOAD-BORROWED-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-CONTEXT-PRESENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-CONTEXT-PRESENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-CONTEXT-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-CONTEXT-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-PROTOCOL-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-PROTOCOL-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-NATURES-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-NATURES-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-NATURES-EMPTY-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-NATURES-EMPTY-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-NATURES-UNKNOWN-AXIS-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-NATURES-UNKNOWN-AXIS-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-ROUTINGEPOCH-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-ROUTINGEPOCH-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-ROUTINGEPOCH-DECODE-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-ROUTINGEPOCH-DECODE-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-SIGNED-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-SIGNED-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-SIGNED-DECODE-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-SIGNED-DECODE-01.json"
     }
   ],
   "pending": [

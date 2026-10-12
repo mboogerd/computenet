@@ -1,0 +1,27 @@
+{
+  "id": "WV-ADDITIVE-ROUTINGEPOCH-DECODE-01",
+  "title": "A decode-only PORT_API frame reads a legacy routing epoch",
+  "category": "frames/additive",
+  "kind": "frame",
+  "covers": ["WIR1-C06", "WIR1-C09", "WIR1-I02", "WIR1-I19", "WIR1-C16", "42 KE3-39"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{"type": "Stall", "fields": {"reason": "SUSPENDED"}}],
+      "routingEpoch": 7
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]],\"routingEpoch\":7}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU3RhbGwiLHsicmVhc29uIjoiU1VTUEVOREVEIn1dXSwicm91dGluZ0Vwb2NoIjo3fQ=="
+  },
+  "notes": "pinned-because-current: PN-6 leaves routingEpoch write-disabled but read-tolerated for one release. The decode-only bytes carry routingEpoch 7, while WireCodec.encode omits it; the absent twin is WV-ADDITIVE-ROUTINGEPOCH-ABSENT-01."
+}
