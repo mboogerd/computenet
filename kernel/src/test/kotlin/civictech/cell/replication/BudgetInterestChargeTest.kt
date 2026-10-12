@@ -354,4 +354,37 @@ class BudgetInterestChargeTest {
         interestClaims.map { it.key } shouldBe listOf(onQ.ref to onP.ref, onQ.ref to onP.ref)
         rig.q.replication.linkCountAmong(setOf(onQ.ref, onP.ref)) shouldBe 1
     }
+
+    @Test
+    fun `crash supersede at the same ref carries the hold and bypasses an exhausted ledger`() {
+        var refuseAll = false
+        val ledger = RecordingLedger(
+            "q-host",
+            initial = N,
+            refuse = {
+                if (refuseAll) BudgetOutcome.Refused(DenialReason.BUDGET_EXHAUSTED, "q-host", shortfall = 1)
+                else null
+            },
+        )
+        val rig = Rig(ledger)
+        val (onQ, onP) = rig.formPair()
+        refuseAll = true
+
+        // the crash: Q's host is discarded and a DIFFERENT object returns at the same ref
+        val rebuiltHost = ManagedHost(scheduler = rig.controller.scheduler(), registry = rig.q.registry, budget = ledger)
+        val rebuilt = SetCell<String>(onQ.ref)
+        rig.q.replication.replicate(rebuilt, rebuiltHost)
+        rig.controller.runToIdle()
+
+        rig.q.replication.linkCountAmong(setOf(rebuilt.ref, onP.ref)) shouldBe 1
+        rig.q.host.boundaryDenialCount() shouldBe 0L
+        rebuiltHost.boundaryDenialCount() shouldBe 0L
+        ledger.charges.size shouldBe 2
+        ledger.balance(P, ClaimClass.Retention) shouldBe N - 1
+
+        rig.q.registry.locate(onQ.ref) shouldBe rebuiltHost
+        rig.q.ops(rebuilt).add("after-rebuild")
+        rig.controller.runToIdle()
+        onP.membership() shouldBe setOf("after-rebuild")
+    }
 }
