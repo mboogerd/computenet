@@ -656,6 +656,35 @@ class RuntimeBootTest {
     }
 
     @Test
+    fun `a refused close checkpoint joins the combined close failure`() {
+        val policyFile = tempDir.resolve("refused-close-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(checkpointPolicy(ONE_HOUR_NANOS)))
+        val checkpointDir = tempDir.resolve("refused-close-checkpoints")
+        val node = Runtime.boot(
+            Manifest(
+                mapOf(
+                    "budgeted" to NodeSpec(
+                        budget = policyFile.toString(),
+                        budgetCheckpointDir = checkpointDir.toString(),
+                    ),
+                ),
+            ),
+            "budgeted",
+            GraphSpec(emptyList()),
+        )
+        Files.delete(checkpointDir)
+        Files.writeString(checkpointDir, "not a directory")
+
+        val failure = assertThrows<IllegalStateException> { node.close() }
+
+        assertTrue(failure.message!!.contains("failed to close runtime node 'budgeted'"), failure.message)
+        assertTrue(
+            failure.suppressed.any { it is CheckpointStoreRefusedException },
+            "the refused checkpoint write is not among the close failures: ${failure.suppressed.toList()}",
+        )
+    }
+
+    @Test
     fun `a checkpoint policy without a directory, and a directory without a checkpoint policy, refuse boot`() {
         val checkpointPolicy = checkpointPolicy(ONE_HOUR_NANOS)
         val checkpointPolicyFile = tempDir.resolve("requires-directory.json")
