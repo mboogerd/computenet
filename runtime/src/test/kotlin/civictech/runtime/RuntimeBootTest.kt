@@ -635,7 +635,9 @@ class RuntimeBootTest {
         val store = FileBudgetCheckpointStore(checkpointDir) { 0L }
 
         try {
-            Files.delete(checkpointDir)
+            // Renamed aside, not deleted: a first tick that already wrote would make a delete
+            // throw DirectoryNotEmptyException, while a rename holds whatever the directory contains.
+            Files.move(checkpointDir, tempDir.resolve("recovering-ticker-checkpoints-aside"))
             Files.writeString(checkpointDir, "temporarily not a directory")
             awaitUntil("the budget checkpoint ticker records a refused write", 15_000) {
                 node.budgetCheckpointFailure is CheckpointStoreRefusedException
