@@ -29,10 +29,16 @@ import civictech.cell.wire.Peering
 import civictech.testkit.awaitUntil
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
+import civictech.economy.persist.CheckpointRead
+import civictech.economy.persist.CheckpointStoreRefusedException
+import civictech.economy.persist.FallbackReason
+import civictech.economy.persist.FileBudgetCheckpointStore
+import civictech.economy.persist.RestoreOutcome
 import civictech.inspect.InspectorFlag
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -528,6 +534,212 @@ class RuntimeBootTest {
     }
 
     @Test
+    fun `a checkpointed budget is written at close and restored at the next boot`() {
+        val policyFile = tempDir.resolve("checkpoint-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(checkpointPolicy(ONE_HOUR_NANOS)))
+        val checkpointDir = tempDir.resolve("budget-checkpoints")
+        val manifest = Manifest(
+            mapOf(
+                "budgeted" to NodeSpec(
+                    budget = policyFile.toString(),
+                    budgetCheckpointDir = checkpointDir.toString(),
+                ),
+            ),
+        )
+        val principal = PeerId("principal-q")
+        fun spawn(node: Runtime.Node) = CurrentPeer.with(principal, AuthLevel.Authenticated) {
+            node.mainHost.managementInlet.call.spawn(SetCell<String>())
+        }
+
+        val first = Runtime.boot(manifest, "budgeted", GraphSpec(emptyList()))
+        try {
+            assertEquals(RestoreOutcome.Fallback(FallbackReason.MISSING), first.budgetRestore)
+            spawn(first)
+            spawn(first)
+        } finally {
+            first.close()
+        }
+
+        assertTrue(Files.isDirectory(checkpointDir), "boot did not create the checkpoint directory")
+        val store = FileBudgetCheckpointStore(checkpointDir) { 0L }
+        val firstRead = store.read("budgeted")
+        assertTrue(firstRead is CheckpointRead.Present, "close did not write a checkpoint: $firstRead")
+        firstRead as CheckpointRead.Present
+        assertEquals(1L, firstRead.state.sequence)
+        assertEquals(1, firstRead.state.buckets.size)
+
+        val second = Runtime.boot(manifest, "budgeted", GraphSpec(emptyList()))
+        try {
+            assertEquals(RestoreOutcome.Restored(sequence = 1L, buckets = 1), second.budgetRestore)
+            assertEquals(
+                1L,
+                (second.budget as TokenBucketLedger).snapshot()
+                    .bucket(principal, ClaimClass.Spawn)!!.balance,
+            )
+            spawn(second)
+            assertThrows<BudgetRefusedException> { spawn(second) }
+        } finally {
+            second.close()
+        }
+
+        val secondRead = store.read("budgeted") as CheckpointRead.Present
+        assertEquals(2L, secondRead.state.sequence)
+    }
+
+    @Test
+    fun `the checkpoint ticker writes on the policy cadence before close`() {
+        val policyFile = tempDir.resolve("ticker-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(checkpointPolicy(20_000_000L)))
+        val checkpointDir = tempDir.resolve("ticker-checkpoints")
+        val node = Runtime.boot(
+            Manifest(
+                mapOf(
+                    "budgeted" to NodeSpec(
+                        budget = policyFile.toString(),
+                        budgetCheckpointDir = checkpointDir.toString(),
+                    ),
+                ),
+            ),
+            "budgeted",
+            GraphSpec(emptyList()),
+        )
+        val store = FileBudgetCheckpointStore(checkpointDir) { 0L }
+
+        try {
+            awaitUntil("the budget checkpoint ticker writes twice", 15_000) {
+                (store.read("budgeted") as? CheckpointRead.Present)?.state?.sequence?.let { it >= 2L } == true
+            }
+            assertEquals(null, node.budgetCheckpointFailure)
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `a checkpoint ticker records a write failure and keeps ticking`() {
+        val policyFile = tempDir.resolve("recovering-ticker-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(checkpointPolicy(1_000_000_000L)))
+        val checkpointDir = tempDir.resolve("recovering-ticker-checkpoints")
+        val node = Runtime.boot(
+            Manifest(
+                mapOf(
+                    "budgeted" to NodeSpec(
+                        budget = policyFile.toString(),
+                        budgetCheckpointDir = checkpointDir.toString(),
+                    ),
+                ),
+            ),
+            "budgeted",
+            GraphSpec(emptyList()),
+        )
+        val store = FileBudgetCheckpointStore(checkpointDir) { 0L }
+
+        try {
+            Files.delete(checkpointDir)
+            Files.writeString(checkpointDir, "temporarily not a directory")
+            awaitUntil("the budget checkpoint ticker records a refused write", 15_000) {
+                node.budgetCheckpointFailure is CheckpointStoreRefusedException
+            }
+
+            Files.delete(checkpointDir)
+            Files.createDirectories(checkpointDir)
+            awaitUntil("the budget checkpoint ticker writes after the refusal", 15_000) {
+                (store.read("budgeted") as? CheckpointRead.Present)?.state?.sequence?.let { it >= 2L } == true
+            }
+        } finally {
+            if (!Files.isDirectory(checkpointDir)) {
+                Files.deleteIfExists(checkpointDir)
+                Files.createDirectories(checkpointDir)
+            }
+            node.close()
+        }
+    }
+
+    @Test
+    fun `a refused close checkpoint joins the combined close failure`() {
+        val policyFile = tempDir.resolve("refused-close-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(checkpointPolicy(ONE_HOUR_NANOS)))
+        val checkpointDir = tempDir.resolve("refused-close-checkpoints")
+        val node = Runtime.boot(
+            Manifest(
+                mapOf(
+                    "budgeted" to NodeSpec(
+                        budget = policyFile.toString(),
+                        budgetCheckpointDir = checkpointDir.toString(),
+                    ),
+                ),
+            ),
+            "budgeted",
+            GraphSpec(emptyList()),
+        )
+        Files.delete(checkpointDir)
+        Files.writeString(checkpointDir, "not a directory")
+
+        val failure = assertThrows<IllegalStateException> { node.close() }
+
+        assertTrue(failure.message!!.contains("failed to close runtime node 'budgeted'"), failure.message)
+        assertTrue(
+            failure.suppressed.any { it is CheckpointStoreRefusedException },
+            "the refused checkpoint write is not among the close failures: ${failure.suppressed.toList()}",
+        )
+    }
+
+    @Test
+    fun `a checkpoint policy without a directory, and a directory without a checkpoint policy, refuse boot`() {
+        val checkpointPolicy = checkpointPolicy(ONE_HOUR_NANOS)
+        val checkpointPolicyFile = tempDir.resolve("requires-directory.json")
+        Files.writeString(checkpointPolicyFile, Json.encodeToString(checkpointPolicy))
+        val missingDirectoryHostRoot = tempDir.resolve("missing-directory-hosts")
+
+        val missingDirectory = assertThrows<IllegalStateException> {
+            Runtime.boot(
+                Manifest(
+                    mapOf(
+                        "budgeted" to NodeSpec(
+                            budget = checkpointPolicyFile.toString(),
+                            journalDir = missingDirectoryHostRoot.toString(),
+                        ),
+                    ),
+                ),
+                "budgeted",
+                GraphSpec(emptyList()),
+            )
+        }
+        assertTrue(missingDirectory.message!!.contains("nodes[budgeted].budgetCheckpointDir"), missingDirectory.message)
+        assertTrue(missingDirectory.message!!.contains(checkpointPolicy.label), missingDirectory.message)
+        assertFalse(Files.exists(missingDirectoryHostRoot), "mismatched checkpoint config constructed a host")
+
+        val plainPolicy = EconomicPolicy.placeholder()
+        val plainPolicyFile = tempDir.resolve("rejects-directory.json")
+        Files.writeString(plainPolicyFile, Json.encodeToString(plainPolicy))
+        val unusedCheckpointDir = tempDir.resolve("unused-checkpoints")
+        val unexpectedDirectoryHostRoot = tempDir.resolve("unexpected-directory-hosts")
+
+        val unexpectedDirectory = assertThrows<IllegalStateException> {
+            Runtime.boot(
+                Manifest(
+                    mapOf(
+                        "budgeted" to NodeSpec(
+                            budget = plainPolicyFile.toString(),
+                            budgetCheckpointDir = unusedCheckpointDir.toString(),
+                            journalDir = unexpectedDirectoryHostRoot.toString(),
+                        ),
+                    ),
+                ),
+                "budgeted",
+                GraphSpec(emptyList()),
+            )
+        }
+        assertTrue(
+            unexpectedDirectory.message!!.contains("nodes[budgeted].budgetCheckpointDir"),
+            unexpectedDirectory.message,
+        )
+        assertTrue(unexpectedDirectory.message!!.contains(plainPolicy.label), unexpectedDirectory.message)
+        assertFalse(Files.exists(unusedCheckpointDir), "mismatched checkpoint config created its directory")
+        assertFalse(Files.exists(unexpectedDirectoryHostRoot), "mismatched checkpoint config constructed a host")
+    }
+
+    @Test
     fun `the peering bridge charges the one node ledger`() {
         val policy = EconomicPolicy.placeholder().copy(
             prices = mapOf(ClaimClass.Spawn to 1L),
@@ -697,6 +909,18 @@ class RuntimeBootTest {
         listOf(SpawnStep("items", CellFactory { ref -> SetCell<String>(ref) })),
     )
 
+    private fun checkpointPolicy(cadenceNanos: Long): EconomicPolicy =
+        EconomicPolicy.placeholder().copy(
+            refill = ClaimClass.entries.associateWith {
+                EconomicPolicy.Refill(tokensPerInterval = 1L, intervalNanos = ONE_HOUR_NANOS)
+            },
+            unvouchedBootstrap = mapOf(ClaimClass.Spawn to 3L),
+            checkpoint = EconomicPolicy.Checkpoint(
+                cadenceNanos = cadenceNanos,
+                stalenessBoundNanos = ONE_HOUR_NANOS,
+            ),
+        )
+
     private data class CapturingSetFactory(private val capture: String) : CellFactory {
         override fun create(ref: CellRef): SetCell<String> =
             SetCell<String>(ref).also { capturedSets[capture] = it }
@@ -719,6 +943,7 @@ class RuntimeBootTest {
     }
 
     companion object {
+        private const val ONE_HOUR_NANOS = 3_600_000_000_000L
         private val capturedSets = ConcurrentHashMap<String, SetCell<String>>()
     }
 }
