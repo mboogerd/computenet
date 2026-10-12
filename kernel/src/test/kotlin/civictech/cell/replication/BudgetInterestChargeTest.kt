@@ -4,6 +4,7 @@ import civictech.cell.BoundarySeam
 import civictech.cell.BudgetClaim
 import civictech.cell.BudgetLedger
 import civictech.cell.BudgetOutcome
+import civictech.cell.CellRef
 import civictech.cell.ClaimClass
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
@@ -27,13 +28,17 @@ import civictech.cell.link.PeerStamp
 import civictech.cell.link.UnboundReason
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.proxy.InvocationSink
 import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -69,6 +74,22 @@ class BudgetInterestChargeTest {
                     outcome.undo()
                 }
             }
+    }
+
+    private class BlockingRetentionLedger(private val inner: BudgetLedger) : BudgetLedger {
+        val retentionCharged = CountDownLatch(1)
+        val finishRetentionCharge = CountDownLatch(1)
+
+        override fun charge(claim: BudgetClaim): BudgetOutcome {
+            val outcome = inner.charge(claim)
+            if (claim.claimClass == ClaimClass.Retention && outcome is BudgetOutcome.Admitted) {
+                retentionCharged.countDown()
+                check(finishRetentionCharge.await(20, TimeUnit.SECONDS)) {
+                    "the concurrent unpublish never reached its callback"
+                }
+            }
+            return outcome
+        }
     }
 
     private class Peer(
@@ -201,6 +222,50 @@ class BudgetInterestChargeTest {
         recording.balance(P, ClaimClass.Interest) shouldBe N - 1
         recording.charges.size shouldBe 2
         counting.undoCalls.get() shouldBe 1
+    }
+
+    @Test
+    fun `unpublish overlapping Retention admission releases the pending hold exactly once`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val blocking = BlockingRetentionLedger(counting)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = blocking)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        replication.replicate(local, host)
+        controller.runToIdle()
+
+        val remote = CellRef(logicalId, 0)
+        val sink = InvocationSink { }
+        val releaseCharge = registry.onUnpublish { ref ->
+            if (ref == remote) blocking.finishRetentionCharge.countDown()
+        }
+        val publishing = FutureTask {
+            check(
+                registry.publishFromPeer(
+                    remote,
+                    sink,
+                    peer = P,
+                    announcer = PeerStamp(P),
+                ) == null,
+            ) { "the remote publication was unexpectedly refused" }
+        }
+        Thread.ofVirtual().start(publishing)
+
+        check(blocking.retentionCharged.await(20, TimeUnit.SECONDS)) {
+            "the concurrent publication never reached its Retention charge"
+        }
+        registry.unpublishFromPeer(remote, P, sink) shouldBe null
+        publishing.get(20, TimeUnit.SECONDS)
+        releaseCharge.close()
+
+        recording.balance(P, ClaimClass.Retention) shouldBe N
+        recording.balance(P, ClaimClass.Interest) shouldBe N
+        counting.undoCalls.get() shouldBe 2
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
     }
 
     @Test
