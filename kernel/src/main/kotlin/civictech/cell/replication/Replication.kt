@@ -1,7 +1,12 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
+import civictech.cell.BoundarySeam
+import civictech.cell.BudgetClaim
+import civictech.cell.BudgetOutcome
+import civictech.cell.ClaimClass
 import civictech.cell.TagFrontier
+import civictech.cell.denyBudget
 import civictech.cell.consistency.CausalStability
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.consistency.ReplicaQuorum
@@ -18,6 +23,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
+import civictech.cell.link.PeerStamp
 import civictech.cell.link.sliceTo
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -114,6 +120,9 @@ class Replication(
 
     /** Established gossip links per (local replica → remote replica) pair. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
+
+    /** Retention reservations held for charged gossip links, keyed by the same pair as [linked]. */
+    private val retentionHolds = mutableMapOf<Pair<CellRef, CellRef>, () -> Unit>()
 
     /**
      * The tag-lane high-water of a replica that LEFT this peer, kept against the
@@ -439,9 +448,10 @@ class Replication(
         registry.onPublish { ref -> linkOut(ref) }
         // reconcile (spec 42, G-45): a peer's despawn/eviction — or, since T21,
         // a whole peer dropped by `unpublishRemotes` — removes it from
-        // replicasOf; drop the now-stale outbound gossip link rather than
-        // leaving it targeting a gone ref (no ack protocol — this is purely
-        // local bookkeeping, the routed proxy would otherwise just dead-letter).
+        // replicasOf; release the link's Retention reservation and drop the
+        // now-stale outbound gossip link rather than leaving it targeting a
+        // gone ref (no ack protocol — this is purely local bookkeeping, the
+        // routed proxy would otherwise just dead-letter).
         //
         // Bookkeeping only, deliberately: the outlet attachment itself is left
         // in place and simply *replaced* if the peer comes back, because the
@@ -450,7 +460,10 @@ class Replication(
         // same guarantee — but it would have to be repeated in [evict] and
         // [rebind], and it is the derived key, not this call site, that makes
         // re-linking idempotent no matter which path dropped the entry.
-        registry.onUnpublish { ref -> linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) } }
+        registry.onUnpublish { ref ->
+            retentionHolds.keys.filter { it.second == ref }.toList().forEach(::releaseHold)
+            linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) }
+        }
     }
 
     /**
@@ -564,6 +577,7 @@ class Replication(
                     if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
                 }
                 if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
+                retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
                 linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
                 if (adapters[cell.ref] === adapter) {
                     adapters.remove(cell.ref)
@@ -599,10 +613,11 @@ class Replication(
      * this call — is the only event a crash and a rebuild both reach.
      *
      * Like [rebind] and unlike [evict] this does **not** close the
-     * delivered-watermark row: this peer is not departing, the same ref returns,
-     * and the row must keep constraining replica-fed frontier reads. And like
-     * [rebind] it leaves the stale outlet attachment alone — [gossipRef] makes
-     * the re-link *replace* it at the outlet.
+     * delivered-watermark row or release the Retention reservation: this peer
+     * is not departing, the same ref returns, and both remain authoritative
+     * across the rebuild. And like [rebind] it leaves the stale outlet
+     * attachment alone — [gossipRef] makes the re-link *replace* it at the
+     * outlet.
      *
      * A first replicate of a fresh ref, and [rebind]/[evict] (which already
      * removed the incumbent), find nothing here: the path is a no-op for every
@@ -850,7 +865,8 @@ class Replication(
      * Returns `true` if the replica despawned, `false` if it suspended
      * instead (no reachable peer).
      *
-     * On a real (despawn) departure this closes the local delivered-watermark
+     * On a real (despawn) departure this releases every Retention reservation
+     * held for the replica's outbound links, then closes the local delivered-watermark
      * row once this peer hosts no further replica of the logical id (PN-0c, spec
      * 40/42 §Delivered watermarks): [WatermarkCell.close] marks the row cleanly
      * departed so a downstream replica-fed frontier stops constraining reads on
@@ -903,6 +919,7 @@ class Replication(
         // this id leaves (the companion carries this peer's single row).
         if (closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()) watermarks[cell.ref.id]?.close()
         hostOf.remove(cell.ref)
+        retentionHolds.keys.filter { it.first == cell.ref }.toList().forEach(::releaseHold)
         linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
         partitionSuspended.remove(cell.ref)
         adapters.remove(cell.ref)?.let { adapter -> host.managementInlet.call.despawn(adapter.ref) }
@@ -947,11 +964,11 @@ class Replication(
      *    known peer and the candidate's own `catchUpOnLinked` re-syncs it.
      *
      * The incumbent's local bookkeeping and outbound links are dropped WITHOUT
-     * closing the delivered-watermark row (unlike [evict]): this peer stays a
-     * member — the same ref returns — so the row must keep constraining. Inbound
-     * gossip that arrives during the object swap parks at the registry on the
-     * despawn's unpublish and replays on the candidate's republish, so no peer
-     * delta is lost.
+     * closing the delivered-watermark row or releasing its Retention reservation
+     * (unlike [evict]): this peer stays a member — the same ref returns — so both
+     * remain authoritative. Inbound gossip that arrives during the object swap
+     * parks at the registry on the despawn's unpublish and replays on the
+     * candidate's republish, so no peer delta is lost.
      */
     fun rebind(
         incumbent: Replicable<*>,
@@ -1049,6 +1066,30 @@ class Replication(
             gossipOutlet(cell).linking.fireLinked(link)
             return
         }
+        if (local !is WatermarkCell) {
+            val host = hostOf[local.ref]
+            val announcer = (registry.location(other) as? LocationRegistry.Remote)?.announcer
+            if (host != null && announcer != null && host.anyLedgerOnChain() && key !in retentionHolds) {
+                val interestClaim = budgetClaim(announcer, ClaimClass.Interest, key = key)
+                when (val interest = host.chargeThroughAncestors(interestClaim)) {
+                    is BudgetOutcome.Refused -> {
+                        denyLinkBudget(host, interest, interestClaim, key)
+                        return
+                    }
+                    is BudgetOutcome.Admitted -> {
+                        val retentionClaim = budgetClaim(announcer, ClaimClass.Retention, hold = true)
+                        when (val retention = host.chargeThroughAncestors(retentionClaim)) {
+                            is BudgetOutcome.Refused -> {
+                                interest.undo()
+                                denyLinkBudget(host, retention, retentionClaim, key)
+                                return
+                            }
+                            is BudgetOutcome.Admitted -> retentionHolds[key] = retention.undo
+                        }
+                    }
+                }
+            }
+        }
         // the proxy resolves the port by name; delta types are erased on this
         // path and re-checked at the receiving inlet's serve
         val routed = (HostedCellProxy.create(other, registry, ReplicaDeltaInlet::class.java)
@@ -1063,6 +1104,31 @@ class Replication(
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
         linked[key] = local to gossipOutlet(local).streamTo(sink, at = gossipRef(local.ref, other))
+    }
+
+    private fun budgetClaim(
+        announcer: PeerStamp,
+        claimClass: ClaimClass,
+        key: Any? = null,
+        hold: Boolean = false,
+    ): BudgetClaim = BudgetClaim(announcer, claimClass, key, hold)
+
+    private fun denyLinkBudget(
+        host: ManagedHost,
+        refused: BudgetOutcome.Refused,
+        claim: BudgetClaim,
+        key: Pair<CellRef, CellRef>,
+    ) {
+        host.budgetDenialSink.denyBudget(
+            refused,
+            claim,
+            BoundarySeam.LINK_AUTHORITY,
+            subject = gossipRef(key.first, key.second).toString(),
+        )
+    }
+
+    private fun releaseHold(key: Pair<CellRef, CellRef>) {
+        retentionHolds.remove(key)?.invoke()
     }
 
     @Suppress("UNCHECKED_CAST")
