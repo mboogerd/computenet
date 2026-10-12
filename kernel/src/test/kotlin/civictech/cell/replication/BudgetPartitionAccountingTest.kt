@@ -101,7 +101,7 @@ class BudgetPartitionAccountingTest {
 
         Peering.loopback(p.side, a.side, pToA, aToP)
         Peering.loopback(p.side, b.side, pToB, bToP)
-        Peering.loopback(a.side, b.side, aToB, bToA)
+        val abLink = Peering.loopback(a.side, b.side, aToB, bToA)
 
         val aReplicas = mutableListOf<SetCell<String>>()
         val bReplicas = mutableListOf<SetCell<String>>()
@@ -143,9 +143,27 @@ class BudgetPartitionAccountingTest {
             ledgerB.charges.count { it.stamp.id == P },
         )
 
+        // The partition was real: every A↔B announcement was dropped, so neither
+        // side ever learned the other's instances.
+        a.registry.location(bReplicas[0].ref) shouldBe null
+        b.registry.location(aReplicas[0].ref) shouldBe null
+
+        // Opening a frame gate re-sends nothing: the announcements dropped while it
+        // was closed are gone, and no frame crosses any of the six directions if the
+        // gates are merely opened. The heal is therefore a fresh A↔B connection
+        // instance, whose catch-up announcements now pass the open gates.
         aToB.closed = false
         bToA.closed = false
+        abLink.heal()
         controller.runToIdle()
+
+        // The heal delivered: each side now knows the other's instances and has
+        // charged the other's stamp from its own ledger. Those charges are A's and
+        // B's own principals; they are never folded into the P assertions below.
+        a.registry.location(bReplicas[0].ref) shouldNotBe null
+        b.registry.location(aReplicas[0].ref) shouldNotBe null
+        ledgerA.charges.any { it.stamp.id == B } shouldBe true
+        ledgerB.charges.any { it.stamp.id == A } shouldBe true
 
         val afterHeal = listOf(
             ledgerA.balance(P, ClaimClass.Interest),
