@@ -2,6 +2,7 @@ package civictech.wire.vector
 
 import civictech.cell.wire.WireCodec
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -175,7 +176,21 @@ class NeutralValuesTest {
         assertEquals(root, VectorLoader.locateRoot(root.parent)) // wire/
         assertEquals(root, VectorLoader.locateRoot(root.parent.parent)) // repository root
         assertEquals(loader.documents().map { it.id }, VectorLoader(root).documents().map { it.id })
-        assertEquals(emptyList<PendingEntry>(), loader.pending())
+        assertEquals(loader.pending(), VectorLoader(root).pending())
+    }
+
+    // Whether the COMMITTED `pending` is empty is `RegistrationCoverageTest`'s
+    // strict-mode rule, not this loader's: asserting it here too would redden
+    // `-Dwire.vectors.strict=false` on a staged corpus. This pins the read itself.
+    @Test
+    fun `the loader reads the pending entries of the manifest it is given`(@TempDir tmp: Path) {
+        val root = copyCorpus(tmp)
+        val manifest = root.resolve("manifest.json")
+        val staged = PendingEntry(discriminator = "StagedDiscriminator", owedBy = "computenet-staged")
+        val entry = JsonObject(mapOf("discriminator" to JsonPrimitive(staged.discriminator), "owedBy" to JsonPrimitive(staged.owedBy)))
+        val obj = Json.parseToJsonElement(Files.readString(manifest)) as JsonObject
+        Files.writeString(manifest, JsonObject(obj + ("pending" to JsonArray(listOf(entry)))).toString())
+        assertEquals(listOf(staged), VectorLoader(root).pending())
     }
 
     private fun copyCorpus(dir: Path): Path {
