@@ -234,6 +234,33 @@ class TopologyRecoveryTest {
     }
 
     @Test
+    fun `recovery still dead letters pre-despawn input when the ref is not respawned`() {
+        val journal = InMemoryJournal()
+        val before = runtime(journal, SimulationController())
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    "source",
+                    RecordingSetFactory,
+                    IdentityBinding.Exact(sourceRef),
+                    journalId = "j",
+                ),
+            ),
+        ).apply(before.context)
+        sourceOps(before).add("incarnation-a")
+        GraphSpec(listOf(DespawnStep("source"))).apply(before.context)
+
+        val recoveredController = SimulationController()
+        val recovered = runtime(journal, recoveredController)
+        val recovery = recovered.context.recover(journal)
+        recoveredController.runToIdle()
+
+        recovered.deadLetters.map { it.description } shouldBe listOf("unknown cell $sourceRef")
+        recovery.replayedFrames shouldBe 1
+        recovered.host.portAt(sourceRef, "inlet") shouldBe null
+    }
+
+    @Test
     fun `missing journal binding dead letters the topology record and aborts recovery loudly`() {
         val journal = InMemoryJournal()
         val writer = ManagedHost()

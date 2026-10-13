@@ -53,6 +53,11 @@ internal data class StagedRecovery(
  * A decoded frame plus the recovery-local lifecycle generation it addressed. Explicit
  * spawn/despawn events advance this token; a state-continuous promotion deliberately does not.
  * This distinguishes reuse of the same exact [CellRef] without widening the durable format.
+ *
+ * The token is local to ONE journal's replay: it orders a frame against the topology records of
+ * the journal that frame was read from. A cell whose frames are journaled apart from its
+ * topology (a `journalId` other than the context's topology journal) has no such order to read,
+ * so its frames always carry generation 0 and are never retired here.
  */
 private data class PendingReplayFrame(
     val frame: HostedPortInvocation,
@@ -578,6 +583,10 @@ internal class HostDurability(
         // eagerly in the single forward pass below; only frame submission moves.
         val pendingFrames = mutableListOf<PendingReplayFrame>()
         val lifecycleGenerations = mutableMapOf<CellRef, Long>()
+        // Refs whose latest replayed lifecycle event is a Despawn. Read from the journal, not from
+        // the host's cell table: the management inlet only ENQUEUES a despawn (spawn is awaited),
+        // so the table can still name a despawned cell when the frames below are submitted.
+        val despawnedRefs = mutableSetOf<CellRef>()
         ReplayScope.with(scope) {
             val records = journal.replay()
             fun submitFrame(payload: ByteArray) {
@@ -627,8 +636,8 @@ internal class HostDurability(
                                     // intentionally absent: both its same-ref replica rebind and
                                     // distinct-ref state migration preserve state continuity.
                                     val lifecycleRef = when (event) {
-                                        is TopoEvent.Spawn -> event.ref
-                                        is TopoEvent.Despawn -> event.ref
+                                        is TopoEvent.Spawn -> event.ref.also { despawnedRefs -= it }
+                                        is TopoEvent.Despawn -> event.ref.also { despawnedRefs += it }
                                         else -> null
                                     }
                                     lifecycleRef?.let { ref ->
@@ -681,12 +690,12 @@ internal class HostDurability(
                     // deferred. A despawn + spawn may therefore replace the concrete cell
                     // behind an otherwise identical CellRef before this loop. Resolving such
                     // a frame now would cross its lifecycle boundary and contaminate the new
-                    // incarnation. Discharge it as retired work. A now-missing target still
-                    // re-enters the intake so the ordinary undeliverable-frame path can
-                    // dead-letter it; only a different live lifecycle generation is suppressed.
-                    val currentIncarnation = cellsView()[frame.cellRef]
+                    // incarnation. Discharge it as retired work. A target the journal left
+                    // despawned (no later spawn) still re-enters the intake so the ordinary
+                    // undeliverable-frame path dead-letters it, as before; only a frame that a
+                    // LATER spawn of the same ref would capture is suppressed.
                     val currentGeneration = lifecycleGenerations[frame.cellRef] ?: 0L
-                    if (currentIncarnation != null && pending.lifecycleGeneration != currentGeneration) {
+                    if (frame.cellRef !in despawnedRefs && pending.lifecycleGeneration != currentGeneration) {
                         frame.invocation.args.forEach(Proxy::discharge)
                         return@forEach
                     }
