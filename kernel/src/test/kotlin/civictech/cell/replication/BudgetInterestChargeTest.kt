@@ -32,6 +32,7 @@ import civictech.cell.port.Use
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
@@ -66,12 +67,14 @@ class BudgetInterestChargeTest {
 
     private class CountingLedger(private val inner: BudgetLedger) : BudgetLedger {
         val undoCalls = AtomicInteger()
+        val undoneClasses = CopyOnWriteArrayList<ClaimClass>()
 
         override fun charge(claim: BudgetClaim): BudgetOutcome =
             when (val outcome = inner.charge(claim)) {
                 is BudgetOutcome.Refused -> outcome
                 is BudgetOutcome.Admitted -> BudgetOutcome.Admitted {
                     undoCalls.incrementAndGet()
+                    undoneClasses += claim.claimClass
                     outcome.undo()
                 }
             }
@@ -267,6 +270,272 @@ class BudgetInterestChargeTest {
         recording.balance(P, ClaimClass.Interest) shouldBe N
         counting.undoCalls.get() shouldBe 2
         replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
+    }
+
+    @Test
+    fun `link formation failure releases a fresh Retention hold and refunds Interest`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = counting)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        val failure = IllegalStateException("link formation failed")
+        val remote = CellRef(logicalId, 0)
+        val sink = InvocationSink { }
+        replication.beforeLinkInstall = { candidate, target ->
+            if (candidate === local && target == remote) throw failure
+        }
+        registry.publishFromPeer(remote, sink, peer = P, announcer = PeerStamp(P)) shouldBe null
+
+        shouldThrow<IllegalStateException> {
+            replication.replicate(local, host)
+        } shouldBe failure
+        controller.runToIdle()
+
+        recording.balance(P, ClaimClass.Interest) shouldBe N
+        recording.balance(P, ClaimClass.Retention) shouldBe N
+        recording.charges.size shouldBe 2
+        counting.undoCalls.get() shouldBe 2
+        counting.undoneClasses.count { it == ClaimClass.Interest } shouldBe 1
+        counting.undoneClasses.count { it == ClaimClass.Retention } shouldBe 1
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
+
+        // The failed call must not leave a hidden hold-map entry that makes the
+        // next announcement re-link for free.
+        replication.beforeLinkInstall = null
+        registry.publishFromPeer(remote, sink, peer = P, announcer = PeerStamp(P)) shouldBe null
+        controller.runToIdle()
+
+        recording.charges.map { it.claimClass } shouldBe
+            listOf(ClaimClass.Interest, ClaimClass.Retention, ClaimClass.Interest, ClaimClass.Retention)
+        recording.balance(P, ClaimClass.Interest) shouldBe N - 1
+        recording.balance(P, ClaimClass.Retention) shouldBe N - 1
+        counting.undoCalls.get() shouldBe 2
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 1
+    }
+
+    @Test
+    fun `link formation failure preserves a Retention hold carried into rebind`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val rig = Rig(counting)
+        val (incumbent, remote) = rig.formPair()
+        val candidate = SetCell<String>(incumbent.ref)
+        val failure = IllegalStateException("rebind formation failed")
+        rig.q.replication.beforeLinkInstall = { local, target ->
+            if (local === candidate && target == remote.ref) throw failure
+        }
+
+        shouldThrow<IllegalStateException> {
+            rig.q.replication.rebind(incumbent, candidate, rig.q.host)
+        } shouldBe failure
+        rig.controller.runToIdle()
+
+        recording.balance(P, ClaimClass.Interest) shouldBe N - 1
+        recording.balance(P, ClaimClass.Retention) shouldBe N - 1
+        recording.charges.size shouldBe 2
+        counting.undoCalls.get() shouldBe 0
+        rig.q.replication.linkCountAmong(setOf(candidate.ref, remote.ref)) shouldBe 0
+
+        // The carried hold remains the pair's reservation, so a later
+        // announcement re-links without charging either class again.
+        rig.q.replication.beforeLinkInstall = null
+        val location = rig.q.registry.location(remote.ref) as LocationRegistry.Remote
+        rig.q.registry.publish(remote.ref, location.sink, peer = P)
+        rig.controller.runToIdle()
+
+        recording.charges.size shouldBe 2
+        counting.undoCalls.get() shouldBe 0
+        recording.balance(P, ClaimClass.Interest) shouldBe N - 1
+        recording.balance(P, ClaimClass.Retention) shouldBe N - 1
+        rig.q.replication.linkCountAmong(setOf(candidate.ref, remote.ref)) shouldBe 1
+    }
+
+    @Test
+    fun `reannouncement skipped by a failing formation retries after rollback`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = counting)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        val remote = CellRef(logicalId, 0)
+        val firstSink = InvocationSink { }
+        val secondSink = InvocationSink { }
+        registry.publishFromPeer(remote, firstSink, peer = P, announcer = PeerStamp(P)) shouldBe null
+
+        val formationEntered = CountDownLatch(1)
+        val releaseFormation = CountDownLatch(1)
+        val attempts = AtomicInteger()
+        val failure = IllegalStateException("first formation failed")
+        replication.beforeLinkInstall = { candidate, target ->
+            if (candidate === local && target == remote && attempts.incrementAndGet() == 1) {
+                formationEntered.countDown()
+                check(releaseFormation.await(20, TimeUnit.SECONDS)) {
+                    "the reannouncement never released the failing formation"
+                }
+                throw failure
+            }
+        }
+
+        val forming = FutureTask<Throwable> {
+            try {
+                replication.replicate(local, host)
+                AssertionError("the first formation did not throw")
+            } catch (thrown: Throwable) {
+                thrown
+            }
+        }
+        Thread.ofVirtual().start(forming)
+        check(formationEntered.await(20, TimeUnit.SECONDS)) { "the first formation never reached installLink" }
+
+        registry.publishFromPeer(remote, secondSink, peer = P, announcer = PeerStamp(P)) shouldBe null
+        releaseFormation.countDown()
+
+        forming.get(20, TimeUnit.SECONDS) shouldBe failure
+        controller.runToIdle()
+        attempts.get() shouldBe 2
+        recording.charges.map { it.claimClass } shouldBe
+            listOf(ClaimClass.Interest, ClaimClass.Retention, ClaimClass.Interest, ClaimClass.Retention)
+        counting.undoCalls.get() shouldBe 2
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 1
+    }
+
+    @Test
+    fun `cancelled failing formation retries the replacement after rollback`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = counting)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val incumbent = SetCell<String>(CellRef(logicalId, 1))
+        val replacement = SetCell<String>(incumbent.ref)
+        val remote = CellRef(logicalId, 0)
+        registry.publishFromPeer(remote, InvocationSink { }, peer = P, announcer = PeerStamp(P)) shouldBe null
+
+        val formationEntered = CountDownLatch(1)
+        val releaseFormation = CountDownLatch(1)
+        val failure = IllegalStateException("incumbent formation failed")
+        replication.beforeLinkInstall = { candidate, target ->
+            if (candidate === incumbent && target == remote) {
+                formationEntered.countDown()
+                check(releaseFormation.await(20, TimeUnit.SECONDS)) {
+                    "the replacement never released the failing formation"
+                }
+                throw failure
+            }
+        }
+
+        val forming = FutureTask<Throwable> {
+            try {
+                replication.replicate(incumbent, host)
+                AssertionError("the incumbent formation did not throw")
+            } catch (thrown: Throwable) {
+                thrown
+            }
+        }
+        Thread.ofVirtual().start(forming)
+        check(formationEntered.await(20, TimeUnit.SECONDS)) { "the incumbent formation never reached installLink" }
+
+        val replacementFailure = IllegalStateException("stop replacement before reservation")
+        replication.beforeLinkLifecycle = { candidate, target ->
+            if (candidate === replacement && target == remote) throw replacementFailure
+        }
+        shouldThrow<IllegalStateException> {
+            replication.rebind(incumbent, replacement, host)
+        } shouldBe replacementFailure
+        replication.beforeLinkLifecycle = null
+        releaseFormation.countDown()
+
+        forming.get(20, TimeUnit.SECONDS) shouldBe failure
+        controller.runToIdle()
+        recording.charges.map { it.claimClass } shouldBe
+            listOf(ClaimClass.Interest, ClaimClass.Retention, ClaimClass.Interest, ClaimClass.Retention)
+        counting.undoCalls.get() shouldBe 2
+        replication.linkCountAmong(setOf(replacement.ref, remote)) shouldBe 1
+    }
+
+    @Test
+    fun `retry after a failing formation does not block concurrent retirement`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = recording)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        val remote = CellRef(logicalId, 0)
+        registry.publishFromPeer(remote, InvocationSink { }, peer = P, announcer = PeerStamp(P)) shouldBe null
+
+        val formationEntered = CountDownLatch(1)
+        val releaseFormation = CountDownLatch(1)
+        val retryEntered = CountDownLatch(1)
+        val releaseRetry = CountDownLatch(1)
+        val attempts = AtomicInteger()
+        val failure = IllegalStateException("first formation failed")
+        // The first install fails after a re-announcement was skipped; the
+        // retry that failure triggers then parks inside its own install, where
+        // a real transport would be blocked on the catch-up send.
+        replication.beforeLinkInstall = { candidate, target ->
+            if (candidate === local && target == remote) {
+                when (attempts.incrementAndGet()) {
+                    1 -> {
+                        formationEntered.countDown()
+                        check(releaseFormation.await(20, TimeUnit.SECONDS)) {
+                            "the reannouncement never released the failing formation"
+                        }
+                        throw failure
+                    }
+                    2 -> {
+                        retryEntered.countDown()
+                        check(releaseRetry.await(20, TimeUnit.SECONDS)) {
+                            "the retirement path never released the retry"
+                        }
+                    }
+                }
+            }
+        }
+
+        val forming = FutureTask<Throwable> {
+            try {
+                replication.replicate(local, host)
+                AssertionError("the first formation did not throw")
+            } catch (thrown: Throwable) {
+                thrown
+            }
+        }
+        Thread.ofVirtual().start(forming)
+        check(formationEntered.await(20, TimeUnit.SECONDS)) { "the first formation never reached installLink" }
+        registry.publishFromPeer(remote, InvocationSink { }, peer = P, announcer = PeerStamp(P)) shouldBe null
+        releaseFormation.countDown()
+        check(retryEntered.await(20, TimeUnit.SECONDS)) { "the failed formation never retried" }
+
+        // Retirement takes the link-lifecycle monitor; a retry running under
+        // that monitor would hold it for as long as its install is blocked.
+        val retiring = FutureTask<Unit> {
+            registry.unpublish(remote)
+            Unit
+        }
+        Thread.ofVirtual().start(retiring)
+        try {
+            retiring.get(2, TimeUnit.SECONDS)
+        } finally {
+            releaseRetry.countDown()
+        }
+
+        forming.get(20, TimeUnit.SECONDS) shouldBe failure
+        controller.runToIdle()
+        attempts.get() shouldBe 2
+        registry.location(remote) shouldBe null
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
+        recording.balance(P, ClaimClass.Retention) shouldBe N
     }
 
     @Test
