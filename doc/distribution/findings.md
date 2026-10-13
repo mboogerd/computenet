@@ -1293,3 +1293,216 @@ Evidence: `~/computenet-runs/computenet-yfg48/container-iter/`.
 - CI's `iroh-sidecar` lane has run this class only on `00a5961c` (run
   35682294768, red on the `computenet-yfg48` link error, before the pin). This
   entry's final head has not been run in CI.
+
+---
+
+## 2026-10-13 — ECO1 landed: per-Principal budgets over issued identities (epic `computenet-66m`)
+
+This entry names, and does not edit, `2026-08-21 — DSC1: cryptographic peer
+identity and signed announcements` and `2026-09-14 — DSC4 landed:
+anchor-vouched stable peer identity`. In particular, DSC1's `[DSC1-NV-02]`
+handed the Sybil half of G-62 to ECO1 because identity had become countable and
+attributable but not costly. The anchor decision changed the shape of that work
+from key minting to issuer policy; it did not turn the hand-off into a claim the
+repository can verify.
+
+### What landed, per feature
+
+- **F1, `computenet-tnmwh`** — PR #1171, `2d2462db`: the kernel budget
+  vocabulary, three typed budget refusal reasons, and the default-inert
+  `BudgetLedger.Unlimited` seam.
+- **F2, `computenet-kwhw6`** — PR #1172, `a49568be`: the `:economy` leaf module,
+  serializable `EconomicPolicy`, issuer-aware token-bucket ledger, retention
+  bounds, validation, and the startup record.
+- **F3, `computenet-5o1rf`** — PR #1173, `0ca4c85b`: charges at the existing
+  `Spawn`, `Attention`, and `Link` admission seams, including ancestor-walk
+  rollback and charge idempotency.
+- **F4, `computenet-2zasa`** — PR #1179, `181c6459`: budget denials routed
+  through the existing accounting and exclusive-payload discharge path, with
+  management operations exempt and the reachable wave-completeness case
+  pinned.
+- **F5, `computenet-jtof7`** — PR #1451, `ad7497a8`: replication charges
+  `Interest`, holds and releases `Retention`, and keeps accounting host-local
+  across partition and convergence.
+- **F6, `computenet-xbs8t`** — PR #1310, `0b7c40de`: conservative budget
+  checkpoints, bootstrap fallback for missing, unreadable, or stale state, and
+  reconnect/restart without an implicit refill.
+- **Runtime checkpoint wiring, `computenet-66m.1`** — PR #1450, `4f19b838`:
+  runtime restore, periodic tick/checkpoint, and orderly-shutdown checkpointing
+  for the node ledger.
+
+Five closed defects are part of what landed: `computenet-sb9v1` (PR #1174,
+`23adb1b2`) repaired undo/idempotency-key handling and recorded the
+post-eviction limit; `computenet-chgam` (PR #1175, `195d92ad`) stopped a stale
+undo from forgetting a newer admission's reused key; `computenet-4yvsx` (PR
+#1305, `0057add4`) exempted promotion COMMIT from `Spawn`; `computenet-8s74x`
+(PR #1307, `46933bcf`) kept zero-price undo/key handling under the bucket
+monitor; and `computenet-fh9cc` (PR #1309, `c27aa6ad`) made the cold precheck a
+non-consuming `Link`-budget dry run.
+
+Outside the epic, INT3 `computenet-3u0hk` (PR #1319, `11878d3e`) is how a node
+gets a budget today: Runtime reads the manifest's budget policy and installs a
+`TokenBucketLedger`, while the epic's runtime child owns its checkpoints.
+
+### The minting re-scope
+
+The anchor decision retired `[ECO1-MINT-01]` and `[ECO1-MINT-05]`: a hashcash
+predicate over key material prices the wrong object once identity is an issued
+stable name, and rotation can change the key without changing that name. It
+also retired `[ECO1-MINT-07]` and `[ECO1-MINT-08]`: the per-connection puzzle
+was proof-of-work that conflicts with P10's low-power constituency, and the
+connection burst it addressed is a transport-admission concern rather than
+economics.
+
+The surviving obligations are `[ECO1-MINT-02r]`, `[ECO1-MINT-03r]`,
+`[ECO1-MINT-04r]`, `[ECO1-MINT-06r]`, `[ECO1-MINT-09r]`,
+`[ECO1-MINT-10r]`, and `[ECO1-PAR-09r]`. Budgets attach to identity **and**
+issuer: buckets remain per identity and claim class, their bootstrap comes
+from the vouching issuer's policy row, and an optional issuer aggregate caps
+outstanding holds across the identities it vouched for at this host. An
+issuer-less, transport-vouched, or unnamed-issuer stamp uses the explicit
+`unvouchedBootstrap` class.
+
+### Claims this epic does NOT make
+
+The following `[ECO1-NV-01..06]` statements are restated verbatim. DSC4's
+anchor decision discharges none of them.
+
+- **[ECO1-NV-01]** ECO1 cannot demonstrate that any configured minting difficulty is *sufficient*
+  to deter a Sybil attack. `[ECO1-MINT-02]` is verifiable — a fingerprint either satisfies the
+  predicate or it does not. "Difficulty `d` makes the mesh Sybil-resistant" is **not** a
+  requirement and must not be written as one. What ECO1 delivers is a *tunable* cost and a
+  *visible* parameter pair (`[ECO1-BUD-09]`, `[ECO1-MINT-09]`), so an operator can reason about
+  the inequality themselves.
+- **[ECO1-NV-02]** ECO1 cannot bound *cost asymmetry*. Proof-of-work is precisely the mechanism
+  an adversary with GPUs or rented capacity defeats most cheaply relative to an honest laptop.
+  The difficulty that inconveniences an attacker may exclude the low-power civic-tech
+  participants P10 exists to serve. This is a design tension, not a bug, and it has no test.
+- **[ECO1-NV-03]** ECO1 cannot enforce a *global* per-`Principal` bound. §43.ATT forbids a global
+  coordinator (P4), so a `Principal` addressing `k` independent hosts obtains `k` budgets.
+  `[ECO1-PAR-04]` requires that this be *stated*; it must never be described as a global bound,
+  and no test may assert one.
+- **[ECO1-NV-04]** ECO1 cannot detect identity *sharing or resale*. Nothing distinguishes one
+  actor holding one key from ten actors sharing it. Budget-per-`Principal` is budget-per-key, and
+  the gap between key and actor is unclosable at this layer.
+- **[ECO1-NV-05]** ECO1 cannot price a claim *correctly*. Prices are PLC2's output, fitted
+  against BEN2's measured costs, and their adequacy is an empirical operational question. A test
+  can prove a price is *charged*, never that it is *right*.
+- **[ECO1-NV-06]** ECO1's refill schedule cannot be shown to be attack-resistant. A patient
+  adversary who consumes exactly at the refill rate is indistinguishable, at this layer, from a
+  legitimate steady consumer. Detecting the difference is reputation (§R6 direction 3), out of
+  scope.
+
+### BS-18 and its issued-identity form, BS-18r
+
+BS-18 remains the documented negative result: with free identities, a
+per-identity bootstrap budget bounds nothing across identities. BS-18r makes
+the issued-identity form executable in `SybilFloodTest`. Half (a) sends
+distinct issuer-less identities through a `ManagedHost`'s `Attention` seam;
+each consumes its own bootstrap and every admission or refusal is accounted.
+Half (b) shows only a local bound over one issuer's vouches at one host by
+holding `Retention` directly in the ledger under the issuer aggregate cap. It
+says nothing about issuer diligence or Sybil sufficiency, and neither half
+measures time or assumes how an identity was obtained.
+
+`FINDINGS-ROW BS-18r`, copied from
+`TEST-civictech.economy.adversarial.SybilFloodTest.xml` after the focused run:
+
+```text
+| ClaimClass | admitted | denied |
+| --- | ---: | --- |
+| Spawn | 0 | - |
+| Interest | 0 | - |
+| Attention | 6 | BUDGET_EXHAUSTED=2 |
+| Link | 0 | - |
+| Retention | 0 | - |
+buckets: 2 scope: sybil-host
+```
+
+This is measured on the test machine (Darwin arm64), seed 0, `n = 2`, `B = 3`,
+at source sha `81e796ed458ab816bb2f120ab3bc5afb7b28729b`. PLC2
+(`computenet-z1w`) may consume it as input; it is not a bound.
+
+### `[ECO1-PAR-04]`
+
+`StartupRecord.K_HOSTS_STATEMENT` is, verbatim: "a Principal's aggregate across
+k independent hosts is bounded by k × its per-host budget; no global bound is
+claimed". `BudgetPartitionAccountingTest` asserts the deliberately local
+`2B = 4`, rather than a global bound, as `[ECO1-NV-03]` requires.
+
+### Policy status
+
+`EconomicPolicy.placeholder()` is labelled `"placeholder (unfitted; PLC2
+computenet-z1w has not landed)"` and carries `fitted = false`. At writing, PLC2
+(`computenet-z1w`) is **deferred**, so none of these numbers is presented as
+fitted.
+
+### Section 9 risk position
+
+For risk 2, proof-of-work was rejected because a setting meaningful to an
+attacker may exclude P10's low-power participants. Issuance was chosen instead,
+but the tension between an open mesh and issuer gating remains DSC4 residual R3;
+this epic does not resolve it. Risk 1 remains a configuration failure mode: a
+non-zero `unvouchedBootstrap` makes the budget decorative across freely
+obtained identities, and `[ECO1-MINT-10r]` makes that choice noisy with an
+explicit startup warning rather than claiming it away.
+
+### `ratePerWindow` landed
+
+The SEC1 follow-up is no longer merely filed. `computenet-hrp9n`, included in
+INT3 PR #1319 (`11878d3e`), windows and bounds the per-Principal rate counter;
+`computenet-kuefn`, PR #1329 (`25f8dd38`), rejects a non-positive window.
+
+### Default-off evidence (BS-02 / `[ECO1-POL-06]`)
+
+`BudgetDefaultOffTest` is the structural pin: literal default-built hosts attach
+no ledger to their chain or spawned membrane, a loopback remote `Attention`
+assertion is clamped without a budget denial, and a refusing-ledger control
+proves that the same frame reaches the budget seam.
+
+All five module suites below ran with `--rerun --no-build-cache` at source sha
+`81e796ed458ab816bb2f120ab3bc5afb7b28729b`:
+
+- `:kernel:test`: `__KERNEL_BUILD__`; `__KERNEL_TASKS__`; `__KERNEL_TESTS__`
+  tests.
+- `:wire:test`: `__WIRE_BUILD__`; `__WIRE_TASKS__`; `__WIRE_TESTS__` tests.
+- `:demo:shopping:test`: `__SHOPPING_BUILD__`; `__SHOPPING_TASKS__`;
+  `__SHOPPING_TESTS__` tests.
+- `:demo:exchange:test`: `__EXCHANGE_BUILD__`; `__EXCHANGE_TASKS__`;
+  `__EXCHANGE_TESTS__` tests.
+- `:demo:agora:test`: `__AGORA_BUILD__`; `__AGORA_TASKS__`; `__AGORA_TESTS__`
+  tests.
+
+No `EconomicPolicy` is configured as a suite or application default in that
+evidence. The supporting search,
+`git grep -n EconomicPolicy -- 'demo/*/src/*' 'wire/src/*'`, found no demo
+occurrence and only
+`wire/src/test/kotlin/civictech/wire/WsBudgetReconnectResumesTest.kt`; that test
+constructs a policy deliberately to prove the policy-on reconnect path, rather
+than configuring `:wire:test` as a whole.
+
+### Open at writing
+
+Four bugs under the epic remain open at writing; their landing belongs in a
+later appended entry:
+
+- `computenet-oma6z` (**in progress**, draft PR #1454) serializes replication's
+  linked lifecycle against concurrent formation and retirement.
+- `computenet-ks5zz` (**open**) leaves an `Interest` debit and `Retention` hold
+  behind if link formation throws after charging.
+- `computenet-zkrii` (**open**) can leave a superseding replacement without a
+  link when rebind or crash supersedes a pending charged admission.
+- `computenet-nrj3h` (**open**) records opposite lock order between the linked
+  lifecycle monitor and the registry park-queue monitor.
+
+### Corpus check
+
+At source sha `81e796ed458ab816bb2f120ab3bc5afb7b28729b`,
+`git log 2d2462db..81e796ed458ab816bb2f120ab3bc5afb7b28729b -G
+'ECO1|NV-0[1-6]|Sybil' -- concord/corpus` produced empty output. The broader
+range contains 12 corpus commits, so the empty result is a checked negative:
+no corpus requirement was proposed against an `[ECO1-NV-*]` claim. Therefore
+no `concord/corpus/DISPUTES.md` entry is written.
+
+`./gradlew :concord:concordance` left `doc/spec/CONCORDANCE.md` unchanged, and
+`./gradlew :concord:check` was green at the same source sha.
