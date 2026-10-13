@@ -81,7 +81,7 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `reclaim-worktrees.sh` | `[--dry-run] [--min-age-minutes N]` — removes worktrees of closed beads, when provably safe |
 | `session-holder.sh` | `[--check <token> [<updated-at>]]` — this session's holder token; `--check` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN (a write within 2h reads LIVE, not STALE) |
 | `resumable-epics.sh` | `(no arguments)` — epics holding a feature left `in_progress` |
-| `undefer-unblocked.sh` | `[--dry-run]` — reopens deferred epics whose `undefers:<epic>` blockers all closed, or that are `deferred:human-gated` and have workable work again; `UNLABELLED` = a deferral nothing will reopen |
+| `undefer-unblocked.sh` | `[--dry-run]` — reopens deferred epics whose `undefers:<epic>` blockers all closed, or that are `deferred:human-gated` and have workable work again or no park left; `UNLABELLED` = a deferral nothing will reopen |
 | `close-bead.sh` | `<bead-id> [bd-close-args...]` — closes a bead, then immediately runs the undefer sweep so a blocked epic reopens at close time, not at the next session's startup check |
 | `claim-epic.sh` | `<epic-id>` — claims or takes over an epic and pushes the acquisition; `--release <epic-id>` reopens a dead run's epic unless a live session works beneath it |
 | `claim-item.sh` | `<id>` — claims an item with the session holder token |
