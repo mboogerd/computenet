@@ -577,6 +577,134 @@ class OutletHighWaterRecoveryTest {
     }
 
     /**
+     * computenet-es92f task review: the type-8 trace must be the order delivery takes,
+     * not host acceptance order. A re-accepted parked frame keeps its old acceptance
+     * position, so a snapshot sorted by that position hands back journal order. Here
+     * the failing frame leaves two frames pending: 7 (staged, journaled last) and 5
+     * (parked, journaled first, re-accepted behind 7). Live delivers 7 then 5.
+     */
+    @Test
+    fun `a RESTART trace lists its pending frames in delivery order, not acceptance order`() {
+        val controller = SimulationController(seed = 71)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        before.feed(1)
+        controller.runToIdle()
+
+        before.host.managementInlet.call.suspend(relayRef)
+        before.feed(5)
+        controller.runToIdle()
+        before.feed(Int.MIN_VALUE)
+        before.feed(7)
+        before.host.managementInlet.call.resume(relayRef)
+        controller.runToIdle()
+        before.host.supervisionAccounting().restarts shouldBe 1
+        // The live delivery order the record has to carry: 7 before 5.
+        effects shouldBe listOf(1, 7, 5)
+
+        val restart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        val trigger = checkNotNull(restart.triggerFrameOrdinal)
+        restart.followingFrameOrdinals.size shouldBe 2
+        // Journal order is 5, MIN, 7; so 7 is the ordinal above the trigger's and 5 the one below.
+        (restart.followingFrameOrdinals[0] > trigger) shouldBe true
+        (restart.followingFrameOrdinals[1] < trigger) shouldBe true
+
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 7, 5)
+        after.feed(9)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 7, 5, 9)
+    }
+
+    /**
+     * computenet-es92f task review: recovery reorders a cell's staged replay frames to a
+     * recorded trace. A RESTART that fires while they are still staged (a metadata
+     * failure overtaking them, the computenet-srkyq shape) snapshots them for its own
+     * type-8 record, and that snapshot must see the reordered queue. Measured before the
+     * repair: the second record listed the frames in journal order, so a second recovery
+     * replayed parked frame 5 ahead of the historical trigger, restored a short
+     * fresh-epoch high-water, and the next live frame never fired ([KFX-11]).
+     */
+    @Test
+    fun `a RESTART during recovery records the reordered replay queue and survives a second crash`() {
+        val controller = SimulationController(seed = 73)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val first = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        first.feed(1)
+        controller.runToIdle()
+        first.host.managementInlet.call.suspend(relayRef)
+        first.feed(5)
+        controller.runToIdle()
+        first.feed(Int.MIN_VALUE)
+        first.host.managementInlet.call.resume(relayRef)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 5)
+        val historical = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        val historicalTrigger = checkNotNull(historical.triggerFrameOrdinal)
+        val parked = historical.followingFrameOrdinals.single()
+
+        // Crash 1. Recovery stages the relay's frames as 1, MIN, 5; the failing metadata
+        // task (band 0) restarts the relay ahead of all three.
+        val recovering = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        recovering.host.recoverFrom(journal)
+        ProtocolSupport.of(recovering.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = recovering.relay.inlet.ref
+            override val to = recovering.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+        recovering.host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                recovering.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        controller.runToIdle()
+        val overtaking = journal.replay().mapNotNull(JournalRecords::decodeRestart).last()
+        overtaking.triggerFrameOrdinal shouldBe null
+        overtaking.followingFrameOrdinals.size shouldBe 3
+        // The historical trigger still runs before the frame that followed it.
+        (overtaking.followingFrameOrdinals.indexOf(historicalTrigger) <
+            overtaking.followingFrameOrdinals.indexOf(parked)) shouldBe true
+        recovering.feed(3)
+        controller.runToIdle()
+        val liveEffects = effects.toList()
+        val liveWave = recovering.relay.outlet.waveState()
+        liveEffects.count { it == 3 } shouldBe 1
+
+        // Crash 2.
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+        effects shouldBe liveEffects
+        after.relay.outlet.waveState() shouldBe liveWave
+        after.feed(4)
+        controller.runToIdle()
+        effects shouldBe liveEffects + 4
+    }
+
+    /**
      * computenet-srkyq review: the frames a metadata-plane RESTART overtakes may be
      * REPLAYED frames still staged by an earlier recovery, not only live-journaled
      * ones. They are records of the same journal, so a second recovery must put the

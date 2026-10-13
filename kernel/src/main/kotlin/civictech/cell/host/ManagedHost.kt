@@ -991,7 +991,14 @@ open class ManagedHost(
                             }
                     }
                 }
-                action(pending.sortedBy(CheckpointFrame::sequence))
+                // Deliberately NOT sorted by acceptance position: the list is handed over
+                // in the order delivery would take from this state (each cell's staged
+                // queue order, then its supervision-parked frames, which resume re-accepts
+                // behind whatever is staged). `HostDurability.journalRestart` records that
+                // order as type 8's delivery trace; a re-accepted parked frame keeps its
+                // OLD acceptance position, so sorting here would hand back journal order.
+                // `checkpoint` wants acceptance order and sorts by `sequence` itself.
+                action(pending)
             }
         },
         // computenet-ggxrq: `intakeControl` is declared later in this file, so this is a
@@ -1351,8 +1358,16 @@ open class ManagedHost(
             val insertionIndex = ordered.indexOfFirst { it.second.replayOf !== journal }
                 .let { if (it < 0) ordered.size else it }
             ordered.addAll(insertionIndex, traceEntries)
+            // Re-deal the queue's own stage sequences in ascending order over the new
+            // arrangement. `AttentionScheduler.stagedInSequence` sorts by that sequence,
+            // and `HostDurability.journalRestart` reads it as live delivery order: a
+            // RESTART that fires while these replay frames are still staged would
+            // otherwise record their pre-reorder (journal) order in its own type-8
+            // trace, and a second recovery would replay them across the wrong epoch
+            // boundary (computenet-es92f task review).
+            val sequences = ordered.map { it.first }.sorted()
             queue.clear()
-            queue.addAll(ordered)
+            queue.addAll(ordered.mapIndexed { index, entry -> sequences[index] to entry.second })
         }
         if (marker != null) {
             if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()

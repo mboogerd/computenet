@@ -496,9 +496,10 @@ internal class HostDurability(
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
     /**
      * Runs its argument while holding the host's `dataLock`, handing it every
-     * accepted-but-undelivered invocation in host-sequence order: scheduler
-     * queued/attention-parked work, supervision-SUSPEND parking and cold-inlet
-     * ACTIVATE tails. The default — nothing pending, no lock — is for a delegate
+     * accepted-but-undelivered invocation in pending DELIVERY order per cell (not
+     * sorted by [CheckpointFrame.sequence]; a caller that wants acceptance order
+     * sorts by it): scheduler queued/attention-parked work, supervision-SUSPEND
+     * parking and cold-inlet ACTIVATE tails. The default — nothing pending, no lock — is for a delegate
      * built without a host (`JournalRecordsTest`); `ManagedHost` always passes its own.
      */
     private val underIntakeLock: ((pending: List<CheckpointFrame>) -> Unit) -> Unit = { it(emptyList()) },
