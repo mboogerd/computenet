@@ -29,17 +29,21 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.wire.PortAddress
 import civictech.cell.wire.WireEdgeLink
 import civictech.economy.EconomicPolicy
+import civictech.economy.InvalidEconomicPolicyException
 import civictech.economy.TokenBucketLedger
+import civictech.economy.startupRecord
 import civictech.testkit.awaitUntil
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
@@ -69,6 +73,112 @@ class BudgetedNodeTest {
 
     @TempDir
     lateinit var tempDir: Path
+
+    @Test
+    fun `budgeted boot emits one startup record and its unvouched warning through the sink`() {
+        val policy = EconomicPolicy.placeholder().copy(
+            fitted = true,
+            label = "runtime-test-policy",
+            unvouchedBootstrap = mapOf(ClaimClass.Attention to 2L),
+        )
+        val policyFile = tempDir.resolve("startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.serializer(), policy))
+        val captured = mutableListOf<String>()
+
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+            startupSink = captured::add,
+        )
+        try {
+            val record = requireNotNull(node.budgetStartupRecord)
+            val expected = policy.applied().startupRecord()
+            assertEquals(expected, record)
+            assertEquals(listOf(record.toString()) + record.warnings, captured)
+            assertTrue(captured.single { it.startsWith("WARNING:") }.contains("unbounded by identity cost"))
+            assertTrue(node.hosts.values.all { !it.isDrained }, "the warned node is not live")
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `a throwing startup sink does not prevent a budgeted node from booting`() {
+        val policyFile = tempDir.resolve("throwing-startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.placeholder()))
+
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+            startupSink = { throw IllegalStateException("startup sink unavailable") },
+        )
+        try {
+            assertTrue(node.budgetStartupRecord != null)
+            assertTrue(node.hosts.values.all { !it.isDrained })
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `a startup sink that throws an Error does not prevent a budgeted node from booting`() {
+        // StartupRecord.emit swallows Exceptions itself; an Error reaches Runtime.boot's own catch.
+        val policyFile = tempDir.resolve("error-startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.placeholder()))
+
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+            startupSink = { throw LinkageError("startup sink unavailable") },
+        )
+        try {
+            assertEquals(EconomicPolicy.placeholder().applied().startupRecord(), node.budgetStartupRecord)
+            assertTrue(node.hosts.values.all { !it.isDrained })
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `an unbudgeted boot emits no startup record or warning`() {
+        val captured = mutableListOf<String>()
+
+        val node = Runtime.boot(
+            Manifest(mapOf("plain" to NodeSpec())),
+            "plain",
+            GraphSpec(emptyList()),
+            startupSink = captured::add,
+        )
+        try {
+            assertNull(node.budgetStartupRecord)
+            assertTrue(captured.isEmpty())
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `an invalid budget policy emits nothing before validation fails`() {
+        val policy = EconomicPolicy.placeholder().copy(
+            unvouchedBootstrap = mapOf(ClaimClass.Spawn to -1L),
+        )
+        val policyFile = tempDir.resolve("invalid-startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.serializer(), policy))
+        val captured = mutableListOf<String>()
+
+        assertThrows<InvalidEconomicPolicyException> {
+            Runtime.boot(
+                Manifest(mapOf("invalid" to NodeSpec(budget = policyFile.toString()))),
+                "invalid",
+                GraphSpec(emptyList()),
+                startupSink = captured::add,
+            )
+        }
+        assertTrue(captured.isEmpty())
+    }
 
     @Test
     @Timeout(60)

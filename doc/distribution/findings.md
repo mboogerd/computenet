@@ -1507,3 +1507,9 @@ no `concord/corpus/DISPUTES.md` entry is written.
 
 `./gradlew :concord:concordance` left `doc/spec/CONCORDANCE.md` unchanged, and
 `./gradlew :concord:check` was green at the same source sha.
+
+## 2026-10-13 — Runtime emits the ECO1 startup record at boot (`computenet-66m.2`)
+
+The runtime composition root now emits each budgeted node's `StartupRecord` exactly once at
+boot, including the explicit unvouched-bootstrap warning when applicable. The emitted record is
+also exposed on the booted node for inspection; nodes without a manifest budget remain silent.

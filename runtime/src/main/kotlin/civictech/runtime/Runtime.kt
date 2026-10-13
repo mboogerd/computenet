@@ -43,10 +43,13 @@ import civictech.cell.wire.WireEdgeLink
 import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.economy.EconomicPolicy
+import civictech.economy.StartupRecord
 import civictech.economy.TokenBucketLedger
+import civictech.economy.emit
 import civictech.economy.persist.BudgetCheckpointStore
 import civictech.economy.persist.FileBudgetCheckpointStore
 import civictech.economy.persist.RestoreOutcome
+import civictech.economy.startupRecord
 import civictech.identity.Ed25519SignatureVerifier
 import civictech.identity.FilePeerIncarnationStore
 import civictech.identity.FilePeerKeyStore
@@ -308,6 +311,7 @@ object Runtime {
         overrides: Map<String, String> = emptyMap(),
         inspector: InspectorFlag.Options? = null,
         transport: PeerTransport? = null,
+        startupSink: (String) -> Unit = { System.err.println(it) },
     ): Node {
         manifest.validated()
         val nodeSpec = requireNotNull(manifest.nodes[node]) { "manifest has no node '$node'" }
@@ -342,6 +346,7 @@ object Runtime {
         val budgetCheckpointStore: BudgetCheckpointStore?
         val budgetCheckpointCadenceNanos: Long?
         val budgetRestore: RestoreOutcome?
+        val budgetStartupRecord: StartupRecord?
         if (nodeSpec.budget != null) {
             val policyFile = nodeSpec.budget
             val policy = Json.decodeFromString(EconomicPolicy.serializer(), File(policyFile).readText())
@@ -351,7 +356,15 @@ object Runtime {
                 "nodes[$node].budgetCheckpointDir must be set exactly when economic policy " +
                     "'${policy.label}' has checkpoint configuration"
             }
-            val ledger = TokenBucketLedger(policy.applied(), System::nanoTime, scope = node)
+            val appliedPolicy = policy.applied()
+            val startupRecord = appliedPolicy.startupRecord()
+            try {
+                startupRecord.emit(startupSink)
+            } catch (_: Throwable) {
+                // A startup sink is observational only. Even a sink that throws an Error must
+                // not prevent a validated node from becoming usable.
+            }
+            val ledger = TokenBucketLedger(appliedPolicy, System::nanoTime, scope = node)
             val store = checkpointDir?.let { directory ->
                 val path = Path.of(directory)
                 Files.createDirectories(path)
@@ -361,11 +374,13 @@ object Runtime {
             budgetCheckpointStore = store
             budgetCheckpointCadenceNanos = checkpoint?.cadenceNanos
             budgetRestore = store?.let(ledger::restoreFrom)
+            budgetStartupRecord = startupRecord
         } else {
             budget = BudgetLedger.Unlimited
             budgetCheckpointStore = null
             budgetCheckpointCadenceNanos = null
             budgetRestore = null
+            budgetStartupRecord = null
         }
         lateinit var applyContext: ApplyContext
         val journals = mutableMapOf<String, Journal>()
@@ -463,6 +478,7 @@ object Runtime {
                 budgetCheckpointStore = budgetCheckpointStore,
                 budgetCheckpointCadenceNanos = budgetCheckpointCadenceNanos,
                 budgetRestore = budgetRestore,
+                budgetStartupRecord = budgetStartupRecord,
                 identity = identity,
                 overrides = overrides.toMap(),
                 inspectorOptions = inspector,
@@ -511,6 +527,8 @@ object Runtime {
         private val budgetCheckpointCadenceNanos: Long?,
         /** The startup restore result, or null when this node has no budget checkpoint store. */
         val budgetRestore: RestoreOutcome?,
+        /** The emitted budget startup record, or null when this node has no manifest budget. */
+        val budgetStartupRecord: StartupRecord?,
         /** The node's key-store identity, or null when this manifest node is unsigned. */
         val identity: PeerIdentity?,
         private val overrides: Map<String, String>,
