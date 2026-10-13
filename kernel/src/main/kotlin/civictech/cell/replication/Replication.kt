@@ -93,6 +93,13 @@ class Replication(
      * link is published under the monitor. Retirement can therefore cancel a
      * formation while catch-up is in flight; the post-install check removes
      * the entry which the assignment could only write afterwards.
+     *
+     * **Lock order:** [LocationRegistry] may synchronously notify this linker
+     * while it holds a ref's park-queue monitor (a failed replay unpublishes
+     * its dead transport). Therefore this monitor is never held across a
+     * registry delivery or gossip catch-up, including first-link installation,
+     * re-announcement re-fire, and failed-install retry. The allowed nesting is
+     * park queue -> [linkLifecycle], never [linkLifecycle] -> park queue.
      */
     private val linkLifecycle = Any()
 
