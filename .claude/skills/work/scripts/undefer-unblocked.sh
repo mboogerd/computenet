@@ -13,7 +13,13 @@
 # A deferred epic WITHOUT the label is never touched; if it has parked
 # descendants and no outstanding `undefers:` marker it is reported UNLABELLED,
 # because nothing would ever reopen it. Postponed epics hit this too: the line
-# is advice, and label only what was deferred for a person's answer.
+# is advice, and label only what was deferred for a person's answer. So is one
+# with no park left but workable work (its park was answered before anyone
+# labelled it), unless it is `replan:postpone`/`replan:pause`.
+# A labelled epic with NO parked descendant and no candidate is un-deferred
+# too (computenet-2o0z4): answering a park closes it, nothing human gates the
+# epic any more, and while deferred no session reaches its close gate or
+# breakdown. One that is blocked elsewhere gets re-deferred with markers.
 # ponytail: a session that defers for a reason this predicate cannot see gets
 # its epic reopened at the next sweep; the defer comment is the only brake.
 #
@@ -117,9 +123,18 @@ for bid, r in sorted(rows.items()):
         cur = up(cur)
 for eid, e in sorted(rows.items()):
     if eid in deferred and gate in labels(e):
-        print("CAND" if cands[eid] else "GATED", eid, *(cands[eid] or waits[eid]))
-    elif eid in deferred and waits[eid] and "undefers:" + eid not in marked:
+        if cands[eid]:   # first field: what it would still wait on, for the veto line
+            print("CAND", eid, ",".join(waits[eid]) or "-", *cands[eid])
+        elif waits[eid]:
+            print("GATED", eid, *waits[eid])
+        else:
+            print("FREE", eid)
+    elif eid in deferred and "undefers:" + eid in marked:
+        pass
+    elif eid in deferred and waits[eid]:
         print("UNLABELLED", eid, *waits[eid])
+    elif eid in deferred and cands[eid] and not {"replan:postpone", "replan:pause"} & set(labels(e)):
+        print("OPENWORK", eid, *cands[eid])
     elif is_epic(e) and e.get("status") != "deferred" and gate in labels(e):
         print("STALE", eid, e.get("status"))
 PY
@@ -127,17 +142,27 @@ PY
 
 while read -r kind e rest; do
   case "$kind" in
-    GATED) echo "WAITING $e on ${rest:-a person}" ;;
+    GATED) echo "WAITING $e on $rest" ;;
+    OPENWORK) echo "UNLABELLED $e (deferred with no park, label or marker, yet $rest looks workable, and nothing will reopen it; if the deferral is spent: bd undefer $e)" ;;
+    FREE)
+      echo "UNDEFERRED $e (was $GATE; no parked descendant gates it any more)"
+      if [ "$DRY" = 0 ]; then
+        bd undefer "$e" >/dev/null || { echo "undefer-unblocked: bd undefer $e failed" >&2; exit 3; }
+        bd update "$e" --remove-label "$GATE" >/dev/null
+        bd comment "$e" "un-deferred: was $GATE and no parked descendant remains" >/dev/null
+      fi ;;
     UNLABELLED) echo "UNLABELLED $e (deferred with parked work $rest and nothing to reopen it; if a person's answer is what it waits for: bd update $e --add-label $GATE)" ;;
     STALE)
       echo "CLEARED $e ($rest)"
       [ "$DRY" = 1 ] || bd update "$e" --remove-label "$GATE" >/dev/null ;;
     CAND)
+      held=${rest%% *}; rest=${rest#* }
+      [ "$held" = - ] && held="" || held=" on ${held//,/ }"
       # shellcheck disable=SC2086
       vr=$("$VERIFY_READY" $rest 2>/dev/null); vrc=$?
       case "$vrc" in
         0) ready=$(printf '%s\n' "$vr" | awk '$1 == "READY" {print $2}' | tr '\n' ' ') ;;
-        1) echo "WAITING $e on a person (verify-ready.sh finds none of $rest ready)"; continue ;;
+        1) echo "WAITING $e$held (verify-ready.sh finds none of $rest ready)"; continue ;;
         *) echo "undefer-unblocked: verify-ready.sh exited $vrc on $e's descendants — nothing checked" >&2; exit 3 ;;
       esac
       echo "UNDEFERRED $e (was $GATE; now workable: ${ready% })"

@@ -187,8 +187,8 @@ cat > "$CTRL/all.json" <<EOF
 EOF
 printf 'BLOCKED x-e.2 by: y (closed) [unmerged on f]\n' > "$CTRL/vr.out"; echo 1 > "$CTRL/vr.rc"
 out=$("$SCRIPT" 2>&1); rc=$?
-{ [ "$rc" = 0 ] && grep -q "^WAITING x-e" <<<"$out" && nowrite; } \
-  && ok "verify-ready has the last word on a candidate" || bad "vr veto: rc=$rc out=$out"
+{ [ "$rc" = 0 ] && grep -q "^WAITING x-e (verify-ready" <<<"$out" && ! grep -q "person" <<<"$out" && nowrite; } \
+  && ok "verify-ready has the last word on a candidate, and no person is blamed without a park" || bad "vr veto: rc=$rc out=$out"
 
 # 13. A MISSING LABEL IS REPORTED, never acted on: a deferred epic with parked
 #     work and no marker would be stranded; one deferred for another reason
@@ -217,6 +217,36 @@ out=$("$SCRIPT" 2>&1); rc=$?
 { [ "$rc" = 0 ] && grep -q "^CLEARED x-e (open)" <<<"$out" && grep -q "^update x-e --remove-label $G" "$BD_LOG" \
   && ! grep -q "^undefer" "$BD_LOG"; } \
   && ok "a spent label comes off an epic that is no longer deferred" || bad "stale label: rc=$rc out=$out"
+
+# 15. the park was answered by closing it and nothing else is open, or the only
+#     open child is edge-blocked outside the epic: nothing human gates either,
+#     so both are un-deferred (computenet-2o0z4 — they printed WAITING forever).
+fixture
+cat > "$CTRL/all.json" <<EOF
+[{"id":"x-e","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-e.1","issue_type":"bug","status":"closed","labels":["human"]},
+ {"id":"x-f","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-f.1","issue_type":"task","status":"open",
+  "dependencies":[{"issue_id":"x-f.1","depends_on_id":"y-o","type":"blocks"}]},
+ {"id":"y-o","issue_type":"task","status":"open"}]
+EOF
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^UNDEFERRED x-e " <<<"$out" && grep -q "^UNDEFERRED x-f " <<<"$out" \
+  && ! grep -q "person" <<<"$out" && grep -q "^undefer x-e" "$BD_LOG" && grep -q "^undefer x-f" "$BD_LOG" \
+  && grep -q "^update x-e --remove-label $G" "$BD_LOG" && ! grep -q "^verify-ready" "$BD_LOG"; } \
+  && ok "a human-gated epic with no park left is un-deferred" || bad "free: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# 16. unlabelled, its park already answered, work open and no marker -> reported,
+#     never touched (the computenet-4vxtr shape)
+fixture
+cat > "$CTRL/all.json" <<'EOF'
+[{"id":"x-e","issue_type":"epic","status":"deferred"},
+ {"id":"x-e.1","issue_type":"bug","status":"closed","labels":["human"]},
+ {"id":"x-e.2","issue_type":"task","status":"open"}]
+EOF
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^UNLABELLED x-e .*x-e.2" <<<"$out" && nowrite; } \
+  && ok "an unlabelled deferral with workable work and no marker is reported" || bad "openwork: rc=$rc out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
