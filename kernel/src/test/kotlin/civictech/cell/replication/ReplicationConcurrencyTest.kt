@@ -24,6 +24,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 class ReplicationConcurrencyTest {
     private interface SetInletProxy {
@@ -230,6 +231,85 @@ class ReplicationConcurrencyTest {
 
         fixture.registry.location(fixture.remote) shouldBe null
         fixture.replication.linkCountAmong(setOf(fixture.local.ref, fixture.remote)) shouldBe 0
+    }
+
+    @Test
+    fun `parked catch-up and failing replay do not invert lifecycle and park queue monitors`() {
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val logicalId = UUID.randomUUID()
+        val remote = CellRef(logicalId, 0)
+        val replayEntered = CountDownLatch(1)
+        val installEntered = CountDownLatch(1)
+        val locationRemoved = CountDownLatch(1)
+        var failReplay = false
+        lateinit var dead: InvocationSink
+        dead = InvocationSink { invocation ->
+            if (!failReplay) return@InvocationSink
+            replayEntered.countDown()
+            check(installEntered.await(20, TimeUnit.SECONDS)) {
+                "the catch-up formation never overlapped the parked replay"
+            }
+            registry.unpublishRemotes(via = dead)
+            throw IntakeClosedException(invocation.cellRef)
+        }
+
+        // Publish before constructing Replication so the ref is a known member
+        // without starting a link formation. Holding its delivery lane parks one
+        // invocation for the re-announcement to replay under the park-queue lock.
+        registry.publishFromPeer(remote, dead, peer = REMOTE) shouldBe null
+        registry.hold(remote)
+        (HostedCellProxy.create(remote, registry, SetInletProxy::class.java) as SetInletProxy)
+            .inlet.call.add("parked-before-reannouncement")
+        registry.parkedFor(remote).size shouldBe 1
+
+        // Register before Replication's listener. The callback proves that
+        // unpublishRemotes removed the location, then its next callback tries
+        // linkLifecycle while the replay still holds the park-queue monitor.
+        registry.onUnpublish { ref ->
+            if (ref == remote) locationRemoved.countDown()
+        }
+        val replication = Replication(registry)
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        local.inlet.call.add("catch-up")
+        replication.beforeLinkInstall = { candidate, target ->
+            if (candidate === local && target == remote) {
+                installEntered.countDown()
+                check(locationRemoved.await(20, TimeUnit.SECONDS)) {
+                    "the failing replay never removed the remote location"
+                }
+            }
+        }
+
+        failReplay = true
+        val reannouncing = FutureTask<Unit> {
+            registry.publishFromPeer(remote, dead, peer = REMOTE) shouldBe null
+            Unit
+        }
+        Thread.ofVirtual().start(reannouncing)
+        check(replayEntered.await(20, TimeUnit.SECONDS)) {
+            "the re-announcement never replayed the parked invocation"
+        }
+
+        val replicating = FutureTask<Unit> {
+            replication.replicate(local, host)
+            Unit
+        }
+        Thread.ofVirtual().start(replicating)
+        try {
+            reannouncing.get(2, TimeUnit.SECONDS)
+            replicating.get(2, TimeUnit.SECONDS)
+        } catch (timeout: TimeoutException) {
+            throw AssertionError(
+                "park-queue replay deadlocked with Replication link lifecycle during catch-up",
+                timeout,
+            )
+        }
+
+        installEntered.count shouldBe 0L
+        locationRemoved.count shouldBe 0L
+        registry.parkedFor(remote).isNotEmpty() shouldBe true
     }
 
     @Test
