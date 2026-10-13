@@ -97,6 +97,7 @@ class BudgetedNodeTest {
             assertEquals(expected, record)
             assertEquals(listOf(record.toString()) + record.warnings, captured)
             assertTrue(captured.single { it.startsWith("WARNING:") }.contains("unbounded by identity cost"))
+            assertTrue(node.hosts.values.all { !it.isDrained }, "the warned node is not live")
         } finally {
             node.close()
         }
@@ -115,6 +116,26 @@ class BudgetedNodeTest {
         )
         try {
             assertTrue(node.budgetStartupRecord != null)
+            assertTrue(node.hosts.values.all { !it.isDrained })
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `a startup sink that throws an Error does not prevent a budgeted node from booting`() {
+        // StartupRecord.emit swallows Exceptions itself; an Error reaches Runtime.boot's own catch.
+        val policyFile = tempDir.resolve("error-startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.placeholder()))
+
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+            startupSink = { throw LinkageError("startup sink unavailable") },
+        )
+        try {
+            assertEquals(EconomicPolicy.placeholder().applied().startupRecord(), node.budgetStartupRecord)
             assertTrue(node.hosts.values.all { !it.isDrained })
         } finally {
             node.close()
