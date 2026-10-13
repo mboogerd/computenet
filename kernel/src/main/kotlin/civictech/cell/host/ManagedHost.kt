@@ -2103,7 +2103,7 @@ open class ManagedHost(
         synchronized(dataLock) { stagedRestartBoundaries.remove(hostedInvocation) }?.let { restart ->
             val cell = cells[cellRef]
                 ?: return deadLetter(null, "restart boundary names unknown cell $cellRef", hostedInvocation)
-            restartCell(cellRef, cell, hostedInvocation, restart)
+            restartCell(cellRef, cell, hostedInvocation, restart, recordedTraceMatches = true)
             return
         }
         var retainCheckpointSequence = false
@@ -2425,12 +2425,16 @@ open class ManagedHost(
                         cell,
                         StallNotice.Stall(StallReason.DEAD_LETTERED, hostedInvocation.invocation.context?.timestamp),
                     )
-                SupervisionPolicy.RESTART -> restartCell(
-                    cellRef,
-                    cell,
-                    hostedInvocation,
-                    hostDurability.takeReplayedRestart(hostedInvocation),
-                )
+                SupervisionPolicy.RESTART -> {
+                    val replayed = hostDurability.takeReplayedRestart(hostedInvocation)
+                    restartCell(
+                        cellRef,
+                        cell,
+                        hostedInvocation,
+                        replayed?.restart,
+                        replayed?.pendingTraceMatches ?: true,
+                    )
+                }
                 SupervisionPolicy.SUSPEND -> {
                     // V2-KERNEL: idempotent, exactly like [HostManagementApi.suspend].
                     // This branch IS reachable on an already-suspended cell: the
@@ -2474,8 +2478,11 @@ open class ManagedHost(
         cellRef: CellRef,
         cell: Cell,
         trigger: HostedPortInvocation,
-        replayedRestart: DecodedRestart?,
+        recordedRestart: DecodedRestart?,
+        recordedTraceMatches: Boolean,
     ) {
+        val replayedRestart = recordedRestart?.takeIf { recordedTraceMatches }
+        val replayFallback = recordedRestart != null && !recordedTraceMatches
         // state-restore, never input-replay (spec 23 R6): the failing
         // invocation (and any Owned/Leased it carried) is not re-driven
         notifyDownstream(cell, StallNotice.Stall(StallReason.RESTARTING))
@@ -2527,6 +2534,7 @@ open class ManagedHost(
                 nextGeneration,
                 supersedes,
                 minted,
+                replayFallback,
             )
         }
         cell.onActivate(ctx)

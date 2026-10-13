@@ -266,6 +266,13 @@ private data class RestartOutletWaveRecord(
  * plus the nested frames of `RECORD_INPUT`); the list order is the scheduling fact.
  * Recovery therefore does not infer delivery order from record order, including
  * when resume re-accepted an older parked frame behind a newer failing frame.
+ * For a cell that remains supervision-suspended when the record is written, the
+ * list is the delivery order predicted by that state: its existing park before
+ * scheduler work that will join the park. A later resume can falsify that prediction
+ * by re-accepting the park behind still-staged work. Recovery therefore adopts this
+ * record only while its reconstructed pending suffix still matches the actual suffix;
+ * a mismatch rotates to and journals a fresh boundary whose worst case is duplication,
+ * never reuse of a spent epoch/counter pair.
  * [triggerFramePayload] validates the ordinal binding without becoming an ambiguous
  * journal-wide key for byte-identical frames.
  * [outlets] are the fresh epochs minted before the live
@@ -297,6 +304,12 @@ internal data class DecodedRestart(
 ) {
     data class OutletWave(val portName: String, val sourceId: UUID, val highWater: Long)
 }
+
+/** Whether replay may safely adopt one decoded type-8 epoch at its trigger. */
+internal data class ReplayedRestartDecision(
+    val restart: DecodedRestart,
+    val pendingTraceMatches: Boolean,
+)
 
 /**
  * One reader-visible journal record, decoded by [JournalRecords.decode] — the read-side
@@ -585,7 +598,11 @@ internal class HostDurability(
      * succeeds and [forgetReplayedFrame] discards it. Triggerless events are staged
      * through [submitRestartBoundary] at their journal position instead.
      */
-    private data class ReplayedRestart(val journal: Journal, val restart: DecodedRestart)
+    private data class ReplayedRestart(
+        val journal: Journal,
+        val restart: DecodedRestart,
+        val expectedFollowingFrames: List<HostedPortInvocation>,
+    )
 
     private val replayedRestarts = IdentityHashMap<HostedPortInvocation, ReplayedRestart>()
 
@@ -847,21 +864,6 @@ internal class HostDurability(
                 // 4's contract: everything before the failing index still applies/stages).
                 val excludedTargets = applier?.activeEvolutions().orEmpty()
 
-                synchronized(replayedRestarts) {
-                    pendingRestartBoundaries
-                        .filter { it.trigger != null && it.restart.cellRef !in excludedTargets }
-                        .forEach { pending ->
-                            check(
-                                replayedRestarts.put(
-                                    checkNotNull(pending.trigger),
-                                    ReplayedRestart(journal, pending.restart),
-                                ) == null,
-                            ) {
-                                "multiple trigger-bearing restarts matched one replay frame"
-                            }
-                        }
-                }
-
                 val boundariesByFrameCount = pendingRestartBoundaries.groupBy { it.afterFrameCount }
                 fun stageBoundaries(afterFrameCount: Int) {
                     boundariesByFrameCount[afterFrameCount].orEmpty().forEach { pending ->
@@ -898,6 +900,44 @@ internal class HostDurability(
                     frames++
                 }
                 stageBoundaries(pendingFrames.size)
+
+                // The record's trace describes the live boundary, but recovery can be
+                // suspended and resumed after this reconstruction and before its trigger
+                // runs. Snapshot the reconstructed historical suffix while the recovery
+                // gate still excludes dispatch. At the trigger, adopting the recorded
+                // epoch is safe only if that suffix is still the actual pending suffix.
+                // This includes post-record journal frames that were not yet accepted
+                // when the original restart was recorded, so delivering any of them
+                // ahead of the trigger is detected too.
+                underIntakeLock { pending ->
+                    synchronized(replayedRestarts) {
+                        pendingRestartBoundaries
+                            .filter { it.trigger != null && it.restart.cellRef !in excludedTargets }
+                            .forEach { boundary ->
+                                val trigger = checkNotNull(boundary.trigger)
+                                val triggerIndex = pending.indexOfFirst { it.invocation === trigger }
+                                check(triggerIndex >= 0) {
+                                    "restart boundary for ${boundary.restart.cellRef} has no staged trigger"
+                                }
+                                val expected = pendingReplayTrace(
+                                    journal,
+                                    boundary.restart.cellRef,
+                                    pending.drop(triggerIndex + 1),
+                                )
+                                check(expected.complete) {
+                                    "restart boundary for ${boundary.restart.cellRef} has incomplete reconstructed trace"
+                                }
+                                check(
+                                    replayedRestarts.put(
+                                        trigger,
+                                        ReplayedRestart(journal, boundary.restart, expected.frames),
+                                    ) == null,
+                                ) {
+                                    "multiple trigger-bearing restarts matched one replay frame"
+                                }
+                            }
+                    }
+                }
             }
         }
         // ManagedHost's recovery record-loop gate still prevents data dispatch here.
@@ -909,19 +949,76 @@ internal class HostDurability(
         return StagedRecovery(frames, positions.suppressedDuplicates)
     }
 
+    private data class PendingReplayTrace(
+        val frames: List<HostedPortInvocation>,
+        val complete: Boolean,
+    )
+
+    /**
+     * Resolve the historical invocation identities in one pending delivery-order
+     * suffix, validating their logical ordinals while the replay bookkeeping is live.
+     * Invocation identity survives recovery-time checkpoint ordinal rebasing, while a
+     * replay-derived frame without an ordinal makes the trace incomplete:
+     * adopting a recorded epoch through that ambiguity could suppress later traffic,
+     * so the caller must take the duplicate-safe fallback instead.
+     */
+    private fun pendingReplayTrace(
+        journal: Journal,
+        cellRef: CellRef,
+        pending: List<CheckpointFrame>,
+    ): PendingReplayTrace {
+        val frames = mutableListOf<HostedPortInvocation>()
+        var complete = true
+        synchronized(journaledFrames) {
+            synchronized(replayedFrames) {
+                pending.asSequence()
+                    .map(CheckpointFrame::invocation)
+                    .filter { it.cellRef == cellRef }
+                    .forEach { invocation ->
+                        val originals = coalesceOriginals(invocation)
+                        val represented = if (originals.isEmpty()) listOf(invocation) else originals
+                        var historical = false
+                        represented.forEach { candidate ->
+                            val replayed = replayedFrames[candidate]
+                            val carried = journaledFrames[candidate]
+                            if (replayed?.journal === journal || carried?.journal === journal) {
+                                historical = true
+                            } else if (candidate.replayOf === journal) {
+                                complete = false
+                            }
+                        }
+                        if (historical) frames += invocation
+                    }
+            }
+        }
+        return PendingReplayTrace(frames, complete)
+    }
+
     /**
      * Consume the recorded RESTART bound to [frame], if this replay came from a
      * type-8-aware journal. Recovery used the record's logical trigger ordinal to bind
      * the event to one invocation identity before dispatch; byte-identical later
-     * frames therefore cannot adopt it. No association is the compatibility path
-     * for an older journal: supervision behaves exactly as it did before type 8.
+     * frames therefore cannot adopt it. [ReplayedRestartDecision.pendingTraceMatches]
+     * is false when suspend/resume, attention, or another replay-time action changed
+     * the reconstructed historical suffix before the trigger ran. No association is
+     * the compatibility path for an older journal: supervision behaves exactly as it
+     * did before type 8.
      */
-    fun takeReplayedRestart(frame: HostedPortInvocation): DecodedRestart? {
-        return synchronized(replayedRestarts) {
-            val replayed = replayedRestarts[frame] ?: return@synchronized null
-            if (frame.replayOf !== replayed.journal) null
-            else replayedRestarts.remove(frame)?.restart
+    fun takeReplayedRestart(frame: HostedPortInvocation): ReplayedRestartDecision? {
+        val replayed = synchronized(replayedRestarts) {
+            val matched = replayedRestarts[frame] ?: return@synchronized null
+            if (frame.replayOf !== matched.journal) null else replayedRestarts.remove(frame)
+        } ?: return null
+        var actual = PendingReplayTrace(emptyList(), complete = false)
+        underIntakeLock { pending ->
+            actual = pendingReplayTrace(replayed.journal, frame.cellRef, pending)
         }
+        val sameFrames = actual.frames.size == replayed.expectedFollowingFrames.size &&
+            actual.frames.zip(replayed.expectedFollowingFrames).all { (left, right) -> left === right }
+        return ReplayedRestartDecision(
+            replayed.restart,
+            actual.complete && sameFrames,
+        )
     }
 
     /** Drop every recovery association after one replay frame finishes delivery. */
@@ -1024,9 +1121,10 @@ internal class HostDurability(
         generation: Long,
         supersedes: Set<UUID>,
         outlets: Map<String, OutletWaveState>,
+        replayFallback: Boolean = false,
     ) {
         val journal = cellJournalSelector(trigger.cellRef) ?: return
-        if (trigger.replayOf === journal) return
+        if (trigger.replayOf === journal && !replayFallback) return
         // Reuse exact bytes when the intake appended them. Re-encoding here runs after
         // the handler failed and may therefore encounter an `Owned` argument the handler
         // already consumed; durability must never touch that exclusive twice. A
@@ -1073,12 +1171,14 @@ internal class HostDurability(
                             }
                         }
                     }
-                    journaledFrames[trigger]?.takeIf { it.journal === journal } to following
+                    journaledFrames[trigger]
+                        ?.takeIf { !replayFallback && it.journal === journal } to following
                 }
             }
             val triggerFrameOrdinal = triggerRecord?.ordinal
             val triggerPayload = triggerRecord?.payload
             if (triggerFrameOrdinal == null &&
+                !replayFallback &&
                 trigger.type != HostedPortInvocation.Type.PORT_PROTOCOL &&
                 journalSelector(trigger.cellRef, trigger.portName) === journal
             ) {
@@ -1090,9 +1190,12 @@ internal class HostDurability(
             // can suppress later live traffic. Never encode that ambiguity.
             if (ambiguousSameJournalFrame) return@underIntakeLock
             val namedOrdinals = listOfNotNull(triggerFrameOrdinal) + followingFrameOrdinals
-            check(namedOrdinals.distinct().size == namedOrdinals.size) {
-                "restart delivery trace for ${trigger.cellRef} names a logical frame more than once"
-            }
+            // A host may append before replaying its existing journal. The parked live
+            // copy and the staged replay copy then legitimately name one ordinal twice.
+            // That is not a valid single-delivery trace, but it is also not a reason to
+            // abort supervision after deactivation: omit type 8 and retain the older
+            // duplicate-safe replay behavior.
+            if (namedOrdinals.distinct().size != namedOrdinals.size) return@underIntakeLock
             journal.append(
                 journalRecord(
                     RECORD_RESTART,

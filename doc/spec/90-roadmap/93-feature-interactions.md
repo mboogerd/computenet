@@ -8225,6 +8225,15 @@ artifact, or kept as a separate orchestrator input.
 > frame exactly once after recovery. Attention parking is not the same exposure: all later
 > arrivals join the one parked queue and unpark in acceptance/journal order; the measured control
 > records no following frame.
+> For a cell **still supervision-suspended** when RESTART records the trace, park-before-staged
+> is a prediction from that state: staged work will join the park if dispatch reaches it before
+> resume. Resume can falsify the prediction by re-accepting the existing park behind work that
+> is still staged. Recovery snapshots the complete reconstructed historical suffix before its
+> dispatch gate lifts and compares it with the actual pending suffix when the recorded trigger
+> fails. A match adopts the recorded epoch. A mismatch does not: it mints a fresh epoch and
+> appends a triggerless type-8 boundary carrying the actual pending order, so a later recovery
+> reproduces the fallback. Its worst case is the pre-type-8 duplicate, never a live frame
+> suppressed by reuse of a spent `(sourceId, counter)`.
 >
 > The earlier Coalesce and checkpoint-carry guarantees remain, now expressed by the trace rather
 > than a count. `IntakeControl` expands a currently staged Coalesce merge to its flattened original
@@ -8240,10 +8249,14 @@ artifact, or kept as a separate orchestrator input.
 > Defense in depth (option E): if live bookkeeping cannot name a same-journal trigger or pending
 > frame completely, the host writes no type-8 record for that restart. Recovery then takes the
 > pre-type-8 path, whose admitted loss mode is a duplicate effect; it never writes a partial trace
-> that could suppress later live traffic. Journals containing no type 8 therefore retain the
+> that could suppress later live traffic. The same rule applies when a host appends before
+> recovery and a parked live copy plus its staged replay copy name one logical ordinal twice:
+> supervision completes and omits the ambiguous record rather than throwing after deactivation.
+> Journals containing no type 8 therefore retain the
 > origin/main replay behavior. Pinned by `OutletHighWaterRecoveryTest`: the srkyq staged-live and
 > staged-replay variants, the ggxrq coalesced variant, the p7ggw checkpoint/identical-payload
-> variants, the es92f supervision-resume regression, and the attention-unpark refutation.
+> variants, the es92f supervision-resume regression, the recovery-time suspend/resume one- and
+> two-crash regressions, the pre-recovery live append, and the attention-unpark refutation.
 
 #### 1. Challenge restatement
 
@@ -8435,6 +8448,12 @@ ReBaseline<D>(
 > in-process protocol frame. Recording only ids without their delivery order would
 > retain the same bug under a different representation; recording only the final
 > high-water would lose the supersession announcement.
+> A still-supervision-suspended cell's park-before-staged trace is a prediction until
+> resume: if recovery-time dispatch/resume makes its actual historical suffix differ
+> from the suffix reconstructed under the recovery gate, the host rejects the recorded
+> epoch, mints a fresh one, and journals a triggerless boundary with the actual suffix.
+> That replay-time option-E fallback may duplicate an effect but cannot suppress later
+> live traffic, and the new boundary makes the choice survive another crash.
 > The separate record type is the compatibility mechanism: a journal written
 > before type 8 contains no such record and follows its previous replay path
 > unchanged; widening the serialized checkpoint would instead make old blobs

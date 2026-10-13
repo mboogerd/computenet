@@ -144,6 +144,29 @@ class OutletHighWaterRecoveryTest {
         fun highWater(): Long = relay.outlet.waveState().highWater
     }
 
+    private fun enqueueFailingAttentionRestart(world: World) {
+        ProtocolSupport.of(world.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = world.relay.inlet.ref
+            override val to = world.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+        world.host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                world.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+    }
+
     /**
      * BS-21 (preserved-identity arm), `[KFX-10]`: given a recovered outlet whose
      * identity was preserved, its counter high-water is restored together with it —
@@ -574,6 +597,143 @@ class OutletHighWaterRecoveryTest {
         after.feed(9)
         controller.runToIdle()
         effects shouldBe listOf(1, 5, 7, 9)
+    }
+
+    /**
+     * computenet-jb946 F1: the type-8 trace is a statement about the queue that
+     * recovery reconstructed, not permission to adopt its recorded epoch after
+     * supervision suspend/resume has changed that queue. The two frames on each
+     * side of the historical restart make both delivery and mere acceptance order
+     * observable. Several seeds and partial-drain depths pin the scheduling seam.
+     */
+    @Test
+    fun `suspend resume during recovery cannot suppress either following live effect`() {
+        val failures = mutableListOf<String>()
+        for (seed in listOf(1L, 5L, 10L)) {
+            for (partialDrainSteps in 2..8) {
+                val controller = SimulationController(seed = seed)
+                val journal = InMemoryJournal()
+                val effects = mutableListOf<Int>()
+                val relayRef = CellRef(UUID.randomUUID())
+                val notifierRef = CellRef(UUID.randomUUID())
+                val before = World(controller, journal, relayRef, notifierRef, effects)
+                controller.runToIdle()
+
+                listOf(5, 6, Int.MIN_VALUE, 3, 4).forEach { frame ->
+                    before.feed(frame)
+                    controller.runToIdle()
+                }
+                effects shouldBe listOf(5, 6, 3, 4)
+
+                val after = World(controller, journal, relayRef, notifierRef, effects)
+                controller.runToIdle()
+                after.host.recoverFrom(journal)
+                after.host.managementInlet.call.suspend(relayRef)
+                repeat(partialDrainSteps) { controller.step() }
+                after.host.managementInlet.call.resume(relayRef)
+                controller.runToIdle()
+
+                after.feed(8)
+                after.feed(9)
+                controller.runToIdle()
+                val counts = effects.count { it == 8 } to effects.count { it == 9 }
+                if (counts != (1 to 1)) {
+                    failures += "seed=$seed steps=$partialDrainSteps effects=$effects"
+                }
+            }
+        }
+        failures shouldBe emptyList()
+    }
+
+    /**
+     * computenet-jb946 F2: a replay-time fallback is itself durable history. A
+     * second crash must reproduce its safe epoch before both post-boundary frames,
+     * so two later live frames cannot alias positions spent on either recovery.
+     */
+    @Test
+    fun `replay mismatch remains duplicate safe across a second crash`() {
+        val failures = mutableListOf<String>()
+        for (seed in listOf(1L, 5L, 10L)) {
+            for (partialDrainSteps in 2..4) {
+                val controller = SimulationController(seed = seed)
+                val journal = InMemoryJournal()
+                val effects = mutableListOf<Int>()
+                val relayRef = CellRef(UUID.randomUUID())
+                val notifierRef = CellRef(UUID.randomUUID())
+                val first = World(controller, journal, relayRef, notifierRef, effects)
+                controller.runToIdle()
+
+                listOf(5, 6, Int.MIN_VALUE, 3, 4).forEach { frame ->
+                    first.feed(frame)
+                    controller.runToIdle()
+                }
+
+                val recovering = World(controller, journal, relayRef, notifierRef, effects)
+                controller.runToIdle()
+                recovering.host.recoverFrom(journal)
+                recovering.host.managementInlet.call.suspend(relayRef)
+                repeat(partialDrainSteps) { controller.step() }
+                recovering.host.managementInlet.call.resume(relayRef)
+                controller.runToIdle()
+                val restartsAfterFallback = journal.replay().mapNotNull(JournalRecords::decodeRestart)
+                restartsAfterFallback.size shouldBe 2
+                restartsAfterFallback.last().triggerFrameOrdinal shouldBe null
+                recovering.feed(8)
+                recovering.feed(9)
+                controller.runToIdle()
+                val firstRecoveryCounts = effects.count { it == 8 } to effects.count { it == 9 }
+
+                val after = World(controller, journal, relayRef, notifierRef, effects)
+                controller.runToIdle()
+                after.host.recoverFrom(journal)
+                controller.runToIdle()
+                after.feed(10)
+                after.feed(11)
+                controller.runToIdle()
+                val secondRecoveryCounts = effects.count { it == 10 } to effects.count { it == 11 }
+
+                if (firstRecoveryCounts != (1 to 1) || secondRecoveryCounts != (1 to 1)) {
+                    failures += "seed=$seed steps=$partialDrainSteps effects=$effects"
+                }
+            }
+        }
+        failures shouldBe emptyList()
+    }
+
+    /**
+     * A host may append before it replays an existing journal: logical ordinals
+     * initialise from the stored stream for exactly that sequence. If the live copy
+     * is supervision-parked, recovery stages another copy with the same ordinal.
+     * A metadata RESTART must treat that duplicate identity as an incomplete trace
+     * and finish via the no-type-8 path, never throw halfway through supervision.
+     */
+    @Test
+    fun `a metadata restart tolerates a live append accepted before recovery`() {
+        val controller = SimulationController(seed = 83)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val first = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        first.feed(1)
+        controller.runToIdle()
+
+        val recovering = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        recovering.host.managementInlet.call.suspend(relayRef)
+        recovering.feed(5)
+        controller.runToIdle()
+        recovering.host.recoverFrom(journal)
+        enqueueFailingAttentionRestart(recovering)
+        controller.runToIdle()
+
+        recovering.host.supervisionAccounting().restarts shouldBe 1
+        recovering.host.managementInlet.call.resume(relayRef)
+        controller.runToIdle()
+        recovering.feed(9)
+        controller.runToIdle()
+        effects.count { it == 9 } shouldBe 1
     }
 
     /**
