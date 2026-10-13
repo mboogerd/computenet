@@ -23,6 +23,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
+import civictech.cell.link.NotificationFailures
 import civictech.cell.link.PeerStamp
 import civictech.cell.link.sliceTo
 import civictech.cell.port.PortRef
@@ -1460,8 +1461,30 @@ class Replication(
         // byte-identical.
         val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
+        val outlet = gossipOutlet(local)
+        val at = gossipRef(key.first, key.second)
         @Suppress("UNCHECKED_CAST")
-        return gossipOutlet(local).streamTo(sink, at = gossipRef(key.first, key.second))
+        return try {
+            outlet.streamTo(sink, at = at)
+        } catch (failure: Throwable) {
+            // streamTo installs the consumer and LinkSupport record before it
+            // fires onLinked catch-up. If that delivery throws, no Link is
+            // returned to installLinkChecked, so tear the partial topology down
+            // here — still outside linkLifecycle and before the outer catch
+            // releases this formation's Retention hold and Interest debit.
+            val teardownFailures = NotificationFailures()
+            outlet.linking.links.filter { it.to == at }.forEach { partial ->
+                teardownFailures.guard { partial.unlink() }
+            }
+            // Defensive half for a failure between subscribe and register.
+            outlet.unsubscribe(at)
+            try {
+                teardownFailures.rethrow()
+            } catch (teardownFailure: Throwable) {
+                if (teardownFailure !== failure) failure.addSuppressed(teardownFailure)
+            }
+            throw failure
+        }
     }
 
     private fun budgetClaim(
