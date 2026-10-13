@@ -463,6 +463,82 @@ class BudgetInterestChargeTest {
     }
 
     @Test
+    fun `retry after a failing formation does not block concurrent retirement`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = recording)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        val remote = CellRef(logicalId, 0)
+        registry.publishFromPeer(remote, InvocationSink { }, peer = P, announcer = PeerStamp(P)) shouldBe null
+
+        val formationEntered = CountDownLatch(1)
+        val releaseFormation = CountDownLatch(1)
+        val retryEntered = CountDownLatch(1)
+        val releaseRetry = CountDownLatch(1)
+        val attempts = AtomicInteger()
+        val failure = IllegalStateException("first formation failed")
+        // The first install fails after a re-announcement was skipped; the
+        // retry that failure triggers then parks inside its own install, where
+        // a real transport would be blocked on the catch-up send.
+        replication.beforeLinkInstall = { candidate, target ->
+            if (candidate === local && target == remote) {
+                when (attempts.incrementAndGet()) {
+                    1 -> {
+                        formationEntered.countDown()
+                        check(releaseFormation.await(20, TimeUnit.SECONDS)) {
+                            "the reannouncement never released the failing formation"
+                        }
+                        throw failure
+                    }
+                    2 -> {
+                        retryEntered.countDown()
+                        check(releaseRetry.await(20, TimeUnit.SECONDS)) {
+                            "the retirement path never released the retry"
+                        }
+                    }
+                }
+            }
+        }
+
+        val forming = FutureTask<Throwable> {
+            try {
+                replication.replicate(local, host)
+                AssertionError("the first formation did not throw")
+            } catch (thrown: Throwable) {
+                thrown
+            }
+        }
+        Thread.ofVirtual().start(forming)
+        check(formationEntered.await(20, TimeUnit.SECONDS)) { "the first formation never reached installLink" }
+        registry.publishFromPeer(remote, InvocationSink { }, peer = P, announcer = PeerStamp(P)) shouldBe null
+        releaseFormation.countDown()
+        check(retryEntered.await(20, TimeUnit.SECONDS)) { "the failed formation never retried" }
+
+        // Retirement takes the link-lifecycle monitor; a retry running under
+        // that monitor would hold it for as long as its install is blocked.
+        val retiring = FutureTask<Unit> {
+            registry.unpublish(remote)
+            Unit
+        }
+        Thread.ofVirtual().start(retiring)
+        try {
+            retiring.get(2, TimeUnit.SECONDS)
+        } finally {
+            releaseRetry.countDown()
+        }
+
+        forming.get(20, TimeUnit.SECONDS) shouldBe failure
+        controller.runToIdle()
+        attempts.get() shouldBe 2
+        registry.location(remote) shouldBe null
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
+        recording.balance(P, ClaimClass.Retention) shouldBe N
+    }
+
+    @Test
     fun `a send that fails during link catch-up releases the hold and leaves no uncharged link`() {
         val recording = RecordingLedger("q-host", initial = N)
         val counting = CountingLedger(recording)
