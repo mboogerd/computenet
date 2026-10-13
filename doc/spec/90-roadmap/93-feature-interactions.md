@@ -4650,9 +4650,16 @@ itself: the candidate emits the `ReBaseline` notice (I-22) naming A's superseded
 > use reuse-ref per peer: each peer journals its rebind under the unchanged ref, so a
 > peer killed mid-roll recovers as the candidate and re-converges by ordinary merge.
 > The swap stays `EdgeEvent`-free; `Promote` is the I-7 durability plane, not the wave plane.
-> **Open residual** (computenet-gmlrc, uwt8b-D13): a replicated `PartitionedCell`'s
-> promotion unit is undecided: 53-STATE-04 swaps per organelle, but the composite
-> publishes no ref-addressed organelle for `promoteReplica`.
+> **Decision (computenet-gmlrc; council decision 2026-10-07):** for the
+> replicated-composite shape specified by computenet-7afo4-D9 (PR #1308, not yet
+> on `main`), a `PartitionedCell` is one composite instance per peer, so the
+> swap and export/import unit is the whole composite on each peer, applied
+> through the existing per-peer `promoteReplica` rebind. Each peer journals and
+> commits its own rebind independently; no barrier spans peers. All partitions
+> on one peer switch version together, although versions may still differ across
+> peers. The unreplicated case keeps the per-organelle rule unchanged. This is
+> a specification decision only; it does not claim that the replicated-composite
+> promotion is implemented or tested.
 
 ##### Multiplex / protocol continuity (N3×N23, N3×N27)
 

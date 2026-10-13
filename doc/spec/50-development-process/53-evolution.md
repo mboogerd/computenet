@@ -285,6 +285,16 @@ candidate). [53-STATE-04] For a `PartitionedCell` the swap membrane and the expo
 unit are per organelle — per partition, never the whole composite (a
 whole-composite atomic transaction would be the distributed barrier P4
 forbids); mixed-version partitions coexist safely under the invariance line.
+The one carve-out (decided in 93 I-11, computenet-gmlrc; decided, not built) is
+a `PartitionedCell` replicated as one composite instance per peer — the
+computenet-7afo4-D9 shape, which is not yet on `main`. There the swap membrane
+and export/import unit are instead the whole composite on each peer, applied
+through the existing per-peer `promoteReplica` rebind. Each peer journals and
+commits its own rebind independently; no barrier spans peers. All partitions on
+one peer therefore switch version together, although versions may still differ
+across peers. Every other case keeps the per-organelle rule unchanged: an
+unreplicated composite, and organelles replicated individually as ordinary
+ref-addressed instances (the `ShardCell`/`PartitionedShardSet` route).
 
 *(G-49 resolved for the swap transaction, W3.5)*: `Promotion.promote` is the
 four-phase protocol as an explicit state machine, not by convention. PRECHECK
