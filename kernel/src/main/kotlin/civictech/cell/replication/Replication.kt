@@ -102,6 +102,13 @@ class Replication(
     @Volatile
     internal var beforeLinkLifecycle: ((Replicable<*>, CellRef) -> Unit)? = null
 
+    /**
+     * Deterministic failure seam; invoked outside [linkLifecycle] before
+     * structural link installation.
+     */
+    @Volatile
+    internal var beforeLinkInstall: ((Replicable<*>, CellRef) -> Unit)? = null
+
     private data class AuthorityBinding(
         val authority: WriteAuthority,
         val signer: WriteSigner,
@@ -156,7 +163,15 @@ class Replication(
         val targetInterest: Interest,
         val key: Pair<CellRef, CellRef>,
         val hold: RetentionHold?,
+        /** Interest debit taken with [hold] by this formation, absent for a carried hold. */
+        val freshInterestUndo: (() -> Unit)?,
     ) {
+        init {
+            check(freshInterestUndo == null || hold != null) {
+                "a fresh Interest debit must belong to a Retention hold"
+            }
+        }
+
         var cancelled = false
 
         /**
@@ -1291,6 +1306,7 @@ class Replication(
                                     targetInterest,
                                     key,
                                     expected,
+                                    interest.undo,
                                 )
                                 if (chargedFormation == null && retentionHolds[key] === expected) {
                                     retentionHolds.remove(key)
@@ -1327,9 +1343,11 @@ class Replication(
         targetInterest: Interest,
         key: Pair<CellRef, CellRef>,
         hold: RetentionHold? = null,
+        freshInterestUndo: (() -> Unit)? = null,
     ): LinkFormation? {
         if (!linkEndpointsLiveLocked(local, other) || linkFormations.containsKey(key)) return null
-        return LinkFormation(local, other, targetInterest, key, hold).also { linkFormations[key] = it }
+        return LinkFormation(local, other, targetInterest, key, hold, freshInterestUndo)
+            .also { linkFormations[key] = it }
     }
 
     /**
@@ -1347,9 +1365,39 @@ class Replication(
                 formation.key,
             )
         } catch (failure: Throwable) {
-            synchronized(linkLifecycle) {
+            var releaseFreshHold: RetentionHold? = null
+            val retry = synchronized(linkLifecycle) {
                 if (linkFormations[formation.key] === formation) {
                     linkFormations.remove(formation.key)
+                }
+
+                // Only a formation that admitted both charges itself owns
+                // their rollback. A same-ref rebind/crash-supersede enters
+                // with an installed hold and must carry it through a failed
+                // relink instead of releasing another call's reservation.
+                if (
+                    formation.freshInterestUndo != null &&
+                    retentionHolds[formation.key] === formation.hold
+                ) {
+                    retentionHolds.remove(formation.key)
+                    releaseFreshHold = formation.hold
+                }
+
+                (formation.cancelled || formation.reannounced) &&
+                    registry.location(formation.other) != null
+            }
+
+            // Ledger callbacks and the retry's synchronous catch-up are both
+            // outside linkLifecycle. Retirement may already have released the
+            // hold; in that case the identity check above leaves it alone, but
+            // this formation still refunds its own Interest debit.
+            releaseFreshHold?.release()
+            formation.freshInterestUndo?.invoke()
+            if (retry) {
+                try {
+                    linkOut(formation.other)
+                } catch (retryFailure: Throwable) {
+                    if (retryFailure !== failure) failure.addSuppressed(retryFailure)
                 }
             }
             throw failure
@@ -1399,6 +1447,7 @@ class Replication(
         targetInterest: Interest,
         key: Pair<CellRef, CellRef>,
     ): Link {
+        beforeLinkInstall?.invoke(local, other)
         // the proxy resolves the port by name; delta types are erased on this
         // path and re-checked at the receiving inlet's serve
         val routed = (HostedCellProxy.create(other, registry, ReplicaDeltaInlet::class.java)
