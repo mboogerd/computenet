@@ -17,6 +17,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRegistry
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Proxy
 import civictech.cell.wire.WireCodec
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -46,6 +47,16 @@ internal data class CheckpointFrame(
 internal data class StagedRecovery(
     val replayedFrames: Int,
     val suppressedReplayDuplicates: AtomicInteger,
+)
+
+/**
+ * A decoded frame plus the recovery-local lifecycle generation it addressed. Explicit
+ * spawn/despawn events advance this token; a state-continuous promotion deliberately does not.
+ * This distinguishes reuse of the same exact [CellRef] without widening the durable format.
+ */
+private data class PendingReplayFrame(
+    val frame: HostedPortInvocation,
+    val lifecycleGeneration: Long,
 )
 
 /** Exact replayed positions for one journal recovery, grouped by target port. */
@@ -565,7 +576,8 @@ internal class HostDurability(
         // rather than delivered and dead-lettered once ApplyContext's recovery cleanup despawns
         // that candidate. Every other record kind (Checkpoint, Topology, ...) is still applied
         // eagerly in the single forward pass below; only frame submission moves.
-        val pendingFrames = mutableListOf<HostedPortInvocation>()
+        val pendingFrames = mutableListOf<PendingReplayFrame>()
+        val lifecycleGenerations = mutableMapOf<CellRef, Long>()
         ReplayScope.with(scope) {
             val records = journal.replay()
             fun submitFrame(payload: ByteArray) {
@@ -577,7 +589,10 @@ internal class HostDurability(
                     (if (scope == null) decoded else decoded.baselined(scope))
                         .copy(replayFrontier = scope, replayOf = journal)
                 }
-                pendingFrames += frame
+                pendingFrames += PendingReplayFrame(
+                    frame,
+                    lifecycleGenerations[frame.cellRef] ?: 0L,
+                )
             }
             try {
                 records.forEachIndexed { index, record ->
@@ -606,7 +621,21 @@ internal class HostDurability(
                             is DecodedJournalRecord.Topology -> {
                                 val topologyApplier = applier
                                     ?: error("topology record requires a TopologyApplier")
-                                decoded.events.forEach(topologyApplier::apply)
+                                decoded.events.forEach { event ->
+                                    topologyApplier.apply(event)
+                                    // Spawn/despawn are hard lifecycle boundaries. Promote is
+                                    // intentionally absent: both its same-ref replica rebind and
+                                    // distinct-ref state migration preserve state continuity.
+                                    val lifecycleRef = when (event) {
+                                        is TopoEvent.Spawn -> event.ref
+                                        is TopoEvent.Despawn -> event.ref
+                                        else -> null
+                                    }
+                                    lifecycleRef?.let { ref ->
+                                        lifecycleGenerations[ref] =
+                                            (lifecycleGenerations[ref] ?: 0L) + 1L
+                                    }
+                                }
                             }
                             is DecodedJournalRecord.Input -> {
                                 cursors[decoded.cellRef to decoded.name] = decoded.cursor
@@ -645,8 +674,22 @@ internal class HostDurability(
                 // record that failed to decode was never staged in the first place (T05 finding
                 // 4's contract: everything before the failing index still applies/stages).
                 val excludedTargets = applier?.activeEvolutions().orEmpty()
-                pendingFrames.forEach { frame ->
+                pendingFrames.forEach { pending ->
+                    val frame = pending.frame
                     if (frame.cellRef in excludedTargets) return@forEach
+                    // Topology replay is synchronous while frame submission is deliberately
+                    // deferred. A despawn + spawn may therefore replace the concrete cell
+                    // behind an otherwise identical CellRef before this loop. Resolving such
+                    // a frame now would cross its lifecycle boundary and contaminate the new
+                    // incarnation. Discharge it as retired work. A now-missing target still
+                    // re-enters the intake so the ordinary undeliverable-frame path can
+                    // dead-letter it; only a different live lifecycle generation is suppressed.
+                    val currentIncarnation = cellsView()[frame.cellRef]
+                    val currentGeneration = lifecycleGenerations[frame.cellRef] ?: 0L
+                    if (currentIncarnation != null && pending.lifecycleGeneration != currentGeneration) {
+                        frame.invocation.args.forEach(Proxy::discharge)
+                        return@forEach
+                    }
                     submit(frame)
                     frame.invocation.context?.timestamp?.let { timestamp ->
                         if (journalSelector(frame.cellRef, frame.portName) === journal) {
