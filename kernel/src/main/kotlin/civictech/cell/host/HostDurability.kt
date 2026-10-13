@@ -43,6 +43,12 @@ internal data class CheckpointFrame(
     val invocation: HostedPortInvocation,
 )
 
+/** One nested durable-input frame and its ordinal in the journal's logical frame stream. */
+internal data class AppendedInputFrame(
+    val record: ByteArray,
+    val ordinal: Int,
+)
+
 /** The synchronous staging result that [ManagedHost] exposes as a [Recovery]. */
 internal data class StagedRecovery(
     val replayedFrames: Int,
@@ -252,15 +258,16 @@ private data class RestartOutletWaveRecord(
  * When present, [triggerFramePayload] is the exact `WireCodec` payload of the
  * journaled invocation whose failure caused the transition, so recovery applies
  * this event only when replay reaches that same failure. A null payload records a
- * boundary caused by a never-journaled metadata invocation. [precedesFrameCount]
- * records how many already-journaled, still-pending frames of [cellRef] that
- * metadata-plane RESTART overtook. Per-cell FIFO makes those frames the suffix of
- * this journal's preceding frames for the cell, so recovery can stage the boundary
- * immediately ahead of that suffix without serializing or replay-matching the
- * trigger. For a non-null payload the same count names the still-pending suffix
- * that followed the failing trigger when this record was appended. Recovery can
- * therefore bind the record to the one frame immediately ahead of that suffix;
- * the payload validates that identity rather than serving as a journal-wide key.
+ * boundary caused by a never-journaled metadata invocation. [triggerFrameOrdinal]
+ * names the exact logical frame after whose delivery the restart occurred, when
+ * there was one. [followingFrameOrdinals] names, in LIVE DELIVERY ORDER, every
+ * already-journaled frame that remained pending behind that boundary. The ordinals
+ * identify records in the journal's logical frame stream (ordinary `RECORD_FRAME`s
+ * plus the nested frames of `RECORD_INPUT`); the list order is the scheduling fact.
+ * Recovery therefore does not infer delivery order from record order, including
+ * when resume re-accepted an older parked frame behind a newer failing frame.
+ * [triggerFramePayload] validates the ordinal binding without becoming an ambiguous
+ * journal-wide key for byte-identical frames.
  * [outlets] are the fresh epochs minted before the live
  * [civictech.cell.ReBaselineEmitting.reBaseline] call.
  *
@@ -271,7 +278,8 @@ private data class RestartOutletWaveRecord(
 private data class RestartRecord(
     val cellRef: CellRef,
     val triggerFramePayload: ByteArray?,
-    val precedesFrameCount: Int,
+    val triggerFrameOrdinal: Int?,
+    val followingFrameOrdinals: List<Int>,
     val generation: Long,
     val supersedes: Set<UUID>,
     val outlets: List<RestartOutletWaveRecord>,
@@ -281,7 +289,8 @@ private data class RestartRecord(
 internal data class DecodedRestart(
     val cellRef: CellRef,
     val triggerFramePayload: ByteArray?,
-    val precedesFrameCount: Int,
+    val triggerFrameOrdinal: Int?,
+    val followingFrameOrdinals: List<Int>,
     val generation: Long,
     val supersedes: Set<UUID>,
     val outlets: List<OutletWave>,
@@ -386,7 +395,8 @@ object JournalRecords {
             DecodedRestart(
                 restart.cellRef,
                 restart.triggerFramePayload,
-                restart.precedesFrameCount,
+                restart.triggerFrameOrdinal,
+                restart.followingFrameOrdinals,
                 restart.generation,
                 restart.supersedes,
                 restart.outlets.map { DecodedRestart.OutletWave(it.portName, it.sourceId, it.highWater) },
@@ -482,23 +492,27 @@ internal class HostDurability(
     private val deadLetter: (String) -> Unit,
     private val submit: (HostedPortInvocation) -> Unit,
     private val submitRestartBoundary:
-        (DecodedRestart, Journal, List<HostedPortInvocation>) -> Unit = { _, _, _ -> },
+        (DecodedRestart, Journal, HostedPortInvocation?, List<HostedPortInvocation>) -> Unit = { _, _, _, _ -> },
     private val awaitOnManagementBand: (suspend () -> Unit) -> Unit,
     /**
      * Runs its argument while holding the host's `dataLock`, handing it every
-     * accepted-but-undelivered invocation in host-sequence order: scheduler
-     * queued/attention-parked work, supervision-SUSPEND parking and cold-inlet
-     * ACTIVATE tails. The default — nothing pending, no lock — is for a delegate
-     * built without a host (`JournalRecordsTest`); `ManagedHost` always passes its own.
+     * accepted-but-undelivered invocation in pending DELIVERY order per cell (not
+     * sorted by [CheckpointFrame.sequence]; a caller that wants acceptance order
+     * sorts by it). A currently supervision-suspended cell's existing park precedes
+     * scheduler work that will join that park; otherwise scheduler queued/attention-
+     * parked work is already in delivery order. Cold-inlet ACTIVATE tails follow.
+     * The default — nothing pending, no lock — is for a delegate built without a
+     * host (`JournalRecordsTest`); `ManagedHost` always passes its own.
      */
     private val underIntakeLock: ((pending: List<CheckpointFrame>) -> Unit) -> Unit = { it(emptyList()) },
     /**
      * computenet-ggxrq (I-22 amendment): the original per-record invocations a pending
      * entry subsumes if it is the current staged result of an `IntakeControl.coalesce`
-     * merge, or empty otherwise — `IntakeControl.coalesceOriginalsOf`. [journalRestart]'s
-     * `precedesFrameCount` count uses this so a staged Coalesce merge counts the k WAL
-     * records its originals actually appended, instead of zero (the merged invocation's
-     * own identity is never a key of [journaledFrames] or [replayedFrames]). The default —
+     * merge, or empty otherwise — `IntakeControl.coalesceOriginalsOf`. [journalRestart]
+     * expands those originals into the type-8 delivery-order trace so a staged Coalesce
+     * merge names the k WAL records its originals actually appended, instead of zero (the
+     * merged invocation's own identity is never a key of [journaledFrames] or
+     * [replayedFrames]). The default —
      * always empty — is for a delegate built without a host (`JournalRecordsTest`);
      * `ManagedHost` always passes its own `intakeControl::coalesceOriginalsOf`.
      */
@@ -545,16 +559,24 @@ internal class HostDurability(
      */
     private val replayedPositions = IdentityHashMap<Journal, ReplayedPositions>()
 
-    /** Journal provenance for each asynchronously delivered replay frame. */
-    private data class ReplayedFrame(val journal: Journal)
+    /** Journal provenance and stable logical-frame ordinal for one replay frame. */
+    private data class ReplayedFrame(val journal: Journal, val ordinal: Int)
 
     private val replayedFrames = IdentityHashMap<HostedPortInvocation, ReplayedFrame>()
 
     /** One journal record currently representing an accepted, undelivered frame. */
-    private data class JournaledFrame(val journal: Journal, val payload: ByteArray)
+    private data class JournaledFrame(val journal: Journal, val payload: ByteArray, val ordinal: Int)
 
     /** Exact payload and journal provenance, retained only until delivery finishes. */
     private val journaledFrames = IdentityHashMap<HostedPortInvocation, JournaledFrame>()
+
+    /**
+     * Next logical-frame ordinal in each journal's current (post-compaction) record stream.
+     * Type 8 uses these ordinals only as stable identities; its ordered list, not ordinal
+     * magnitude, records live delivery order. Initialized lazily from an existing journal
+     * so a host may append before recovery, and reset with checkpoint compaction.
+     */
+    private val nextFrameOrdinals = IdentityHashMap<Journal, Int>()
 
     /**
      * Trigger-bearing type-8 events decoded during recovery, bound to their exact
@@ -646,7 +668,6 @@ internal class HostDurability(
         var frames = 0
         var checkpointCatchUpPendingAt: Int? = null
         val positions = ReplayedPositions()
-        val submittedFrames = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
         synchronized(replayedPositions) {
             replayedPositions.remove(journal)
         }
@@ -683,19 +704,21 @@ internal class HostDurability(
         // rather than delivered and dead-lettered once ApplyContext's recovery cleanup despawns
         // that candidate. Every other record kind (Checkpoint, Topology, ...) is still applied
         // eagerly in the single forward pass below; only frame submission moves.
-        val pendingFrames = mutableListOf<Pair<HostedPortInvocation, ByteArray>>()
+        data class PendingFrame(
+            val invocation: HostedPortInvocation,
+            val payload: ByteArray,
+            val ordinal: Int,
+        )
+        val pendingFrames = mutableListOf<PendingFrame>()
+        val pendingFramesByOrdinal = mutableMapOf<Int, PendingFrame>()
+        var nextDecodedFrameOrdinal = 0
         data class PendingRestartBoundary(
             val afterFrameCount: Int,
             val restart: DecodedRestart,
-            val precededFrames: List<HostedPortInvocation>,
+            val trigger: HostedPortInvocation?,
+            val followingFrames: List<HostedPortInvocation>,
         )
         val pendingRestartBoundaries = mutableListOf<PendingRestartBoundary>()
-        data class PendingTriggeredRestart(
-            val trigger: HostedPortInvocation,
-            val restart: DecodedRestart,
-        )
-        val pendingTriggeredRestarts = mutableListOf<PendingTriggeredRestart>()
-        val pendingFramePayloads = IdentityHashMap<HostedPortInvocation, ByteArray>()
         ReplayScope.with(scope) {
             val records = journal.replay()
             fun submitFrame(payload: ByteArray) {
@@ -707,9 +730,9 @@ internal class HostDurability(
                     (if (scope == null) decoded else decoded.baselined(scope))
                         .copy(replayFrontier = scope, replayOf = journal)
                 }
-                pendingFrames += frame to payload
-                pendingFramePayloads[frame] = payload
-                submittedFrames.getOrPut(frame.cellRef, ::mutableListOf) += frame
+                val pending = PendingFrame(frame, payload, nextDecodedFrameOrdinal++)
+                pendingFrames += pending
+                pendingFramesByOrdinal[pending.ordinal] = pending
             }
             try {
                 records.forEachIndexed { index, record ->
@@ -722,41 +745,49 @@ internal class HostDurability(
                     // complete one.
                     try {
                         JournalRecords.decodeRestart(record)?.let { restart ->
-                            if (restart.triggerFramePayload == null) {
-                                val preceding = submittedFrames[restart.cellRef].orEmpty()
-                                require(restart.precedesFrameCount <= preceding.size) {
-                                    "restart boundary for ${restart.cellRef} precedes " +
-                                        "${restart.precedesFrameCount} frames, but only " +
-                                        "${preceding.size} preceding frames were replayed"
-                                }
-                                // Frame submission is deferred until the topology fold below
-                                // has identified interrupted evolution candidates. Retain this
-                                // record's position among decoded frames so the boundary can be
-                                // staged after its preceding frames and before every later one.
-                                pendingRestartBoundaries += PendingRestartBoundary(
-                                    pendingFrames.size,
-                                    restart,
-                                    preceding.takeLast(restart.precedesFrameCount),
-                                )
-                            } else {
-                                val preceding = submittedFrames[restart.cellRef].orEmpty()
-                                require(restart.precedesFrameCount < preceding.size) {
-                                    "trigger-bearing restart for ${restart.cellRef} precedes " +
-                                        "${restart.precedesFrameCount} pending frames, but only " +
-                                        "${preceding.size} preceding frames were replayed"
-                                }
-                                val trigger = preceding[preceding.lastIndex - restart.precedesFrameCount]
-                                require(
-                                    restart.triggerFramePayload.contentEquals(
-                                        checkNotNull(pendingFramePayloads[trigger]),
-                                    ),
-                                ) {
-                                    "trigger-bearing restart for ${restart.cellRef} does not match " +
-                                        "the frame immediately ahead of its " +
-                                        "${restart.precedesFrameCount}-frame pending suffix"
-                                }
-                                pendingTriggeredRestarts += PendingTriggeredRestart(trigger, restart)
+                            require(
+                                (restart.triggerFramePayload == null) == (restart.triggerFrameOrdinal == null),
+                            ) {
+                                "restart boundary for ${restart.cellRef} must name both trigger payload and ordinal, or neither"
                             }
+                            val namedOrdinals = listOfNotNull(restart.triggerFrameOrdinal) +
+                                restart.followingFrameOrdinals
+                            require(namedOrdinals.distinct().size == namedOrdinals.size) {
+                                "restart boundary for ${restart.cellRef} names a logical frame more than once"
+                            }
+                            val named = namedOrdinals.associateWith { ordinal ->
+                                requireNotNull(pendingFramesByOrdinal[ordinal]) {
+                                    "restart boundary for ${restart.cellRef} names unknown logical frame $ordinal"
+                                }.also { pending ->
+                                    require(pending.invocation.cellRef == restart.cellRef) {
+                                        "restart boundary for ${restart.cellRef} names frame $ordinal for " +
+                                            pending.invocation.cellRef
+                                    }
+                                }
+                            }
+                            val trigger = restart.triggerFrameOrdinal?.let { ordinal ->
+                                named.getValue(ordinal).also { pending ->
+                                    require(
+                                        checkNotNull(restart.triggerFramePayload).contentEquals(pending.payload),
+                                    ) {
+                                        "trigger-bearing restart for ${restart.cellRef} does not match logical frame $ordinal"
+                                    }
+                                }.invocation
+                            }
+                            val following = restart.followingFrameOrdinals.map { ordinal ->
+                                named.getValue(ordinal).invocation
+                            }
+                            // Frame submission is deferred until the topology fold below
+                            // has identified interrupted evolution candidates. Retain this
+                            // record's position among decoded frames; once its named frames
+                            // are staged, the host reorders that one cell's queue to this
+                            // explicitly recorded live delivery trace.
+                            pendingRestartBoundaries += PendingRestartBoundary(
+                                pendingFrames.size,
+                                restart,
+                                trigger,
+                                following,
+                            )
                             return@forEachIndexed
                         }
                         when (val decoded = JournalRecords.decode(record)) {
@@ -817,10 +848,15 @@ internal class HostDurability(
                 val excludedTargets = applier?.activeEvolutions().orEmpty()
 
                 synchronized(replayedRestarts) {
-                    pendingTriggeredRestarts
-                        .filterNot { it.restart.cellRef in excludedTargets }
+                    pendingRestartBoundaries
+                        .filter { it.trigger != null && it.restart.cellRef !in excludedTargets }
                         .forEach { pending ->
-                            check(replayedRestarts.put(pending.trigger, ReplayedRestart(journal, pending.restart)) == null) {
+                            check(
+                                replayedRestarts.put(
+                                    checkNotNull(pending.trigger),
+                                    ReplayedRestart(journal, pending.restart),
+                                ) == null,
+                            ) {
                                 "multiple trigger-bearing restarts matched one replay frame"
                             }
                         }
@@ -833,16 +869,18 @@ internal class HostDurability(
                             submitRestartBoundary(
                                 pending.restart,
                                 journal,
-                                pending.precededFrames,
+                                pending.trigger,
+                                pending.followingFrames,
                             )
                         }
                     }
                 }
 
-                pendingFrames.forEachIndexed { index, (frame, payload) ->
+                pendingFrames.forEachIndexed { index, pending ->
                     stageBoundaries(index)
+                    val frame = pending.invocation
                     if (frame.cellRef in excludedTargets) return@forEachIndexed
-                    val replayed = ReplayedFrame(journal)
+                    val replayed = ReplayedFrame(journal, pending.ordinal)
                     synchronized(replayedFrames) {
                         replayedFrames[frame] = replayed
                     }
@@ -873,7 +911,7 @@ internal class HostDurability(
 
     /**
      * Consume the recorded RESTART bound to [frame], if this replay came from a
-     * type-8-aware journal. Recovery used the record's pending-suffix count to bind
+     * type-8-aware journal. Recovery used the record's logical trigger ordinal to bind
      * the event to one invocation identity before dispatch; byte-identical later
      * frames therefore cannot adopt it. No association is the compatibility path
      * for an older journal: supervision behaves exactly as it did before type 8.
@@ -893,13 +931,13 @@ internal class HostDurability(
     }
 
     /** Remember the already-serialized intake frame so RESTART never re-serializes consumed exclusives. */
-    fun rememberJournaledFrame(frame: HostedPortInvocation, record: ByteArray) {
+    fun rememberJournaledFrame(frame: HostedPortInvocation, record: ByteArray, ordinal: Int) {
         check(record.firstOrNull() == RECORD_FRAME) { "journaled invocation is not a frame record" }
         val journal = checkNotNull(journalSelector(frame.cellRef, frame.portName)) {
             "journaled invocation has no selected journal"
         }
         synchronized(journaledFrames) {
-            journaledFrames[frame] = JournaledFrame(journal, record.copyOfRange(1, record.size))
+            journaledFrames[frame] = JournaledFrame(journal, record.copyOfRange(1, record.size), ordinal)
         }
     }
 
@@ -950,6 +988,32 @@ internal class HostDurability(
         byteArrayOf(RECORD_FRAME) + WireCodec.encode(hostedInvocation)
 
     /**
+     * Append one ordinary intake frame and bind its live invocation identity to the
+     * logical-frame ordinal type 8 can later put in its delivery-order trace.
+     */
+    fun appendJournaledFrame(journal: Journal, hostedInvocation: HostedPortInvocation) {
+        val record = journalFrame(hostedInvocation)
+        val ordinal = synchronized(nextFrameOrdinals) {
+            val next = nextFrameOrdinal(journal)
+            journal.append(record)
+            nextFrameOrdinals[journal] = next + 1
+            next
+        }
+        rememberJournaledFrame(hostedInvocation, record, ordinal)
+    }
+
+    private fun nextFrameOrdinal(journal: Journal): Int =
+        nextFrameOrdinals[journal] ?: journal.replay().sumOf(::logicalFrameCount).also {
+            nextFrameOrdinals[journal] = it
+        }
+
+    private fun logicalFrameCount(record: ByteArray): Int = when (val decoded = JournalRecords.decode(record)) {
+        is DecodedJournalRecord.Frame -> 1
+        is DecodedJournalRecord.Input -> decoded.frames.size
+        else -> 0
+    }
+
+    /**
      * Write the fresh-epoch half of one live supervised RESTART before its
      * `ReBaseline` can become visible. A replay of the same journal never appends:
      * it consumes the existing record through [takeReplayedRestart] or through
@@ -968,48 +1032,66 @@ internal class HostDurability(
         // already consumed; durability must never touch that exclusive twice. A
         // never-journaled metadata trigger therefore carries no payload.
         //
-        // Snapshot the pending suffix and append its boundary under the intake lock.
-        // That keeps the count tied to exactly the frames already present before type 8:
-        // an accept cannot land between the snapshot and the record append. The per-cell
-        // FIFO makes the pending frames a suffix, so the count is enough to recover their
-        // exact position even when two invocations have byte-identical payloads.
+        // Snapshot the pending delivery trace and append its boundary under the intake
+        // lock. An accept cannot land between that snapshot and the type-8 append. Each
+        // ordinal identifies one logical frame in this journal; list order is the live
+        // delivery order. Recovery therefore never has to infer scheduling from journal
+        // order, and two byte-identical invocations remain distinct.
         underIntakeLock { pending ->
-            val triggerPayload = synchronized(journaledFrames) { journaledFrames[trigger]?.payload }
             // A frame replayed from this same journal and not yet delivered is also one
-            // of its records: a metadata RESTART during recovery overtakes it exactly as
-            // it would a live-journaled one. For a trigger-bearing restart, the same count
-            // is the suffix of pending records that FOLLOWED the failing trigger. Recovery
-            // binds the record to the frame immediately ahead of that suffix, so payload
-            // equality is validation rather than an ambiguous journal-wide lookup.
+            // of its logical records: a metadata RESTART during recovery overtakes it
+            // exactly as it would a live-journaled one.
             //
             // computenet-ggxrq (I-22 amendment): a pending entry that is the current
-            // staged result of a SaturationPolicy.Coalesce merge is counted by its
-            // original per-record invocations (coalesceOriginals), not by its own
+            // staged result of a SaturationPolicy.Coalesce merge is expanded to its
+            // original per-record invocations (coalesceOriginals), not named by its own
             // identity — the merge is a NEW HostedPortInvocation that journaledFrames/
-            // replayedFrames never keyed, even though the WAL holds one RECORD_FRAME
-            // per original (coalescing is acceptance, not loss). Counting the originals
-            // places the boundary ahead of all k of them, so replay delivers every
-            // original on the correct (old) epoch instead of silently dropping the
-            // post-recovery live frame that follows ([KFX-11]). This is exact for a
+            // replayedFrames never keyed, even though the WAL holds one logical frame per
+            // original (coalescing is acceptance, not loss). Recording those originals
+            // places the boundary ahead of all k of them. This is exact for a
             // handler that reacts once per original element; a handler that instead
             // emits once per MERGED delta sees replay deliver k waves where live
             // delivered one — see 93 I-22's amendment for the documented weaker
             // guarantee (never zero, not exactly-once, for that handler shape).
-            val precedesFrameCount = synchronized(journaledFrames) {
+            var ambiguousSameJournalFrame = false
+            val (triggerRecord, followingFrameOrdinals) = synchronized(journaledFrames) {
                 synchronized(replayedFrames) {
-                    fun isJournaledOrReplayed(invocation: HostedPortInvocation): Boolean =
-                        journaledFrames[invocation]?.journal === journal ||
-                            replayedFrames[invocation]?.journal === journal
-                    pending.sumOf { (_, invocation) ->
-                        if (invocation.cellRef != trigger.cellRef) return@sumOf 0
+                    fun ordinalOf(invocation: HostedPortInvocation): Int? =
+                        journaledFrames[invocation]?.takeIf { it.journal === journal }?.ordinal
+                            ?: replayedFrames[invocation]?.takeIf { it.journal === journal }?.ordinal
+                    val following = pending.flatMap { (_, invocation) ->
+                        if (invocation.cellRef != trigger.cellRef) return@flatMap emptyList()
                         val originals = coalesceOriginals(invocation)
-                        if (originals.isEmpty()) {
-                            if (isJournaledOrReplayed(invocation)) 1 else 0
-                        } else {
-                            originals.count(::isJournaledOrReplayed)
+                        val represented = if (originals.isEmpty()) listOf(invocation) else originals
+                        represented.mapNotNull { candidate ->
+                            ordinalOf(candidate).also { ordinal ->
+                                if (ordinal == null &&
+                                    journalSelector(candidate.cellRef, candidate.portName) === journal
+                                ) {
+                                    ambiguousSameJournalFrame = true
+                                }
+                            }
                         }
                     }
+                    journaledFrames[trigger]?.takeIf { it.journal === journal } to following
                 }
+            }
+            val triggerFrameOrdinal = triggerRecord?.ordinal
+            val triggerPayload = triggerRecord?.payload
+            if (triggerFrameOrdinal == null &&
+                trigger.type != HostedPortInvocation.Type.PORT_PROTOCOL &&
+                journalSelector(trigger.cellRef, trigger.portName) === journal
+            ) {
+                ambiguousSameJournalFrame = true
+            }
+            // Option E as defense in depth: an incomplete trace is more dangerous than
+            // no type-8 record. Falling back to the pre-type-8 replay may duplicate an
+            // effect, while writing a boundary that silently omits a same-journal frame
+            // can suppress later live traffic. Never encode that ambiguity.
+            if (ambiguousSameJournalFrame) return@underIntakeLock
+            val namedOrdinals = listOfNotNull(triggerFrameOrdinal) + followingFrameOrdinals
+            check(namedOrdinals.distinct().size == namedOrdinals.size) {
+                "restart delivery trace for ${trigger.cellRef} names a logical frame more than once"
             }
             journal.append(
                 journalRecord(
@@ -1017,7 +1099,8 @@ internal class HostDurability(
                     RestartRecord(
                         trigger.cellRef,
                         triggerPayload,
-                        precedesFrameCount,
+                        triggerFrameOrdinal,
+                        followingFrameOrdinals,
                         generation,
                         supersedes,
                         outlets.entries.sortedBy { it.key }.map { (portName, state) ->
@@ -1044,15 +1127,22 @@ internal class HostDurability(
         name: String,
         cursor: Serializable,
         frames: List<HostedPortInvocation>,
-    ): List<ByteArray> {
+    ): List<AppendedInputFrame> {
         val encodedFrames = frames.map(::journalFrame)
         val record = journalRecord(
             RECORD_INPUT,
             InputRecord(cellRef, name, cursor, encodedFrames),
         )
-        journal.append(record)
+        val firstOrdinal = synchronized(nextFrameOrdinals) {
+            val next = nextFrameOrdinal(journal)
+            journal.append(record)
+            nextFrameOrdinals[journal] = next + encodedFrames.size
+            next
+        }
         cursors[cellRef to name] = cursor
-        return encodedFrames
+        return encodedFrames.mapIndexed { index, frame ->
+            AppendedInputFrame(frame, firstOrdinal + index)
+        }
     }
 
     /** Append one resolved graph delta before its first host operation. */
@@ -1370,7 +1460,10 @@ internal class HostDurability(
                     }
                     .sortedBy(CheckpointFrame::sequence)
                     .map { it.invocation to journalFrame(it.invocation) }
-                journal.reset(compacted + cellHeld + hostHeld.map { it.second })
+                synchronized(nextFrameOrdinals) {
+                    journal.reset(compacted + cellHeld + hostHeld.map { it.second })
+                    nextFrameOrdinals[journal] = cellHeld.size + hostHeld.size
+                }
 
                 // The reset above changes how the journal represents every still-pending
                 // host entry. Old live associations name records that no longer exist;
@@ -1382,10 +1475,11 @@ internal class HostDurability(
                     synchronized(replayedFrames) {
                         journaledFrames.entries.removeIf { it.value.journal === journal }
                         replayedFrames.entries.removeIf { it.value.journal === journal }
-                        hostHeld.forEach { (invocation, record) ->
+                        hostHeld.forEachIndexed { index, (invocation, record) ->
                             journaledFrames[invocation] = JournaledFrame(
                                 journal,
                                 record.copyOfRange(1, record.size),
+                                cellHeld.size + index,
                             )
                             checkpointCarriedCoalesce(invocation)
                         }

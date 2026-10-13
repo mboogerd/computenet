@@ -954,16 +954,12 @@ open class ManagedHost(
                 // FIFO but is a protocol frame: it is never journaled, so a checkpoint
                 // does not carry it either (and could not encode its in-process link).
                 val pending = ArrayList<CheckpointFrame>()
-                attentionScheduler.stagedInSequence()
-                    .filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL }
-                    .forEach { invocation ->
-                        pending += CheckpointFrame(
-                            checkNotNull(checkpointSequences[invocation]) {
-                                "staged invocation has no host acceptance position: $invocation"
-                            },
-                            invocation,
-                        )
-                    }
+                // For a cell that is STILL supervision-suspended, its existing park is
+                // the head of its eventual delivery order: scheduler-staged data will
+                // first join the tail of that park, then resume drains the park FIFO.
+                // Once resume has removed the park, its re-accepted frames live in the
+                // scheduler queue behind whatever was staged there already, so the
+                // scheduler block below is the complete order for that cell.
                 suspendedCells.values.forEach { queue ->
                     queue.snapshot().forEach { invocation ->
                         pending += CheckpointFrame(
@@ -974,6 +970,16 @@ open class ManagedHost(
                         )
                     }
                 }
+                attentionScheduler.stagedInSequence()
+                    .filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL }
+                    .forEach { invocation ->
+                        pending += CheckpointFrame(
+                            checkNotNull(checkpointSequences[invocation]) {
+                                "staged invocation has no host acceptance position: $invocation"
+                            },
+                            invocation,
+                        )
+                    }
                 cells.forEach { (cellRef, cell) ->
                     PortRegistry.of(cell).names().forEach { portName ->
                         (PortRegistry.of(cell)[portName] as? FanInlet<*>)
@@ -991,7 +997,14 @@ open class ManagedHost(
                             }
                     }
                 }
-                action(pending.sortedBy(CheckpointFrame::sequence))
+                // Deliberately NOT sorted by acceptance position: the list is handed over
+                // in the order delivery would take from this state. For a still-suspended
+                // cell that is park then staged; after resume removed its park, the staged
+                // queue alone already puts re-accepted parked frames behind older staged
+                // work. `HostDurability.journalRestart` records that order as type 8's
+                // delivery trace; `checkpoint` wants acceptance order and sorts by
+                // `sequence` itself.
+                action(pending)
             }
         },
         // computenet-ggxrq: `intakeControl` is declared later in this file, so this is a
@@ -1290,54 +1303,81 @@ open class ManagedHost(
     }
 
     /**
-     * A never-journaled metadata failure has no replayable trigger frame. Its
-     * type-8 record is therefore represented during recovery by an internal
-     * marker in the same per-cell FIFO as the surrounding journal frames. When
-     * live metadata scheduling overtook already-staged data, [precededFrames]
-     * names that replayed suffix and the marker is moved immediately ahead of
-     * it. The marker itself carries no protocol payload and is intercepted by
-     * [deliver] before ordinary port lookup.
+     * Reproduce the per-cell delivery trace stored by type 8. A trigger-bearing
+     * restart moves that exact replay frame ahead of [followingFrames], so its
+     * handler runs and restarts the cell at the live boundary. A metadata restart
+     * has no replayable trigger, so an internal marker occupies the boundary.
+     *
+     * Logical journal ordinals identify the frames, while the record's list order
+     * supplies the scheduling fact. This is intentionally not a journal-position
+     * inference: a resume may have re-accepted an older parked frame behind a newer
+     * failing frame. The marker carries no protocol payload and [deliver] intercepts
+     * it before ordinary port lookup.
      */
     private fun stageReplayedRestartBoundary(
         restart: DecodedRestart,
         journal: Journal,
-        precededFrames: List<HostedPortInvocation>,
+        trigger: HostedPortInvocation?,
+        followingFrames: List<HostedPortInvocation>,
     ) {
-        val marker = HostedPortInvocation(
-            cellRef = restart.cellRef,
-            portName = "",
-            type = HostedPortInvocation.Type.PORT_PROTOCOL,
-            invocation = Invocation("", emptyList(), emptyList()),
-            replayOf = journal,
-        )
-        synchronized(dataLock) {
-            stagedRestartBoundaries[marker] = restart
-            attentionScheduler.stage(marker)
-            if (precededFrames.isNotEmpty()) {
-                val preceded = Collections.newSetFromMap(
-                    IdentityHashMap<HostedPortInvocation, Boolean>(),
-                ).also { it.addAll(precededFrames) }
-                val queue: MutableCollection<Pair<Long, HostedPortInvocation>> =
-                    attentionScheduler.dataQueues[restart.cellRef]
-                        ?: attentionScheduler.attentionParked[restart.cellRef]
-                        ?: error("restart boundary for ${restart.cellRef} has no staged cell queue")
-                val ordered = queue.toMutableList()
-                val markerEntry = ordered.singleOrNull { it.second === marker }
-                    ?: error("restart boundary marker for ${restart.cellRef} was not staged exactly once")
-                check(ordered.count { preceded.contains(it.second) } == precededFrames.size) {
-                    "restart boundary for ${restart.cellRef} cannot find every preceded replay frame"
-                }
-                ordered.remove(markerEntry)
-                val boundaryIndex = ordered.indexOfFirst { preceded.contains(it.second) }
-                check(boundaryIndex >= 0) {
-                    "restart boundary for ${restart.cellRef} has no preceded replay frame"
-                }
-                ordered.add(boundaryIndex, markerEntry)
-                queue.clear()
-                queue.addAll(ordered)
-            }
+        val marker = if (trigger == null) {
+            HostedPortInvocation(
+                cellRef = restart.cellRef,
+                portName = "",
+                type = HostedPortInvocation.Type.PORT_PROTOCOL,
+                invocation = Invocation("", emptyList(), emptyList()),
+                replayOf = journal,
+            )
+        } else {
+            null
         }
-        if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()
+        synchronized(dataLock) {
+            marker?.let {
+                stagedRestartBoundaries[it] = restart
+                attentionScheduler.stage(it)
+            }
+            val trace = buildList {
+                add(trigger ?: checkNotNull(marker))
+                addAll(followingFrames)
+            }
+            val traceSet = Collections.newSetFromMap(
+                IdentityHashMap<HostedPortInvocation, Boolean>(),
+            ).also { it.addAll(trace) }
+            check(traceSet.size == trace.size) {
+                "restart boundary for ${restart.cellRef} names a replay frame more than once"
+            }
+            val queue: MutableCollection<Pair<Long, HostedPortInvocation>> =
+                attentionScheduler.dataQueues[restart.cellRef]
+                    ?: attentionScheduler.attentionParked[restart.cellRef]
+                    ?: error("restart boundary for ${restart.cellRef} has no staged cell queue")
+            val ordered = queue.toMutableList()
+            check(ordered.count { traceSet.contains(it.second) } == trace.size) {
+                "restart boundary for ${restart.cellRef} cannot find every delivery-trace frame"
+            }
+            val traceEntries = trace.map { invocation ->
+                ordered.single { it.second === invocation }
+            }
+            ordered.removeIf { traceSet.contains(it.second) }
+            // All already-staged replay frames omitted from the trace completed before
+            // this live boundary. Traffic accepted after the crash has no replay
+            // provenance and stays behind the reconstructed historical trace.
+            val insertionIndex = ordered.indexOfFirst { it.second.replayOf !== journal }
+                .let { if (it < 0) ordered.size else it }
+            ordered.addAll(insertionIndex, traceEntries)
+            // Re-deal the queue's own stage sequences in ascending order over the new
+            // arrangement. `AttentionScheduler.stagedInSequence` sorts by that sequence,
+            // and `HostDurability.journalRestart` reads it as live delivery order: a
+            // RESTART that fires while these replay frames are still staged would
+            // otherwise record their pre-reorder (journal) order in its own type-8
+            // trace, and a second recovery would replay them across the wrong epoch
+            // boundary (computenet-es92f task review).
+            val sequences = ordered.map { it.first }.sorted()
+            queue.clear()
+            queue.addAll(ordered.mapIndexed { index, entry -> sequences[index] to entry.second })
+        }
+        if (marker != null) {
+            if (dispatchBatch == 1) enqueue(20) { dispatchOneWhenRecoveryReady() } else armBatchDispatch()
+        }
     }
 
     private fun consumeStagedLinkCloseMarker(hostedInvocation: HostedPortInvocation): Boolean =
@@ -1533,9 +1573,7 @@ open class ManagedHost(
     private fun journalTee(hostedInvocation: HostedPortInvocation) {
         val journal = portJournalSelector(hostedInvocation.cellRef, hostedInvocation.portName) ?: return
         if (hostedInvocation.replayOf === journal) return
-        val record = hostDurability.journalFrame(hostedInvocation)
-        journal.append(record)
-        hostDurability.rememberJournaledFrame(hostedInvocation, record)
+        hostDurability.appendJournaledFrame(journal, hostedInvocation)
     }
 
     /**
@@ -1681,13 +1719,13 @@ open class ManagedHost(
             synchronized(dataLock) {
                 val records = hostDurability.journalInput(journal, cellRef, name, cursor, capture.frames)
                 appended = true
-                capture.frames.zip(records).forEach { (captured, record) ->
+                capture.frames.zip(records).forEach { (captured, appended) ->
                     val frame = captured.copy(replayOf = journal)
                     // RECORD_INPUT contains these exact encoded frames. They are staged
                     // with replay provenance so the ordinary tee does not append them
                     // again, but a triggerless RESTART still has to count them as the
                     // journal frames it overtakes.
-                    hostDurability.rememberJournaledFrame(frame, record)
+                    hostDurability.rememberJournaledFrame(frame, appended.record, appended.ordinal)
                     try {
                         accept(frame)
                     } catch (failure: Throwable) {
@@ -2411,16 +2449,22 @@ open class ManagedHost(
             }
         }
         } finally {
-            if (hostedInvocation.replayOf != null) hostDurability.forgetReplayedFrame(hostedInvocation)
-            // Usually populated by the ordinary port-journal tee. Checkpoint carry may
-            // also represent a pending volatile-port frame in the cell's journal, so the
-            // cleanup is deliberately unconditional (a no-op when nothing was tracked).
-            hostDurability.forgetJournaledFrame(hostedInvocation)
-            // computenet-ggxrq: drop coalesce bookkeeping once the merged entry is
-            // delivered — a no-op for the common (non-merged) invocation.
-            intakeControl.forgetCoalesceOriginals(hostedInvocation)
-            if (!retainCheckpointSequence && hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
-                synchronized(dataLock) { checkpointSequences.remove(hostedInvocation) }
+            if (!retainCheckpointSequence) {
+                if (hostedInvocation.replayOf != null) hostDurability.forgetReplayedFrame(hostedInvocation)
+                // Usually populated by the ordinary port-journal tee. Checkpoint carry may
+                // also represent a pending volatile-port frame in the cell's journal, so the
+                // cleanup is deliberately unconditional (a no-op when nothing was tracked).
+                // A supervision-parked frame is still pending and keeps this association
+                // across resume; type 8 needs its stable logical-frame ordinal if a newer
+                // failure overtakes it after re-acceptance.
+                hostDurability.forgetJournaledFrame(hostedInvocation)
+                // computenet-ggxrq: drop coalesce bookkeeping once the merged entry is
+                // delivered — a no-op for the common (non-merged) invocation. Parking is
+                // not delivery, so a parked merge retains its lineage too.
+                intakeControl.forgetCoalesceOriginals(hostedInvocation)
+                if (hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
+                    synchronized(dataLock) { checkpointSequences.remove(hostedInvocation) }
+                }
             }
         }
     }

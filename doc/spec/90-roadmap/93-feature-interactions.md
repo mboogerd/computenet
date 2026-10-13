@@ -8200,60 +8200,50 @@ artifact, or kept as a separate orchestrator input.
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The reconciliation core: host-held generation bookkeeping, the ReBaseline(source, supersedes, state, supersede) catch-up mode, the R5 dead-lane filter on convergent consumers, the re-baseline trigger on every RESTART with direction-by-class (push-authoritat…
 > ⚠ Divergence with landed code: Landed RESTART (spec 31 rule 5, M3.5) is exactly the bare local rollback the resolution forbids: deactivate → activate → restore the spawn-time Stateful checkpoint, same sourceId with a rolled-back counter (tag/wave aliasing possible), no downstream reconci…
 > Reconciled after cross-check: wire Timestamp keeps the opaque per-epoch UUID; generation demoted to host bookkeeping seeding an explicit ReBaseline.supersedes list; R5 fence keys on the list.
-> R6 amendment (2026-10-07, council DECIDED, `computenet-ggxrq`): **DECIDED / LANDED** —
-> a triggerless metadata-plane RESTART (R4's durable boundary, `HostDurability.journalRestart`)
-> that overtakes a staged `SaturationPolicy.Coalesce` merge (`IntakeControl.coalesce`) now
-> counts every coalesced ORIGINAL frame in the type-8 record's `precedesFrameCount`, not the
-> merge's own identity — the merge replaces the staged queue entry with a NEW
-> `HostedPortInvocation` that neither `journaledFrames` nor `replayedFrames` (both
-> identity-keyed) ever held, even though the WAL holds one `RECORD_FRAME` per original
-> (coalescing is acceptance, not loss: the saturated-Coalesce accept path journals every
-> incoming frame before merging it away). Pre-fix this undercounted the merge as zero WAL
-> records, so recovery rotated the epoch too early and SILENTLY DROPPED the first
-> post-recovery live frame ([KFX-11]) — a regression against the pre-R4 baseline, which only
-> duplicated. **Documented weaker guarantee, not a universal exact-replay claim**: counting
-> the originals makes recovery deliver each of them separately where live delivered one
-> merged invocation. For a handler that reacts once per COALESCED ELEMENT (iterates the
-> merged payload and reacts per entry), replay reproduces live EXACTLY — no duplication, no
-> loss. For a handler that instead reacts once per MERGED DELTA (one reaction per accepted
-> invocation, not per element), replay delivers k waves where live delivered one: never zero,
-> but not exactly-once either. A cell whose `SaturationPolicy.Coalesce` inlet needs an
-> exact replay bound for that second shape is out of this amendment's scope (candidates B/D
-> below were considered and rejected for PR #1318's mandate; see the council verdict on
-> `computenet-ggxrq` for the full scoring). Mechanism: `IntakeControl` tracks, per currently
-> staged merge result (identity-keyed, flattened across a chain of coalesces into the same
-> slot), the list of original invocations it subsumes
-> (`IntakeControl.coalesceOriginalsOf`/`forgetCoalesceOriginals`); `HostDurability.journalRestart`
-> consults it when counting pending frames, falling back to the pre-amendment single-identity
-> check for the non-merged case. Pinned by
-> `OutletHighWaterRecoveryTest` (`a metadata-plane RESTART that overtakes a coalesced staged
-> entry survives crash recovery without dropping the post-recovery frame`), which asserts
-> EXACTLY-ONCE (not merely never-zero) for its per-element handler, per the council's caveat.
+> Delivery-order amendment (2026-10-13, council DECIDED option B, `computenet-es92f`):
+> **DECIDED / LANDED** — type 8 no longer stores `precedesFrameCount`. The relative count
+> repeatedly assumed that journal order was live delivery order; supervision resume disproved
+> that assumption by re-accepting an older parked frame *behind* a newer staged failure. The
+> record is now `Restart(cellRef, triggerFramePayload?, triggerFrameOrdinal?,
+> followingFrameOrdinals[], generation, supersedes, outlets[])`. An ordinal identifies one
+> frame in the journal's **logical frame stream** (`RECORD_FRAME`s plus each nested frame in a
+> `RECORD_INPUT`); `followingFrameOrdinals` lists, in **live delivery order**, the frames that
+> remained pending after the boundary. A trigger ordinal says the restart occurred immediately
+> after that exact delivery; null says a never-journaled metadata invocation caused the boundary
+> before the listed frames. Journal position supplies identity only — the ordered list supplies
+> the scheduling fact, satisfying the council's caveat that ids/positions alone would merely
+> relocate the false ordering assumption. `triggerFramePayload` remains validation of the exact
+> ordinal, not a journal-wide match, so byte-identical frames cannot exchange restart records.
 >
-> Checkpoint-carry amendment (2026-10-12, `computenet-p7ggw`): **DECIDED / LANDED** —
-> `precedesFrameCount` always names the `RECORD_FRAME`s the journal CURRENTLY holds for
-> the staged entry, not the number it held before its latest compaction. A checkpoint
-> re-encodes one staged Coalesce merge as one carried `RECORD_FRAME`, so after the reset
-> `HostDurability` rebases both its pending-record provenance and `IntakeControl`'s
-> Coalesce lineage from the merge's k pre-checkpoint originals to the carried merge
-> itself: the next triggerless type-8 record counts it as ONE. If another original is
-> accepted and coalesces into that still-staged merge after the checkpoint, the lineage
-> is `[carried merge, new original]` and the boundary counts TWO — exactly the two records
-> then present. Every later checkpoint repeats the same rebase. Recovery-time checkpoint
-> carry uses this same rule for its staged data records. The type-8 payload and journal
-> format are unchanged; the fix corrects in-memory identity bookkeeping only. Pinned by
-> `OutletHighWaterRecoveryTest` for the carried-only, coalesce-again, and repeated-checkpoint
-> interleavings. The same journal-aware representation covers atomic durable-input batches:
-> although type 7 stores a batch's frames nested inside one `RECORD_INPUT`, recovery expands
-> them individually, so an overtaking type-8 boundary counts each staged nested frame.
-> For a trigger-bearing type-8 record, the existing `precedesFrameCount` field also counts
-> the same-cell records that were still pending *behind* the failing trigger when the record
-> was appended. Recovery binds the restart to the one decoded frame immediately ahead of
-> that suffix, and uses `triggerFramePayload` only to validate the binding. The association
-> is identity-keyed before replay dispatch and survives checkpoint carry until that frame
-> finishes, so a later byte-identical frame cannot consume the historical restart after a
-> transiently successful replay. A zero count retains the original no-pending-tail encoding;
-> neither the type-8 record shape nor the journal format changes.
+> Recovery resolves every named ordinal before dispatch, then reconstructs that cell's queue as
+> trigger → restart → following frames (or internal boundary marker → following frames for a
+> metadata trigger). Other same-cell records preceding type 8 were already delivered before the
+> live boundary and remain ahead of this trace. A supervision-parked frame retains its journal
+> provenance while parked, so resume can record its original ordinal even after re-accepting it;
+> the `computenet-es92f` rig therefore records the newer failing frame as trigger and the older
+> parked frame as following, reproduces the fresh epoch for frame 5, and delivers the next live
+> frame exactly once after recovery. Attention parking is not the same exposure: all later
+> arrivals join the one parked queue and unpark in acceptance/journal order; the measured control
+> records no following frame.
+>
+> The earlier Coalesce and checkpoint-carry guarantees remain, now expressed by the trace rather
+> than a count. `IntakeControl` expands a currently staged Coalesce merge to its flattened original
+> invocations, whose logical ordinals appear in their live element order. The documented weaker
+> guarantee is unchanged: a per-element handler replays exactly; a handler reacting once per
+> merged delta may see k replay waves where live saw one, never zero. Checkpoint compaction resets
+> the logical ordinal stream and rebases a carried merge to the one carried `RECORD_FRAME`; a later
+> coalesced original adds a second ordinal, and another checkpoint collapses them to one again.
+> Atomic durable-input batches allocate one logical ordinal per nested frame. Recovery-time
+> checkpoint carry keeps the trigger association identity-keyed until delivery, so a later
+> byte-identical frame cannot consume it after a transiently successful replay.
+>
+> Defense in depth (option E): if live bookkeeping cannot name a same-journal trigger or pending
+> frame completely, the host writes no type-8 record for that restart. Recovery then takes the
+> pre-type-8 path, whose admitted loss mode is a duplicate effect; it never writes a partial trace
+> that could suppress later live traffic. Journals containing no type 8 therefore retain the
+> origin/main replay behavior. Pinned by `OutletHighWaterRecoveryTest`: the srkyq staged-live and
+> staged-replay variants, the ggxrq coalesced variant, the p7ggw checkpoint/identical-payload
+> variants, the es92f supervision-resume regression, and the attention-unpark refutation.
 
 #### 1. Challenge restatement
 
@@ -8428,24 +8418,23 @@ ReBaseline<D>(
 > **Durable RESTART tail (qfi22-D10, landed).** A RESTART after a journal's
 > last checkpoint is itself durable history. The host appends one additive
 > `RECORD_RESTART` (type 8) before the live re-baseline becomes visible:
-> `Restart(cellRef, triggerFramePayload?, precedesFrameCount, generation, supersedes,
-> outlets[{portName, sourceId, highWater}])`. The trigger is the exact encoded
-> invocation whose failure caused the transition when that invocation was
-> journaled; recovery stages journal frames asynchronously, so the record is
-> held until that same replayed frame fails, then the host adopts the recorded
-> outlet epochs and generation and emits the same `ReBaseline`. A metadata-plane
-> trigger is never journaled and therefore carries no trigger payload. Under the
-> intake lock, its type-8 append records how many already-journaled, still-pending
-> frames of that cell the live metadata task overtook. Per-cell FIFO makes those
-> frames the suffix of the cell's preceding journal frames, so recovery inserts an
-> internal boundary marker immediately ahead of that replayed suffix (or at the
-> record position when the count is zero). Thus replay rotates the epoch before the
-> same frames as live scheduling without changing that scheduling, and the host
-> never tries to encode the in-process protocol frame. Applying a trigger-bearing
-> record immediately when decoded would move its epoch boundary ahead of earlier
-> staged frames; always placing a triggerless boundary at the record position would
-> instead put it after frames the live band-0 restart overtook. Recording only a
-> final high-water would likewise lose the supersession announcement.
+> `Restart(cellRef, triggerFramePayload?, triggerFrameOrdinal?,
+> followingFrameOrdinals[], generation, supersedes,
+> outlets[{portName, sourceId, highWater}])`. Logical-frame ordinals identify
+> ordinary frame records and nested durable-input frames in the current journal;
+> checkpoint compaction starts a fresh ordinal stream over what it carries. The
+> trigger ordinal names the exact journaled invocation whose failure caused the
+> transition. Recovery holds the record until that replayed frame fails, then the
+> host adopts the recorded outlet epochs and generation and emits the same
+> `ReBaseline`. A metadata-plane trigger is never journaled and therefore has no
+> trigger payload or ordinal; recovery stages an internal boundary marker instead.
+> `followingFrameOrdinals` is captured under the intake lock in live delivery order
+> and names every same-journal frame pending after the boundary. Recovery reorders
+> that cell's replay queue to trigger → restart → following (or marker → following),
+> so journal order need not equal delivery order. The host never serializes an
+> in-process protocol frame. Recording only ids without their delivery order would
+> retain the same bug under a different representation; recording only the final
+> high-water would lose the supersession announcement.
 > The separate record type is the compatibility mechanism: a journal written
 > before type 8 contains no such record and follows its previous replay path
 > unchanged; widening the serialized checkpoint would instead make old blobs
