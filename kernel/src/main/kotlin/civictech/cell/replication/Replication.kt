@@ -158,6 +158,15 @@ class Replication(
         val hold: RetentionHold?,
     ) {
         var cancelled = false
+
+        /**
+         * The target was announced again while this formation's catch-up was
+         * in flight. That announcement found no entry in [linked] to re-fire
+         * through, so completion owes it the M10.1 anti-entropy catch-up: the
+         * in-flight one may have gone to the connection a recovering peer
+         * just replaced.
+         */
+        var reannounced = false
     }
 
     private val linkFormations = mutableMapOf<Pair<CellRef, CellRef>, LinkFormation>()
@@ -1169,7 +1178,12 @@ class Replication(
             // A first-link catch-up is already in flight. Its reservation is
             // the pair's lifecycle identity until completion; a retirement
             // marks it cancelled and completion retries against replacements.
-            if (linkFormations.containsKey(key)) return
+            // The announcement itself is recorded, so completion re-fires the
+            // catch-up this call would have sent through an established link.
+            linkFormations[key]?.let { inFlight ->
+                inFlight.reannounced = true
+                return
+            }
 
             if (local !is WatermarkCell) {
                 val host = localHostIfLiveLocked(local)
@@ -1341,8 +1355,19 @@ class Replication(
             throw failure
         }
 
-        val retry = synchronized(linkLifecycle) { installLinkCheckedLocked(formation, link) }
-        if (retry) linkOut(formation.other)
+        var refire = false
+        val retry = synchronized(linkLifecycle) {
+            val retry = installLinkCheckedLocked(formation, link)
+            refire = formation.reannounced && linked[formation.key]?.second === link
+            retry
+        }
+        if (retry) {
+            linkOut(formation.other)
+        } else if (refire) {
+            // Outside the monitor, like every other catch-up delivery.
+            @Suppress("UNCHECKED_CAST")
+            gossipOutlet(formation.local).linking.fireLinked(link)
+        }
     }
 
     /**

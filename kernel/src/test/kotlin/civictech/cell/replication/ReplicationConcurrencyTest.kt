@@ -164,6 +164,41 @@ class ReplicationConcurrencyTest {
     }
 
     @Test
+    fun `re-announcement over a new sink during first-link catch-up still gets anti-entropy`() {
+        val fixture = Fixture()
+        val catchUpEntered = CountDownLatch(1)
+        val releaseCatchUp = CountDownLatch(1)
+        val blockedSink = InvocationSink {
+            catchUpEntered.countDown()
+            check(releaseCatchUp.await(20, TimeUnit.SECONDS)) { "the re-announcement never released catch-up" }
+        }
+        val publishing = FutureTask<Unit> {
+            fixture.registry.publishFromPeer(fixture.remote, blockedSink, peer = REMOTE) shouldBe null
+            Unit
+        }
+        Thread.ofVirtual().start(publishing)
+        check(catchUpEntered.await(20, TimeUnit.SECONDS)) { "first-link formation never fired catch-up" }
+
+        // The peer reconnects: same ref, same peer, a new sink, and no unpublish
+        // in between, while the first catch-up is still blocked on the old sink.
+        val reannouncing = FutureTask<Unit> {
+            fixture.registry.publishFromPeer(fixture.remote, fixture.sink, peer = REMOTE) shouldBe null
+            Unit
+        }
+        Thread.ofVirtual().start(reannouncing)
+        try {
+            reannouncing.get(20, TimeUnit.SECONDS)
+        } finally {
+            releaseCatchUp.countDown()
+        }
+        publishing.get(20, TimeUnit.SECONDS)
+        fixture.controller.runToIdle()
+
+        fixture.replication.linkCountAmong(setOf(fixture.local.ref, fixture.remote)) shouldBe 1
+        fixture.receivedAdds() shouldBe setOf("incumbent")
+    }
+
+    @Test
     fun `re-announced catch-up does not block concurrent retirement`() {
         val fixture = Fixture()
         fixture.registry.publishFromPeer(fixture.remote, fixture.sink, peer = REMOTE) shouldBe null
