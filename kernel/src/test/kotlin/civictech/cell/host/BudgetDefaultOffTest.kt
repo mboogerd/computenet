@@ -52,6 +52,8 @@ private class AttentionMembrane(
  *
  * This overlaps the existing `BudgetProtocolSeamTest` test named "ECO1-POL-06 - an
  * all-Unlimited host attaches no ledger, and a remote assertion is only clamped",
+ * `BudgetProtocolSeamTest` test named "ECO1-POL-06 - with no ledger attached a remote
+ * link connects and nothing is recorded",
  * `BudgetHierarchyWalkTest` test named "with every scope Unlimited nothing is attached,
  * and with any real budget the hierarchy ledger is", and `BridgeBoundaryPolicyTest`
  * test named "the ceiling clamps a bridge-arriving assertion and stays a no-op for a
