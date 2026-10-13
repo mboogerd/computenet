@@ -7,6 +7,7 @@ import civictech.cell.port.*
 import civictech.cell.protocol.*
 import civictech.cell.BlockingCell
 import civictech.cell.BoundaryDenialAccounting
+import civictech.cell.BoundaryDenialSink
 import civictech.cell.BoundaryDenials
 import civictech.cell.BoundarySeam
 import civictech.cell.BudgetCharging
@@ -365,7 +366,7 @@ open class ManagedHost(
     internal val hierarchyLedger: BudgetLedger = BudgetLedger { claim -> chargeThroughAncestors(claim) }
 
     /** True iff some scope on this host's ancestor chain has a non-[BudgetLedger.Unlimited] budget (`5o1rf-D6`). */
-    private fun anyLedgerOnChain(): Boolean {
+    internal fun anyLedgerOnChain(): Boolean {
         var scope: ManagedHost? = this
         while (scope != null) {
             if (scope.budget !== BudgetLedger.Unlimited) return true
@@ -419,6 +420,8 @@ open class ManagedHost(
     private val hostDenials = BoundaryDenials().also { denials ->
         denials.attachReporter { denial, deniedArgs -> deadLetters.boundaryDenial(ref, denial, deniedArgs) }
     }
+
+    internal val budgetDenialSink: BoundaryDenialSink get() = hostDenials.sinkFor("host")
 
     private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
 

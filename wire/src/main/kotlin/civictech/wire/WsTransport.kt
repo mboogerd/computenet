@@ -12,6 +12,7 @@ import civictech.cell.link.IdentityStatement
 import civictech.cell.link.IssuerId
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerStamp
 import civictech.cell.link.UnboundReason
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.port.PortRef
@@ -1703,7 +1704,7 @@ object WsTransport {
             // fresh Session, a client a fresh mirror in `hello`), so the name
             // is the only part of a peer's identity that survives a reconnect.
             val current = checkNotNull(instance) { "onText before hello opened a connection instance" }
-            current.mirror.peer = peer
+            current.mirror.announcer = peer?.let { PeerStamp(it, achieved, issuer) }
             // No re-attach: this mirror was minted by *this* connection's
             // `hello` and starts attached. That is the whole disconnect fence
             // (computenet-dqy.14). A frame the PREVIOUS connection staged on

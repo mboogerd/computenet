@@ -1,0 +1,32 @@
+{
+  "id": "WV-PORT-PROTOCOL-SATURATION-01",
+  "title": "SaturationSignal crosses as an upstream PORT_PROTOCOL frame",
+  "category": "frames/port-protocol",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "41 point 4", "WIR1-C04", "WIR1-I10", "WIR1-C06"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": 0,
+      "methodId": 0,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "outlet",
+      "type": "PORT_PROTOCOL",
+      "protocolId": "saturation",
+      "protocolMessage": {"type": "SaturationSignal", "fields": {"portRef": {"id": "00000000-0000-0000-0000-0000000000c1", "cell": {"id": "00000000-0000-0000-0000-000000000042"}}, "asserted": true}},
+      "edge": {
+        "id": "00000000-0000-0000-0000-00000000e001",
+        "fromRef": {"id": "00000000-0000-0000-0000-0000000000c1", "cell": {"id": "00000000-0000-0000-0000-000000000042"}},
+        "fromCell": {"id": "00000000-0000-0000-0000-000000000042"},
+        "fromPortName": "outlet",
+        "toRef": {"id": "00000000-0000-0000-0000-0000000000c2", "cell": {"id": "00000000-0000-0000-0000-000000000043"}},
+        "toCell": {"id": "00000000-0000-0000-0000-000000000043"},
+        "toPortName": "inlet"
+      }
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":0,\"methodId\":0,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"outlet\",\"type\":\"PORT_PROTOCOL\",\"protocolId\":\"saturation\",\"protocolMessage\":[\"SaturationSignal\",{\"portRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c1\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"}},\"asserted\":true}],\"edge\":{\"id\":\"00000000-0000-0000-0000-00000000e001\",\"fromRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c1\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"}},\"fromCell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"fromPortName\":\"outlet\",\"toRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c2\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"}},\"toCell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"toPortName\":\"inlet\"}}", "base64": "eyJjb250cmFjdElkIjowLCJtZXRob2RJZCI6MCwiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6Im91dGxldCIsInR5cGUiOiJQT1JUX1BST1RPQ09MIiwicHJvdG9jb2xJZCI6InNhdHVyYXRpb24iLCJwcm90b2NvbE1lc3NhZ2UiOlsiU2F0dXJhdGlvblNpZ25hbCIseyJwb3J0UmVmIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGMxIiwiY2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9fSwiYXNzZXJ0ZWQiOnRydWV9XSwiZWRnZSI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwZTAwMSIsImZyb21SZWYiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYzEiLCJjZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQyIn19LCJmcm9tQ2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJmcm9tUG9ydE5hbWUiOiJvdXRsZXQiLCJ0b1JlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBjMiIsImNlbGwiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDMifX0sInRvQ2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9LCJ0b1BvcnROYW1lIjoiaW5sZXQifX0="},
+  "notes": "Pins the upstream delivery target (producer cell …42/outlet) for the shared edge per ncz.4-D7. contractId/methodId are required 0/0 and emitted; protocolId, protocolMessage, and the full edge are present. Default natures, args, context, and version are absent."
+}

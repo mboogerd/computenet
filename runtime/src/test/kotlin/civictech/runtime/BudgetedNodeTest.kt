@@ -74,16 +74,25 @@ class BudgetedNodeTest {
     @Timeout(60)
     fun `a manifest budget refuses a remote peer's surplus Attention without faulting or closing the peering`() {
         val policyFile = tempDir.resolve("policy.json")
+        // A budgeted node charges b for the replication link too ([ECO1-CHG-07]): Interest
+        // when node a's `items` replica links to b's, and a Retention hold for as long as
+        // the link is held. A class with no bootstrap is refused BUDGET_NOT_GRANTED, so a
+        // policy that granted Attention alone would leave node a with no gossip link to b.
+        val charged = listOf(ClaimClass.Attention, ClaimClass.Interest, ClaimClass.Retention)
         val policy = EconomicPolicy.placeholder().copy(
-            prices = mapOf(ClaimClass.Attention to 1L),
-            capacities = mapOf(ClaimClass.Attention to 10L),
-            refill = mapOf(
-                ClaimClass.Attention to EconomicPolicy.Refill(
+            prices = charged.associateWith { 1L },
+            capacities = charged.associateWith { 10L },
+            refill = charged.associateWith {
+                EconomicPolicy.Refill(
                     tokensPerInterval = 1L,
                     intervalNanos = 3_600_000_000_000L,
-                ),
+                )
+            },
+            unvouchedBootstrap = mapOf(
+                ClaimClass.Attention to 3L,
+                ClaimClass.Interest to 2L,
+                ClaimClass.Retention to 2L,
             ),
-            unvouchedBootstrap = mapOf(ClaimClass.Attention to 3L),
         )
         Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.serializer(), policy))
 
@@ -137,6 +146,19 @@ class BudgetedNodeTest {
             awaitUntil("node b observes apple after node a refused the surplus Attention", CONVERGENCE_MS) {
                 "apple" in run.bItems.membership()
             }
+
+            // The link that carried apple is the one node a charged b for: one Interest
+            // debit and one Retention hold out of b's bootstrap of two each, no denial.
+            val replication = (run.a.budget as TokenBucketLedger).snapshot()
+            assertAll(
+                "node a charged b for the one replication link it holds",
+                { assertEquals(1L, replication.bucket(PeerId("b"), ClaimClass.Interest)?.balance) },
+                { assertEquals(1L, replication.bucket(PeerId("b"), ClaimClass.Retention)?.balance) },
+                { assertEquals(1L, replication.bucket(PeerId("b"), ClaimClass.Retention)?.held) },
+                { assertTrue(replication.denied[ClaimClass.Interest].isNullOrEmpty(), "an Interest claim was denied") },
+                { assertTrue(replication.denied[ClaimClass.Retention].isNullOrEmpty(), "a Retention claim was denied") },
+                { assertEquals(1, run.deadLetters.size, "the replication link produced a boundary denial") },
+            )
         } finally {
             run.close()
         }

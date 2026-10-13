@@ -44,6 +44,9 @@ import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.economy.EconomicPolicy
 import civictech.economy.TokenBucketLedger
+import civictech.economy.persist.BudgetCheckpointStore
+import civictech.economy.persist.FileBudgetCheckpointStore
+import civictech.economy.persist.RestoreOutcome
 import civictech.identity.Ed25519SignatureVerifier
 import civictech.identity.FilePeerIncarnationStore
 import civictech.identity.FilePeerKeyStore
@@ -55,8 +58,13 @@ import civictech.inspect.InspectorServer
 import civictech.wire.durableIncarnation
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Path
 import java.security.PublicKey
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 private fun peerIdForKey(publicKey: PublicKey): PeerId =
@@ -330,10 +338,35 @@ object Runtime {
             Ed25519SignatureVerifier(publicKeys::get, WriteAuthorityBytes.canonicalBytes)
         }
         val registry = LocationRegistry()
-        val budget = nodeSpec.budget?.let { policyFile ->
+        val budget: BudgetLedger
+        val budgetCheckpointStore: BudgetCheckpointStore?
+        val budgetCheckpointCadenceNanos: Long?
+        val budgetRestore: RestoreOutcome?
+        if (nodeSpec.budget != null) {
+            val policyFile = nodeSpec.budget
             val policy = Json.decodeFromString(EconomicPolicy.serializer(), File(policyFile).readText())
-            TokenBucketLedger(policy.applied(), System::nanoTime, scope = node)
-        } ?: BudgetLedger.Unlimited
+            val checkpoint = policy.checkpoint
+            val checkpointDir = nodeSpec.budgetCheckpointDir
+            check((checkpoint != null) == (checkpointDir != null)) {
+                "nodes[$node].budgetCheckpointDir must be set exactly when economic policy " +
+                    "'${policy.label}' has checkpoint configuration"
+            }
+            val ledger = TokenBucketLedger(policy.applied(), System::nanoTime, scope = node)
+            val store = checkpointDir?.let { directory ->
+                val path = Path.of(directory)
+                Files.createDirectories(path)
+                FileBudgetCheckpointStore(path, System::currentTimeMillis)
+            }
+            budget = ledger
+            budgetCheckpointStore = store
+            budgetCheckpointCadenceNanos = checkpoint?.cadenceNanos
+            budgetRestore = store?.let(ledger::restoreFrom)
+        } else {
+            budget = BudgetLedger.Unlimited
+            budgetCheckpointStore = null
+            budgetCheckpointCadenceNanos = null
+            budgetRestore = null
+        }
         lateinit var applyContext: ApplyContext
         val journals = mutableMapOf<String, Journal>()
         val journalDirs = mutableMapOf<String, File>()
@@ -427,6 +460,9 @@ object Runtime {
                 replication = replication,
                 replica = nodeSpec.replica,
                 budget = budget,
+                budgetCheckpointStore = budgetCheckpointStore,
+                budgetCheckpointCadenceNanos = budgetCheckpointCadenceNanos,
+                budgetRestore = budgetRestore,
                 identity = identity,
                 overrides = overrides.toMap(),
                 inspectorOptions = inspector,
@@ -471,6 +507,10 @@ object Runtime {
         val replication: Replication,
         val replica: Long?,
         val budget: BudgetLedger,
+        private val budgetCheckpointStore: BudgetCheckpointStore?,
+        private val budgetCheckpointCadenceNanos: Long?,
+        /** The startup restore result, or null when this node has no budget checkpoint store. */
+        val budgetRestore: RestoreOutcome?,
         /** The node's key-store identity, or null when this manifest node is unsigned. */
         val identity: PeerIdentity?,
         private val overrides: Map<String, String>,
@@ -496,6 +536,19 @@ object Runtime {
             private set
 
         private val recoveryCatchUps = mutableListOf<AutoCloseable>()
+        private val budgetCheckpointLedger: TokenBucketLedger? =
+            budgetCheckpointStore?.let { budget as TokenBucketLedger }
+        private val budgetCheckpointTicker: ScheduledExecutorService? =
+            budgetCheckpointStore?.let {
+                Executors.newSingleThreadScheduledExecutor { action ->
+                    Thread(action, "runtime-budget-checkpoint-$name").apply { isDaemon = true }
+                }
+            }
+
+        /** The most recent checkpoint-ticker failure, or null when no tick has failed. */
+        @Volatile
+        var budgetCheckpointFailure: Throwable? = null
+            private set
 
         init {
             if (recovered) {
@@ -518,6 +571,21 @@ object Runtime {
                     recoveryCatchUps += registry.onPublish(::requestIfAvailable)
                     requestIfAvailable(edge.fromRef)
                 }
+            }
+            budgetCheckpointTicker?.let { ticker ->
+                val cadenceNanos = checkNotNull(budgetCheckpointCadenceNanos)
+                ticker.scheduleWithFixedDelay(
+                    {
+                        try {
+                            checkNotNull(budgetCheckpointLedger).tick(checkNotNull(budgetCheckpointStore))
+                        } catch (failure: Exception) {
+                            budgetCheckpointFailure = failure
+                        }
+                    },
+                    cadenceNanos,
+                    cadenceNanos,
+                    TimeUnit.NANOSECONDS,
+                )
             }
         }
 
@@ -698,7 +766,10 @@ object Runtime {
             }
         }
 
-        /** Close endpoints, then the inspector, then drain the bridge and application hosts. */
+        /**
+         * Stop the budget checkpoint ticker, close endpoints, then the inspector, then drain the bridge and
+         * application hosts, and last write the final budget checkpoint.
+         */
         @Synchronized
         override fun close() {
             if (closed) return
@@ -712,6 +783,14 @@ object Runtime {
                 }
             }
 
+            budgetCheckpointTicker?.let { ticker ->
+                capture {
+                    ticker.shutdownNow()
+                    check(ticker.awaitTermination(BUDGET_TICKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+                        "budget checkpoint ticker did not stop"
+                    }
+                }
+            }
             connectionEndpoints.asReversed().forEach { connection -> capture(connection::close) }
             listener?.let { endpoint -> capture(endpoint::close) }
             recoveryCatchUps.forEach { subscription -> capture(subscription::close) }
@@ -725,12 +804,19 @@ object Runtime {
                     host.quiescence().await(30_000, "closing runtime node '$name'")
                 }
             }
+            budgetCheckpointStore?.let { store ->
+                capture { checkNotNull(budgetCheckpointLedger).checkpointTo(store) }
+            }
 
             if (failures.isNotEmpty()) {
                 throw IllegalStateException("failed to close runtime node '$name'").also { combined ->
                     failures.forEach(combined::addSuppressed)
                 }
             }
+        }
+
+        private companion object {
+            const val BUDGET_TICKER_SHUTDOWN_SECONDS = 5L
         }
     }
 }

@@ -9,6 +9,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerStamp
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
@@ -198,21 +199,21 @@ class PeerIdentityTest {
         val mirror = Peering.spawnMirror(Peering.Side(registry, bridge), toPeer = egress)
         mirror.peer.shouldBeNull()
 
-        mirror.peer = PeerId("jvm-b")
+        mirror.announcer = PeerStamp(PeerId("jvm-b"))
         val first = CellRef(UUID.randomUUID())
         mirror.inlet.call.published(first)
         registry.remote(first).peer shouldBe PeerId("jvm-b")
 
         // a re-hello carrying the same name (the client keeps ONE session, and
         // hence one mirror, across reconnects): a no-op in effect
-        mirror.peer = PeerId("jvm-b")
+        mirror.announcer = PeerStamp(PeerId("jvm-b"))
         val second = CellRef(UUID.randomUUID())
         mirror.inlet.call.published(second)
         registry.remote(second).peer shouldBe PeerId("jvm-b")
         registry.remote(first).peer shouldBe PeerId("jvm-b")
 
         // and no stale name leaks if the far end comes back as someone else
-        mirror.peer = PeerId("jvm-c")
+        mirror.announcer = PeerStamp(PeerId("jvm-c"))
         val third = CellRef(UUID.randomUUID())
         mirror.inlet.call.published(third)
         registry.remote(third).peer shouldBe PeerId("jvm-c")
@@ -236,7 +237,7 @@ class PeerIdentityTest {
         mirror.inlet.call.published(early)
         registry.remote(early).peer.shouldBeNull()
 
-        mirror.peer = PeerId("jvm-b")
+        mirror.announcer = PeerStamp(PeerId("jvm-b"))
         val late = CellRef(UUID.randomUUID())
         mirror.inlet.call.published(late)
         registry.remote(late).peer shouldBe PeerId("jvm-b")

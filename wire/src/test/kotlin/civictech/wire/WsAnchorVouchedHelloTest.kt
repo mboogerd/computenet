@@ -8,6 +8,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.link.IdentityStatement
 import civictech.cell.link.PeerId
 import civictech.cell.link.PeerIdentityBinding
+import civictech.cell.link.PeerStamp
 import civictech.cell.link.UnboundReason
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.membrane.Principal
@@ -407,6 +408,10 @@ class WsAnchorVouchedHelloTest {
             }
             (client.registry.location(collector.ref) as LocationRegistry.Remote).peer shouldBe PeerId("server-name")
             (server.registry.location(writer.ref) as LocationRegistry.Remote).peer shouldBe PeerId("client-name")
+            (client.registry.location(collector.ref) as LocationRegistry.Remote).announcer shouldBe
+                PeerStamp(PeerId("server-name"), AuthLevel.Authenticated, anchor.issuerId)
+            (server.registry.location(writer.ref) as LocationRegistry.Remote).announcer shouldBe
+                PeerStamp(PeerId("client-name"), AuthLevel.Authenticated, anchor.issuerId)
             listener.admissionDenialCount shouldBe 0L
             connection.admissionDenialCount shouldBe 0L
         } finally {

@@ -38,6 +38,12 @@ data class Manifest(
                     "journalTopology requires journalDir",
                 )
             }
+            if (node.budgetCheckpointDir != null && node.budget == null) {
+                violations += ManifestViolation(
+                    "nodes[$name].budgetCheckpointDir",
+                    "budgetCheckpointDir requires budget",
+                )
+            }
             node.budget?.let { budget ->
                 if (!File(budget).isFile) {
                     violations += ManifestViolation(
@@ -103,16 +109,16 @@ data class Manifest(
         private val json = Json { ignoreUnknownKeys = false }
 
         /**
-         * Decode and validate [text], failing once with every topology violation. Relative budget and key-store
-         * paths resolve against the manifest file's directory when loaded from a file, else the working directory;
-         * a missing budget file is a [ManifestViolation], while a missing key-store directory is allowed because
-         * the identity store mints it at boot.
+         * Decode and validate [text], failing once with every topology violation. Relative budget,
+         * budget-checkpoint and key-store paths resolve against the manifest file's directory when loaded from a
+         * file, else the working directory; a missing budget file is a [ManifestViolation], while missing
+         * checkpoint and key-store directories are allowed because boot creates them.
          */
         fun parse(text: String): Manifest = decode(text).validated()
 
         /**
-         * Read, decode and validate [file]. Relative budget and key-store paths resolve against the manifest file's
-         * directory, else the working directory; a missing budget file is a [ManifestViolation].
+         * Read, decode and validate [file]. Relative budget, budget-checkpoint and key-store paths resolve against
+         * the manifest file's directory, else the working directory; a missing budget file is a [ManifestViolation].
          */
         fun load(file: File): Manifest =
             decode(file.readText()).resolvingPaths(file.absoluteFile.parentFile).validated()
@@ -123,6 +129,7 @@ data class Manifest(
             nodes = nodes.mapValues { (_, node) ->
                 node.copy(
                     budget = node.budget.resolveAgainst(directory),
+                    budgetCheckpointDir = node.budgetCheckpointDir.resolveAgainst(directory),
                     keyStore = node.keyStore.resolveAgainst(directory),
                 )
             },
@@ -149,6 +156,11 @@ data class NodeSpec(
      * from a file, else the working directory; a missing file is a [ManifestViolation].
      */
     val budget: String? = null,
+    /**
+     * Optional directory for durable budget checkpoints. A relative path resolves against the manifest file's
+     * directory. The directory requires [budget] and is created by [Runtime.boot] when absent.
+     */
+    val budgetCheckpointDir: String? = null,
     /**
      * Optional directory for this node's Ed25519 keypair and durable incarnation. A relative path resolves against
      * the manifest file's directory. The transport [peerName] is unrelated to this key-derived identity.

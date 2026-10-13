@@ -14,7 +14,7 @@ import java.io.File
  * `BoundaryDenialSink`). Same style as [ArchitectureRatchetTest]: a plain-file
  * line scan, no Kotlin parser, no new dependency — but with the expected sets
  * spelled out inline rather than a checked-in baseline resource, because all
- * three sites are small enough to name directly and a fourth site must fail
+ * four sites are small enough to name directly and a fifth site must fail
  * loudly (`2zasa-D3`).
  *
  * All paths below are relative to `kernel/src/main/kotlin/civictech/cell`
@@ -37,7 +37,8 @@ import java.io.File
  *     it never called `deny(` directly.
  * (b) **helper call sites.** [scanDenyBudgetCallSites] — the multiset of
  *     files containing a `denyBudget(` CALL (excluding the declaration line)
- *     — equals exactly `{host/ManagedHost.kt: 1, membrane/CompositeCell.kt: 2}`.
+ *     — equals exactly `{host/ManagedHost.kt: 1, membrane/CompositeCell.kt: 2,
+ *     replication/Replication.kt: 1}`.
  * (c) **claim constructions — BS-05's premise.** [scanBudgetClaimConstructions]
  *     — the multiset of files with a `BudgetClaim(` CONSTRUCTION (excluding
  *     `data class BudgetClaim(`) — equals exactly the same
@@ -54,7 +55,7 @@ import java.io.File
  *     `git grep -n -E 'DenialCount|denial'` -> 0 hits (exit 1) (both scoped to
  *     that directory).
  *
- * A fourth site tripping any of these is not a bug in the ratchet: widen the
+ * A fifth site tripping any of these is not a bug in the ratchet: widen the
  * expected set in this file WITH a comment naming the reason and the
  * BS-06-shaped discharge test the epic's `93-feature-interactions.md` §9
  * risk 7 demands for every new budget-denial site.
@@ -184,7 +185,7 @@ class BudgetDenialRoutingRatchetTest {
     }
 
     @Test
-    fun `every budget denial routes through denyBudget, only three sites construct a BudgetClaim, no scheduling code reads a denial counter`() {
+    fun `every budget denial routes through denyBudget, only four sites construct a BudgetClaim, no scheduling code reads a denial counter`() {
         val root = repoRoot()
         val cellRoot = File(root, "kernel/src/main/kotlin/civictech/cell")
         assertTrue(cellRoot.isDirectory) { "missing $cellRoot - wrong working directory?" }
@@ -220,10 +221,15 @@ class BudgetDenialRoutingRatchetTest {
         // (b) helper call sites.
         val denyBudgetSites = scanDenyBudgetCallSites(cellRoot)
         assertEquals(
-            mapOf("host/ManagedHost.kt" to 1, "membrane/CompositeCell.kt" to 2),
+            mapOf(
+                "host/ManagedHost.kt" to 1,
+                "membrane/CompositeCell.kt" to 2,
+                // [ECO1-CHG-07] / jtof7-D7: gossip-link Interest/Retention refusals.
+                "replication/Replication.kt" to 1,
+            ),
             denyBudgetSites,
         ) {
-            "denyBudget( call sites drifted from the three landed sites (66m-D10). A new site here needs its " +
+            "denyBudget( call sites drifted from the four landed sites (66m-D10). A new site here needs its " +
                 "own BS-06-shaped discharge test (93-feature-interactions.md §9 risk 7) before this set widens; " +
                 "found: $denyBudgetSites"
         }
@@ -232,11 +238,16 @@ class BudgetDenialRoutingRatchetTest {
         // built on a delta-delivery path.
         val claimSites = scanBudgetClaimConstructions(cellRoot)
         assertEquals(
-            mapOf("host/ManagedHost.kt" to 1, "membrane/CompositeCell.kt" to 2),
+            mapOf(
+                "host/ManagedHost.kt" to 1,
+                "membrane/CompositeCell.kt" to 2,
+                // [ECO1-CHG-07] / jtof7-D7: one helper constructs both gossip claim classes.
+                "replication/Replication.kt" to 1,
+            ),
             claimSites,
         ) {
-            "BudgetClaim( construction sites drifted from the three landed sites. BS-05's re-scoped form " +
-                "(2zasa-D1) depends on this set: a fourth site is either an accident to revert, or a genuine " +
+            "BudgetClaim( construction sites drifted from the four landed sites. BS-05's re-scoped form " +
+                "(2zasa-D1) depends on this set: a fifth site is either an accident to revert, or a genuine " +
                 "new budget seam that needs its own BS-06-shaped discharge test and, if it sits on a delta " +
                 "path, reopens BS-05's premise; found: $claimSites"
         }

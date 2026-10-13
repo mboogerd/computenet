@@ -17,5 +17,7 @@ dependencies {
     api(project(":kernel"))
     implementation(libs.kotlinx.serialization)
 
+    // `forEachSeed` drives BS-18r's deterministic cases (computenet-o0lzp.1).
+    testImplementation(project(":testkit"))
     testImplementation(kotlin("test"))
 }

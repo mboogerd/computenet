@@ -1,0 +1,30 @@
+{
+  "id": "WV-ADDITIVE-CONTEXT-PRESENT-01",
+  "title": "A PORT_API frame carries its typed message context",
+  "category": "frames/additive",
+  "kind": "frame",
+  "covers": ["WIR1-C06", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I19", "41 point 1"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "context": {
+        "timestamp": {"sourceId": "00000000-0000-0000-0000-0000000000b1", "counter": 99},
+        "sourcePort": {"id": "00000000-0000-0000-0000-0000000000c1", "cell": {"id": "00000000-0000-0000-0000-000000000043"}},
+        "hop": 2
+      },
+      "args": [{"type": "Stall", "fields": {"reason": "SUSPENDED"}}]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"context\":{\"timestamp\":{\"sourceId\":\"00000000-0000-0000-0000-0000000000b1\",\"counter\":99},\"sourcePort\":{\"id\":\"00000000-0000-0000-0000-0000000000c1\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"}},\"hop\":2},\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiY29udGV4dCI6eyJ0aW1lc3RhbXAiOnsic291cmNlSWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYjEiLCJjb3VudGVyIjo5OX0sInNvdXJjZVBvcnQiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYzEiLCJjZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQzIn19LCJob3AiOjJ9LCJhcmdzIjpbWyJTdGFsbCIseyJyZWFzb24iOiJTVVNQRU5ERUQifV1dfQ=="
+  },
+  "notes": "Pins the MessageContext literal from WV-PAYLOAD-MESSAGECONTEXT-01 in the envelope's typed context position, before args in WireFrame declaration order. The present context key is the positive half for [WIR1-C06]; no reBaseline or baseline default fields are carried."
+}
