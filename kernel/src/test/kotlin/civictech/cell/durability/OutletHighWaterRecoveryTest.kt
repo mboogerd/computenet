@@ -705,6 +705,60 @@ class OutletHighWaterRecoveryTest {
     }
 
     /**
+     * computenet-es92f second read: before resume removes the supervision park, that
+     * park is the head of the cell's eventual delivery order. Work still staged at the
+     * scheduler will first park behind it. The delivery trace must therefore be parked
+     * then staged in this state — the inverse of the post-resume regression above.
+     */
+    @Test
+    fun `a RESTART while still suspended records parked work before later staged work`() {
+        val controller = SimulationController(seed = 79)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        before.feed(1)
+        controller.runToIdle()
+        before.host.managementInlet.call.suspend(relayRef)
+        before.feed(5)
+        controller.runToIdle()
+
+        ProtocolSupport.of(before.relay.inlet).handle(Protocols.Attention) { _, _ ->
+            throw IllegalStateException("protocol handler blew up")
+        }
+        val selfLink = object : Link {
+            override val id: UUID = UUID.randomUUID()
+            override val from = before.relay.inlet.ref
+            override val to = before.relay.inlet.ref
+            override fun unlink() = Unit
+        }
+        before.host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                before.relay.ref,
+                "inlet",
+                HostedPortInvocation.Type.PORT_PROTOCOL,
+                Invocation("", emptyList(), emptyList()),
+                protocolId = Protocols.Attention,
+                protocolLink = selfLink,
+                protocolMessage = Attention(.5f),
+            ),
+        )
+        before.feed(7)
+        controller.runToIdle()
+
+        val restart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        restart.triggerFrameOrdinal shouldBe null
+        restart.followingFrameOrdinals.size shouldBe 2
+        before.host.managementInlet.call.resume(relayRef)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 5, 7)
+        // Journal order is 5 then 7, and here that is also live delivery order.
+        (restart.followingFrameOrdinals[0] < restart.followingFrameOrdinals[1]) shouldBe true
+    }
+
+    /**
      * computenet-srkyq review: the frames a metadata-plane RESTART overtakes may be
      * REPLAYED frames still staged by an earlier recovery, not only live-journaled
      * ones. They are records of the same journal, so a second recovery must put the

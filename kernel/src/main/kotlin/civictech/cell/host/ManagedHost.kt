@@ -954,16 +954,12 @@ open class ManagedHost(
                 // FIFO but is a protocol frame: it is never journaled, so a checkpoint
                 // does not carry it either (and could not encode its in-process link).
                 val pending = ArrayList<CheckpointFrame>()
-                attentionScheduler.stagedInSequence()
-                    .filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL }
-                    .forEach { invocation ->
-                        pending += CheckpointFrame(
-                            checkNotNull(checkpointSequences[invocation]) {
-                                "staged invocation has no host acceptance position: $invocation"
-                            },
-                            invocation,
-                        )
-                    }
+                // For a cell that is STILL supervision-suspended, its existing park is
+                // the head of its eventual delivery order: scheduler-staged data will
+                // first join the tail of that park, then resume drains the park FIFO.
+                // Once resume has removed the park, its re-accepted frames live in the
+                // scheduler queue behind whatever was staged there already, so the
+                // scheduler block below is the complete order for that cell.
                 suspendedCells.values.forEach { queue ->
                     queue.snapshot().forEach { invocation ->
                         pending += CheckpointFrame(
@@ -974,6 +970,16 @@ open class ManagedHost(
                         )
                     }
                 }
+                attentionScheduler.stagedInSequence()
+                    .filter { it.type != HostedPortInvocation.Type.PORT_PROTOCOL }
+                    .forEach { invocation ->
+                        pending += CheckpointFrame(
+                            checkNotNull(checkpointSequences[invocation]) {
+                                "staged invocation has no host acceptance position: $invocation"
+                            },
+                            invocation,
+                        )
+                    }
                 cells.forEach { (cellRef, cell) ->
                     PortRegistry.of(cell).names().forEach { portName ->
                         (PortRegistry.of(cell)[portName] as? FanInlet<*>)
@@ -992,12 +998,12 @@ open class ManagedHost(
                     }
                 }
                 // Deliberately NOT sorted by acceptance position: the list is handed over
-                // in the order delivery would take from this state (each cell's staged
-                // queue order, then its supervision-parked frames, which resume re-accepts
-                // behind whatever is staged). `HostDurability.journalRestart` records that
-                // order as type 8's delivery trace; a re-accepted parked frame keeps its
-                // OLD acceptance position, so sorting here would hand back journal order.
-                // `checkpoint` wants acceptance order and sorts by `sequence` itself.
+                // in the order delivery would take from this state. For a still-suspended
+                // cell that is park then staged; after resume removed its park, the staged
+                // queue alone already puts re-accepted parked frames behind older staged
+                // work. `HostDurability.journalRestart` records that order as type 8's
+                // delivery trace; `checkpoint` wants acceptance order and sorts by
+                // `sequence` itself.
                 action(pending)
             }
         },
