@@ -87,10 +87,11 @@ class Replication(
      * formation, reconciliation, rollback, eviction, rebind, crash supersede,
      * Retention holds, and the test reads over [linked].
      *
-     * [installLink] deliberately runs while this reentrant monitor is held.
-     * Its catch-up can synchronously unpublish a dead transport on this same
-     * thread; the post-install liveness check then observes that callback and
-     * removes the entry which the assignment could only write afterwards.
+     * Link formation is two-phase: a reservation is installed under this
+     * monitor, [installLink]'s synchronous catch-up runs without it, then the
+     * link is published under the monitor. Retirement can therefore cancel a
+     * formation while catch-up is in flight; the post-install check removes
+     * the entry which the assignment could only write afterwards.
      */
     private val linkLifecycle = Any()
 
@@ -141,6 +142,25 @@ class Replication(
 
     /** Established gossip links per (local replica → remote replica) pair. Guarded by [linkLifecycle]. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
+
+    /**
+     * One in-flight first-link install per ordered replica pair. Guarded by
+     * [linkLifecycle]. Retirement marks the reservation cancelled rather than
+     * waiting for synchronous catch-up; completion then drops the just-built
+     * link and retries against any replacement endpoints that appeared while
+     * the old catch-up was in flight.
+     */
+    private class LinkFormation(
+        val local: Replicable<*>,
+        val other: CellRef,
+        val targetInterest: Interest,
+        val key: Pair<CellRef, CellRef>,
+        val hold: RetentionHold?,
+    ) {
+        var cancelled = false
+    }
+
+    private val linkFormations = mutableMapOf<Pair<CellRef, CellRef>, LinkFormation>()
 
     /**
      * One Retention reservation for a charged gossip pair. A pending slot is
@@ -1138,12 +1158,18 @@ class Replication(
         var chargeHost: ManagedHost? = null
         var chargeAnnouncer: PeerStamp? = null
         var catchUp: Pair<Replicable<*>, Link>? = null
+        var formation: LinkFormation? = null
+        var formationDecided = false
         synchronized(linkLifecycle) {
             if (!linkEndpointsLiveLocked(local, other)) return
             linked[key]?.let { (cell, link) ->
                 catchUp = cell to link
                 return@synchronized
             }
+            // A first-link catch-up is already in flight. Its reservation is
+            // the pair's lifecycle identity until completion; a retirement
+            // marks it cancelled and completion retries against replacements.
+            if (linkFormations.containsKey(key)) return
 
             if (local !is WatermarkCell) {
                 val host = localHostIfLiveLocked(local)
@@ -1151,24 +1177,29 @@ class Replication(
                 if (host != null && announcer != null) {
                     retentionHolds[key]?.let { hold ->
                         if (hold.installed) {
-                            installLinkCheckedLocked(local, other, targetInterest, key, hold)
+                            formation = beginLinkFormationLocked(local, other, targetInterest, key, hold)
+                            formationDecided = true
+                            return@synchronized
                         }
                         return
                     }
                     if (!host.anyLedgerOnChain()) {
-                        installLinkCheckedLocked(local, other, targetInterest, key)
-                        return
+                        formation = beginLinkFormationLocked(local, other, targetInterest, key)
+                        formationDecided = true
+                        return@synchronized
                     }
                     pending = RetentionHold().also { retentionHolds[key] = it }
                     chargeHost = host
                     chargeAnnouncer = announcer
                 } else {
-                    installLinkCheckedLocked(local, other, targetInterest, key)
-                    return
+                    formation = beginLinkFormationLocked(local, other, targetInterest, key)
+                    formationDecided = true
+                    return@synchronized
                 }
             } else {
-                installLinkCheckedLocked(local, other, targetInterest, key)
-                return
+                formation = beginLinkFormationLocked(local, other, targetInterest, key)
+                formationDecided = true
+                return@synchronized
             }
         }
 
@@ -1193,6 +1224,11 @@ class Replication(
             gossipOutlet(cell).linking.fireLinked(link)
             return
         }
+        formation?.let {
+            installLinkChecked(it)
+            return
+        }
+        if (formationDecided) return
 
         val expected = requireNotNull(pending)
         val host = requireNotNull(chargeHost)
@@ -1225,6 +1261,7 @@ class Replication(
                         denyLinkBudget(host, retention, retentionClaim, key)
                     }
                     is BudgetOutcome.Admitted -> {
+                        var chargedFormation: LinkFormation? = null
                         val formed = synchronized(linkLifecycle) {
                             if (
                                 retentionHolds[key] !== expected ||
@@ -1234,13 +1271,24 @@ class Replication(
                                 false
                             } else {
                                 expected.install(retention.undo)
-                                installLinkCheckedLocked(local, other, targetInterest, key, expected)
-                                true
+                                chargedFormation = beginLinkFormationLocked(
+                                    local,
+                                    other,
+                                    targetInterest,
+                                    key,
+                                    expected,
+                                )
+                                if (chargedFormation == null && retentionHolds[key] === expected) {
+                                    retentionHolds.remove(key)
+                                }
+                                chargedFormation != null
                             }
                         }
                         if (!formed) {
                             retention.undo()
                             interest.undo()
+                        } else {
+                            installLinkChecked(requireNotNull(chargedFormation))
                         }
                     }
                 }
@@ -1258,27 +1306,66 @@ class Replication(
     private fun linkEndpointsLiveLocked(local: Replicable<*>, other: CellRef): Boolean =
         localHostIfLiveLocked(local) != null && registry.location(other) != null
 
-    /**
-     * Install while [linkLifecycle] is held, then re-check both endpoints and
-     * an optional carried hold. [installLink]'s synchronous catch-up can
-     * re-enter retirement before its map assignment completes; that callback
-     * changes one of these facts, so the just-written stale entry is removed.
-     */
-    private fun installLinkCheckedLocked(
+    /** Must be called under [linkLifecycle]. */
+    private fun beginLinkFormationLocked(
         local: Replicable<*>,
         other: CellRef,
         targetInterest: Interest,
         key: Pair<CellRef, CellRef>,
         hold: RetentionHold? = null,
-    ) {
-        if (!linkEndpointsLiveLocked(local, other)) return
-        installLink(local, other, targetInterest, key)
-        if (
-            !linkEndpointsLiveLocked(local, other) ||
-            (hold != null && retentionHolds[key] !== hold)
-        ) {
-            linked.remove(key)
+    ): LinkFormation? {
+        if (!linkEndpointsLiveLocked(local, other) || linkFormations.containsKey(key)) return null
+        return LinkFormation(local, other, targetInterest, key, hold).also { linkFormations[key] = it }
+    }
+
+    /**
+     * Build the structural link and fire its synchronous catch-up without
+     * [linkLifecycle]. Retirement can therefore enter, cancel [formation], and
+     * return while a transport send is blocked. Completion publishes the link
+     * and validates the reservation atomically afterwards.
+     */
+    private fun installLinkChecked(formation: LinkFormation) {
+        val link = try {
+            installLink(
+                formation.local,
+                formation.other,
+                formation.targetInterest,
+                formation.key,
+            )
+        } catch (failure: Throwable) {
+            synchronized(linkLifecycle) {
+                if (linkFormations[formation.key] === formation) {
+                    linkFormations.remove(formation.key)
+                }
+            }
+            throw failure
         }
+
+        val retry = synchronized(linkLifecycle) { installLinkCheckedLocked(formation, link) }
+        if (retry) linkOut(formation.other)
+    }
+
+    /**
+     * Must be called under [linkLifecycle]. Publish the completed link, then
+     * discard it if retirement cancelled the formation, either endpoint left,
+     * or the charged Retention hold was released during catch-up. Returning
+     * true asks the caller to reconcile any replacement endpoint now visible.
+     */
+    private fun installLinkCheckedLocked(formation: LinkFormation, link: Link): Boolean {
+        check(linkFormations[formation.key] === formation) {
+            "replication link formation lost its lifecycle reservation for ${formation.key}"
+        }
+        linkFormations.remove(formation.key)
+        linked[formation.key] = formation.local to link
+        if (
+            formation.cancelled ||
+            !linkEndpointsLiveLocked(formation.local, formation.other) ||
+            (formation.hold != null && retentionHolds[formation.key] !== formation.hold)
+        ) {
+            linked.remove(formation.key)
+            return formation.cancelled && registry.location(formation.other) != null
+        }
+        return false
     }
 
     private fun installLink(
@@ -1286,7 +1373,7 @@ class Replication(
         other: CellRef,
         targetInterest: Interest,
         key: Pair<CellRef, CellRef>,
-    ) {
+    ): Link {
         // the proxy resolves the port by name; delta types are erased on this
         // path and re-checked at the receiving inlet's serve
         val routed = (HostedCellProxy.create(other, registry, ReplicaDeltaInlet::class.java)
@@ -1300,7 +1387,7 @@ class Replication(
         val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
-        linked[key] = local to gossipOutlet(local).streamTo(sink, at = gossipRef(local.ref, other))
+        return gossipOutlet(local).streamTo(sink, at = gossipRef(key.first, key.second))
     }
 
     private fun budgetClaim(
@@ -1326,6 +1413,7 @@ class Replication(
 
     /** Must be called under [linkLifecycle]; drops links but carries Retention holds. */
     private fun dropLinksMatchingLocked(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
+        linkFormations.values.filter { predicate(it.key) }.forEach { it.cancelled = true }
         linked.keys.filter(predicate).toList().forEach { linked.remove(it) }
     }
 

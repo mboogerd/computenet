@@ -132,6 +132,38 @@ class ReplicationConcurrencyTest {
     }
 
     @Test
+    fun `first-link catch-up does not block concurrent retirement`() {
+        val fixture = Fixture()
+        val catchUpEntered = CountDownLatch(1)
+        val releaseCatchUp = CountDownLatch(1)
+        val blockedSink = InvocationSink {
+            catchUpEntered.countDown()
+            check(releaseCatchUp.await(20, TimeUnit.SECONDS)) { "the retirement path never released catch-up" }
+        }
+        val publishing = FutureTask<Unit> {
+            fixture.registry.publishFromPeer(fixture.remote, blockedSink, peer = REMOTE) shouldBe null
+            Unit
+        }
+        Thread.ofVirtual().start(publishing)
+        check(catchUpEntered.await(20, TimeUnit.SECONDS)) { "first-link formation never fired catch-up" }
+
+        val retiring = FutureTask<Unit> {
+            fixture.registry.unpublish(fixture.remote)
+            Unit
+        }
+        Thread.ofVirtual().start(retiring)
+        try {
+            retiring.get(2, TimeUnit.SECONDS)
+        } finally {
+            releaseCatchUp.countDown()
+        }
+        publishing.get(20, TimeUnit.SECONDS)
+
+        fixture.registry.location(fixture.remote) shouldBe null
+        fixture.replication.linkCountAmong(setOf(fixture.local.ref, fixture.remote)) shouldBe 0
+    }
+
+    @Test
     fun `re-announced catch-up does not block concurrent retirement`() {
         val fixture = Fixture()
         fixture.registry.publishFromPeer(fixture.remote, fixture.sink, peer = REMOTE) shouldBe null
