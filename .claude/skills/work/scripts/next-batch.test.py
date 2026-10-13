@@ -1056,7 +1056,7 @@ _vr_cands = [(t("a", "x/A.kt"), False), (t("b", "x/B.kt"), False), (t("r", "x/R.
 _seen_args = []
 def _vr(args, **k):
     _seen_args.append(args)
-    return _Out(0, "READY a\nBLOCKED b by:\n    c.1 (closed) [unmerged on c]\nPARKED p (status blocked)\n")
+    return _Out(0, "READY a\nBLOCKED b by:\n    c.1 (closed) [unmerged on c]\nPARKED p (status=blocked)\n")
 nb.subprocess.run = _vr
 try:
     _kept, _skip = nb.drop_unmerged_blocked(_vr_cands)

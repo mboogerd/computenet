@@ -228,10 +228,13 @@ cat > "$CTRL/all.json" <<EOF
  {"id":"x-f","issue_type":"epic","status":"deferred","labels":["$G"]},
  {"id":"x-f.1","issue_type":"task","status":"open",
   "dependencies":[{"issue_id":"x-f.1","depends_on_id":"y-o","type":"blocks"}]},
- {"id":"y-o","issue_type":"task","status":"open"}]
+ {"id":"y-o","issue_type":"task","status":"open"},
+ {"id":"x-g","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"y-m","issue_type":"task","status":"open","labels":["undefers:x-g"]}]
 EOF
 out=$("$SCRIPT" 2>&1); rc=$?
 { [ "$rc" = 0 ] && grep -q "^UNDEFERRED x-e " <<<"$out" && grep -q "^UNDEFERRED x-f " <<<"$out" \
+  && grep -q "^WAITING x-g on its undefers:x-g blockers" <<<"$out" && ! grep -q "^undefer x-g" "$BD_LOG" \
   && ! grep -q "person" <<<"$out" && grep -q "^undefer x-e" "$BD_LOG" && grep -q "^undefer x-f" "$BD_LOG" \
   && grep -q "^update x-e --remove-label $G" "$BD_LOG" && ! grep -q "^verify-ready" "$BD_LOG"; } \
   && ok "a human-gated epic with no park left is un-deferred" || bad "free: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"

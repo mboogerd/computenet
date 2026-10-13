@@ -49,7 +49,7 @@
 # names the blockers, which is how that person finds the way back.
 #
 # Usage: undefer-unblocked.sh [--dry-run]
-# Prints one line per epic: UNDEFERRED <epic> (...) | WAITING <epic> on <ids>
+# Prints one line per epic: UNDEFERRED <epic> (...) | WAITING <epic> [on <ids>] (...)
 # | CLEARED <epic> (<status>) | UNLABELLED <epic> (...).
 # Exit 0: done (possibly nothing to do). Exit 3: a query failed (bd, or
 #   verify-ready.sh's own exit 3) — nothing was established; writes already
@@ -127,6 +127,8 @@ for eid, e in sorted(rows.items()):
             print("CAND", eid, ",".join(waits[eid]) or "-", *cands[eid])
         elif waits[eid]:
             print("GATED", eid, *waits[eid])
+        elif "undefers:" + eid in marked:   # blocked elsewhere too: the marker pass owns it
+            print("GATED", eid, "its", "undefers:" + eid, "blockers")
         else:
             print("FREE", eid)
     elif eid in deferred and "undefers:" + eid in marked:
