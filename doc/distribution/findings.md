@@ -1420,7 +1420,7 @@ buckets: 2 scope: sybil-host
 ```
 
 This is measured on the test machine (Darwin arm64), seed 0, `n = 2`, `B = 3`,
-at source sha `81e796ed458ab816bb2f120ab3bc5afb7b28729b`. PLC2
+at source sha `95d8a2b1e806550ce15b30bbe5c84fc6b2982960`. PLC2
 (`computenet-z1w`) may consume it as input; it is not a bound.
 
 ### `[ECO1-PAR-04]`
@@ -1461,17 +1461,18 @@ assertion is clamped without a budget denial, and a refusing-ledger control
 proves that the same frame reaches the budget seam.
 
 All five module suites below ran with `--rerun --no-build-cache` at source sha
-`81e796ed458ab816bb2f120ab3bc5afb7b28729b`:
+`95d8a2b1e806550ce15b30bbe5c84fc6b2982960`:
 
-- `:kernel:test`: `__KERNEL_BUILD__`; `__KERNEL_TASKS__`; `__KERNEL_TESTS__`
-  tests.
-- `:wire:test`: `__WIRE_BUILD__`; `__WIRE_TASKS__`; `__WIRE_TESTS__` tests.
-- `:demo:shopping:test`: `__SHOPPING_BUILD__`; `__SHOPPING_TASKS__`;
-  `__SHOPPING_TESTS__` tests.
-- `:demo:exchange:test`: `__EXCHANGE_BUILD__`; `__EXCHANGE_TASKS__`;
-  `__EXCHANGE_TESTS__` tests.
-- `:demo:agora:test`: `__AGORA_BUILD__`; `__AGORA_TASKS__`; `__AGORA_TESTS__`
-  tests.
+- `:kernel:test`: `BUILD SUCCESSFUL in 3m 30s`;
+  `31 actionable tasks: 9 executed, 22 up-to-date`; 2,548 tests.
+- `:wire:test`: `BUILD SUCCESSFUL in 1m 5s`;
+  `32 actionable tasks: 6 executed, 26 up-to-date`; 325 tests.
+- `:demo:shopping:test`: `BUILD SUCCESSFUL in 46s`;
+  `42 actionable tasks: 13 executed, 29 up-to-date`; 21 tests.
+- `:demo:exchange:test`: `BUILD SUCCESSFUL in 25s`;
+  `35 actionable tasks: 4 executed, 31 up-to-date`; 21 tests.
+- `:demo:agora:test`: `BUILD SUCCESSFUL in 28s`;
+  `39 actionable tasks: 13 executed, 26 up-to-date`; 48 tests.
 
 No `EconomicPolicy` is configured as a suite or application default in that
 evidence. The supporting search,
@@ -1497,8 +1498,8 @@ later appended entry:
 
 ### Corpus check
 
-At source sha `81e796ed458ab816bb2f120ab3bc5afb7b28729b`,
-`git log 2d2462db..81e796ed458ab816bb2f120ab3bc5afb7b28729b -G
+At source sha `95d8a2b1e806550ce15b30bbe5c84fc6b2982960`,
+`git log 2d2462db..95d8a2b1e806550ce15b30bbe5c84fc6b2982960 -G
 'ECO1|NV-0[1-6]|Sybil' -- concord/corpus` produced empty output. The broader
 range contains 12 corpus commits, so the empty result is a checked negative:
 no corpus requirement was proposed against an `[ECO1-NV-*]` claim. Therefore
