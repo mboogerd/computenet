@@ -57,9 +57,9 @@ internal class IntakeControl(
      * queued entry with a NEW [HostedPortInvocation] identity (`old.copy(...)` in
      * [coalesce]), so neither [HostDurability]'s `journaledFrames` nor `replayedFrames`
      * — both identity-keyed — ever holds that merged object. Without this map,
-     * `HostDurability.journalRestart`'s `precedesFrameCount` undercounts a staged merge
-     * as zero WAL records instead of the k originals actually appended (one `RECORD_FRAME`
-     * per coalesced original, since coalescing is acceptance, not loss —
+     * `HostDurability.journalRestart`'s delivery-order trace would omit a staged merge
+     * instead of naming the k originals actually appended (one `RECORD_FRAME` per
+     * coalesced original, since coalescing is acceptance, not loss —
      * `ManagedHost.accept`'s saturated-Coalesce branch journals every incoming frame before
      * merging it away). Keyed by the merged entry CURRENTLY staged in the queue, so a chain
      * of coalesces (a third frame merging into an already-merged entry) flattens to the

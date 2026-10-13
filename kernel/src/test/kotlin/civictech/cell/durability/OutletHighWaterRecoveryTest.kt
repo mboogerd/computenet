@@ -10,6 +10,8 @@ import civictech.cell.Timestamp
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.evolve.Effectful
 import civictech.cell.control.Attention
+import civictech.cell.control.AttentionPolicy
+import civictech.cell.control.AttentionSupport
 import civictech.cell.host.DecodedJournalRecord
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.IntakeBound
@@ -115,9 +117,10 @@ class OutletHighWaterRecoveryTest {
         relayRef: CellRef,
         notifierRef: CellRef,
         val effects: MutableList<Int>,
+        attention: AttentionPolicy? = null,
         restartRequested: (Int) -> Boolean = { it == Int.MIN_VALUE },
     ) {
-        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val host = ManagedHost(scheduler = controller.scheduler(), journal = journal, attention = attention)
         val relay = RelayCell(relayRef, restartRequested)
         val notifier = NotifierCell(notifierRef, effects)
 
@@ -313,7 +316,8 @@ class OutletHighWaterRecoveryTest {
         val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart)
             .single()
         restartRecord.cellRef shouldBe relayRef
-        restartRecord.precedesFrameCount shouldBe 0
+        checkNotNull(restartRecord.triggerFrameOrdinal)
+        restartRecord.followingFrameOrdinals shouldBe emptyList()
         restartRecord.generation shouldBe 1L
         restartRecord.supersedes shouldBe liveRestartNotices.single().reBaseline?.supersedes
         val trigger = WireCodec.decode(checkNotNull(restartRecord.triggerFramePayload))
@@ -424,7 +428,8 @@ class OutletHighWaterRecoveryTest {
         val restartRecord = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
         restartRecord.cellRef shouldBe relayRef
         restartRecord.triggerFramePayload shouldBe null
-        restartRecord.precedesFrameCount shouldBe 1
+        restartRecord.triggerFrameOrdinal shouldBe null
+        restartRecord.followingFrameOrdinals.size shouldBe 1
         restartRecord.generation shouldBe 1L
         restartRecord.supersedes shouldBe notices.single().reBaseline?.supersedes
         restartRecord.outlets.associate { it.portName to it.sourceId } shouldBe mapOf(
@@ -460,6 +465,115 @@ class OutletHighWaterRecoveryTest {
         controller.runToIdle()
         effects shouldBe listOf(1, 2, 3, 4)
         effects.count { it == 4 } shouldBe 1
+    }
+
+    /**
+     * computenet-es92f: supervision resume re-accepts parked traffic behind data that was
+     * staged while the cell remained suspended. The failing frame therefore runs first
+     * even though the parked frame precedes it in the journal. Type 8 must reproduce that
+     * delivery order rather than infer the epoch boundary from journal order; otherwise
+     * recovery replays frame 5 on the old epoch and the restored Effectful frontier then
+     * suppresses the next live frame as already acted ([KFX-11]).
+     */
+    @Test
+    fun `a resumed supervision-parked frame cannot suppress the next live effect after recovery`() {
+        val controller = SimulationController(seed = 61)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        before.feed(1)
+        controller.runToIdle()
+
+        before.host.managementInlet.call.suspend(relayRef)
+        before.feed(5)
+        controller.runToIdle()
+        effects shouldBe listOf(1)
+
+        // This failing frame is staged but not delivered. Resume runs on the management
+        // band, re-accepts parked frame 5 behind it, then data dispatch delivers the
+        // failure (and rotates the epoch) before frame 5.
+        before.feed(Int.MIN_VALUE)
+        before.host.managementInlet.call.resume(relayRef)
+        controller.runToIdle()
+        before.host.supervisionAccounting().restarts shouldBe 1
+        effects shouldBe listOf(1, 5)
+        val restart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        val triggerOrdinal = checkNotNull(restart.triggerFrameOrdinal)
+        val parkedOrdinal = restart.followingFrameOrdinals.single()
+        // Journal order is parked 5, then failing MIN; delivery order is the inverse.
+        // The record names both identities and carries that scheduling fact explicitly.
+        (triggerOrdinal > parkedOrdinal) shouldBe true
+
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        // Stronger than origin/main's duplicate: replay reconstructs the fresh-epoch
+        // delivery, so the parked frame remains exactly-once at this in-process sink.
+        effects shouldBe listOf(1, 5)
+        after.feed(9)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 5, 9)
+    }
+
+    /**
+     * Measured refutation of the neighbouring `resumeAttentionParked` hypothesis:
+     * attention parking retains one queue for the cell, so a parked ordinary frame and
+     * the later failing frame unpark in their original acceptance/journal order. There
+     * is no older frame re-accepted behind the failure, and the type-8 trace therefore
+     * has no post-restart frame to reorder.
+     */
+    @Test
+    fun `attention-unpark preserves journal order across a failing frame`() {
+        val controller = SimulationController(seed = 63)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+        val before = World(
+            controller,
+            journal,
+            relayRef,
+            notifierRef,
+            effects,
+            attention = AttentionPolicy(suspendAfter = 0),
+        )
+        controller.runToIdle()
+        before.feed(1)
+        controller.runToIdle()
+        effects shouldBe listOf(1)
+
+        AttentionSupport.of(before.relay).attend(0f)
+        before.feed(5)
+        before.feed(Int.MIN_VALUE)
+        controller.runToIdle()
+        effects shouldBe listOf(1)
+
+        AttentionSupport.of(before.relay).attend(1f)
+        controller.runToIdle()
+        before.host.supervisionAccounting().restarts shouldBe 1
+        effects shouldBe listOf(1, 5)
+        val restart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
+        checkNotNull(restart.triggerFrameOrdinal)
+        restart.followingFrameOrdinals shouldBe emptyList()
+
+        before.feed(7)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 5, 7)
+
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 5, 7)
+        after.feed(9)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 5, 7, 9)
     }
 
     /**
@@ -509,7 +623,8 @@ class OutletHighWaterRecoveryTest {
         )
         controller.runToIdle()
         recovering.host.supervisionAccounting().restarts shouldBe 1
-        journal.replay().mapNotNull(JournalRecords::decodeRestart).single().precedesFrameCount shouldBe 2
+        journal.replay().mapNotNull(JournalRecords::decodeRestart)
+            .single().followingFrameOrdinals.size shouldBe 2
         recovering.feed(3)
         controller.runToIdle()
         // liveEffects includes recovery 1's own re-derivations of 1 and 2 on the fresh
@@ -551,8 +666,8 @@ class OutletHighWaterRecoveryTest {
      * the one the council's DECIDED verdict (computenet-ggxrq, 2026-10-07) requires for
      * the "exactly-once, not merely never-zero" bound: a `SaturationPolicy.Coalesce`
      * merge of two originals this handler reacts to still fires once per original
-     * ELEMENT, so counting the merge's originals in `precedesFrameCount` (option A's
-     * mechanism) makes replay reproduce live EXACTLY for this shape — see the test's
+     * ELEMENT, so naming the originals in type 8's delivery-order trace makes replay
+     * reproduce live EXACTLY for this shape — see the test's
      * own KDoc for the weaker-guarantee carve-out this shape does NOT need.
      */
     class CoalesceRelayCell(override val ref: CellRef) : Cell, ReBaselineEmitting, Stateful {
@@ -662,14 +777,15 @@ class OutletHighWaterRecoveryTest {
     /**
      * computenet-ggxrq (I-22 amendment, council DECIDED 2026-10-07, option C): a
      * triggerless metadata-plane RESTART overtaking a `SaturationPolicy.Coalesce`
-     * staged entry must count every coalesced ORIGINAL in `precedesFrameCount`
-     * (option A's mechanism), not the merge's own identity — `IntakeControl.coalesce`
+     * staged entry must name every coalesced ORIGINAL in its delivery-order trace,
+     * not the merge's own identity — `IntakeControl.coalesce`
      * replaces the staged queue entry with a NEW `HostedPortInvocation` that neither
      * `journaledFrames` nor `replayedFrames` ever keyed, so a bare identity count
      * undercounted it as 0 even though the WAL holds one `RECORD_FRAME` per original
      * (coalescing is acceptance, not loss: `ManagedHost`'s saturated-Coalesce branch
      * journals every incoming frame before merging it away). Measured on this bead
-     * before the fix: `precedesFrameCount=0`, live effects `[1, 2, 22, 3]`, recovered
+     * before the original ggxrq fix: the boundary named no frames, live effects
+     * `[1, 2, 22, 3]`, recovered
      * `[1, 2, 3, 2, 22]` with the post-recovery live frame SILENTLY LOST (`[KFX-11]`) —
      * a regression vs origin/main, which only duplicated.
      *
@@ -736,7 +852,8 @@ class OutletHighWaterRecoveryTest {
         val restartRecord = journalA.replay().mapNotNull(JournalRecords::decodeRestart).single()
         restartRecord.triggerFramePayload shouldBe null
         // computenet-ggxrq: BOTH coalesced originals, not the pre-fix 0.
-        restartRecord.precedesFrameCount shouldBe 2
+        restartRecord.triggerFrameOrdinal shouldBe null
+        restartRecord.followingFrameOrdinals.size shouldBe 2
 
         world.feed(3, counter = 8)
         controller.runToIdle()
@@ -836,7 +953,8 @@ class OutletHighWaterRecoveryTest {
         controller.runToIdle()
 
         val restartRecord = journalA.replay().mapNotNull(JournalRecords::decodeRestart).single()
-        restartRecord.precedesFrameCount shouldBe 2
+        restartRecord.triggerFrameOrdinal shouldBe null
+        restartRecord.followingFrameOrdinals.size shouldBe 2
         world.feed(3, counter = 9)
         controller.runToIdle()
         val liveEffects = effects.toList()
@@ -942,7 +1060,7 @@ class OutletHighWaterRecoveryTest {
         before.feed(Int.MIN_VALUE)
         if (checkpointDuringRecovery) {
             // Queue the equal frame before the trigger fails. The type-8 record must
-            // say that its trigger precedes this one-frame pending suffix; payload
+            // identify its trigger separately from the one following frame; payload
             // equality alone cannot distinguish the two records.
             before.feed(Int.MIN_VALUE)
             controller.runToIdle()
@@ -953,7 +1071,8 @@ class OutletHighWaterRecoveryTest {
         }
         before.host.supervisionAccounting().restarts shouldBe 1
         val historicalRestart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
-        historicalRestart.precedesFrameCount shouldBe if (checkpointDuringRecovery) 1 else 0
+        checkNotNull(historicalRestart.triggerFrameOrdinal)
+        historicalRestart.followingFrameOrdinals.size shouldBe if (checkpointDuringRecovery) 1 else 0
         val historicalSource = historicalRestart.outlets.single { it.portName == "outlet" }.sourceId
 
         // CRASH. Reverse the transient outcomes: the historical trigger now succeeds,
@@ -976,7 +1095,7 @@ class OutletHighWaterRecoveryTest {
      * review): here the historical trigger is the LATER of two byte-identical frames.
      * The earlier one succeeds live and fails for the first time during recovery, so
      * it must mint a new epoch; binding the record to the first payload-equal frame
-     * instead of the one its pending-suffix count names would hand it the historical one.
+     * instead of its recorded trigger ordinal would hand it the historical one.
      */
     @Test
     fun `a RESTART record stays with the later of two identical frames`() {
@@ -998,7 +1117,8 @@ class OutletHighWaterRecoveryTest {
         controller.runToIdle()
         before.host.supervisionAccounting().restarts shouldBe 1
         val historicalRestart = journal.replay().mapNotNull(JournalRecords::decodeRestart).single()
-        historicalRestart.precedesFrameCount shouldBe 0
+        checkNotNull(historicalRestart.triggerFrameOrdinal)
+        historicalRestart.followingFrameOrdinals shouldBe emptyList()
         val historicalSource = historicalRestart.outlets.single { it.portName == "outlet" }.sourceId
 
         // CRASH. The earlier equal frame now fails; the historical trigger succeeds.
@@ -1070,7 +1190,8 @@ class OutletHighWaterRecoveryTest {
         world.hostA.supervisionAccounting().restarts shouldBe 1
         val restartRecord = journalA.replay().mapNotNull(JournalRecords::decodeRestart).single()
         restartRecord.triggerFramePayload shouldBe null
-        restartRecord.precedesFrameCount shouldBe expectedPrecedingRecords
+        restartRecord.triggerFrameOrdinal shouldBe null
+        restartRecord.followingFrameOrdinals.size shouldBe expectedPrecedingRecords
 
         world.feed(3, counter = 8)
         controller.runToIdle()
