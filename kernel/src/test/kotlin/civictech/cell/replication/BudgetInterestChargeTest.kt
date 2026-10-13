@@ -318,6 +318,48 @@ class BudgetInterestChargeTest {
     }
 
     @Test
+    fun `catch-up failure removes the partial attachment before refunding link charges`() {
+        val recording = RecordingLedger("q-host", initial = N)
+        val counting = CountingLedger(recording)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = counting)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val local = SetCell<String>(CellRef(logicalId, 1))
+        replication.replicate(local, host)
+        (HostedCellProxy.create(local.ref, registry, SetInletProxy::class.java) as SetInletProxy)
+            .inlet.call.add("x")
+        controller.runToIdle()
+
+        val remote = CellRef(logicalId, 0)
+        val sends = AtomicInteger()
+        val linksAtFailure = AtomicInteger()
+        val sink = InvocationSink {
+            linksAtFailure.set(local.outlet.linking.links.size)
+            if (sends.incrementAndGet() == 1) throw IllegalStateException("catch-up send failed")
+        }
+
+        registry.publishFromPeer(remote, sink, peer = P, announcer = PeerStamp(P)) shouldBe null
+        controller.runToIdle()
+
+        linksAtFailure.get() shouldBe 1
+        sends.get() shouldBe 1
+        recording.balance(P, ClaimClass.Interest) shouldBe N
+        recording.balance(P, ClaimClass.Retention) shouldBe N
+        counting.undoneClasses.count { it == ClaimClass.Interest } shouldBe 1
+        counting.undoneClasses.count { it == ClaimClass.Retention } shouldBe 1
+        replication.linkCountAmong(setOf(local.ref, remote)) shouldBe 0
+        local.outlet.linking.links.size shouldBe 0
+
+        (HostedCellProxy.create(local.ref, registry, SetInletProxy::class.java) as SetInletProxy)
+            .inlet.call.add("y")
+        controller.runToIdle()
+
+        sends.get() shouldBe 1
+    }
+
+    @Test
     fun `link formation failure preserves a Retention hold carried into rebind`() {
         val recording = RecordingLedger("q-host", initial = N)
         val counting = CountingLedger(recording)
