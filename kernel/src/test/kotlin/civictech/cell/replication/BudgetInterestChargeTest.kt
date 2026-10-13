@@ -12,7 +12,9 @@ import civictech.cell.RecordingLedger
 import civictech.cell.ThrowingLedger
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.DeadLetter
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.IntakeClosedException
 import civictech.cell.host.LocationRegistry
@@ -29,6 +31,7 @@ import civictech.cell.link.PeerStamp
 import civictech.cell.link.UnboundReason
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
@@ -91,6 +94,26 @@ class BudgetInterestChargeTest {
                 check(finishRetentionCharge.await(20, TimeUnit.SECONDS)) {
                     "the concurrent unpublish never reached its callback"
                 }
+            }
+            return outcome
+        }
+    }
+
+    private class AfterAdmissionLedger(
+        private val inner: BudgetLedger,
+        private val window: ClaimClass,
+        private val afterAdmission: () -> Unit,
+    ) : BudgetLedger {
+        val hookCalls = AtomicInteger()
+
+        override fun charge(claim: BudgetClaim): BudgetOutcome {
+            val outcome = inner.charge(claim)
+            if (
+                claim.claimClass == window &&
+                outcome is BudgetOutcome.Admitted &&
+                hookCalls.incrementAndGet() == 1
+            ) {
+                afterAdmission()
             }
             return outcome
         }
@@ -169,6 +192,66 @@ class BudgetInterestChargeTest {
                 ?.let { IdentityResolution.Bound(it.name, it.issuer, it) }
                 ?: IdentityResolution.Unbound(UnboundReason.NO_STATEMENT)
         }
+    }
+
+    private fun assertPendingAdmissionFollowsReplacement(
+        window: ClaimClass,
+        crashSupersede: Boolean,
+    ) {
+        val recording = RecordingLedger("q-host", initial = N)
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val incumbent = SetCell<String>(CellRef(logicalId, 1))
+        val replacement = SetCell<String>(incumbent.ref)
+        lateinit var incumbentHost: ManagedHost
+        lateinit var replacementHost: ManagedHost
+        val ledger = AfterAdmissionLedger(recording, window) {
+            if (crashSupersede) {
+                replication.replicate(replacement, replacementHost)
+            } else {
+                replication.rebind(incumbent, replacement, incumbentHost)
+            }
+        }
+        incumbentHost = ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            budget = ledger,
+        )
+        replacementHost = if (crashSupersede) {
+            ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = ledger)
+        } else {
+            incumbentHost
+        }
+        replication.replicate(incumbent, incumbentHost)
+        controller.runToIdle()
+
+        val remote = CellRef(logicalId, 0)
+        val received = CopyOnWriteArrayList<HostedPortInvocation>()
+        registry.publishFromPeer(
+            remote,
+            InvocationSink { received += it },
+            peer = P,
+            announcer = PeerStamp(P),
+        ) shouldBe null
+        controller.runToIdle()
+
+        ledger.hookCalls.get() shouldBe 1
+        recording.charges.map { it.claimClass } shouldBe
+            listOf(ClaimClass.Interest, ClaimClass.Retention)
+        recording.balance(P, ClaimClass.Interest) shouldBe N - 1
+        recording.balance(P, ClaimClass.Retention) shouldBe N - 1
+        replication.linkCountAmong(setOf(replacement.ref, remote)) shouldBe 1
+
+        received.clear()
+        (HostedCellProxy.create(replacement.ref, registry, SetInletProxy::class.java) as SetInletProxy)
+            .inlet.call.add("replacement")
+        controller.runToIdle()
+        received.flatMapTo(mutableSetOf()) { invocation ->
+            (invocation.invocation.args.firstOrNull() as? SetDelta<*>)
+                ?.adds?.keys?.filterIsInstance<String>().orEmpty()
+        } shouldBe setOf("replacement")
     }
 
     @Test
@@ -770,6 +853,115 @@ class BudgetInterestChargeTest {
 
             rig.q.replication.linkCountAmong(setOf(onQ.ref, onP.ref)) shouldBe 1
         }
+    }
+
+    @Test
+    fun `same-ref rebind inherits an Interest admission already in flight`() {
+        assertPendingAdmissionFollowsReplacement(ClaimClass.Interest, crashSupersede = false)
+    }
+
+    @Test
+    fun `same-ref rebind inherits a Retention admission already in flight`() {
+        assertPendingAdmissionFollowsReplacement(ClaimClass.Retention, crashSupersede = false)
+    }
+
+    @Test
+    fun `crash supersede inherits an Interest admission already in flight`() {
+        assertPendingAdmissionFollowsReplacement(ClaimClass.Interest, crashSupersede = true)
+    }
+
+    @Test
+    fun `crash supersede inherits a Retention admission already in flight`() {
+        assertPendingAdmissionFollowsReplacement(ClaimClass.Retention, crashSupersede = true)
+    }
+
+    /**
+     * The other interleaving of the same overlap: the charge returns while the
+     * rebind is BETWEEN dropping the incumbent and spawning the replacement, so
+     * the admitting call finds no live instance at the ref and has to leave the
+     * admission for the replacement's own `maybeLink` to resume. The one event
+     * inside that gap is rebind enqueueing the incumbent's despawn (the despawn
+     * itself, and its unpublish, only run once the replacement's spawn awaits).
+     */
+    private fun assertAdmissionLeftInRebindGapIsResumed(window: ClaimClass) {
+        val recording = RecordingLedger("q-host", initial = N)
+        val chargeAdmitted = CountDownLatch(1)
+        val releaseCharge = CountDownLatch(1)
+        val ledger = AfterAdmissionLedger(recording, window) {
+            chargeAdmitted.countDown()
+            check(releaseCharge.await(20, TimeUnit.SECONDS)) { "the rebind never reached its despawn gap" }
+        }
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val rebinding = Thread.currentThread()
+        var onRebindSubmit: (() -> Unit)? = null
+        val simulated = controller.scheduler()
+        val scheduler = object : HostScheduler by simulated {
+            override fun submit(priority: Int, action: suspend () -> Unit) {
+                if (Thread.currentThread() === rebinding) onRebindSubmit?.also { onRebindSubmit = null }?.invoke()
+                simulated.submit(priority, action)
+            }
+        }
+        val host = ManagedHost(scheduler = scheduler, registry = registry, budget = ledger)
+        val replication = Replication(registry)
+        val logicalId = UUID.randomUUID()
+        val incumbent = SetCell<String>(CellRef(logicalId, 1))
+        val replacement = SetCell<String>(incumbent.ref)
+        replication.replicate(incumbent, host)
+        controller.runToIdle()
+
+        val remote = CellRef(logicalId, 0)
+        val received = CopyOnWriteArrayList<HostedPortInvocation>()
+        val announcing = FutureTask<Any?> {
+            registry.publishFromPeer(
+                remote,
+                InvocationSink { received += it },
+                peer = P,
+                announcer = PeerStamp(P),
+            )
+        }
+        Thread.ofVirtual().start(announcing)
+        check(chargeAdmitted.await(20, TimeUnit.SECONDS)) { "the admission never reached its $window charge" }
+
+        val gapVisits = AtomicInteger()
+        val linksLeftInGap = AtomicInteger(-1)
+        onRebindSubmit = {
+            gapVisits.incrementAndGet()
+            releaseCharge.countDown()
+            announcing.get(20, TimeUnit.SECONDS) shouldBe null
+            linksLeftInGap.set(replication.linkCountAmong(setOf(incumbent.ref, remote)))
+        }
+        replication.rebind(incumbent, replacement, host)
+        controller.runToIdle()
+
+        gapVisits.get() shouldBe 1
+        // The admitting call finished inside the gap and formed nothing there.
+        linksLeftInGap.get() shouldBe 0
+        ledger.hookCalls.get() shouldBe 1
+        recording.charges.map { it.claimClass } shouldBe
+            listOf(ClaimClass.Interest, ClaimClass.Retention)
+        recording.balance(P, ClaimClass.Interest) shouldBe N - 1
+        recording.balance(P, ClaimClass.Retention) shouldBe N - 1
+        replication.linkCountAmong(setOf(replacement.ref, remote)) shouldBe 1
+
+        received.clear()
+        (HostedCellProxy.create(replacement.ref, registry, SetInletProxy::class.java) as SetInletProxy)
+            .inlet.call.add("replacement")
+        controller.runToIdle()
+        received.flatMapTo(mutableSetOf()) { invocation ->
+            (invocation.invocation.args.firstOrNull() as? SetDelta<*>)
+                ?.adds?.keys?.filterIsInstance<String>().orEmpty()
+        } shouldBe setOf("replacement")
+    }
+
+    @Test
+    fun `replacement resumes an Interest admission that returned inside the rebind gap`() {
+        assertAdmissionLeftInRebindGapIsResumed(ClaimClass.Interest)
+    }
+
+    @Test
+    fun `replacement resumes a Retention admission that returned inside the rebind gap`() {
+        assertAdmissionLeftInRebindGapIsResumed(ClaimClass.Retention)
     }
 
     @Test

@@ -190,24 +190,68 @@ class Replication(
     /**
      * One Retention reservation for a charged gossip pair. A pending slot is
      * installed before either ledger call, so a concurrent release can mark the
-     * admission as obsolete before its undo handle exists. All slot transitions
-     * happen under [linkLifecycle].
+     * admission as obsolete before its undo handle exists. It also owns an
+     * admitted Interest rollback until structural formation begins, allowing a
+     * same-ref replacement to resume either charge window without charging
+     * afresh. Map membership and charge-phase transitions happen under
+     * [linkLifecycle]; undo callbacks may run after an obsolete slot is removed.
      */
-    private class RetentionHold {
-        private var undo: (() -> Unit)? = null
+    private enum class AdmissionPhase {
+        INTEREST_CHARGING,
+        INTEREST_ADMITTED,
+        RETENTION_CHARGING,
+        INSTALLED,
+    }
+
+    private class RetentionHold(
+        val chargeHost: ManagedHost,
+        val announcer: PeerStamp,
+    ) {
+        private var phase = AdmissionPhase.INTEREST_CHARGING
+        private var interestUndo: (() -> Unit)? = null
+        private var retentionUndo: (() -> Unit)? = null
         private var released = false
 
-        val installed: Boolean get() = undo != null
+        val installed: Boolean get() = phase == AdmissionPhase.INSTALLED
 
-        fun install(action: () -> Unit) {
-            check(!released && undo == null) { "cannot install a released Retention hold" }
-            undo = action
+        fun admitInterest(action: () -> Unit) {
+            check(!released && phase == AdmissionPhase.INTEREST_CHARGING) {
+                "cannot admit Interest in Retention phase $phase"
+            }
+            interestUndo = action
+            phase = AdmissionPhase.INTEREST_ADMITTED
+        }
+
+        fun beginRetentionCharge(): Boolean {
+            if (released || phase != AdmissionPhase.INTEREST_ADMITTED) return false
+            phase = AdmissionPhase.RETENTION_CHARGING
+            return true
+        }
+
+        fun admitRetention(action: () -> Unit) {
+            check(!released && phase == AdmissionPhase.RETENTION_CHARGING) {
+                "cannot install Retention in admission phase $phase"
+            }
+            retentionUndo = action
+            phase = AdmissionPhase.INSTALLED
+        }
+
+        fun freshInterestUndo(): (() -> Unit)? = interestUndo
+
+        fun transferInterestToFormation() {
+            check(installed) { "cannot transfer Interest before Retention is installed" }
+            interestUndo = null
         }
 
         fun release() {
             if (released) return
             released = true
-            undo?.also { undo = null }?.invoke()
+            retentionUndo?.also { retentionUndo = null }?.invoke()
+            // Before structural formation takes ownership, an admitted
+            // Interest debit is still part of this pending admission. A real
+            // retirement rolls both charges back; same-ref recovery leaves the
+            // slot in the map and transfers this callback to LinkFormation.
+            interestUndo?.also { interestUndo = null }?.invoke()
         }
     }
 
@@ -217,7 +261,9 @@ class Replication(
      * installs a pending slot before charging, while unlink/rollback/eviction
      * remove that same slot through [releaseHoldsMatchingLocked]. Thus a release that
      * overlaps admission either releases an installed hold or causes the later
-     * admission to undo both charges without forming a link.
+     * admission to undo both charges without forming a link. Rebind and crash
+     * supersede deliberately leave the slot present, so their same-ref replacement
+     * completes the in-flight admission under the stable link identity (jtof7-D9).
      */
     private val retentionHolds = mutableMapOf<Pair<CellRef, CellRef>, RetentionHold>()
 
@@ -1179,9 +1225,8 @@ class Replication(
         val key = local.ref to other
         beforeLinkLifecycle?.invoke(local, other)
 
-        var pending: RetentionHold? = null
-        var chargeHost: ManagedHost? = null
-        var chargeAnnouncer: PeerStamp? = null
+        var interestAdmission: RetentionHold? = null
+        var retentionAdmission: RetentionHold? = null
         var catchUp: Pair<Replicable<*>, Link>? = null
         var formation: LinkFormation? = null
         var formationDecided = false
@@ -1206,21 +1251,25 @@ class Replication(
                 val announcer = (registry.location(other) as? LocationRegistry.Remote)?.announcer
                 if (host != null && announcer != null) {
                     retentionHolds[key]?.let { hold ->
+                        formationDecided = true
                         if (hold.installed) {
-                            formation = beginLinkFormationLocked(local, other, targetInterest, key, hold)
-                            formationDecided = true
-                            return@synchronized
+                            formation = beginHeldLinkFormationLocked(local, other, targetInterest, key, hold)
+                        } else if (hold.beginRetentionCharge()) {
+                            // A same-ref replacement arrived after Interest
+                            // admitted but before the retired caller could
+                            // continue. It inherits that admission and drives
+                            // the one remaining charge itself (jtof7-D9).
+                            retentionAdmission = hold
                         }
-                        return
+                        return@synchronized
                     }
                     if (!host.anyLedgerOnChain()) {
                         formation = beginLinkFormationLocked(local, other, targetInterest, key)
                         formationDecided = true
                         return@synchronized
                     }
-                    pending = RetentionHold().also { retentionHolds[key] = it }
-                    chargeHost = host
-                    chargeAnnouncer = announcer
+                    interestAdmission = RetentionHold(host, announcer)
+                        .also { retentionHolds[key] = it }
                 } else {
                     formation = beginLinkFormationLocked(local, other, targetInterest, key)
                     formationDecided = true
@@ -1258,70 +1307,107 @@ class Replication(
             installLinkChecked(it)
             return
         }
-        if (formationDecided) return
 
-        val expected = requireNotNull(pending)
-        val host = requireNotNull(chargeHost)
-        val announcer = requireNotNull(chargeAnnouncer)
-        val interestClaim = budgetClaim(announcer, ClaimClass.Interest, key = key)
-        when (val interest = host.chargeThroughAncestors(interestClaim)) {
+        retentionAdmission?.let {
+            chargeRetention(key, other, targetInterest, it)
+            return
+        }
+        if (formationDecided) return
+        chargeInterest(key, other, targetInterest, requireNotNull(interestAdmission))
+    }
+
+    private fun chargeInterest(
+        key: Pair<CellRef, CellRef>,
+        other: CellRef,
+        targetInterest: Interest,
+        admission: RetentionHold,
+    ) {
+        val claim = budgetClaim(admission.announcer, ClaimClass.Interest, key = key)
+        when (val interest = admission.chargeHost.chargeThroughAncestors(claim)) {
             is BudgetOutcome.Refused -> {
                 synchronized(linkLifecycle) {
-                    if (retentionHolds[key] === expected) retentionHolds.remove(key)
+                    if (retentionHolds[key] === admission) retentionHolds.remove(key)
                 }
-                denyLinkBudget(host, interest, interestClaim, key)
+                denyLinkBudget(admission.chargeHost, interest, claim, key)
             }
             is BudgetOutcome.Admitted -> {
-                val stillPending = synchronized(linkLifecycle) {
-                    val live = retentionHolds[key] === expected && linkEndpointsLiveLocked(local, other)
-                    if (!live && retentionHolds[key] === expected) retentionHolds.remove(key)
-                    live
+                var continueWithRetention = false
+                val kept = synchronized(linkLifecycle) {
+                    if (retentionHolds[key] !== admission || registry.location(other) == null) {
+                        if (retentionHolds[key] === admission) retentionHolds.remove(key)
+                        false
+                    } else {
+                        admission.admitInterest(interest.undo)
+                        // The exact object that initiated the charge may have
+                        // retired. If its same-ref replacement is already live,
+                        // continue immediately; otherwise leave the admitted
+                        // slot for that replacement's maybeLink call to resume.
+                        if (liveLocalAtRefLocked(key.first) != null) {
+                            continueWithRetention = admission.beginRetentionCharge()
+                        }
+                        true
+                    }
                 }
-                if (!stillPending) {
+                if (!kept) {
                     interest.undo()
-                    return
+                } else if (continueWithRetention) {
+                    chargeRetention(key, other, targetInterest, admission)
                 }
-                val retentionClaim = budgetClaim(announcer, ClaimClass.Retention, hold = true)
-                when (val retention = host.chargeThroughAncestors(retentionClaim)) {
-                    is BudgetOutcome.Refused -> {
-                        synchronized(linkLifecycle) {
-                            if (retentionHolds[key] === expected) retentionHolds.remove(key)
-                        }
-                        interest.undo()
-                        denyLinkBudget(host, retention, retentionClaim, key)
+            }
+        }
+    }
+
+    private fun chargeRetention(
+        key: Pair<CellRef, CellRef>,
+        other: CellRef,
+        targetInterest: Interest,
+        admission: RetentionHold,
+    ) {
+        val claim = budgetClaim(admission.announcer, ClaimClass.Retention, hold = true)
+        when (val retention = admission.chargeHost.chargeThroughAncestors(claim)) {
+            is BudgetOutcome.Refused -> {
+                val owned = synchronized(linkLifecycle) {
+                    if (retentionHolds[key] !== admission) false
+                    else {
+                        retentionHolds.remove(key)
+                        true
                     }
-                    is BudgetOutcome.Admitted -> {
-                        var chargedFormation: LinkFormation? = null
-                        val formed = synchronized(linkLifecycle) {
-                            if (
-                                retentionHolds[key] !== expected ||
-                                !linkEndpointsLiveLocked(local, other)
-                            ) {
-                                if (retentionHolds[key] === expected) retentionHolds.remove(key)
-                                false
-                            } else {
-                                expected.install(retention.undo)
-                                chargedFormation = beginLinkFormationLocked(
-                                    local,
-                                    other,
-                                    targetInterest,
-                                    key,
-                                    expected,
-                                    interest.undo,
-                                )
-                                if (chargedFormation == null && retentionHolds[key] === expected) {
-                                    retentionHolds.remove(key)
-                                }
-                                chargedFormation != null
-                            }
+                }
+                if (owned) admission.release()
+                denyLinkBudget(admission.chargeHost, retention, claim, key)
+            }
+            is BudgetOutcome.Admitted -> {
+                var formation: LinkFormation? = null
+                var releaseAdmission = false
+                val kept = synchronized(linkLifecycle) {
+                    if (retentionHolds[key] !== admission) {
+                        false
+                    } else if (registry.location(other) == null) {
+                        retentionHolds.remove(key)
+                        releaseAdmission = true
+                        false
+                    } else {
+                        admission.admitRetention(retention.undo)
+                        liveLocalAtRefLocked(key.first)?.let { current ->
+                            formation = beginHeldLinkFormationLocked(
+                                current,
+                                other,
+                                targetInterest,
+                                key,
+                                admission,
+                            )
                         }
-                        if (!formed) {
-                            retention.undo()
-                            interest.undo()
-                        } else {
-                            installLinkChecked(requireNotNull(chargedFormation))
-                        }
+                        // A same-ref swap can be between despawn and spawn at
+                        // this instant. Keep the installed admission in that
+                        // gap; the replacement resumes it without recharging.
+                        true
                     }
+                }
+                if (!kept) {
+                    if (releaseAdmission) admission.release()
+                    retention.undo()
+                } else {
+                    formation?.let(::installLinkChecked)
                 }
             }
         }
@@ -1332,6 +1418,12 @@ class Replication(
         if (localReplicas[local.ref.id]?.any { it === local } != true) return null
         return hostOf[local.ref]
     }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun liveLocalAtRefLocked(ref: CellRef): Replicable<*>? =
+        localReplicas[ref.id]
+            ?.lastOrNull { it.ref == ref }
+            ?.takeIf { localHostIfLiveLocked(it) != null }
 
     /** Must be called under [linkLifecycle]. */
     private fun linkEndpointsLiveLocked(local: Replicable<*>, other: CellRef): Boolean =
@@ -1349,6 +1441,30 @@ class Replication(
         if (!linkEndpointsLiveLocked(local, other) || linkFormations.containsKey(key)) return null
         return LinkFormation(local, other, targetInterest, key, hold, freshInterestUndo)
             .also { linkFormations[key] = it }
+    }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun beginHeldLinkFormationLocked(
+        local: Replicable<*>,
+        other: CellRef,
+        targetInterest: Interest,
+        key: Pair<CellRef, CellRef>,
+        hold: RetentionHold,
+    ): LinkFormation? {
+        val freshInterestUndo = hold.freshInterestUndo()
+        return beginLinkFormationLocked(
+            local,
+            other,
+            targetInterest,
+            key,
+            hold,
+            freshInterestUndo,
+        )?.also {
+            // Once structural formation starts, LinkFormation owns rollback
+            // for the debit. A later same-ref retry carries the installed hold
+            // and the already-spent Interest charge without a second debit.
+            hold.transferInterestToFormation()
+        }
     }
 
     /**
