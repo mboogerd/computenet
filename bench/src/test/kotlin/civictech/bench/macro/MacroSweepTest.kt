@@ -102,13 +102,13 @@ class MacroSweepTest {
             invocationCoordinates.remove(context.uniqueId)
         }
 
-        override fun testAborted(context: ExtensionContext, cause: Throwable) {
+        override fun testAborted(context: ExtensionContext, cause: Throwable?) {
             invocationCoordinates.remove(context.uniqueId)
         }
 
-        override fun testFailed(context: ExtensionContext, cause: Throwable) {
+        override fun testFailed(context: ExtensionContext, cause: Throwable?) {
             val at = invocationCoordinates.remove(context.uniqueId) ?: return
-            if (cause.hasTimeoutCause()) outcomes[at] = timeoutOutcome(at)
+            if (cause?.hasTimeoutCause() == true) outcomes[at] = timeoutOutcome(at)
         }
     }
 
