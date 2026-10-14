@@ -1,6 +1,7 @@
 package civictech.bench.macro
 
 import civictech.bench.Drive
+import civictech.bench.RunEnvironment
 import civictech.bench.cost.Coordinate
 import civictech.bench.cost.CostSubject
 import civictech.bench.cost.PointOutcome
@@ -8,12 +9,17 @@ import civictech.bench.macro.mesh.MeshBuild
 import civictech.bench.macro.mesh.MeshTopology
 import civictech.cell.CellRef
 import civictech.cell.proxy.Invocation
+import civictech.testkit.awaitUntil
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 
 class PointAccountingTest {
 
@@ -113,15 +119,126 @@ class PointAccountingTest {
     }
 
     @Test
-    fun realDriveReturnsTheTypedPlaceholder() {
-        val at = coordinate(drive = Drive.REAL)
+    fun realPointRecordsWallClockWithADispersionFigure() {
+        val at = coordinate(hostCount = 1, drive = Drive.REAL)
 
-        SweepRunner().run(at) shouldBe PointOutcome.Unschedulable(
-            at = at,
-            subject = CostSubject.PROPAGATION,
-            reason = "REAL drive not yet wired",
-            observedLimit = "",
+        val outcome = SweepRunner(real = RealOptions(trials = 2, env = realEnvironment))
+            .run(at)
+            .shouldBeInstanceOf<PointOutcome.Ok>()
+
+        outcome.at shouldBe at
+        outcome.subject shouldBe CostSubject.PROPAGATION
+        outcome.counts.simSteps shouldBe 0L
+        outcome.counts.crossHostFrames shouldBe 0L
+        outcome.counts.wireBytes shouldBe 0L
+        val wall = requireNotNull(outcome.wall)
+        wall.drive shouldBe Drive.REAL
+        wall.unit shouldBe "ms/point"
+        wall.env shouldBe realEnvironment
+        (wall.dispersion >= 0.0) shouldBe true
+        (wall.value >= 0.0) shouldBe true
+    }
+
+    @Test
+    fun schedulerLoopThrowFailsTheRealPoint() {
+        val at = coordinate(hostCount = 1, drive = Drive.REAL)
+        val capturedErr = ByteArrayOutputStream()
+        val originalErr = System.err
+        try {
+            System.setErr(PrintStream(capturedErr, true, Charsets.UTF_8))
+            val outcome = SweepRunner(
+                real = RealOptions(trials = 1, env = realEnvironment),
+                hook = PointHook { context, _ ->
+                    val world = context.shouldBeInstanceOf<PointContext.Real>().world
+                    world.scheduler.submit(0) {
+                        throw IllegalStateException("bench: injected scheduler-loop throw")
+                    }
+                },
+            ).run(at).shouldBeInstanceOf<PointOutcome.Failed>()
+
+            outcome.cause shouldContain IllegalStateException::class.java.name
+            outcome.cause shouldContain "injected scheduler-loop throw"
+            outcome.deadLetters shouldBe emptyList()
+            awaitUntil("the scheduler backstop prints the injected failure", timeoutMs = 5_000) {
+                capturedErr.toString(Charsets.UTF_8).contains("injected scheduler-loop throw")
+            }
+        } finally {
+            System.setErr(originalErr)
+        }
+    }
+
+    @Test
+    fun deadLetterFailsTheRealPoint() {
+        val at = coordinate(hostCount = 1, drive = Drive.REAL)
+        val runner = SweepRunner(
+            real = RealOptions(trials = 1, env = realEnvironment),
+            hook = PointHook { context, _ ->
+                val world = context.shouldBeInstanceOf<PointContext.Real>().world
+                val method = Runnable::class.java.methods.single { it.name == "run" }
+                world.host.routerInlet.call.route(
+                    CellRef(UUID.randomUUID()),
+                    "inlet",
+                    Invocation.of(method, emptyArray()),
+                )
+            },
         )
+
+        val outcome = runner.run(at).shouldBeInstanceOf<PointOutcome.Failed>()
+
+        outcome.cause shouldBe "dead letter"
+        outcome.deadLetters.size shouldBe 1
+    }
+
+    @Test
+    fun realBudgetExhaustionIsNonConvergent() {
+        val at = coordinate(hostCount = 1, drive = Drive.REAL)
+        val release = CountDownLatch(1)
+        try {
+            val outcome = SweepRunner(
+                budget = PointBudget(realMillis = 200),
+                real = RealOptions(trials = 1, env = realEnvironment),
+                hook = PointHook { context, _ ->
+                    context.shouldBeInstanceOf<PointContext.Real>().world.scheduler.submit(0) {
+                        release.await()
+                    }
+                },
+            ).run(at)
+
+            outcome shouldBe PointOutcome.NonConvergent(
+                at,
+                CostSubject.PROPAGATION,
+                "realMillis=200",
+            )
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test
+    fun multiHostOrReplicatedRealIsUnschedulable() {
+        val coordinates = listOf(
+            coordinate(hostCount = 3, drive = Drive.REAL),
+            coordinate(hostCount = 1, replication = true, drive = Drive.REAL),
+        )
+
+        coordinates.forEach { at ->
+            val outcome = SweepRunner(real = RealOptions(trials = 1, env = realEnvironment))
+                .run(at)
+                .shouldBeInstanceOf<PointOutcome.Unschedulable>()
+
+            outcome.at shouldBe at
+            outcome.reason shouldContain "[BEN2-13]"
+            outcome.observedLimit shouldBe "hostCount=1, replication=false"
+        }
+    }
+
+    @Test
+    fun realDriveRequiresRealOptions() {
+        val failure = shouldThrow<IllegalArgumentException> {
+            SweepRunner().run(coordinate(hostCount = 1, drive = Drive.REAL))
+        }
+
+        failure.message shouldContain "REAL drive needs RealOptions"
     }
 
     private fun coordinate(
@@ -142,5 +259,19 @@ class PointAccountingTest {
         replication = replication,
         durability = durability,
         drive = drive,
+    )
+
+    private val realEnvironment = RunEnvironment(
+        jvmVendor = "test-vendor",
+        jvmVersion = "test-version",
+        heapSettings = "test-heap",
+        cpuModel = "test-cpu",
+        coreCount = 1,
+        os = "test-os",
+        jmhMode = "PointAccountingTest fixture; not JMH",
+        forkCount = 1,
+        warmupIterations = 1,
+        measurementIterations = 1,
+        harnessCommitSha = "test",
     )
 }
