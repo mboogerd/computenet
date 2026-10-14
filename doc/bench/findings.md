@@ -6485,3 +6485,26 @@ Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corr
 Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
 Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `OperatorThroughputBenchmark.sim` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.05106599919551368, so a later row above 0.103 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.05106599919551368 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
 
+## 2026-10-14 — BB-GRA — LDBC Graphalytics coverage after the KE5-independent slice (LCC validated; PR, CDLP, BFS, SSSP, WCC blocked on E5.2/E5.3[/E5.4])
+Harness: 1dd835544a252a50559c8d0c4ef515a5ef030569 · JVM Amazon.com Inc. (Corretto-21.0.5.11.1)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=Graphalytics LCC SIM work steps (JUnit @Tag(bench) probe) forks=1 warmup=1 iters=5 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| example-directed load | 17.0 ± 0.0 steps | |
+| example-directed compute | 0.0 ± 0.0 steps | |
+| example-undirected load | 24.0 ± 0.0 steps | |
+| example-undirected compute | 0.0 ± 0.0 steps | |
+Trigger: G-41 — INCONCLUSIVE for cycle regions: five algorithms remain blocked on KE5 constructs; LCC validates.
+
+Specification: LDBC Graphalytics Benchmark specification v1.0.6-draft
+Dataset source commit: 7b8bde76cf7aab5e90b25ecd4b38829e2f98b292
+Load mode: volatile/per-message
+
+| Algorithm | Status | Cause |
+| --- | --- | --- |
+| BFS | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). It also needs E5.4 iteration-cut detection. |
+| CDLP | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). |
+| LCC | validated |  |
+| PR | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). |
+| SSSP | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). It also needs E5.4 iteration-cut detection. |
+| WCC | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). It also needs E5.4 iteration-cut detection. |
