@@ -6602,3 +6602,39 @@ This structural export has an empty calibration list. `CostQuery.coLocatedEdge` 
 ### Candidate G-item
 
 local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.
+
+## 2026-10-14 — macro REAL per-unit time calibration
+Harness: c4366b8a · JVM Amazon.com Inc. (Corretto-21.0.5.11.1)/21.0.5 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=Average time forks=3 warmup=5 iters=5 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| localDispatchNanos | 10857.310979 ± 1621.90272 ns/op | |
+| crossHostFrameNanos | 1821.36234 ± 33.09845 ns/op | |
+| wireByteNanos | 6.025744396201454 ± 0.10521673813602318 ns/byte | |
+| journalFsyncNanos | 24178.104886 ± 2434.713831 ns/op | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- localDispatchNanos (drive=REAL): 10857.310979 ± 1621.90272 ns/op, relative dispersion 0.1493834636529296 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- crossHostFrameNanos (drive=REAL): 1821.36234 ± 33.09845 ns/op, relative dispersion 0.0181723588289412 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- wireByteNanos (drive=REAL): 6.025744396201454 ± 0.10521673813602318 ns/byte, relative dispersion 0.017461201673663815 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- journalFsyncNanos (drive=REAL): 24178.104886 ± 2434.713831 ns/op, relative dispersion 0.10069911775466685 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+
+## 2026-10-14 — SetCell retained bytes per element
+Harness: c4366b8a · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=retained-heap-delta (in-process JUnit probe; not JMH) forks=1 warmup=1 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| retainedBytesPerElement | 269.158792 ± 0.015137969131824842 bytes/element | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- retainedBytesPerElement (drive=REAL): 269.158792 ± 0.015137969131824842 bytes/element, relative dispersion 5.624177839163746E-5
+
+Calibration provenance:
+JMH command: <toolchain-21>/bin/java -jar bench/build/libs/bench-jmh.jar 'MacroCalibrationBenchmark' -rf csv -rff /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/a5b5b783-5fe8-42b9-b967-75dac3552119/scratchpad/work.lkUUMv/computenet-mkyb1.4-implement.7ws4Ll/macro-calibration-real.csv 2>&1 | tee /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/a5b5b783-5fe8-42b9-b967-75dac3552119/scratchpad/work.lkUUMv/computenet-mkyb1.4-implement.7ws4Ll/macro-calibration-real.log
+largeFrameBytes=366614
+smallFrameBytes=275
+retained footprint elements=100000 replicates=10
+
+With this export, `CostQuery.cellResidency` answers `Priced` at admitted structural points; `CostQuery.coLocatedEdge`, `CostQuery.crossHostEdge`, and `CostQuery.reBaseline` remain `NotMeasured` because local messages and REBASELINE structural evidence are unmeasured.
