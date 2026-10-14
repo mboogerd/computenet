@@ -6486,7 +6486,7 @@ Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersio
 Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `OperatorThroughputBenchmark.sim` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.05106599919551368, so a later row above 0.103 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.05106599919551368 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
 
 ## 2026-10-14 — macro sweep — structural counts per point over the OFAT plan (mkyb1-D1/D16): shape × cardinality × batch × host count × fan-out with replication and durability switches, FULL_MESH loopback, SIM drive, determinism check on every point
-Harness: 9f59de42 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+Harness: 6940663d · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
 JMH: mode=SIM structural sweep (JUnit @Tag("bench"), one deterministic SimulationController per point; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both attempts) forks=1 warmup=1 iters=2 · drive=SIM
 | subject | value | notes |
 | --- | --- | --- |
@@ -6554,6 +6554,18 @@ JMH: mode=SIM structural sweep (JUnit @Tag("bench"), one deterministic Simulatio
 | FAN_OUT_TREE n=10000 b=10 h=3 f=16 repl=off dur=off wireBytes | 4.0493424E7 ± 0.0 wireBytes/point | |
 | FAN_OUT_TREE n=10000 b=10 h=3 f=16 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
 | FAN_OUT_TREE n=10000 b=10 h=3 f=16 repl=off dur=off simSteps | 170000.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off crossHostFrames | 420000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off wireBytes | 2.12440476E8 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off simSteps | 850000.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off crossHostFrames | 1660000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off wireBytes | 8.27788548E8 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off simSteps | 3330000.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off crossHostFrames | 426583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off wireBytes | 2.17981655E8 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off simSteps | 863166.0 ± 0.0 simSteps/point | |
 | DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=on crossHostFrames | 26583.0 ± 0.0 crossHostFrames/point | |
 | DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=on wireBytes | 1.3605747E7 ± 0.0 wireBytes/point | |
 | DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=on journalRecords | 36583.0 ± 0.0 journalRecords/point | |
@@ -6562,6 +6574,10 @@ JMH: mode=SIM structural sweep (JUnit @Tag("bench"), one deterministic Simulatio
 | DIAMOND n=1000000 b=10 h=8 f=4 repl=off dur=off wireBytes | 2.335558514E9 ± 0.0 wireBytes/point | |
 | DIAMOND n=1000000 b=10 h=8 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
 | DIAMOND n=1000000 b=10 h=8 f=4 repl=off dur=off simSteps | 9999582.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off crossHostFrames | 2270000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off wireBytes | 1.161075906E9 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off simSteps | 4550000.0 ± 0.0 simSteps/point | |
 Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 
 ### Sweep plan
@@ -6577,7 +6593,7 @@ Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 - Corners: point #21 — Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=1000000, batchSize=10, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM); point #22 — Coordinate(shape=FAN_OUT_TREE, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
 - Topology: FULL_MESH
 - Determinism check: true for every SIM point
-- Budget: 60000 + 28 * cardinality, clamped to 2147483647 steps
+- Budget: 60000 + 28 * cardinality * message-volume scale (FAN_OUT_TREE ceil(fan-out / 4); replication routes = host count * (host count - 1); otherwise 1), clamped to 2147483647 steps
 - Shape seed: 1
 
 ### Omissions
@@ -6586,14 +6602,10 @@ Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 - 2 :wire host counts 2 and 3 — reason: sibling feature, the real-transport cross-check
 - 1 STAR — reason: mkyb1-D8: not in the declared space
 - 22 REAL drive at each plan coordinate — reason: structural counts are SIM-derived ([BEN2-33]); calibration is the JMH benchmark
-- FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off: NonConvergent — declared budget exhausted: simSteps=340000
-- FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off: NonConvergent — declared budget exhausted: simSteps=340000
-- DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off: NonConvergent — declared budget exhausted: simSteps=340000
-- FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off: NonConvergent — declared budget exhausted: simSteps=340000
 
 ### Outcome tally
 
-admitted=18 NonConvergent=4 NonDeterministic=0 Unschedulable=0 Failed=0 Unreportable=0
+admitted=22 NonConvergent=0 NonDeterministic=0 Unschedulable=0 Failed=0 Unreportable=0
 
 ### Cost-query consequences
 

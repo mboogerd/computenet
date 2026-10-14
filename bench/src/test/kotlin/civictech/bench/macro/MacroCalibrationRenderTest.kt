@@ -34,13 +34,23 @@ class MacroCalibrationRenderTest {
         requireNotNull(repoRoot?.takeIf { it.isNotBlank() }) {
             "system property computenet.repo.root must name the export checkout"
         }
+        val recordedRetainedPath = System.getProperty(RECORDED_RETAINED_PROPERTY)
+            ?.takeIf { it.isNotBlank() }
+            ?: System.getenv(RECORDED_RETAINED_ENV)?.takeIf { it.isNotBlank() }
+        // Unset: a fresh calibration runs the in-process probe here (mkyb1-D12). Set: a
+        // re-merge reuses the recorded constant with its original measuring provenance.
 
         val results = File(resultsPath!!)
         val jmhConstants = CalibrationExport.constantsFromJmh(results, harnessSha!!)
-        val retained = CalibrationExport.retainedBytesPerElement(
-            harnessCommitSha = harnessSha,
-            elements = RETAINED_ELEMENTS,
-        )
+        val recordedRetained = recordedRetainedPath?.let { File(it).toPath() }
+        val retained = if (recordedRetained != null) {
+            CalibrationExport.recordedRetainedBytesPerElement(recordedRetained)
+        } else {
+            CalibrationExport.retainedBytesPerElement(
+                harnessCommitSha = harnessSha,
+                elements = RETAINED_ELEMENTS,
+            )
+        }
         val export = File(repoRoot!!, CostSchema.STABLE_PATH).toPath()
         val merged = CalibrationExport.merge(export, jmhConstants + retained)
 
@@ -79,10 +89,17 @@ class MacroCalibrationRenderTest {
         )
         println("largeFrameBytes=${CalibrationExport.largeFrameBytes(results)}")
         println("smallFrameBytes=${CalibrationExport.smallFrameBytes(results)}")
-        println(
-            "retained footprint elements=$RETAINED_ELEMENTS " +
-                "replicates=${Footprint.DEFAULT_REPLICATES}",
-        )
+        if (recordedRetained != null) {
+            println(
+                "retained calibration reused from ${recordedRetained.toAbsolutePath()} " +
+                    "(measured by harness ${retained.env.harnessCommitSha})",
+            )
+        } else {
+            println(
+                "retained footprint elements=$RETAINED_ELEMENTS " +
+                    "replicates=${Footprint.DEFAULT_REPLICATES}",
+            )
+        }
     }
 
     private fun labelledJmhConstant(constant: CalibrationConstant): LabelledResult {
@@ -107,6 +124,10 @@ class MacroCalibrationRenderTest {
 
     companion object {
         private const val RETAINED_ELEMENTS = 100_000
+        private const val RECORDED_RETAINED_PROPERTY =
+            "civictech.bench.recordedRetainedCalibration"
+        private const val RECORDED_RETAINED_ENV =
+            "CIVICTECH_BENCH_RECORDED_RETAINED_CALIBRATION"
         private val ALL_CONSTANTS = setOf(
             Calibration.LOCAL_DISPATCH_NANOS,
             Calibration.CROSS_HOST_FRAME_NANOS,

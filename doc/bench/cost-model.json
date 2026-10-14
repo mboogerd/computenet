@@ -1,6 +1,6 @@
 {
     "schemaVersion": 1,
-    "harnessSha": "9f59de42",
+    "harnessSha": "6940663d",
     "envelope": {
         "numeric": {
             "cardinality": {
@@ -17,7 +17,7 @@
             },
             "fanOut": {
                 "min": 1.0,
-                "max": 16.0
+                "max": 256.0
             }
         },
         "categorical": {
@@ -29,7 +29,8 @@
                 "RANDOM_DAG"
             ],
             "replication": [
-                "false"
+                "false",
+                "true"
             ],
             "durability": [
                 "false",
@@ -59,7 +60,7 @@
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -82,7 +83,7 @@
                 "journalRecords": 0,
                 "simSteps": 16500
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -105,7 +106,7 @@
                 "journalRecords": 0,
                 "simSteps": 70000
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -128,7 +129,7 @@
                 "journalRecords": 0,
                 "simSteps": 25000
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -151,7 +152,7 @@
                 "journalRecords": 0,
                 "simSteps": 120000
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -174,7 +175,7 @@
                 "journalRecords": 0,
                 "simSteps": 6166
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -197,7 +198,7 @@
                 "journalRecords": 0,
                 "simSteps": 633166
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -220,7 +221,7 @@
                 "journalRecords": 0,
                 "simSteps": 6333166
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -243,7 +244,7 @@
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -266,7 +267,7 @@
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -289,7 +290,7 @@
                 "journalRecords": 0,
                 "simSteps": 10000
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -312,7 +313,7 @@
                 "journalRecords": 0,
                 "simSteps": 52916
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -335,7 +336,7 @@
                 "journalRecords": 0,
                 "simSteps": 66250
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -358,7 +359,7 @@
                 "journalRecords": 0,
                 "simSteps": 99582
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -381,7 +382,7 @@
                 "journalRecords": 0,
                 "simSteps": 10000
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -404,7 +405,76 @@
                 "journalRecords": 0,
                 "simSteps": 170000
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 420000,
+                "wireBytes": 212440476,
+                "journalRecords": 0,
+                "simSteps": 850000
+            },
+            "harnessSha": "6940663d"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 1660000,
+                "wireBytes": 827788548,
+                "journalRecords": 0,
+                "simSteps": 3330000
+            },
+            "harnessSha": "6940663d"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": true,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 426583,
+                "wireBytes": 217981655,
+                "journalRecords": 0,
+                "simSteps": 863166
+            },
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -427,7 +497,7 @@
                 "journalRecords": 36583,
                 "simSteps": 63166
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
         },
         {
             "at": {
@@ -450,7 +520,30 @@
                 "journalRecords": 0,
                 "simSteps": 9999582
             },
-            "harnessSha": "9f59de42"
+            "harnessSha": "6940663d"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 2270000,
+                "wireBytes": 1161075906,
+                "journalRecords": 0,
+                "simSteps": 4550000
+            },
+            "harnessSha": "6940663d"
         }
     ],
     "calibration": [
@@ -551,70 +644,5 @@
         }
     ],
     "laws": [],
-    "exclusions": [
-        {
-            "at": {
-                "shape": "FAN_OUT_TREE",
-                "shapeSeed": 1,
-                "cardinality": 10000,
-                "batchSize": 10,
-                "hostCount": 3,
-                "fanOut": 64,
-                "replication": false,
-                "durability": false,
-                "drive": "SIM"
-            },
-            "subject": "PROPAGATION",
-            "kind": "NonConvergent",
-            "reason": "declared budget exhausted: simSteps=340000"
-        },
-        {
-            "at": {
-                "shape": "FAN_OUT_TREE",
-                "shapeSeed": 1,
-                "cardinality": 10000,
-                "batchSize": 10,
-                "hostCount": 3,
-                "fanOut": 256,
-                "replication": false,
-                "durability": false,
-                "drive": "SIM"
-            },
-            "subject": "PROPAGATION",
-            "kind": "NonConvergent",
-            "reason": "declared budget exhausted: simSteps=340000"
-        },
-        {
-            "at": {
-                "shape": "DIAMOND",
-                "shapeSeed": 1,
-                "cardinality": 10000,
-                "batchSize": 10,
-                "hostCount": 3,
-                "fanOut": 4,
-                "replication": true,
-                "durability": false,
-                "drive": "SIM"
-            },
-            "subject": "PROPAGATION",
-            "kind": "NonConvergent",
-            "reason": "declared budget exhausted: simSteps=340000"
-        },
-        {
-            "at": {
-                "shape": "FAN_OUT_TREE",
-                "shapeSeed": 1,
-                "cardinality": 10000,
-                "batchSize": 10,
-                "hostCount": 8,
-                "fanOut": 256,
-                "replication": false,
-                "durability": false,
-                "drive": "SIM"
-            },
-            "subject": "PROPAGATION",
-            "kind": "NonConvergent",
-            "reason": "declared budget exhausted: simSteps=340000"
-        }
-    ]
+    "exclusions": []
 }

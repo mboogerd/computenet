@@ -116,6 +116,18 @@ object CalibrationExport {
         )
     }
 
+    /** Reuses the retained-size probe result already recorded in a prior export. */
+    fun recordedRetainedBytesPerElement(recordedExport: Path): CalibrationConstant {
+        val matches = CostSchema.parse(Files.readString(recordedExport)).calibration.filter {
+            it.name == Calibration.RETAINED_BYTES_PER_ELEMENT
+        }
+        require(matches.size == 1) {
+            "$recordedExport: expected exactly one recorded " +
+                "${Calibration.RETAINED_BYTES_PER_ELEMENT} constant, found ${matches.size}"
+        }
+        return matches.single()
+    }
+
     /**
      * Replaces an existing export's calibration section and validates before writing.
      *
