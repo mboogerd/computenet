@@ -117,6 +117,12 @@ class BenchMesh private constructor(
      * visible before any routed link is installed. The caller still owns the
      * post-write [runToIdle] drive.
      *
+     * A cross-host link needs a loopback between its two peers: announcements
+     * are not relayed, so under [MeshTopology.STAR] two spokes never resolve
+     * each other's refs and a spoke-to-spoke link is refused rather than left
+     * to park every delta. (Replicated sources are unaffected: their consumer
+     * links are local and gossip does travel through the hub.)
+     *
      * The graph's [civictech.cell.graph.IdentityBinding] is intentionally
      * ignored. Mesh refs are always the stable [MeshRefs] function of handle,
      * peer index, and host count.
@@ -209,9 +215,18 @@ class BenchMesh private constructor(
 
         val sourcePeer = if (from.replicated) to.placement!! else from.placement!!
         val targetPeer = to.placement!!
-        if (sourcePeer != targetPeer && step.inlet !in ROUTED_DELTA_INLETS) {
+        if (sourcePeer == targetPeer) return
+        if (step.inlet !in ROUTED_DELTA_INLETS) {
             throw IllegalArgumentException(
                 "cross-host target '${step.to}' uses unsupported inlet '${step.inlet}'",
+            )
+        }
+        val edgeName = "peer${minOf(sourcePeer, targetPeer)}<->peer${maxOf(sourcePeer, targetPeer)}"
+        if (edgeName !in loopbacks) {
+            throw IllegalArgumentException(
+                "cross-host link '${step.from}' (peer$sourcePeer) → '${step.to}' (peer$targetPeer) " +
+                    "has no loopback under $topology: peer$sourcePeer never resolves the target, " +
+                    "so every delta would park undelivered",
             )
         }
     }

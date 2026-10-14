@@ -5,6 +5,8 @@ import civictech.bench.macro.mesh.CrossHostEdges
 import civictech.bench.macro.mesh.MeshBuild
 import civictech.bench.macro.mesh.MeshRefs
 import civictech.bench.macro.mesh.MeshTopology
+import civictech.bench.macro.shape.Shape
+import civictech.bench.macro.shape.ShapeSpec
 import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.StateRead
@@ -308,8 +310,90 @@ class MeshApplyTest {
         error.message.orEmpty() shouldContain "only be called once"
     }
 
-    private fun built(hostCount: Int, replication: Boolean = false): BenchMesh =
-        (BenchMesh.build(hostCount, 1, MeshTopology.FULL_MESH, { null }, replication) as MeshBuild.Built).mesh
+    /**
+     * STAR wires only hub loopbacks and announcements are not relayed, so a
+     * spoke never resolves another spoke's ref: that link is refused instead of
+     * parking every delta with no dead letter. Links along a hub loopback work.
+     */
+    @Test
+    fun starRefusesSpokeToSpokeLinkAndDeliversAlongHubLoopbacks() {
+        val error = shouldThrow<IllegalArgumentException> {
+            built(3, topology = MeshTopology.STAR).apply(
+                GraphSpec(
+                    listOf(
+                        spawnSet("source0", "host1"),
+                        spawnFilter("sink", "host2"),
+                        ConnectStep("source0", "outlet", "sink", "inlet"),
+                    ),
+                ),
+            )
+        }
+        error.message.orEmpty() shouldContain "source0"
+        error.message.orEmpty() shouldContain "sink"
+        error.message.orEmpty() shouldContain "STAR"
+
+        for ((sourcePeer, sinkPeer) in listOf(1 to 0, 0 to 2)) {
+            val mesh = built(3, topology = MeshTopology.STAR)
+            mesh.apply(
+                GraphSpec(
+                    listOf(
+                        spawnSet("source0", "host$sourcePeer"),
+                        spawnFilter("sink", "host$sinkPeer"),
+                        ConnectStep("source0", "outlet", "sink", "inlet"),
+                    ),
+                ),
+            )
+            mesh.sourceInlet("source0", sourcePeer).add(3L)
+            mesh.runToIdle()
+            operatorMembership(mesh, "sink") shouldBe setOf(3L)
+            mesh.deadLetters.shouldBeEmpty()
+        }
+    }
+
+    /**
+     * The producer/consumer seam: every generated shape, applied on a full
+     * mesh, must compute what the same shape computes on one host (topology
+     * and predicates are host-count independent; only placement differs).
+     */
+    @Test
+    fun generatedShapesComputeTheSingleHostResultOnEveryHostCount() {
+        for (shape in Shape.entries) {
+            val oracle = generatedSinkMembership(shape, hostCount = 1)
+            oracle.values.any { it.isNotEmpty() } shouldBe true
+            for (hostCount in listOf(2, 3, 5)) {
+                generatedSinkMembership(shape, hostCount) shouldBe oracle
+            }
+        }
+    }
+
+    /** Applies a generated shape, writes at every source, and reads each sink through a pass-through tap. */
+    private fun generatedSinkMembership(shape: Shape, hostCount: Int): Map<String, Set<Long>> {
+        val generated = ShapeSpec(shape, seed = 7, cardinality = 9, fanOut = 2, hostCount = hostCount).generate()
+        val steps = generated.spec.lowered()
+        val placements = steps.filterIsInstance<SpawnStep>().associate { it.handle to it.placement!! }
+        val taps = generated.sinks.flatMap { sink ->
+            listOf(
+                spawnFilter("tap-$sink", placements.getValue(sink)),
+                ConnectStep(sink, "outlet", "tap-$sink", "inlet"),
+            )
+        }
+        val mesh = built(hostCount)
+        val refs = mesh.apply(GraphSpec(steps + taps))
+        for (source in generated.sources) {
+            val inlet = mesh.sourceInlet(source, refs.getValue(source).instanceId.toInt())
+            ((0L..11L) + (250L..261L)).forEach(inlet::add)
+        }
+        mesh.runToIdle()
+        mesh.deadLetters.shouldBeEmpty()
+        return generated.sinks.associateWith { operatorMembership(mesh, "tap-$it") }
+    }
+
+    private fun built(
+        hostCount: Int,
+        replication: Boolean = false,
+        topology: MeshTopology = MeshTopology.FULL_MESH,
+    ): BenchMesh =
+        (BenchMesh.build(hostCount, 1, topology, { null }, replication) as MeshBuild.Built).mesh
 
     private fun passThroughSpec(
         lastPeer: Int,
