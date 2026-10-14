@@ -130,6 +130,7 @@ class MeshApplyTest {
         }
         directError.message.orEmpty() shouldContain "sink"
         directError.message.orEmpty() shouldContain "non-default LinkOptions"
+        shouldThrow<IllegalArgumentException> { direct.cell("sink") }
 
         val relayed = built(3, topology = MeshTopology.STAR)
         val relayedError = shouldThrow<IllegalArgumentException> {
@@ -145,6 +146,7 @@ class MeshApplyTest {
         }
         relayedError.message.orEmpty() shouldContain "sink"
         relayedError.message.orEmpty() shouldContain "non-default LinkOptions"
+        shouldThrow<IllegalArgumentException> { relayed.cell("sink") }
 
         val local = built(1)
         local.apply(
