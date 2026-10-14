@@ -128,6 +128,30 @@ class PointAccountingTest {
     }
 
     @Test
+    fun outOfMemoryDuringTheDriveLoopIsUnschedulable() {
+        val at = coordinate()
+
+        val outcome = SweepRunner(
+            hook = PointHook { _, _ -> throw OutOfMemoryError("simulated") },
+        ).run(at).shouldBeInstanceOf<PointOutcome.Unschedulable>()
+
+        outcome.reason shouldBe "java.lang.OutOfMemoryError: simulated"
+        outcome.observedLimit.startsWith("maxHeap=") shouldBe true
+    }
+
+    @Test
+    fun outOfMemoryDuringApplyIsUnschedulable() {
+        val at = coordinate()
+
+        val outcome = SweepRunner(
+            setupHook = SetupHook { throw OutOfMemoryError("simulated") },
+        ).run(at).shouldBeInstanceOf<PointOutcome.Unschedulable>()
+
+        outcome.reason shouldBe "java.lang.OutOfMemoryError: simulated"
+        outcome.observedLimit.startsWith("maxHeap=") shouldBe true
+    }
+
+    @Test
     fun deadLetterFailsThePoint() {
         val at = coordinate()
         val runner = SweepRunner(
