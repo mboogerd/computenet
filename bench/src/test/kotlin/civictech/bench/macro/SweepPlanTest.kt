@@ -5,7 +5,6 @@ import civictech.bench.cost.Coordinate
 import civictech.bench.macro.mesh.MeshTopology
 import civictech.bench.macro.shape.KNOWN_FAILING_SEEDS
 import civictech.bench.macro.shape.Shape
-import civictech.cell.host.SimulationController
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -83,14 +82,24 @@ class SweepPlanTest {
     }
 
     @Test
-    fun budgetsGrowWithCardinalityAndClampAtTheRunnerBoundary() {
+    fun budgetsScaleWithDeclaredMessageVolumeAndClampAtTheRunnerBoundary() {
         val budgets = SweepPlan.CARDINALITIES.map { cardinality ->
             SweepPlan.budgetFor(SweepPlan.BASELINE.copy(cardinality = cardinality)).simSteps
         }
 
         budgets.zipWithNext().forEach { (lower, higher) -> higher shouldBeGreaterThan lower }
-        SweepPlan.budgetFor(SweepPlan.BASELINE).simSteps shouldBeGreaterThan
-            SimulationController.DEFAULT_BUDGET
+        SweepPlan.budgetFor(SweepPlan.BASELINE).simSteps shouldBe 340_000
+        SweepPlan.budgetFor(
+            SweepPlan.BASELINE.copy(shape = Shape.FAN_OUT_TREE.name, fanOut = 64),
+        ).simSteps shouldBe 4_540_000
+        SweepPlan.budgetFor(
+            SweepPlan.BASELINE.copy(shape = Shape.FAN_OUT_TREE.name, fanOut = 256),
+        ).simSteps shouldBe 17_980_000
+        SweepPlan.budgetFor(
+            SweepPlan.BASELINE.copy(shape = Shape.FAN_OUT_TREE.name, fanOut = 256, hostCount = 8),
+        ).simSteps shouldBe 17_980_000
+        SweepPlan.budgetFor(SweepPlan.BASELINE.copy(replication = true)).simSteps shouldBe 900_000
+        SweepPlan.budgetFor(SweepPlan.BASELINE.copy(fanOut = 256)).simSteps shouldBe 340_000
         SweepPlan.budgetFor(SweepPlan.BASELINE.copy(cardinality = Long.MAX_VALUE)).simSteps shouldBe
             Int.MAX_VALUE
     }
@@ -126,6 +135,8 @@ class SweepPlanTest {
         description shouldContain "Topology: ${MeshTopology.FULL_MESH}"
         description shouldContain "Determinism check: true"
         description shouldContain "${SweepPlan.STEPS_PER_ELEMENT} * cardinality"
+        description shouldContain "FAN_OUT_TREE ceil(fan-out / ${SweepPlan.BASELINE.fanOut})"
+        description shouldContain "replication copies = host count"
         description shouldContain "Shape seed: ${SweepPlan.SHAPE_SEED}"
     }
 

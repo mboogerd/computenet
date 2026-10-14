@@ -13,9 +13,10 @@ import civictech.cell.host.SimulationController
  *
  * The fan-out sweep deliberately uses [Shape.FAN_OUT_TREE] instead of the diamond
  * baseline because diamond ignores fan-out; that D16 deviation prevents four
- * nominal fan-out points from measuring the same graph. Per D9, each point receives
- * [SimulationController.DEFAULT_BUDGET] plus [STEPS_PER_ELEMENT] steps per element,
- * clamped to [Int.MAX_VALUE].
+ * nominal fan-out points from measuring the same graph. The D9 cardinality allowance
+ * is multiplied by a message-volume scale: fan-out trees use their fan-out relative to
+ * the baseline (rounded up), while replication uses one copy per full-mesh host. The
+ * composed allowance is clamped to [Int.MAX_VALUE].
  */
 object SweepPlan {
     val SHAPES: List<Shape> = Shape.entries.toList()
@@ -89,15 +90,34 @@ object SweepPlan {
     /** The 22 stable SIM coordinates in the declared execution order. */
     fun points(): List<Coordinate> = PLAN
 
-    /** The per-point D9 step allowance, saturated at the runner's `Int` boundary. */
+    /**
+     * The per-point step allowance, saturated at the runner's `Int` boundary.
+     *
+     * Cardinality remains the calibrated base workload. [Shape.FAN_OUT_TREE] emits one
+     * branch per fan-out target, so its scale is `ceil(fanOut / baselineFanOut)`; other
+     * shapes ignore fan-out. Replication on the full mesh sends the state to every host,
+     * so its scale is [Coordinate.hostCount]. These independent message sources compose.
+     */
     fun budgetFor(at: Coordinate): PointBudget {
         require(at.cardinality >= 0) { "cardinality must be non-negative" }
+        require(at.fanOut > 0) { "fanOut must be positive" }
+        require(at.hostCount > 0) { "hostCount must be positive" }
         val remaining = Int.MAX_VALUE.toLong() - SimulationController.DEFAULT_BUDGET
-        val simSteps = if (at.cardinality > remaining / STEPS_PER_ELEMENT) {
-            Int.MAX_VALUE
+        val baselineFanOut = BASELINE.fanOut.toLong()
+        val fanOutScale = if (at.shape == Shape.FAN_OUT_TREE.name) {
+            (at.fanOut.toLong() + baselineFanOut - 1L) / baselineFanOut
         } else {
-            SimulationController.DEFAULT_BUDGET + (STEPS_PER_ELEMENT * at.cardinality).toInt()
+            1L
         }
+        val replicationScale = if (at.replication) at.hostCount.toLong() else 1L
+        val variableSteps = cappedProduct(
+            remaining,
+            STEPS_PER_ELEMENT,
+            at.cardinality,
+            fanOutScale,
+            replicationScale,
+        )
+        val simSteps = SimulationController.DEFAULT_BUDGET + variableSteps.toInt()
         return PointBudget(simSteps = simSteps)
     }
 
@@ -147,8 +167,9 @@ object SweepPlan {
         appendLine("- Topology: $TOPOLOGY")
         appendLine("- Determinism check: $DETERMINISM_CHECK for every SIM point")
         appendLine(
-            "- Budget: ${SimulationController.DEFAULT_BUDGET} + $STEPS_PER_ELEMENT * cardinality, " +
-                "clamped to ${Int.MAX_VALUE} steps",
+            "- Budget: ${SimulationController.DEFAULT_BUDGET} + $STEPS_PER_ELEMENT * cardinality * " +
+                "message-volume scale (FAN_OUT_TREE ceil(fan-out / ${BASELINE.fanOut}); " +
+                "replication copies = host count; otherwise 1), clamped to ${Int.MAX_VALUE} steps",
         )
         appendLine("- Shape seed: $SHAPE_SEED")
     }
@@ -156,6 +177,16 @@ object SweepPlan {
     private fun declaredCellCount(): Int =
         SHAPES.size * CARDINALITIES.size * BATCH_SIZES.size * HOST_COUNTS.size *
             FAN_OUTS.size * REPLICATION.size * DURABILITY.size
+
+    private fun cappedProduct(cap: Long, vararg factors: Long): Long {
+        var product = 1L
+        factors.forEach { factor ->
+            if (factor == 0L) return 0L
+            if (product > cap / factor) return cap
+            product *= factor
+        }
+        return product
+    }
 
     private fun <T> StringBuilder.appendDimension(
         name: String,
