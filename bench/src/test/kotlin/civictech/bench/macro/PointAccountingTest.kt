@@ -5,9 +5,19 @@ import civictech.bench.RunEnvironment
 import civictech.bench.cost.Coordinate
 import civictech.bench.cost.CostSubject
 import civictech.bench.cost.PointOutcome
+import civictech.bench.macro.mesh.BenchMesh
 import civictech.bench.macro.mesh.MeshBuild
 import civictech.bench.macro.mesh.MeshTopology
+import civictech.bench.macro.mesh.TopologyRefusal
 import civictech.cell.CellRef
+import civictech.cell.data.SetCell
+import civictech.cell.data.op.FilterCell
+import civictech.cell.graph.ConnectStep
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.SpawnStep
+import civictech.cell.graph.TypedCellFactory
+import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkRole
 import civictech.cell.proxy.Invocation
 import civictech.testkit.awaitUntil
 import io.kotest.assertions.throwables.shouldThrow
@@ -174,19 +184,23 @@ class PointAccountingTest {
     }
 
     @Test
-    fun currentTopologyRefusalMessageMapsToUnschedulable() {
-        val at = coordinate()
+    fun benchMeshTopologyRefusalMapsToUnschedulable() {
+        val at = coordinate(shapeSeed = 0, hostCount = 3)
         val outcome = SweepRunner(
             topology = MeshTopology.STAR,
-            setupHook = SetupHook {
-                throw IllegalArgumentException(
-                    "cross-host link 'source' (peer1) → 'sink' (peer2) " +
-                        "has neither a direct loopback nor a hub relay under STAR",
+            meshBuilder = { hostCount, seed, topology, journalFor, replication ->
+                BenchMesh.build(
+                    hostCount = hostCount,
+                    seed = seed,
+                    topology = topology,
+                    journalFor = journalFor,
+                    replication = replication,
+                    includeEdge = { first, second -> first != 0 || second != 2 },
                 )
             },
         ).run(at).shouldBeInstanceOf<PointOutcome.Unschedulable>()
 
-        outcome.reason shouldContain "has neither a direct loopback nor a hub relay under STAR"
+        outcome.reason shouldContain TopologyRefusal::class.java.name
         outcome.observedLimit shouldBe "topology=STAR"
     }
 
@@ -194,14 +208,35 @@ class PointAccountingTest {
     fun unrelatedCrossHostRefusalRemainsFailed() {
         val at = coordinate()
         val outcome = SweepRunner(
-            setupHook = SetupHook {
-                throw IllegalArgumentException(
-                    "cross-host target 'sink' uses unsupported non-default LinkOptions",
+            setupHook = SetupHook { mesh ->
+                mesh.apply(
+                    GraphSpec(
+                        listOf(
+                            SpawnStep(
+                                "source",
+                                TypedCellFactory<SetCell<Long>> { ref -> SetCell(ref) },
+                                placement = "host0",
+                            ),
+                            SpawnStep(
+                                "sink",
+                                TypedCellFactory<FilterCell<Long>> { ref -> FilterCell(ref) { true } },
+                                placement = "host1",
+                            ),
+                            ConnectStep(
+                                "source",
+                                "outlet",
+                                "sink",
+                                "inlet",
+                                LinkOptions(role = LinkRole.Observe),
+                            ),
+                        ),
+                    ),
                 )
             },
         ).run(at).shouldBeInstanceOf<PointOutcome.Failed>()
 
-        outcome.cause shouldContain "uses unsupported non-default LinkOptions"
+        outcome.cause shouldContain IllegalArgumentException::class.java.name
+        outcome.cause shouldContain LinkOptions::class.java.simpleName
     }
 
     @Test

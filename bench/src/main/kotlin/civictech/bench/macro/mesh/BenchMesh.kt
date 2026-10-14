@@ -42,6 +42,9 @@ interface SetOpsProxy {
     val inlet: Use<SetOps<Long>>
 }
 
+/** A cross-host link cannot be routed through the mesh topology. */
+class TopologyRefusal(message: String) : IllegalArgumentException(message)
+
 /** Result of attempting to construct a benchmark mesh. */
 sealed interface MeshBuild {
     /** A complete mesh with one peer for every requested host. */
@@ -231,7 +234,7 @@ class BenchMesh private constructor(
             )
         }
         if (!hasDirectLoopback(sourcePeer, targetPeer) && !canRelayThroughHub(sourcePeer, targetPeer)) {
-            throw IllegalArgumentException(
+            throw TopologyRefusal(
                 "cross-host link '${step.from}' (peer$sourcePeer) → '${step.to}' (peer$targetPeer) " +
                     "has neither a direct loopback nor a hub relay under $topology",
             )
@@ -417,6 +420,8 @@ class BenchMesh private constructor(
             journalFor: (Int) -> Journal?,
             replication: Boolean,
             beforePeer: (Int) -> Unit = {},
+            /** Test seam for exercising links whose declared topology edge is absent. */
+            includeEdge: (Int, Int) -> Boolean = { _, _ -> true },
         ): MeshBuild {
             require(hostCount >= 1) { "hostCount must be at least 1" }
             val world = DstWorld(seed)
@@ -440,6 +445,7 @@ class BenchMesh private constructor(
                 }
 
                 for ((i, j) in topology.edges(hostCount)) {
+                    if (!includeEdge(i, j)) continue
                     val edgeName = "peer$i<->peer$j"
                     world.edges.declare(edgeName, from = "peer$i", to = "peer$j")
                     loopbacks[edgeName] = Peering.loopback(
