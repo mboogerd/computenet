@@ -81,7 +81,9 @@ class Counters(
          * alternatives were `FanOutlet.targetMisses`, which counts misses rather than
          * dispatches; tapping every outlet, which changes the fan-out set being measured;
          * and `simSteps`, which also counts management tasks. The candidate G-item is a
-         * per-host dispatch counter, and under SIM `simSteps` is only an upper bound.
+         * per-host dispatch counter. Under SIM, `simSteps` is an upper bound: ManagedHost
+         * submits one scheduler task per delivery (ManagedHost.kt:1335), plus management
+         * tasks.
          *
          * The runner records this exact reason instead of manufacturing a local-message
          * count; a kernel counter is forbidden by [BEN2-51], and the sweep findings entry
