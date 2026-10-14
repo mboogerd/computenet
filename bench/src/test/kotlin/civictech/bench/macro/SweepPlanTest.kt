@@ -98,7 +98,7 @@ class SweepPlanTest {
         SweepPlan.budgetFor(
             SweepPlan.BASELINE.copy(shape = Shape.FAN_OUT_TREE.name, fanOut = 256, hostCount = 8),
         ).simSteps shouldBe 17_980_000
-        SweepPlan.budgetFor(SweepPlan.BASELINE.copy(replication = true)).simSteps shouldBe 900_000
+        SweepPlan.budgetFor(SweepPlan.BASELINE.copy(replication = true)).simSteps shouldBe 1_740_000
         SweepPlan.budgetFor(SweepPlan.BASELINE.copy(fanOut = 256)).simSteps shouldBe 340_000
         SweepPlan.budgetFor(SweepPlan.BASELINE.copy(cardinality = Long.MAX_VALUE)).simSteps shouldBe
             Int.MAX_VALUE
@@ -136,7 +136,7 @@ class SweepPlanTest {
         description shouldContain "Determinism check: true"
         description shouldContain "${SweepPlan.STEPS_PER_ELEMENT} * cardinality"
         description shouldContain "FAN_OUT_TREE ceil(fan-out / ${SweepPlan.BASELINE.fanOut})"
-        description shouldContain "replication copies = host count"
+        description shouldContain "replication routes = host count * (host count - 1)"
         description shouldContain "Shape seed: ${SweepPlan.SHAPE_SEED}"
     }
 

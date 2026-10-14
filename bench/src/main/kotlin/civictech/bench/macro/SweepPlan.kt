@@ -15,8 +15,8 @@ import civictech.cell.host.SimulationController
  * baseline because diamond ignores fan-out; that D16 deviation prevents four
  * nominal fan-out points from measuring the same graph. The D9 cardinality allowance
  * is multiplied by a message-volume scale: fan-out trees use their fan-out relative to
- * the baseline (rounded up), while replication uses one copy per full-mesh host. The
- * composed allowance is clamped to [Int.MAX_VALUE].
+ * the baseline (rounded up), while replication uses the count of directed full-mesh
+ * routes. The composed allowance is clamped to [Int.MAX_VALUE].
  */
 object SweepPlan {
     val SHAPES: List<Shape> = Shape.entries.toList()
@@ -95,8 +95,9 @@ object SweepPlan {
      *
      * Cardinality remains the calibrated base workload. [Shape.FAN_OUT_TREE] emits one
      * branch per fan-out target, so its scale is `ceil(fanOut / baselineFanOut)`; other
-     * shapes ignore fan-out. Replication on the full mesh sends the state to every host,
-     * so its scale is [Coordinate.hostCount]. These independent message sources compose.
+     * shapes ignore fan-out. Replication can gossip over every directed full-mesh route,
+     * so its scale is `hostCount * (hostCount - 1)`. These independent message sources
+     * compose.
      */
     fun budgetFor(at: Coordinate): PointBudget {
         require(at.cardinality >= 0) { "cardinality must be non-negative" }
@@ -109,7 +110,11 @@ object SweepPlan {
         } else {
             1L
         }
-        val replicationScale = if (at.replication) at.hostCount.toLong() else 1L
+        val replicationScale = if (at.replication) {
+            (at.hostCount.toLong() * (at.hostCount - 1L)).coerceAtLeast(1L)
+        } else {
+            1L
+        }
         val variableSteps = cappedProduct(
             remaining,
             STEPS_PER_ELEMENT,
@@ -167,9 +172,10 @@ object SweepPlan {
         appendLine("- Topology: $TOPOLOGY")
         appendLine("- Determinism check: $DETERMINISM_CHECK for every SIM point")
         appendLine(
-            "- Budget: ${SimulationController.DEFAULT_BUDGET} + $STEPS_PER_ELEMENT * cardinality * " +
+                "- Budget: ${SimulationController.DEFAULT_BUDGET} + $STEPS_PER_ELEMENT * cardinality * " +
                 "message-volume scale (FAN_OUT_TREE ceil(fan-out / ${BASELINE.fanOut}); " +
-                "replication copies = host count; otherwise 1), clamped to ${Int.MAX_VALUE} steps",
+                "replication routes = host count * (host count - 1); otherwise 1), " +
+                "clamped to ${Int.MAX_VALUE} steps",
         )
         appendLine("- Shape seed: $SHAPE_SEED")
     }
