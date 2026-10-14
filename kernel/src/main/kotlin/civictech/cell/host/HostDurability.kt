@@ -492,6 +492,12 @@ internal class HostDurability(
      * frontier before it can originate a new wave. Keying by outlet, and
      * carrying the expected source id, makes an intervening fresh-epoch rotation
      * invalidate the floor instead of applying one epoch's counter to another.
+     *
+     * Limit: this protects only the live frame. Replay frames that drain after
+     * an overtaking live frame emit above the frontier too, so the `Effectful`
+     * sink acts on them a second time (double-fire, which `[KFX-11]` ranks
+     * below loss). Observed in the computenet-byl5s rig, SimulationController
+     * seeds 1-3: partial drain 2-3 re-fires 5, drain 4-8 re-fires 5 and 6.
      */
     private val pendingLiveOutletFloors =
         ConcurrentHashMap<Pair<CellRef, String>, OutletWaveState>()
