@@ -207,7 +207,7 @@ while IFS=$'\t' read -r id action worktree why; do
     echo "  worktree not on this machine: $worktree"
     continue
   fi
-  if ! git worktree list --porcelain | grep -qxF "worktree $wt"; then
+  if ! git worktree list --porcelain | grep -xF "worktree $wt" >/dev/null; then  # not -q: SIGPIPE under pipefail
     echo "  not a registered worktree, left alone: $wt"
     continue
   fi

@@ -92,7 +92,9 @@ EOF
   fi
 fi
 
-if git worktree list --porcelain | grep -qx "worktree $abs"; then
+# Not `grep -q`: quitting early SIGPIPEs a long list, which pipefail reads as
+# "not attached" (computenet-4hwv1).
+if git worktree list --porcelain | grep -xF "worktree $abs" >/dev/null; then
   note "worktree $abs already attached"
 elif [ -n "$local_sha" ]; then
   note "attaching $abs on existing local branch $BRANCH"
