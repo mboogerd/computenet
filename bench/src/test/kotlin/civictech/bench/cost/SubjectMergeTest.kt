@@ -28,7 +28,10 @@ class SubjectMergeTest {
             replacement.structural
         merged.structural.none { it.at.shape == "old" } shouldBe true
         merged.calibration shouldBe existing.calibration
-        merged.laws shouldBe replacement.laws
+        merged.exclusions shouldBe
+            existing.exclusions.filter { it.subject == CostSubject.PROPAGATION } + replacement.exclusions
+        merged.laws shouldBe
+            existing.laws.filter { it.subject == CostSubject.PROPAGATION } + replacement.laws
         merged.envelope.categorical.getValue(Dimensions.SHAPE) shouldBe setOf(
             "chain",
             "diamond",
@@ -68,6 +71,35 @@ class SubjectMergeTest {
 
         failure.message shouldContain "PROPAGATION"
         Files.readAllBytes(file) shouldBe before
+    }
+
+    @Test
+    fun `refuses a replacement exclusion carrying another subject`() {
+        val replacement = replacementModel()
+        val invalid = replacement.copy(
+            exclusions = replacement.exclusions + replacement.exclusions.first()
+                .copy(subject = CostSubject.PROPAGATION),
+        )
+
+        val failure = shouldThrow<IllegalArgumentException> {
+            SubjectMerge.replaceSubject(existingModel(), CostSubject.REBASELINE, invalid)
+        }
+
+        failure.message shouldContain "PROPAGATION"
+    }
+
+    @Test
+    fun `refuses a replacement law carrying another subject`() {
+        val replacement = replacementModel()
+        val invalid = replacement.copy(
+            laws = replacement.laws + replacement.laws.first().copy(subject = CostSubject.PROPAGATION),
+        )
+
+        val failure = shouldThrow<IllegalArgumentException> {
+            SubjectMerge.replaceSubject(existingModel(), CostSubject.REBASELINE, invalid)
+        }
+
+        failure.message shouldContain "PROPAGATION"
     }
 
     @Test
@@ -124,11 +156,13 @@ class SubjectMergeTest {
 
     private fun existingModel(): CostModel {
         val writer = CostWriter(EXISTING_SHA)
-        listOf(
+        val propagation = listOf(
             coordinate(shape = "chain", hostCount = 1, fanOut = 1),
             coordinate(shape = "chain", hostCount = 2, fanOut = 4),
             coordinate(shape = "diamond", hostCount = 3, fanOut = 4),
-        ).forEachIndexed { index, at ->
+            coordinate(shape = "diamond", hostCount = 4, fanOut = 4),
+        )
+        propagation.forEachIndexed { index, at ->
             writer.admit(
                 PointOutcome.Ok(
                     at = at,
@@ -138,14 +172,48 @@ class SubjectMergeTest {
                 ),
             )
         }
+        val old = listOf(1, 2, 3, 4).map { fanOut -> coordinate(shape = "old", fanOut = fanOut) }
+        old.forEach { at ->
+            writer.admit(
+                PointOutcome.Ok(
+                    at = at,
+                    subject = CostSubject.REBASELINE,
+                    counts = counts(messages = at.fanOut.toLong()),
+                    wall = null,
+                ),
+            )
+        }
         writer.admit(
-            PointOutcome.Ok(
-                at = coordinate(shape = "old", fanOut = 4),
-                subject = CostSubject.REBASELINE,
-                counts = counts(messages = 4),
-                wall = null,
+            PointOutcome.Failed(
+                at = coordinate(shape = "chain", hostCount = 5),
+                subject = CostSubject.PROPAGATION,
+                cause = "synthetic kept exclusion",
+                deadLetters = listOf("one"),
             ),
         )
+        writer.admit(
+            PointOutcome.Failed(
+                at = coordinate(shape = "old", fanOut = 8),
+                subject = CostSubject.REBASELINE,
+                cause = "synthetic replaced exclusion",
+                deadLetters = listOf("one"),
+            ),
+        )
+        writer.fit(
+            dimension = Dimensions.HOST_COUNT,
+            subject = CostSubject.PROPAGATION,
+            metric = "messages",
+            form = GrowthForm.LINEAR,
+            points = propagation,
+        )
+        writer.fit(
+            dimension = Dimensions.FAN_OUT,
+            subject = CostSubject.REBASELINE,
+            metric = "messages",
+            form = GrowthForm.LINEAR,
+            points = old,
+        )
+        check(writer.model().laws.size == 2) { "existing fixture must carry one law per subject" }
         writer.calibrate(calibration("first", 10.0))
         writer.calibrate(calibration("second", 20.0))
         return writer.model()
