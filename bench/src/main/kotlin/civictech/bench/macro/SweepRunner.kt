@@ -320,7 +320,7 @@ class SweepRunner(
             mesh.apply(generated.spec)
             mesh.runToIdle()
         } catch (error: IllegalArgumentException) {
-            if (error.message.orEmpty().contains("has no loopback under")) {
+            if (error.message.orEmpty().contains("has neither a direct loopback nor a hub relay under")) {
                 return PointOutcome.Unschedulable(
                     at = at,
                     subject = CostSubject.PROPAGATION,

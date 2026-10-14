@@ -158,16 +158,50 @@ class PointAccountingTest {
     }
 
     @Test
-    fun unsupportedStarCoordinateIsATypedOutcome() {
-        // Seed 0 puts the final CHAIN edge between spokes 1 and 2.
+    fun starSpokeToSpokeCoordinateRelaysThroughHub() {
+        // Seed 0 puts the final CHAIN edge between spokes 1 and 2. STAR now
+        // relays that edge through peer 0, so this coordinate is schedulable.
+        // FULL_MESH has a direct loopback for every pair and STAR has a hub
+        // relay for every spoke pair; therefore no generated coordinate in
+        // the current topology set reaches the mesh-topology refusal branch.
         val at = coordinate(shapeSeed = 0, hostCount = 3)
 
         val outcome = SweepRunner(topology = MeshTopology.STAR).run(at)
-            .shouldBeInstanceOf<PointOutcome.Unschedulable>()
+            .shouldBeInstanceOf<PointOutcome.Ok>()
 
         outcome.at shouldBe at
-        outcome.reason shouldContain "has no loopback under STAR"
+        outcome.counts.crossHostFrames shouldBeGreaterThan 0L
+    }
+
+    @Test
+    fun currentTopologyRefusalMessageMapsToUnschedulable() {
+        val at = coordinate()
+        val outcome = SweepRunner(
+            topology = MeshTopology.STAR,
+            setupHook = SetupHook {
+                throw IllegalArgumentException(
+                    "cross-host link 'source' (peer1) → 'sink' (peer2) " +
+                        "has neither a direct loopback nor a hub relay under STAR",
+                )
+            },
+        ).run(at).shouldBeInstanceOf<PointOutcome.Unschedulable>()
+
+        outcome.reason shouldContain "has neither a direct loopback nor a hub relay under STAR"
         outcome.observedLimit shouldBe "topology=STAR"
+    }
+
+    @Test
+    fun unrelatedCrossHostRefusalRemainsFailed() {
+        val at = coordinate()
+        val outcome = SweepRunner(
+            setupHook = SetupHook {
+                throw IllegalArgumentException(
+                    "cross-host target 'sink' uses unsupported non-default LinkOptions",
+                )
+            },
+        ).run(at).shouldBeInstanceOf<PointOutcome.Failed>()
+
+        outcome.cause shouldContain "uses unsupported non-default LinkOptions"
     }
 
     @Test
