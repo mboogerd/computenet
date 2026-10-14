@@ -11,9 +11,11 @@ import civictech.bench.cost.StructuralCounts
 import civictech.bench.macro.mesh.BenchMesh
 import civictech.bench.macro.mesh.MeshBuild
 import civictech.bench.macro.mesh.MeshTopology
+import civictech.bench.macro.mesh.TopologyRefusal
 import civictech.bench.macro.shape.GeneratedShape
 import civictech.bench.macro.shape.Shape
 import civictech.bench.macro.shape.ShapeSpec
+import civictech.cell.durability.Journal
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.SimulationController
@@ -77,6 +79,21 @@ class SweepRunner(
     val real: RealOptions? = null,
     val hook: PointHook = PointHook { _, _ -> },
     val setupHook: SetupHook = SetupHook { },
+    val meshBuilder: (
+        hostCount: Int,
+        seed: Long,
+        topology: MeshTopology,
+        journalFor: (Int) -> Journal?,
+        replication: Boolean,
+    ) -> MeshBuild = { hostCount, seed, topology, journalFor, replication ->
+        BenchMesh.build(
+            hostCount = hostCount,
+            seed = seed,
+            topology = topology,
+            journalFor = journalFor,
+            replication = replication,
+        )
+    },
 ) {
     fun run(at: Coordinate): PointOutcome {
         if (at.drive == Drive.REAL) {
@@ -295,11 +312,11 @@ class SweepRunner(
         attempt: Int,
     ): PointOutcome {
         val journals = mutableListOf<CountingJournal>()
-        val build = BenchMesh.build(
-            hostCount = at.hostCount,
-            seed = at.shapeSeed,
-            topology = topology,
-            journalFor = { peer ->
+        val build = meshBuilder(
+            at.hostCount,
+            at.shapeSeed,
+            topology,
+            { peer ->
                 if (!at.durability) {
                     null
                 } else {
@@ -310,7 +327,7 @@ class SweepRunner(
                     ).also(journals::add)
                 }
             },
-            replication = at.replication,
+            at.replication,
         )
         if (build is MeshBuild.Unschedulable) return unschedulableOutcome(at, build)
         val mesh = (build as MeshBuild.Built).mesh
@@ -319,15 +336,14 @@ class SweepRunner(
             setupHook.beforeApply(mesh)
             mesh.apply(generated.spec)
             mesh.runToIdle()
+        } catch (error: TopologyRefusal) {
+            return PointOutcome.Unschedulable(
+                at = at,
+                subject = CostSubject.PROPAGATION,
+                reason = describe(error),
+                observedLimit = "topology=$topology",
+            )
         } catch (error: IllegalArgumentException) {
-            if (error.message.orEmpty().contains("has neither a direct loopback nor a hub relay under")) {
-                return PointOutcome.Unschedulable(
-                    at = at,
-                    subject = CostSubject.PROPAGATION,
-                    reason = describe(error),
-                    observedLimit = "topology=$topology",
-                )
-            }
             return failed(at, error, mesh)
         } catch (error: Throwable) {
             return if (error is IllegalStateException &&

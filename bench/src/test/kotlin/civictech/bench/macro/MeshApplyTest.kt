@@ -5,6 +5,7 @@ import civictech.bench.macro.mesh.CrossHostEdges
 import civictech.bench.macro.mesh.MeshBuild
 import civictech.bench.macro.mesh.MeshRefs
 import civictech.bench.macro.mesh.MeshTopology
+import civictech.bench.macro.mesh.TopologyRefusal
 import civictech.bench.macro.shape.Shape
 import civictech.bench.macro.shape.ShapeSpec
 import civictech.cell.BoundedStateful
@@ -408,6 +409,26 @@ class MeshApplyTest {
         }
     }
 
+    @Test
+    fun missingTopologyEdgeRaisesTypedRefusalFromBenchMesh() {
+        val mesh = built(3, topology = MeshTopology.STAR) { first, second -> first != 0 || second != 2 }
+
+        val error = shouldThrow<TopologyRefusal> {
+            mesh.apply(
+                GraphSpec(
+                    listOf(
+                        spawnSet("source0", "host1"),
+                        spawnFilter("sink", "host2"),
+                        ConnectStep("source0", "outlet", "sink", "inlet"),
+                    ),
+                ),
+            )
+        }
+
+        error.message.orEmpty() shouldContain "source0"
+        error.message.orEmpty() shouldContain "sink"
+    }
+
     /**
      * The producer/consumer seam: every generated shape, applied on a full
      * mesh, must compute what the same shape computes on one host (topology
@@ -465,8 +486,18 @@ class MeshApplyTest {
         hostCount: Int,
         replication: Boolean = false,
         topology: MeshTopology = MeshTopology.FULL_MESH,
+        includeEdge: (Int, Int) -> Boolean = { _, _ -> true },
     ): BenchMesh =
-        (BenchMesh.build(hostCount, 1, topology, { null }, replication) as MeshBuild.Built).mesh
+        (
+            BenchMesh.build(
+                hostCount,
+                1,
+                topology,
+                { null },
+                replication,
+                includeEdge = includeEdge,
+            ) as MeshBuild.Built
+        ).mesh
 
     private fun passThroughSpec(
         lastPeer: Int,
