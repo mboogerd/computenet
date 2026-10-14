@@ -88,6 +88,25 @@ else
   bad "already attached: script exited non-zero (not idempotent)"
 fi
 
+
+# --------------------------- 2b. already attached, many other worktrees listed
+# `grep -q` quits at the first match; with pipefail the rest of a long
+# `git worktree list` then dies of SIGPIPE and the pipeline reads as "not
+# attached", so the script re-added the worktree and git exited 128
+# (computenet-4hwv1). Sorts first, so plenty of output follows the match.
+co=$(sandbox crowded); wt="$co/../a-att"
+first=$(run "$co" "$wt" feature/x origin/main 2>/dev/null)
+# Registered by hand (`worktree add` x600 is minutes): list only reads these.
+gd=$(git -C "$co" rev-parse --absolute-git-dir); pad=$(printf 'p%.0s' $(seq 1 200)); head=$(sha "$co")
+for i in $(seq 1 600); do
+  mkdir -p "$gd/worktrees/z$i"; echo "$head" > "$gd/worktrees/z$i/HEAD"; echo ../.. > "$gd/worktrees/z$i/commondir"
+  echo "$ROOT/z-$pad-$i/.git" > "$gd/worktrees/z$i/gitdir"
+done
+if out=$(run "$co" "$wt" feature/x origin/main 2>/dev/null) && [ "$out" = "$first" ]; then
+  ok "already attached among 600 worktrees: recognised, exit 0"
+else
+  bad "already attached among 600 worktrees: not recognised (exit or path wrong)"
+fi
 # ------------------------------------------- 3. local branch exists, no worktree
 co=$(sandbox localonly); wt="$co/../wt-local"
 git -C "$co" checkout --quiet -b feature/x
