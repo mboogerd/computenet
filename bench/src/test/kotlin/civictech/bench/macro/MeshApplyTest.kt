@@ -296,6 +296,18 @@ class MeshApplyTest {
         mismatch.message.orEmpty() shouldContain "wrong-ref"
     }
 
+    /** `apply`'s KDoc declares a mesh one-shot: the second call is refused, not merged. */
+    @Test
+    fun secondApplyIsRefused() {
+        val mesh = built(1)
+        mesh.apply(GraphSpec(listOf(spawnSet("first", "host0"))))
+
+        val error = shouldThrow<IllegalStateException> {
+            mesh.apply(GraphSpec(listOf(spawnSet("second", "host0"))))
+        }
+        error.message.orEmpty() shouldContain "only be called once"
+    }
+
     private fun built(hostCount: Int, replication: Boolean = false): BenchMesh =
         (BenchMesh.build(hostCount, 1, MeshTopology.FULL_MESH, { null }, replication) as MeshBuild.Built).mesh
 
