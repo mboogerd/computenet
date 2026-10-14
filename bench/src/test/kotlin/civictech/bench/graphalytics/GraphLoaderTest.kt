@@ -107,6 +107,24 @@ class GraphLoaderTest {
     }
 
     @Test
+    fun `declared vertex count rejects altered metadata`() {
+        val alteredVertices = scratchDataset("altered-vertices")
+        val properties = alteredVertices.resolve("altered-vertices.properties")
+        Files.writeString(
+            properties,
+            Files.readString(properties).replace("meta.vertices = 10", "meta.vertices = 9"),
+        )
+        val failure = assertThrows(LoadFidelityException::class.java) {
+            GraphLoader.load(DatasetRef("altered-vertices", alteredVertices.toString()))
+        }
+        val message = failure.message.orEmpty()
+        assertTrue(message.contains("altered-vertices"))
+        assertTrue(message.contains("meta.vertices"))
+        assertTrue(message.contains("declared 9"))
+        assertTrue(message.contains("actual 10"))
+    }
+
+    @Test
     fun `reference output preserves raw tokens`() {
         val output = Datasets.referenceOutput(Datasets.EXAMPLE_DIRECTED, Algorithm.LCC)
 
