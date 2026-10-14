@@ -117,11 +117,14 @@ class BenchMesh private constructor(
      * visible before any routed link is installed. The caller still owns the
      * post-write [runToIdle] drive.
      *
-     * A cross-host link needs a loopback between its two peers: announcements
-     * are not relayed, so under [MeshTopology.STAR] two spokes never resolve
-     * each other's refs and a spoke-to-spoke link is refused rather than left
-     * to park every delta. (Replicated sources are unaffected: their consumer
-     * links are local and gossip does travel through the hub.)
+     * A cross-host link normally uses the loopback between its two peers.
+     * [MeshTopology.STAR] deliberately does not relay announcements, so for a
+     * spoke-to-spoke link the harness installs the target ref on the source
+     * spoke as reachable through peer 0. The hub's ordinary registry lookup
+     * then forwards the invocation through the target spoke's loopback. Both
+     * hops remain real bridge frames and are counted on their named
+     * [DstWorld.edges] edges. Replicated sources are unaffected: their
+     * consumer links are local and gossip already travels through the hub.
      *
      * The graph's [civictech.cell.graph.IdentityBinding] is intentionally
      * ignored. Mesh refs are always the stable [MeshRefs] function of handle,
@@ -221,12 +224,10 @@ class BenchMesh private constructor(
                 "cross-host target '${step.to}' uses unsupported inlet '${step.inlet}'",
             )
         }
-        val edgeName = "peer${minOf(sourcePeer, targetPeer)}<->peer${maxOf(sourcePeer, targetPeer)}"
-        if (edgeName !in loopbacks) {
+        if (!hasDirectLoopback(sourcePeer, targetPeer) && !canRelayThroughHub(sourcePeer, targetPeer)) {
             throw IllegalArgumentException(
                 "cross-host link '${step.from}' (peer$sourcePeer) → '${step.to}' (peer$targetPeer) " +
-                    "has no loopback under $topology: peer$sourcePeer never resolves the target, " +
-                    "so every delta would park undelivered",
+                    "has neither a direct loopback nor a hub relay under $topology",
             )
         }
     }
@@ -289,6 +290,9 @@ class BenchMesh private constructor(
                     (result as LinkResult.Rejected).reason
             }
         } else {
+            if (!hasDirectLoopback(sourcePeer, targetPeer)) {
+                installHubRelay(toRef, sourcePeer, targetPeer)
+            }
             val routed = routedDeltaInlet(toRef, sourcePeer, step.inlet)
             peers[sourcePeer].host.managementInlet.call.connect(
                 fromRef,
@@ -297,6 +301,37 @@ class BenchMesh private constructor(
             )
         }
     }
+
+    /**
+     * Make [toRef] reachable from one STAR spoke through the hub.
+     *
+     * The source-to-hub sink is the `bToA` direction because STAR loopbacks
+     * are constructed as `(hub, spoke)`. The hub already learned [toRef]
+     * directly from the target spoke during the announcement drain in
+     * [apply], so its normal registry delivery supplies the second hop. This
+     * synthetic remote is intentionally unattributed: peer 0 is the relay,
+     * not the owner that announced the target ref.
+     */
+    private fun installHubRelay(toRef: CellRef, sourcePeer: Int, targetPeer: Int) {
+        check(canRelayThroughHub(sourcePeer, targetPeer)) {
+            "peer$sourcePeer cannot relay $toRef to peer$targetPeer under $topology"
+        }
+        val sourceToHub = loopbacks.getValue(edgeName(HUB_PEER, sourcePeer)).bToA
+        peers[sourcePeer].registry.publish(toRef, sourceToHub)
+    }
+
+    private fun canRelayThroughHub(sourcePeer: Int, targetPeer: Int): Boolean =
+        topology == MeshTopology.STAR &&
+            sourcePeer != HUB_PEER &&
+            targetPeer != HUB_PEER &&
+            edgeName(HUB_PEER, sourcePeer) in loopbacks &&
+            edgeName(HUB_PEER, targetPeer) in loopbacks
+
+    private fun hasDirectLoopback(firstPeer: Int, secondPeer: Int): Boolean =
+        edgeName(firstPeer, secondPeer) in loopbacks
+
+    private fun edgeName(firstPeer: Int, secondPeer: Int): String =
+        "peer${minOf(firstPeer, secondPeer)}<->peer${maxOf(firstPeer, secondPeer)}"
 
     private fun routedDeltaInlet(toRef: CellRef, sourcePeer: Int, inlet: String): Propagate<SetDelta<Long>> =
         when (inlet) {
@@ -361,6 +396,7 @@ class BenchMesh private constructor(
         throw IllegalArgumentException("spawn '${step.handle}' $reason")
 
     companion object {
+        private const val HUB_PEER = 0
         private val HOST_PLACEMENT = Regex("host(\\d+)")
         private val ROUTED_DELTA_INLETS = setOf("inlet", "left", "right")
 
