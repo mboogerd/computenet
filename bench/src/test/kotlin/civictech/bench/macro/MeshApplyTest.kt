@@ -310,31 +310,37 @@ class MeshApplyTest {
         error.message.orEmpty() shouldContain "only be called once"
     }
 
-    /**
-     * STAR wires only hub loopbacks and announcements are not relayed, so a
-     * spoke never resolves another spoke's ref: that link is refused instead of
-     * parking every delta with no dead letter. Links along a hub loopback work.
-     */
+    /** STAR relays a spoke-to-spoke link through both hub loopbacks and keeps direct links direct. */
     @Test
-    fun starRefusesSpokeToSpokeLinkAndDeliversAlongHubLoopbacks() {
-        val error = shouldThrow<IllegalArgumentException> {
-            built(3, topology = MeshTopology.STAR).apply(
-                GraphSpec(
-                    listOf(
-                        spawnSet("source0", "host1"),
-                        spawnFilter("sink", "host2"),
-                        ConnectStep("source0", "outlet", "sink", "inlet"),
-                    ),
+    fun starRelaysSpokeToSpokeLinkThroughHub() {
+        val mesh = built(3, topology = MeshTopology.STAR)
+        mesh.apply(
+            GraphSpec(
+                listOf(
+                    spawnSet("source0", "host1"),
+                    spawnFilter("sink", "host2"),
+                    ConnectStep("source0", "outlet", "sink", "inlet"),
                 ),
-            )
+            ),
+        )
+        val framesBeforeWrite = mesh.world.traceEvents()
+            .filter { it.port == "peer0<->peer1" || it.port == "peer0<->peer2" }
+            .groupingBy { it.port }
+            .eachCount()
+
+        mesh.sourceInlet("source0", peer = 1).add(3L)
+        mesh.runToIdle()
+
+        operatorMembership(mesh, "sink") shouldBe setOf(3L)
+        for (edgeName in listOf("peer0<->peer1", "peer0<->peer2")) {
+            mesh.world.traceEvents().count { it.port == edgeName } shouldBe
+                framesBeforeWrite.getOrDefault(edgeName, 0) + 1
         }
-        error.message.orEmpty() shouldContain "source0"
-        error.message.orEmpty() shouldContain "sink"
-        error.message.orEmpty() shouldContain "STAR"
+        mesh.deadLetters.shouldBeEmpty()
 
         for ((sourcePeer, sinkPeer) in listOf(1 to 0, 0 to 2)) {
-            val mesh = built(3, topology = MeshTopology.STAR)
-            mesh.apply(
+            val directMesh = built(3, topology = MeshTopology.STAR)
+            directMesh.apply(
                 GraphSpec(
                     listOf(
                         spawnSet("source0", "host$sourcePeer"),
@@ -343,10 +349,10 @@ class MeshApplyTest {
                     ),
                 ),
             )
-            mesh.sourceInlet("source0", sourcePeer).add(3L)
-            mesh.runToIdle()
-            operatorMembership(mesh, "sink") shouldBe setOf(3L)
-            mesh.deadLetters.shouldBeEmpty()
+            directMesh.sourceInlet("source0", sourcePeer).add(5L)
+            directMesh.runToIdle()
+            operatorMembership(directMesh, "sink") shouldBe setOf(5L)
+            directMesh.deadLetters.shouldBeEmpty()
         }
     }
 
@@ -366,8 +372,23 @@ class MeshApplyTest {
         }
     }
 
+    /** Every declared STAR host count computes the same sink memberships as one host. */
+    @Test
+    fun generatedShapesComputeTheSingleHostResultUnderStar() {
+        for (shape in Shape.entries) {
+            val oracle = generatedSinkMembership(shape, hostCount = 1)
+            for (hostCount in listOf(3, 5, 8)) {
+                generatedSinkMembership(shape, hostCount, MeshTopology.STAR) shouldBe oracle
+            }
+        }
+    }
+
     /** Applies a generated shape, writes at every source, and reads each sink through a pass-through tap. */
-    private fun generatedSinkMembership(shape: Shape, hostCount: Int): Map<String, Set<Long>> {
+    private fun generatedSinkMembership(
+        shape: Shape,
+        hostCount: Int,
+        topology: MeshTopology = MeshTopology.FULL_MESH,
+    ): Map<String, Set<Long>> {
         val generated = ShapeSpec(shape, seed = 7, cardinality = 9, fanOut = 2, hostCount = hostCount).generate()
         val steps = generated.spec.lowered()
         val placements = steps.filterIsInstance<SpawnStep>().associate { it.handle to it.placement!! }
@@ -377,7 +398,7 @@ class MeshApplyTest {
                 ConnectStep(sink, "outlet", "tap-$sink", "inlet"),
             )
         }
-        val mesh = built(hostCount)
+        val mesh = built(hostCount, topology = topology)
         val refs = mesh.apply(GraphSpec(steps + taps))
         for (source in generated.sources) {
             val inlet = mesh.sourceInlet(source, refs.getValue(source).instanceId.toInt())
