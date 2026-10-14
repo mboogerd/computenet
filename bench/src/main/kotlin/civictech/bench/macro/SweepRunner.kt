@@ -70,6 +70,8 @@ sealed interface PointContext {
  * REAL observations do not use [determinismCheck]: their structural counts are not
  * reproducible seed-for-seed. Their `BenchResult.dispersion` is the explicitly
  * stated equivalent half-range of the trial wall times, not JMH's reported error.
+ * Per mkyb1-D10, an [OutOfMemoryError] during SIM setup or drive is unschedulable,
+ * not a failed point, and records the JVM heap limit that was reached.
  */
 class SweepRunner(
     val budget: PointBudget = PointBudget(),
@@ -336,6 +338,8 @@ class SweepRunner(
             setupHook.beforeApply(mesh)
             mesh.apply(generated.spec)
             mesh.runToIdle()
+        } catch (error: OutOfMemoryError) {
+            return outOfMemoryOutcome(at, error)
         } catch (error: TopologyRefusal) {
             return PointOutcome.Unschedulable(
                 at = at,
@@ -363,6 +367,7 @@ class SweepRunner(
         val (counters, registration) = Counters.installOn(mesh.world, journals)
         val start = counters.snapshot()
         var simSteps = 0L
+        var outOfMemory: OutOfMemoryError? = null
         var failure: Throwable? = null
         var exhausted = false
         try {
@@ -390,6 +395,8 @@ class SweepRunner(
                     break@batch
                 }
             }
+        } catch (error: OutOfMemoryError) {
+            outOfMemory = error
         } catch (error: Throwable) {
             failure = error
         } finally {
@@ -397,6 +404,7 @@ class SweepRunner(
         }
 
         val deadLetters = mesh.deadLetters.map { it.toString() }
+        outOfMemory?.let { return outOfMemoryOutcome(at, it) }
         return when {
             failure != null -> PointOutcome.Failed(
                 at = at,
@@ -473,3 +481,13 @@ internal fun unschedulableOutcome(
 
 private fun describe(error: Throwable): String =
     "${error.javaClass.name}: ${error.message}"
+
+private fun outOfMemoryOutcome(
+    at: Coordinate,
+    error: OutOfMemoryError,
+): PointOutcome.Unschedulable = PointOutcome.Unschedulable(
+    at = at,
+    subject = CostSubject.PROPAGATION,
+    reason = describe(error),
+    observedLimit = "maxHeap=${Runtime.getRuntime().maxMemory()}",
+)
