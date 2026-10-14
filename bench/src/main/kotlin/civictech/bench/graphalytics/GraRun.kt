@@ -23,13 +23,12 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.Properties
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
 
 internal enum class RunPhase { LOAD, RECOVER, COMPUTE }
 
 private data class PhaseStart(
     val startedNanos: Long,
-    val awaitedSteps: Long,
+    val executedSteps: Long,
 )
 
 internal class GraRunHooks(
@@ -329,7 +328,7 @@ object GraRun {
     ): RunRig = when (drive) {
         Drive.SIM -> {
             val controller = SimulationController(seed)
-            val scheduler = AwaitCountingScheduler(controller, controller.scheduler())
+            val scheduler = PhaseCountingScheduler(controller.scheduler())
             val host = hooks.hostFactory(scheduler, journal, dispatchBatch)
             object : RunRig {
                 override val host: ManagedHost = host
@@ -337,14 +336,14 @@ object GraRun {
 
                 override fun beginPhase(): PhaseStart = PhaseStart(
                     startedNanos = System.nanoTime(),
-                    awaitedSteps = scheduler.awaitedSteps,
+                    executedSteps = scheduler.executedSteps,
                 )
 
                 override fun completePhase(phase: RunPhase, started: PhaseStart): Figure {
-                    val stepsConsumedByAwait = scheduler.awaitedSteps - started.awaitedSteps
+                    val stepsConsumedBeforeDrain = scheduler.executedSteps - started.executedSteps
                     val stepsDrainedAtEnd = controller.runToIdle().toLong()
                     hooks.phaseQuiesced(phase)
-                    return Figure.Work(stepsConsumedByAwait + stepsDrainedAtEnd)
+                    return Figure.Work(stepsConsumedBeforeDrain + stepsDrainedAtEnd)
                 }
 
                 override fun close() = scheduler.shutdown()
@@ -360,7 +359,7 @@ object GraRun {
 
                 override fun beginPhase(): PhaseStart = PhaseStart(
                     startedNanos = System.nanoTime(),
-                    awaitedSteps = 0L,
+                    executedSteps = 0L,
                 )
 
                 override fun completePhase(phase: RunPhase, started: PhaseStart): Figure {
@@ -388,21 +387,19 @@ object GraRun {
      * observed: graph-DSL spawn/connect calls are awaited host-management calls.
      * [SimulationController]'s scheduler advances the controller inside [HostScheduler.await],
      * so link-time catch-up can consume all compute work before a later `runToIdle()` starts.
-     * Count those exact controller steps here, then add the final drain's own step count.
+     * Count each host action as it starts, then add the final drain's own step count.
      */
-    private class AwaitCountingScheduler(
-        private val controller: SimulationController,
+    private class PhaseCountingScheduler(
         private val delegate: HostScheduler,
     ) : HostScheduler by delegate {
-        var awaitedSteps: Long = 0L
+        var executedSteps: Long = 0L
             private set
 
-        override fun <T> await(future: CompletableFuture<T>): T {
-            while (!future.isDone) {
-                check(controller.step()) { "simulation quiescent but awaited future incomplete" }
-                awaitedSteps++
+        override fun submit(priority: Int, action: suspend () -> Unit) {
+            delegate.submit(priority) {
+                executedSteps++
+                action()
             }
-            return delegate.await(future)
         }
     }
 }
