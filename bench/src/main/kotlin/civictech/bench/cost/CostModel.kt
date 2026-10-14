@@ -58,7 +58,8 @@ data class CalibrationConstant internal constructor(
  * The measured coverage boundary for a cost model ([BEN2-39], zbhyf-D4/D12).
  *
  * The constructor is `internal` because the envelope is derived from admitted points
- * by the writer; callers must not widen coverage by declaring a range by hand.
+ * by [CostWriter], its only production caller; callers must not widen coverage by
+ * declaring a range by hand.
  */
 @Serializable
 data class Envelope internal constructor(
