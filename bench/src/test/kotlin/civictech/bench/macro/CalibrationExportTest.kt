@@ -35,7 +35,7 @@ class CalibrationExportTest {
 
         val constants = CalibrationExport.constantsFromJmh(results, HARNESS_SHA)
 
-        constants.map { it.name } shouldBe CalibrationExport.METHOD_TO_CONSTANT.values.toList()
+        constants.map { it.name } shouldBe EXPECTED_CONSTANTS
         constants.map { it.env }.distinct().size shouldBe 1
         constants.all { it.unit == "ns/op" || it.unit == "ns/byte" } shouldBe true
         val wire = constants.single { it.name == Calibration.WIRE_BYTE_NANOS }
@@ -254,5 +254,11 @@ class CalibrationExportTest {
         private const val STRUCTURAL_SHA = "def5678"
         private const val FRAME_BYTES = 65_536L
         private val EXPECTED_METHODS = CalibrationExport.METHOD_TO_CONSTANT.keys.toList()
+        private val EXPECTED_CONSTANTS = listOf(
+            Calibration.LOCAL_DISPATCH_NANOS,
+            Calibration.CROSS_HOST_FRAME_NANOS,
+            Calibration.WIRE_BYTE_NANOS,
+            Calibration.JOURNAL_FSYNC_NANOS,
+        )
     }
 }
