@@ -26,13 +26,21 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.Timeout
+import org.junit.jupiter.api.extension.ExtensionContext
+import org.junit.jupiter.api.extension.InvocationInterceptor
+import org.junit.jupiter.api.extension.ReflectiveInvocationContext
+import org.junit.jupiter.api.extension.RegisterExtension
+import org.junit.jupiter.api.extension.TestWatcher
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.MethodSource
 import java.io.File
+import java.lang.reflect.Method
 import java.nio.file.Files
 import java.time.LocalDate
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit.MINUTES
+import java.util.concurrent.TimeoutException
 
 /** Runs and exports the declared BEN2 structural macro sweep (mkyb1-D3/D14/D15/D17). */
 @Tag("bench")
@@ -44,6 +52,11 @@ class MacroSweepTest {
     var temporaryRoot: File? = null
 
     private val outcomes = LinkedHashMap<Coordinate, PointOutcome>()
+    private val invocationCoordinates = ConcurrentHashMap<String, Coordinate>()
+
+    @JvmField
+    @RegisterExtension
+    val timeoutObserver: TestWatcher = TimeoutObserver()
 
     /** Kept as the single plan seam so the prescribed three-point mutation can slice it. */
     fun points(): List<Coordinate> = SweepPlan.points()
@@ -54,24 +67,53 @@ class MacroSweepTest {
     fun `runs every declared SIM point with determinism enabled`(at: Coordinate) {
         val pointNumber = points().indexOf(at) + 1
         val journalDir = File(requireNotNull(temporaryRoot), "point-$pointNumber")
-        val started = System.nanoTime()
         val outcome = SweepRunner(
             budget = SweepPlan.budgetFor(at),
             topology = SweepPlan.TOPOLOGY,
             journalDir = journalDir,
             determinismCheck = SweepPlan.DETERMINISM_CHECK,
         ).run(at)
-        // JUnit's default SAME_THREAD timeout only interrupts this thread, and the SIM
-        // drive runs on to completion; JUnit then fails the invocation AFTER this body
-        // has returned. A runner outcome that outlived the deadline is therefore
-        // replaced here by the timeout exclusion (mkyb1-D17), never admitted as Ok.
-        val timedOut = Thread.currentThread().isInterrupted ||
-            System.nanoTime() - started >= MINUTES.toNanos(POINT_TIMEOUT_MINUTES)
-        val recorded = if (timedOut) timeoutOutcome(at) else outcome
 
-        assertNull(outcomes.put(at, recorded), "plan coordinate produced more than one outcome: $at")
+        assertNull(outcomes.put(at, outcome), "plan coordinate produced more than one outcome: $at")
         assertEquals(at, outcome.at, "runner outcome must retain the coordinate it measured")
     }
+
+    /**
+     * JUnit's SAME_THREAD timeout decides its final verdict only after the test body
+     * returns. The interceptor records the parameterized invocation's coordinate;
+     * [TestWatcher] then observes the finalized [TimeoutException] and replaces even
+     * a successfully returned runner outcome before [AfterAll] exports the sweep.
+     */
+    private inner class TimeoutObserver : InvocationInterceptor, TestWatcher {
+        override fun interceptTestTemplateMethod(
+            invocation: InvocationInterceptor.Invocation<Void>,
+            invocationContext: ReflectiveInvocationContext<Method>,
+            extensionContext: ExtensionContext,
+        ) {
+            val at = invocationContext.arguments.singleOrNull() as? Coordinate
+                ?: error("macro sweep invocation must carry exactly one Coordinate")
+            check(invocationCoordinates.put(extensionContext.uniqueId, at) == null) {
+                "duplicate JUnit invocation id: ${extensionContext.uniqueId}"
+            }
+            invocation.proceed()
+        }
+
+        override fun testSuccessful(context: ExtensionContext) {
+            invocationCoordinates.remove(context.uniqueId)
+        }
+
+        override fun testAborted(context: ExtensionContext, cause: Throwable) {
+            invocationCoordinates.remove(context.uniqueId)
+        }
+
+        override fun testFailed(context: ExtensionContext, cause: Throwable) {
+            val at = invocationCoordinates.remove(context.uniqueId) ?: return
+            if (cause.hasTimeoutCause()) outcomes[at] = timeoutOutcome(at)
+        }
+    }
+
+    private fun Throwable.hasTimeoutCause(): Boolean =
+        generateSequence(this) { it.cause }.any { it is TimeoutException }
 
     private fun timeoutOutcome(at: Coordinate): PointOutcome = PointOutcome.NonConvergent(
         at = at,
@@ -82,6 +124,10 @@ class MacroSweepTest {
     @AfterAll
     fun `writes the structural export and prints its findings entry`() {
         val plan = points()
+        assertTrue(
+            invocationCoordinates.isEmpty(),
+            "every parameterized invocation must receive its finalized JUnit result",
+        )
         plan.filterNot(outcomes::containsKey).forEach { at -> outcomes[at] = timeoutOutcome(at) }
         assertEquals(plan.size, outcomes.size, "every plan coordinate must have exactly one outcome")
         assertEquals(plan.toSet(), outcomes.keys.toSet(), "outcomes must cover the declared plan")
