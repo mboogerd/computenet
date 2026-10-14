@@ -1,14 +1,13 @@
 package civictech.bench.macro
 
-import civictech.cell.host.CoroutineScheduler
 import civictech.cell.host.HostColor
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldBeSameInstanceAs
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
@@ -45,7 +44,7 @@ class SchedulerFailureCaptureTest {
 
     @Test
     fun recordsAThrowUnderCoroutineSchedulerAndTheLoopSurvives() {
-        val scheduler = InstrumentedScheduler(CoroutineScheduler("bench-capture-coroutine"))
+        val scheduler = InstrumentedScheduler(coroutineScheduler("bench-capture-coroutine"))
         try {
             scheduler.submit(0) { throw IllegalStateException(INJECTED) }
             awaitUntil("coroutine scheduler failure is captured", timeoutMs = 5_000) {
@@ -128,6 +127,19 @@ class SchedulerFailureCaptureTest {
         override fun shutdown() {
             shutdownCalled = true
         }
+    }
+
+    /**
+     * `:kernel` keeps kotlinx-coroutines as an implementation dependency, so
+     * `:bench` cannot name [CoroutineScheduler][civictech.cell.host.CoroutineScheduler]'s
+     * dispatcher-typed constructor without widening the module graph. Invoke its
+     * Kotlin default-argument constructor reflectively while still exercising the
+     * real scheduler implementation at runtime.
+     */
+    private fun coroutineScheduler(name: String): HostScheduler {
+        val type = Class.forName("civictech.cell.host.CoroutineScheduler")
+        val defaultConstructor = type.declaredConstructors.single { it.parameterCount == 4 }
+        return defaultConstructor.newInstance(name, null, 2, null) as HostScheduler
     }
 
     private companion object {
