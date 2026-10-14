@@ -67,6 +67,10 @@ class MeshConstructionTest {
                     }
                 }
             }
+            // The announcements crossed each loopback through its declared edge,
+            // which is where the runner will count frames.
+            val edgePorts = mesh.world.traceEvents().mapNotNull { it.port }.toSet()
+            mesh.world.edges.names().filterNot { it in edgePorts }.shouldBeEmpty()
             mesh.deadLetters.shouldBeEmpty()
         }
     }
