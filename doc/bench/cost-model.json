@@ -453,7 +453,103 @@
             "harnessSha": "9f59de42"
         }
     ],
-    "calibration": [],
+    "calibration": [
+        {
+            "name": "localDispatchNanos",
+            "value": 10857.310979,
+            "unit": "ns/op",
+            "dispersion": 1621.90272,
+            "env": {
+                "jvmVendor": "Amazon.com Inc. (Corretto-21.0.5.11.1)",
+                "jvmVersion": "21.0.5",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Average time",
+                "forkCount": 3,
+                "warmupIterations": 5,
+                "measurementIterations": 5,
+                "harnessCommitSha": "c4366b8a"
+            }
+        },
+        {
+            "name": "crossHostFrameNanos",
+            "value": 1821.36234,
+            "unit": "ns/op",
+            "dispersion": 33.09845,
+            "env": {
+                "jvmVendor": "Amazon.com Inc. (Corretto-21.0.5.11.1)",
+                "jvmVersion": "21.0.5",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Average time",
+                "forkCount": 3,
+                "warmupIterations": 5,
+                "measurementIterations": 5,
+                "harnessCommitSha": "c4366b8a"
+            }
+        },
+        {
+            "name": "wireByteNanos",
+            "value": 6.025744396201454,
+            "unit": "ns/byte",
+            "dispersion": 0.10521673813602318,
+            "env": {
+                "jvmVendor": "Amazon.com Inc. (Corretto-21.0.5.11.1)",
+                "jvmVersion": "21.0.5",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Average time",
+                "forkCount": 3,
+                "warmupIterations": 5,
+                "measurementIterations": 5,
+                "harnessCommitSha": "c4366b8a"
+            }
+        },
+        {
+            "name": "journalFsyncNanos",
+            "value": 24178.104886,
+            "unit": "ns/op",
+            "dispersion": 2434.713831,
+            "env": {
+                "jvmVendor": "Amazon.com Inc. (Corretto-21.0.5.11.1)",
+                "jvmVersion": "21.0.5",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Average time",
+                "forkCount": 3,
+                "warmupIterations": 5,
+                "measurementIterations": 5,
+                "harnessCommitSha": "c4366b8a"
+            }
+        },
+        {
+            "name": "retainedBytesPerElement",
+            "value": 269.158792,
+            "unit": "bytes/element",
+            "dispersion": 0.015137969131824842,
+            "env": {
+                "jvmVendor": "Amazon.com Inc. (OpenJDK 64-Bit Server VM)",
+                "jvmVersion": "21.0.5",
+                "heapSettings": "-Xmx2g",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "retained-heap-delta (in-process JUnit probe; not JMH)",
+                "forkCount": 1,
+                "warmupIterations": 1,
+                "measurementIterations": 10,
+                "harnessCommitSha": "c4366b8a"
+            }
+        }
+    ],
     "laws": [],
     "exclusions": [
         {
