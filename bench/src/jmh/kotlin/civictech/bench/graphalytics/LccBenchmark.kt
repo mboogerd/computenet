@@ -7,6 +7,7 @@ import civictech.bench.RunEnvironment
 import civictech.bench.micro.BoundedReadFixtures
 import civictech.bench.micro.ThroughputReport
 import civictech.cell.durability.Journal
+import org.openjdk.jmh.annotations.AuxCounters
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Fork
@@ -29,10 +30,25 @@ import java.util.concurrent.TimeUnit
 /**
  * REAL-drive LCC timing over the checked-in Graphalytics examples.
  *
- * Both benchmark methods execute the complete two-phase [GraRun] protocol. The
- * [load] method reports only the load interval and [compute] reports only the
- * compute interval; each still executes and validates the other phase because a
- * compute interval has no meaning without the loaded graph.
+ * Both benchmark methods execute the complete two-phase [GraRun] protocol
+ * (load, compute, validation); [GraRun] cannot run its phases separately and
+ * is not changed by this task. Under `Mode.AverageTime` JMH's primary score is
+ * the wall time of the whole `@Benchmark` call, so it is the WHOLE-RUN time for
+ * both methods and says nothing about one phase.
+ *
+ * The per-phase figures ([BB-GRA-07]) are the `@AuxCounters` secondary results
+ * `getLoadNanos` (reported by [realLoad]) and `getComputeNanos`
+ * (reported by [realCompute]): each is the record's own interval for that
+ * phase, taken from [GraRun]'s `Figure.Duration`. Read those secondary rows,
+ * not the primary score, as the load and compute times; the primary score is
+ * not a phase figure (it is a timing of the whole invocation with per-invocation
+ * fixtures excluded, and was observed not to equal either phase).
+ *
+ * Caveat: JMH aggregates `@AuxCounters` `EVENTS` secondary rows by SUM over the
+ * measurement iterations, so the console table's secondary `Score` is
+ * `Cnt` x the mean per-iteration phase time. The per-iteration values (the
+ * phase mean in ns) are the `rawData` of the `-rf json` result; the console
+ * `Score` divided by `Cnt` is their mean.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
@@ -108,11 +124,63 @@ open class LccBenchmark {
         deleteTree(trialDirectory)
     }
 
-    @Benchmark
-    fun realLoad(blackhole: Blackhole): Long = run(blackhole, "load") { it.load }
+    /**
+     * Per-phase secondary results; the primary score of both benchmarks is whole-run time.
+     *
+     * JMH reads `@AuxCounters` getters once at the end of each iteration, so each
+     * exposed value is the MEAN phase interval per invocation in that iteration,
+     * in nanoseconds (the sums and the count are private and not reported). The
+     * console summary adds these per-iteration values across iterations; see the
+     * class KDoc.
+     */
+    @State(Scope.Thread)
+    @AuxCounters(AuxCounters.Type.EVENTS)
+    open class Phases {
+        private var invocations = 0L
+        private var loadSum = 0L
+        private var computeSum = 0L
 
+        /** Same banner as the benchmark state: a state class reachable from a benchmark must print it. */
+        @Setup(Level.Trial)
+        fun announceHost() {
+            HostFacts.captureCurrent().bannerLines().forEach(::println)
+        }
+
+        @Setup(Level.Iteration)
+        fun reset() {
+            invocations = 0
+            loadSum = 0
+            computeSum = 0
+        }
+
+        internal fun recordLoad(nanos: Long) {
+            invocations++
+            loadSum += nanos
+        }
+
+        internal fun recordCompute(nanos: Long) {
+            invocations++
+            computeSum += nanos
+        }
+
+        /** Mean GraRun load interval per invocation, in ns (reported by [realLoad]). */
+        fun getLoadNanos(): Long = if (invocations == 0L) 0 else loadSum / invocations
+
+        /** Mean GraRun compute interval per invocation, in ns (reported by [realCompute]). */
+        fun getComputeNanos(): Long = if (invocations == 0L) 0 else computeSum / invocations
+    }
+
+    /** Whole run as primary score; `getLoadNanos` is the load phase alone. */
     @Benchmark
-    fun realCompute(blackhole: Blackhole): Long = run(blackhole, "compute") { it.compute }
+    fun realLoad(blackhole: Blackhole, phases: Phases) {
+        phases.recordLoad(run(blackhole, "load") { it.load })
+    }
+
+    /** Whole run as primary score; `getComputeNanos` is the compute phase alone. */
+    @Benchmark
+    fun realCompute(blackhole: Blackhole, phases: Phases) {
+        phases.recordCompute(run(blackhole, "compute") { it.compute })
+    }
 
     private fun run(
         blackhole: Blackhole,
