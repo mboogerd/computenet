@@ -105,12 +105,12 @@ class MacroSweepTest {
 
         val admitted = orderedOutcomes.filterIsInstance<PointOutcome.Ok>()
         val excluded = orderedOutcomes.filterNot { it is PointOutcome.Ok }
+        assertEnvelopeMatches(model, admitted)
         assertEquals(
             admitted.map { it.subject to it.at },
             model.structural.map { it.subject to it.at },
             "only admitted outcomes may produce structural entries, in plan order",
         )
-        assertEnvelopeMatches(model, admitted)
         assertExclusionsMatch(model, excluded)
 
         val structuralKeys = model.structural.map { it.subject to it.at }.toSet()
