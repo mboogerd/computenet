@@ -26,6 +26,11 @@ import java.util.UUID
 
 internal enum class RunPhase { LOAD, RECOVER, COMPUTE }
 
+private data class PhaseStart(
+    val startedNanos: Long,
+    val executedSteps: Long,
+)
+
 internal class GraRunHooks(
     val hostFactory: (HostScheduler, Journal?, Int) -> ManagedHost = { scheduler, journal, dispatchBatch ->
         ManagedHost(scheduler = scheduler, journal = journal, dispatchBatch = dispatchBatch)
@@ -110,7 +115,7 @@ object GraRun {
         val rig = rig(drive, seed, journal, dispatchBatch, hooks)
 
         try {
-            val loadStarted = System.nanoTime()
+            val loadStarted = rig.beginPhase()
             val edges = spawnEdges(rig, dataset)
             val edgeApi = rig.host.lookup<SetApi<Edge>>(edgeRef(dataset))
                 ?: error("loaded edge relation ${edgeRef(dataset)} was not hosted")
@@ -154,7 +159,7 @@ object GraRun {
 
         try {
             val edges = spawnEdges(rig, dataset)
-            val recoveryStarted = System.nanoTime()
+            val recoveryStarted = rig.beginPhase()
             journal?.let(rig.host::recoverFrom)
             val recoveryFigure = rig.completePhase(RunPhase.RECOVER, recoveryStarted)
 
@@ -212,7 +217,7 @@ object GraRun {
         env: RunEnvironment,
         recovered: Boolean?,
     ): GraRecord {
-        val computeStarted = System.nanoTime()
+        val computeStarted = rig.beginPhase()
         val lcc = lccBuilder.attach(rig.host.managementInlet, edges)
         val computeFigure = rig.completePhase(RunPhase.COMPUTE, computeStarted)
         val actual = lcc.read(loaded.vertices)
@@ -323,16 +328,22 @@ object GraRun {
     ): RunRig = when (drive) {
         Drive.SIM -> {
             val controller = SimulationController(seed)
-            val scheduler = controller.scheduler()
+            val scheduler = PhaseCountingScheduler(controller.scheduler())
             val host = hooks.hostFactory(scheduler, journal, dispatchBatch)
             object : RunRig {
                 override val host: ManagedHost = host
                 override val schedulerLabel: String = "SimulationController"
 
-                override fun completePhase(phase: RunPhase, startedNanos: Long): Figure {
-                    val steps = controller.runToIdle().toLong()
+                override fun beginPhase(): PhaseStart = PhaseStart(
+                    startedNanos = System.nanoTime(),
+                    executedSteps = scheduler.executedSteps,
+                )
+
+                override fun completePhase(phase: RunPhase, started: PhaseStart): Figure {
+                    val stepsConsumedBeforeDrain = scheduler.executedSteps - started.executedSteps
+                    val stepsDrainedAtEnd = controller.runToIdle().toLong()
                     hooks.phaseQuiesced(phase)
-                    return Figure.Work(steps)
+                    return Figure.Work(stepsConsumedBeforeDrain + stepsDrainedAtEnd)
                 }
 
                 override fun close() = scheduler.shutdown()
@@ -346,11 +357,16 @@ object GraRun {
                 override val host: ManagedHost = host
                 override val schedulerLabel: String = "VirtualThreadScheduler"
 
-                override fun completePhase(phase: RunPhase, startedNanos: Long): Figure {
+                override fun beginPhase(): PhaseStart = PhaseStart(
+                    startedNanos = System.nanoTime(),
+                    executedSteps = 0L,
+                )
+
+                override fun completePhase(phase: RunPhase, started: PhaseStart): Figure {
                     scheduler.awaitDrained("Graphalytics ${phase.name.lowercase()} phase")
                     hooks.phaseQuiesced(phase)
                     return Figure.Duration(
-                        nanos = System.nanoTime() - startedNanos,
+                        nanos = System.nanoTime() - started.startedNanos,
                         dispersionNanos = 0,
                     )
                 }
@@ -363,6 +379,27 @@ object GraRun {
     private interface RunRig : AutoCloseable {
         val host: ManagedHost
         val schedulerLabel: String
-        fun completePhase(phase: RunPhase, startedNanos: Long): Figure
+        fun beginPhase(): PhaseStart
+        fun completePhase(phase: RunPhase, started: PhaseStart): Figure
+    }
+
+    /**
+     * observed: graph-DSL spawn/connect calls are awaited host-management calls.
+     * [SimulationController]'s scheduler advances the controller inside [HostScheduler.await],
+     * so link-time catch-up can consume all compute work before a later `runToIdle()` starts.
+     * Count each host action as it starts, then add the final drain's own step count.
+     */
+    private class PhaseCountingScheduler(
+        private val delegate: HostScheduler,
+    ) : HostScheduler by delegate {
+        var executedSteps: Long = 0L
+            private set
+
+        override fun submit(priority: Int, action: suspend () -> Unit) {
+            delegate.submit(priority) {
+                executedSteps++
+                action()
+            }
+        }
     }
 }
