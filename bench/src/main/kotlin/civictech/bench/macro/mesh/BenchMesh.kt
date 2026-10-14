@@ -13,6 +13,7 @@ import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.SimulationController
+import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -219,6 +220,11 @@ class BenchMesh private constructor(
         val sourcePeer = if (from.replicated) to.placement!! else from.placement!!
         val targetPeer = to.placement!!
         if (sourcePeer == targetPeer) return
+        if (step.options != LinkOptions.DEFAULT) {
+            throw IllegalArgumentException(
+                "cross-host target '${step.to}' uses unsupported non-default LinkOptions",
+            )
+        }
         if (step.inlet !in ROUTED_DELTA_INLETS) {
             throw IllegalArgumentException(
                 "cross-host target '${step.to}' uses unsupported inlet '${step.inlet}'",

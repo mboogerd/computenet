@@ -23,7 +23,11 @@ import civictech.cell.graph.KeyedFamily
 import civictech.cell.graph.SpawnStep
 import civictech.cell.graph.TypedCellFactory
 import civictech.cell.graph.UnlinkStep
+import civictech.cell.link.LinkOptions
+import civictech.cell.link.LinkRole
 import civictech.cell.link.PeerId
+import civictech.cell.port.FanInlet
+import civictech.cell.port.PortRegistry
 import civictech.cell.replication.WriteAuthority
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -108,6 +112,54 @@ class MeshApplyTest {
 
         operatorMembership(mesh, "join", subState = "ledger") shouldBe setOf(11L)
         mesh.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
+    fun nonDefaultLinkOptionsAreRefusedAcrossDirectAndRelayedPeersButAllowedLocally() {
+        val direct = built(2)
+        val directError = shouldThrow<IllegalArgumentException> {
+            direct.apply(
+                GraphSpec(
+                    listOf(
+                        spawnSet("source0", "host0"),
+                        spawnFilter("sink", "host1"),
+                        ConnectStep("source0", "outlet", "sink", "inlet", LinkOptions(role = LinkRole.Observe)),
+                    ),
+                ),
+            )
+        }
+        directError.message.orEmpty() shouldContain "sink"
+        directError.message.orEmpty() shouldContain "non-default LinkOptions"
+        shouldThrow<IllegalArgumentException> { direct.cell("sink") }
+
+        val relayed = built(3, topology = MeshTopology.STAR)
+        val relayedError = shouldThrow<IllegalArgumentException> {
+            relayed.apply(
+                GraphSpec(
+                    listOf(
+                        spawnSet("source0", "host1"),
+                        spawnFilter("sink", "host2"),
+                        ConnectStep("source0", "outlet", "sink", "inlet", LinkOptions(role = LinkRole.Observe)),
+                    ),
+                ),
+            )
+        }
+        relayedError.message.orEmpty() shouldContain "sink"
+        relayedError.message.orEmpty() shouldContain "non-default LinkOptions"
+        shouldThrow<IllegalArgumentException> { relayed.cell("sink") }
+
+        val local = built(1)
+        local.apply(
+            GraphSpec(
+                listOf(
+                    spawnSet("source0", "host0"),
+                    spawnFilter("sink", "host0"),
+                    ConnectStep("source0", "outlet", "sink", "inlet", LinkOptions(role = LinkRole.Observe)),
+                ),
+            ),
+        )
+        val sinkInlet = PortRegistry.of(local.cell("sink"))["inlet"] as FanInlet<*>
+        sinkInlet.linking.links.single().role shouldBe LinkRole.Observe
     }
 
     @Test
