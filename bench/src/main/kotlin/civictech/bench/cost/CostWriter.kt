@@ -44,7 +44,7 @@ class CostWriter(private val harnessSha: String) {
         val subject: CostSubject,
         val metric: String,
         val form: GrowthForm,
-        val fittedOver: List<Coordinate>,
+        val fittedOver: Set<Coordinate>,
     )
 
     private val structural = linkedMapOf<StructuralKey, StructuralCost>()
@@ -192,7 +192,7 @@ class CostWriter(private val harnessSha: String) {
             fittedOver = points.toList(),
             goodnessOfFit = goodnessOfFit,
         )
-        val lawKey = GrowthLawKey(dimension, subject, metric, form, points)
+        val lawKey = GrowthLawKey(dimension, subject, metric, form, points.toSet())
         require(laws.none { existing -> existing.key() == lawKey }) {
             "duplicate growth law $lawKey"
         }
@@ -251,6 +251,9 @@ class CostWriter(private val harnessSha: String) {
         require(key !in structural) {
             "exclusion at $key conflicts with an existing structural point"
         }
+        require(exclusions.none { it.subject == outcome.subject && it.at == outcome.at }) {
+            "duplicate exclusion at $key"
+        }
         val exclusion = ExcludedPoint(outcome.at, outcome.subject, kind, reason)
         exclusions += exclusion
         return Admission.Excluded(exclusion)
@@ -261,7 +264,7 @@ class CostWriter(private val harnessSha: String) {
         subject = subject,
         metric = metric,
         form = form,
-        fittedOver = fittedOver,
+        fittedOver = fittedOver.toSet(),
     )
 
     private fun deriveEnvelope(entries: List<StructuralCost>): Envelope = Envelope(

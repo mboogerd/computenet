@@ -146,6 +146,36 @@ class CostEnvelopeTest {
     }
 
     @Test
+    fun `two excluded outcomes cannot coexist at one key`() {
+        val at = coordinate(hostCount = 2)
+        val writer = CostWriter("abc1234")
+        writer.admit(
+            PointOutcome.NonConvergent(
+                at = at,
+                subject = CostSubject.PROPAGATION,
+                budget = "10_000 steps",
+            ),
+        )
+
+        val duplicate = shouldThrow<IllegalArgumentException> {
+            writer.admit(
+                PointOutcome.Failed(
+                    at = at,
+                    subject = CostSubject.PROPAGATION,
+                    cause = "scheduler loop exception",
+                    deadLetters = emptyList(),
+                ),
+            )
+        }
+
+        duplicate.message shouldContain "PROPAGATION"
+        duplicate.message shouldContain at.toString()
+        val admittedAt = coordinate(hostCount = 3)
+        writer.admit(ok(admittedAt, messages = 11))
+        writer.model().exclusions.map { it.kind } shouldBe listOf("NonConvergent")
+    }
+
+    @Test
     fun `calibration names and the writer sha are unique non-blank identities`() {
         shouldThrow<IllegalArgumentException> { CostWriter("  ") }
 
@@ -279,7 +309,7 @@ class CostEnvelopeTest {
     }
 
     @Test
-    fun `the same successful fit cannot append a duplicate law`() {
+    fun `the same successful fit cannot append a duplicate law in any point order`() {
         val points = listOf(1, 4, 16, 64).map { coordinate(fanOut = it) }
         val writer = CostWriter("abc1234")
         points.forEach { at -> writer.admit(ok(at, messages = 3L * at.fanOut + 7L)) }
@@ -297,7 +327,7 @@ class CostEnvelopeTest {
                 CostSubject.PROPAGATION,
                 "messages",
                 GrowthForm.LINEAR,
-                points,
+                points.reversed(),
             )
         }
 
