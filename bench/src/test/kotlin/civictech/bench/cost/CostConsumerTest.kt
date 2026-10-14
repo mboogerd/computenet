@@ -76,6 +76,23 @@ class CostConsumerTest {
     }
 
     @Test
+    fun `names the largest term as dominant and the first in formula order on a tie`() {
+        val query = CostQuery(syntheticModel())
+
+        // 1000 * 50 = 50_000 < 100 * 2000 = 200_000: the second term is the largest.
+        val frameDominated = query.crossHostEdge(coordinate(hostCount = 8))
+            .shouldBeInstanceOf<CostAnswer.Priced>()
+        frameDominated.value shouldBe 250_000.0
+        frameDominated.from.dominant shouldBe Calibration.CROSS_HOST_FRAME_NANOS
+
+        // 100_000 * 50 = 2500 * 2000 = 5_000_000: a tie goes to the first term.
+        val tied = query.crossHostEdge(coordinate(hostCount = 8, cardinality = 100_000))
+            .shouldBeInstanceOf<CostAnswer.Priced>()
+        tied.value shouldBe 10_000_000.0
+        tied.from.dominant shouldBe Calibration.LOCAL_DISPATCH_NANOS
+    }
+
+    @Test
     fun `refuses every dimension beyond the derived envelope`() {
         val query = CostQuery(syntheticModel())
         val at = coordinate()
@@ -163,6 +180,14 @@ class CostConsumerTest {
                     hostCount == 1 && cardinality == 1_000L -> structuralCounts(
                         messages = null,
                         messagesNotMeasured = MESSAGES_NOT_MEASURED,
+                    )
+                    hostCount == 8 && cardinality == 1_000L -> structuralCounts(
+                        messages = 1_000,
+                        crossHostFrames = 100,
+                    )
+                    hostCount == 8 && cardinality == 100_000L -> structuralCounts(
+                        messages = 100_000,
+                        crossHostFrames = 2_500,
                     )
                     else -> structuralCounts(messages = cardinality)
                 }
