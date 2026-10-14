@@ -39,6 +39,26 @@ class GraRunTest {
     }
 
     @Test
+    fun `sim compute figure counts work for both published example datasets`() {
+        Datasets.all().forEach { dataset ->
+            val record = validated(
+                GraRun.run(
+                    dataset = dataset,
+                    drive = Drive.SIM,
+                    seed = 1L,
+                    env = environment(),
+                ),
+            )
+
+            val compute = assertInstanceOf(Figure.Work::class.java, record.compute)
+            assertTrue(
+                compute.steps > 0,
+                "${dataset.name} SIM compute must count the scheduler work that produced its validated LCC result",
+            )
+        }
+    }
+
+    @Test
     fun `real drive records separate durations`() {
         val record = validated(
             GraRun.run(
