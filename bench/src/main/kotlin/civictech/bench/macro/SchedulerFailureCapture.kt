@@ -1,0 +1,78 @@
+package civictech.bench.macro
+
+import civictech.cell.host.HostColor
+import civictech.cell.host.HostScheduler
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Records failures that a production [HostScheduler] drain loop would otherwise
+ * print and continue past.
+ *
+ * The wrapped action is always rethrown after it is recorded, so this decorator
+ * does not replace or weaken the scheduler's own failure policy. [submitted] is
+ * incremented before delegation and [completed] only after an action returns or
+ * throws. [idle] reads completed first and submitted second: a concurrent submit
+ * between those reads can therefore only produce a conservative `false`, never a
+ * false `true` while new work is queued.
+ */
+class InstrumentedScheduler(private val inner: HostScheduler) : HostScheduler {
+    private val submittedCount = AtomicLong()
+    private val completedCount = AtomicLong()
+    private val capturedFailures = ConcurrentLinkedQueue<Throwable>()
+
+    override val color: HostColor get() = inner.color
+
+    /** Number of actions submitted through this decorator. */
+    val submitted: Long get() = submittedCount.get()
+
+    /** Number of submitted actions that have returned or thrown. */
+    val completed: Long get() = completedCount.get()
+
+    /** A snapshot of failures observed so far, in observation order. */
+    val failures: List<Throwable> get() = capturedFailures.toList()
+
+    /** Whether every action submitted through this decorator has completed. */
+    val idle: Boolean
+        get() {
+            val completedSnapshot = completedCount.get()
+            return completedSnapshot == submittedCount.get()
+        }
+
+    override fun submit(priority: Int, action: suspend () -> Unit) {
+        submittedCount.incrementAndGet()
+        inner.submit(priority) {
+            try {
+                action()
+            } catch (failure: Throwable) {
+                capturedFailures += failure
+                throw failure
+            } finally {
+                completedCount.incrementAndGet()
+            }
+        }
+    }
+
+    override fun <T> await(future: CompletableFuture<T>): T = inner.await(future)
+
+    override fun shutdown() = inner.shutdown()
+
+    /**
+     * Poll [idle] from outside the scheduler's execution context until it is
+     * true or [millis] elapses. This deliberately does not call [inner.await].
+     */
+    fun awaitIdle(millis: Long, pollMillis: Long = 5): Boolean {
+        require(millis >= 0) { "millis must not be negative" }
+        require(pollMillis > 0) { "pollMillis must be positive" }
+
+        val started = System.nanoTime()
+        val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(millis)
+        while (!idle) {
+            if (System.nanoTime() - started >= timeoutNanos) return false
+            Thread.sleep(pollMillis)
+        }
+        return true
+    }
+}
