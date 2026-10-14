@@ -90,6 +90,9 @@ class SweepPlanTest {
         budgets.zipWithNext().forEach { (lower, higher) -> higher shouldBeGreaterThan lower }
         SweepPlan.budgetFor(SweepPlan.BASELINE).simSteps shouldBe 340_000
         SweepPlan.budgetFor(
+            SweepPlan.BASELINE.copy(shape = Shape.FAN_OUT_TREE.name, fanOut = 1),
+        ).simSteps shouldBe 340_000
+        SweepPlan.budgetFor(
             SweepPlan.BASELINE.copy(shape = Shape.FAN_OUT_TREE.name, fanOut = 64),
         ).simSteps shouldBe 4_540_000
         SweepPlan.budgetFor(
