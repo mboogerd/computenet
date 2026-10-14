@@ -54,27 +54,35 @@ class MacroSweepTest {
     fun `runs every declared SIM point with determinism enabled`(at: Coordinate) {
         val pointNumber = points().indexOf(at) + 1
         val journalDir = File(requireNotNull(temporaryRoot), "point-$pointNumber")
+        val started = System.nanoTime()
         val outcome = SweepRunner(
             budget = SweepPlan.budgetFor(at),
             topology = SweepPlan.TOPOLOGY,
             journalDir = journalDir,
             determinismCheck = SweepPlan.DETERMINISM_CHECK,
         ).run(at)
+        // JUnit's default SAME_THREAD timeout only interrupts this thread, and the SIM
+        // drive runs on to completion; JUnit then fails the invocation AFTER this body
+        // has returned. A runner outcome that outlived the deadline is therefore
+        // replaced here by the timeout exclusion (mkyb1-D17), never admitted as Ok.
+        val timedOut = Thread.currentThread().isInterrupted ||
+            System.nanoTime() - started >= MINUTES.toNanos(POINT_TIMEOUT_MINUTES)
+        val recorded = if (timedOut) timeoutOutcome(at) else outcome
 
-        assertNull(outcomes.put(at, outcome), "plan coordinate produced more than one outcome: $at")
+        assertNull(outcomes.put(at, recorded), "plan coordinate produced more than one outcome: $at")
         assertEquals(at, outcome.at, "runner outcome must retain the coordinate it measured")
     }
+
+    private fun timeoutOutcome(at: Coordinate): PointOutcome = PointOutcome.NonConvergent(
+        at = at,
+        subject = CostSubject.PROPAGATION,
+        budget = "junitTimeout=${POINT_TIMEOUT_MINUTES}m",
+    )
 
     @AfterAll
     fun `writes the structural export and prints its findings entry`() {
         val plan = points()
-        plan.filterNot(outcomes::containsKey).forEach { at ->
-            outcomes[at] = PointOutcome.NonConvergent(
-                at = at,
-                subject = CostSubject.PROPAGATION,
-                budget = "junitTimeout=${POINT_TIMEOUT_MINUTES}m",
-            )
-        }
+        plan.filterNot(outcomes::containsKey).forEach { at -> outcomes[at] = timeoutOutcome(at) }
         assertEquals(plan.size, outcomes.size, "every plan coordinate must have exactly one outcome")
         assertEquals(plan.toSet(), outcomes.keys.toSet(), "outcomes must cover the declared plan")
 
