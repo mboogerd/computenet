@@ -39,6 +39,14 @@ class CostWriter(private val harnessSha: String) {
         val at: Coordinate,
     )
 
+    private data class GrowthLawKey(
+        val dimension: String,
+        val subject: CostSubject,
+        val metric: String,
+        val form: GrowthForm,
+        val fittedOver: List<Coordinate>,
+    )
+
     private val structural = linkedMapOf<StructuralKey, StructuralCost>()
     private val calibration = linkedMapOf<String, CalibrationConstant>()
     private val laws = mutableListOf<GrowthLaw>()
@@ -110,6 +118,12 @@ class CostWriter(private val harnessSha: String) {
             "unknown structural metric '$metric'; expected ${STRUCTURAL_METRICS.joinToString()}"
         }
 
+        val seenCoordinates = mutableSetOf<Coordinate>()
+        val repeatedCoordinate = points.firstOrNull { !seenCoordinates.add(it) }
+        require(repeatedCoordinate == null) {
+            "repeated coordinate $repeatedCoordinate in growth-law fit"
+        }
+
         val samples = points.map { at ->
             val entry = structural[StructuralKey(subject, at)]
                 ?: throw IllegalArgumentException("no admitted entry at ($subject, $at)")
@@ -178,6 +192,10 @@ class CostWriter(private val harnessSha: String) {
             fittedOver = points.toList(),
             goodnessOfFit = goodnessOfFit,
         )
+        val lawKey = GrowthLawKey(dimension, subject, metric, form, points)
+        require(laws.none { existing -> existing.key() == lawKey }) {
+            "duplicate growth law $lawKey"
+        }
         laws += law
         return FitResult.Law(law)
     }
@@ -210,6 +228,9 @@ class CostWriter(private val harnessSha: String) {
             "REAL point ${outcome.at} must enter through calibrate, not structural admission"
         }
         val key = StructuralKey(outcome.subject, outcome.at)
+        require(exclusions.none { it.subject == outcome.subject && it.at == outcome.at }) {
+            "structural point $key conflicts with an existing exclusion"
+        }
         require(key !in structural) { "duplicate structural point $key" }
         val entry = StructuralCost(
             at = outcome.at,
@@ -226,10 +247,22 @@ class CostWriter(private val harnessSha: String) {
         kind: String,
         reason: String,
     ): Admission.Excluded {
+        val key = StructuralKey(outcome.subject, outcome.at)
+        require(key !in structural) {
+            "exclusion at $key conflicts with an existing structural point"
+        }
         val exclusion = ExcludedPoint(outcome.at, outcome.subject, kind, reason)
         exclusions += exclusion
         return Admission.Excluded(exclusion)
     }
+
+    private fun GrowthLaw.key(): GrowthLawKey = GrowthLawKey(
+        dimension = dimension,
+        subject = subject,
+        metric = metric,
+        form = form,
+        fittedOver = fittedOver,
+    )
 
     private fun deriveEnvelope(entries: List<StructuralCost>): Envelope = Envelope(
         numeric = linkedMapOf(
