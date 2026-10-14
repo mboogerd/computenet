@@ -3,6 +3,7 @@ package civictech.bench.macro.rebaseline
 import civictech.bench.cost.CostSubject
 import civictech.bench.cost.PointOutcome
 import civictech.bench.macro.PointBudget
+import civictech.bench.macro.mesh.MeshRefs
 import civictech.cell.ReBaselineNotice
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.SetDelta
@@ -160,5 +161,30 @@ class ReBaselineProbeTest {
 
         attempts shouldBe 2
         outcome.cause shouldContain "re-baseline reached 1 of 2 taps"
+    }
+
+    @Test
+    fun `determinism pair whose two Ok attempts disagree is NonDeterministic, never Ok`() {
+        val at = ReBaselineProbe.coordinate(ReBaselineProbe.REMOTE_TAPS, 10, 2, 2)
+        var attempts = 0
+
+        val measured = ReBaselineProbe.run(
+            at = at,
+            beforePoison = { rig ->
+                attempts++
+                if (attempts == 2) {
+                    // Extra cross-host work inside the measured window of the second attempt only.
+                    rig.mesh.peers[1].host.managementInlet.call.spawn(
+                        ReBaselineTapCell(MeshRefs.ref("rebaseline-extra", 1, at.hostCount)),
+                    )
+                }
+            },
+        )
+        val outcome = measured.outcome.shouldBeInstanceOf<PointOutcome.NonDeterministic>()
+
+        attempts shouldBe 2
+        outcome.subject shouldBe CostSubject.REBASELINE
+        (outcome.first == outcome.second) shouldBe false
+        measured.reassertedElements shouldBe null
     }
 }
