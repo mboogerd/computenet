@@ -625,9 +625,9 @@
         },
         {
             "name": "retainedBytesPerElement",
-            "value": 269.14599200000004,
+            "value": 269.158792,
             "unit": "bytes/element",
-            "dispersion": 0.01109037385239137,
+            "dispersion": 0.015137969131824842,
             "env": {
                 "jvmVendor": "Amazon.com Inc. (OpenJDK 64-Bit Server VM)",
                 "jvmVersion": "21.0.5",

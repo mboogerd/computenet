@@ -126,6 +126,26 @@ class CalibrationExportTest {
     }
 
     @Test
+    fun `recorded retained bytes are reused byte for byte with their measuring provenance`() {
+        val export = tempDir.resolve("recorded-cost-model.json")
+        syntheticModel(export)
+        val recorded = constant(Calibration.RETAINED_BYTES_PER_ELEMENT, 269.158792)
+        CalibrationExport.merge(export, listOf(recorded))
+
+        CalibrationExport.recordedRetainedBytesPerElement(export) shouldBe recorded
+
+        CalibrationExport.merge(
+            export,
+            listOf(constant(Calibration.LOCAL_DISPATCH_NANOS, 11.0)),
+        )
+        val failure = shouldThrow<IllegalArgumentException> {
+            CalibrationExport.recordedRetainedBytesPerElement(export)
+        }
+        failure.message shouldContain export.toString()
+        failure.message shouldContain Calibration.RETAINED_BYTES_PER_ELEMENT
+    }
+
+    @Test
     fun `SIM result cannot become a calibration constant from this package`() {
         shouldThrow<IllegalArgumentException> {
             CalibrationConstant.from(
