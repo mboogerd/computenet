@@ -46,10 +46,13 @@ class BenchMesh private constructor(
     val peers: List<BenchPeer>,
     val loopbacks: Map<String, Peering.Loopback>,
     val crossHostEdges: CrossHostEdges,
-    deadLetters: List<DeadLetter>,
+    private val capturedDeadLetters: List<DeadLetter>,
 ) {
-    /** A snapshot of dead letters emitted by this mesh's data and bridge hosts. */
-    val deadLetters: List<DeadLetter> = deadLetters.toList()
+    /**
+     * Dead letters emitted so far by this mesh's data and bridge hosts, in
+     * arrival order. Each read is a fresh snapshot of the live capture.
+     */
+    val deadLetters: List<DeadLetter> get() = capturedDeadLetters.toList()
 
     /** Drain every peer scheduler through the mesh's deterministic controller. */
     fun runToIdle(budget: Int = SimulationController.DEFAULT_BUDGET): Int =
@@ -112,7 +115,7 @@ class BenchMesh private constructor(
                         } else {
                             CrossHostEdges.Present(loopbacks.keys.toSet())
                         },
-                        deadLetters = deadLetters,
+                        capturedDeadLetters = deadLetters,
                     ),
                 )
             } catch (error: OutOfMemoryError) {

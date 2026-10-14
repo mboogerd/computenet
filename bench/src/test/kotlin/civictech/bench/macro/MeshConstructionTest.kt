@@ -5,6 +5,8 @@ import civictech.bench.macro.mesh.CrossHostEdges
 import civictech.bench.macro.mesh.MeshBuild
 import civictech.bench.macro.mesh.MeshRefs
 import civictech.bench.macro.mesh.MeshTopology
+import civictech.cell.CellRef
+import civictech.cell.proxy.Invocation
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.testkit.dst.StableRefs
@@ -12,6 +14,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
+import java.util.UUID
 
 class MeshConstructionTest {
 
@@ -66,6 +69,24 @@ class MeshConstructionTest {
             }
             mesh.deadLetters.shouldBeEmpty()
         }
+    }
+
+    /**
+     * `deadLetters` must read the live capture, not a copy frozen at build
+     * time: without this, the emptiness assertion above cannot fail.
+     */
+    @Test
+    fun deadLettersFromDataAndBridgeHostsAreObservableAfterBuild() {
+        val mesh = built(2, MeshTopology.FULL_MESH)
+        mesh.deadLetters.shouldBeEmpty()
+
+        val method = Runnable::class.java.methods.single { it.name == "run" }
+        val peer = mesh.peers[1]
+        peer.host.routerInlet.call.route(CellRef(UUID.randomUUID()), "inlet", Invocation.of(method, emptyArray()))
+        peer.bridgeHost.routerInlet.call.route(CellRef(UUID.randomUUID()), "inlet", Invocation.of(method, emptyArray()))
+        mesh.runToIdle()
+
+        mesh.deadLetters.size shouldBe 2
     }
 
     @Test
