@@ -18,12 +18,15 @@ import java.util.Random
 /** Factories used by generated shapes; implementations intentionally contain no live runtime objects. */
 sealed interface ShapeFactory : CellFactory
 
-/** Constructs a source set. [elementSeed] is reserved for the runner's input stream. */
+/**
+ * Constructs a source set (in-degree 0). [elementSeed] currently holds the node's
+ * index in spawn order, not a value derived from [ShapeSpec.seed]; nothing reads it yet.
+ */
 data class SourceFactory(val elementSeed: Long) : ShapeFactory {
     override fun create(ref: CellRef): Cell = SetCell<Long>(ref)
 }
 
-/** Constructs a unary filter from the stable [PREDICATES] table. */
+/** Constructs a unary filter (in-degree 1) from the stable [PREDICATES] table. */
 data class FilterFactory(val predicateIndex: Int) : ShapeFactory {
     init {
         require(predicateIndex in PREDICATES.indices) { "predicateIndex must identify a PREDICATES entry" }
@@ -32,12 +35,18 @@ data class FilterFactory(val predicateIndex: Int) : ShapeFactory {
     override fun create(ref: CellRef): Cell = FilterCell(ref, PREDICATES[predicateIndex])
 }
 
-/** Constructs a many-input union set. [elementSeed] is reserved for the runner's input stream. */
+/**
+ * Constructs a many-input union set (in-degree >= 2). [elementSeed] currently holds
+ * the node's index in spawn order, not a value derived from [ShapeSpec.seed].
+ */
 data class UnionFactory(val elementSeed: Long) : ShapeFactory {
     override fun create(ref: CellRef): Cell = UnionSetCell<Long>(ref)
 }
 
-/** Constructs the binary intersection used by the diamond sink. */
+/**
+ * Constructs the binary intersection used by the diamond sink. [elementSeed] currently
+ * holds the node's index in spawn order, not a value derived from [ShapeSpec.seed].
+ */
 data class IntersectFactory(val elementSeed: Long) : ShapeFactory {
     override fun create(ref: CellRef): Cell = IntersectSetCell<Long>(ref)
 }
