@@ -66,6 +66,13 @@ class GraRecordTest {
         assertFalse(GraRecord.Failed::class.java.declaredFields.any { it.name == "load" })
         assertFalse(GraRecord.Failed::class.java.declaredFields.any { it.name == "compute" })
         assertFalse(GraRecord.MeasurementOnly::class.java.declaredFields.any { it.name == "validation" })
+        assertEquals(
+            setOf("header", "load", "compute"),
+            GraRecord.MeasurementOnly::class.java.declaredFields.map { it.name }.toSet(),
+        )
+        assertFalse(
+            GraRecord.Failed::class.java.declaredFields.any { Figure::class.java.isAssignableFrom(it.type) },
+        )
     }
 
     @Test

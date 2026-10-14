@@ -31,6 +31,36 @@ class ValidatorTest {
     }
 
     @Test
+    fun `epsilon passes a value lying exactly on the boundary`() {
+        // 9.131 / 9.1319131 sit exactly on |r - s| == EPSILON * |r| in IEEE-754 doubles
+        // (found by searching r = k/1000 for an exact case), so this fixture separates
+        // the specification's `<=` from a strict `<`; the case above lands just inside it.
+        val reference = 9.131
+        val onBoundary = 9.1319131
+        assertEquals(EPSILON * reference, kotlin.math.abs(reference - onBoundary))
+
+        val result = validate(Algorithm.LCC, mapOf(1L to "9.131"), mapOf(1L to onBoundary))
+
+        assertInstanceOf(Validation.Passed::class.java, result)
+    }
+
+    @Test
+    fun `no public validator entry point accepts an epsilon`() {
+        val validatorFile = Class.forName("civictech.bench.graphalytics.ValidatorKt")
+        val floatingParameters = validatorFile.declaredMethods
+            .filter { java.lang.reflect.Modifier.isPublic(it.modifiers) }
+            .filter { method ->
+                method.parameterTypes.any {
+                    it == java.lang.Double.TYPE || it == java.lang.Double::class.java ||
+                        it == java.lang.Float.TYPE || it == java.lang.Float::class.java
+                }
+            }
+            .map { it.name }
+
+        assertEquals(emptyList<String>(), floatingParameters)
+    }
+
+    @Test
     fun `zero reference requires exact zero and infinity matches only infinity`() {
         assertTrue(
             validate(Algorithm.PR, mapOf(1L to "0.0"), mapOf(1L to 0.0)) is Validation.Passed,
