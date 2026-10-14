@@ -43,6 +43,56 @@ class PointAccountingTest {
     }
 
     @Test
+    fun nonReplicatedCrossHostSimPointCountsRoutedFramesAndBytes() {
+        // Seed 0 places the CHAIN across both peers and routes its inputs over
+        // the first cross-host edge (observed: 26 frames for this coordinate).
+        val at = coordinate(shapeSeed = 0)
+
+        val outcome = SweepRunner().run(at).shouldBeInstanceOf<PointOutcome.Ok>()
+
+        outcome.at shouldBe at
+        outcome.counts.crossHostFrames shouldBeGreaterThan 0L
+        outcome.counts.wireBytes shouldBeGreaterThan 0L
+    }
+
+    @Test
+    fun setupActionThrowIsFailedWithItsCauseInsteadOfEscaping() {
+        val at = coordinate()
+        val outcome = SweepRunner(
+            setupHook = SetupHook { mesh ->
+                mesh.world.controller.scheduler().submit(0) {
+                    throw IllegalStateException("bench: setup action throw")
+                }
+            },
+        ).run(at).shouldBeInstanceOf<PointOutcome.Failed>()
+
+        outcome.at shouldBe at
+        outcome.subject shouldBe CostSubject.PROPAGATION
+        outcome.cause shouldContain IllegalStateException::class.java.name
+        outcome.cause shouldContain "bench: setup action throw"
+        outcome.deadLetters shouldBe emptyList()
+    }
+
+    @Test
+    fun setupBudgetExhaustionRemainsNonConvergent() {
+        val at = coordinate()
+        val outcome = SweepRunner(
+            setupHook = SetupHook { mesh ->
+                val scheduler = mesh.world.controller.scheduler()
+                lateinit var action: suspend () -> Unit
+                action = { scheduler.submit(0, action) }
+                scheduler.submit(0, action)
+            },
+        ).run(at)
+
+        outcome shouldBe PointOutcome.NonConvergent(
+            at,
+            CostSubject.PROPAGATION,
+            "setup:simSteps=${civictech.cell.host.SimulationController.DEFAULT_BUDGET}",
+        )
+    }
+
+    @Test
     fun budgetExhaustionIsNonConvergentAndDoesNotThrow() {
         val at = coordinate()
 

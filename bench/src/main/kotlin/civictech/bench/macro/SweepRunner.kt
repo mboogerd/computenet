@@ -46,6 +46,11 @@ fun interface PointHook {
     fun afterSetup(ctx: PointContext, attempt: Int)
 }
 
+/** Hook used to exercise actions that are drained while the graph is being applied. */
+fun interface SetupHook {
+    fun beforeApply(mesh: BenchMesh)
+}
+
 /** Runtime context exposed to a [PointHook]. */
 sealed interface PointContext {
     class Sim(val mesh: BenchMesh) : PointContext
@@ -71,6 +76,7 @@ class SweepRunner(
     val determinismCheck: Boolean = true,
     val real: RealOptions? = null,
     val hook: PointHook = PointHook { _, _ -> },
+    val setupHook: SetupHook = SetupHook { },
 ) {
     fun run(at: Coordinate): PointOutcome {
         if (at.drive == Drive.REAL) {
@@ -255,11 +261,21 @@ class SweepRunner(
     }
 
     private fun failed(at: Coordinate, error: Throwable, world: RealWorld): PointOutcome.Failed =
+        failed(at, error, world.deadLetters.map { it.toString() })
+
+    private fun failed(at: Coordinate, error: Throwable, mesh: BenchMesh): PointOutcome.Failed =
+        failed(at, error, mesh.deadLetters.map { it.toString() })
+
+    private fun failed(
+        at: Coordinate,
+        error: Throwable,
+        deadLetters: List<String>,
+    ): PointOutcome.Failed =
         PointOutcome.Failed(
             at = at,
             subject = CostSubject.PROPAGATION,
             cause = describe(error),
-            deadLetters = world.deadLetters.map { it.toString() },
+            deadLetters = deadLetters,
         )
 
     private fun nonConvergent(at: Coordinate, setup: Boolean): PointOutcome.NonConvergent =
@@ -300,6 +316,7 @@ class SweepRunner(
         val mesh = (build as MeshBuild.Built).mesh
 
         try {
+            setupHook.beforeApply(mesh)
             mesh.apply(generated.spec)
             mesh.runToIdle()
         } catch (error: IllegalArgumentException) {
@@ -311,13 +328,19 @@ class SweepRunner(
                     observedLimit = "topology=$topology",
                 )
             }
-            throw error
-        } catch (_: IllegalStateException) {
-            return PointOutcome.NonConvergent(
-                at = at,
-                subject = CostSubject.PROPAGATION,
-                budget = "setup:simSteps=${SimulationController.DEFAULT_BUDGET}",
-            )
+            return failed(at, error, mesh)
+        } catch (error: Throwable) {
+            return if (error is IllegalStateException &&
+                error.message == setupBudgetExhaustionMessage()
+            ) {
+                PointOutcome.NonConvergent(
+                    at = at,
+                    subject = CostSubject.PROPAGATION,
+                    budget = "setup:simSteps=${SimulationController.DEFAULT_BUDGET}",
+                )
+            } else {
+                failed(at, error, mesh)
+            }
         }
 
         val sourcePeers = sourcePeers(generated)
@@ -417,6 +440,9 @@ class SweepRunner(
         data class Completed(val wallMillis: Double, val journalRecords: Long) : RealTrial
         data class Excluded(val outcome: PointOutcome) : RealTrial
     }
+
+    private fun setupBudgetExhaustionMessage(): String =
+        "simulation did not quiesce within ${SimulationController.DEFAULT_BUDGET} steps — likely livelock"
 }
 
 internal fun unschedulableOutcome(
