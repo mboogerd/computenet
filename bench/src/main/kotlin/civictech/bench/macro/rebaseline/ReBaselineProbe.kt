@@ -204,7 +204,14 @@ data class ReBaselineOutcome(
     val reassertedElements: Long?,
     val reassertedTags: Long?,
     val notices: Int?,
-)
+) {
+    init {
+        val extras = listOf(reassertedElements, reassertedTags, notices)
+        require(
+            if (outcome is PointOutcome.Ok) extras.all { it != null } else extras.all { it == null },
+        ) { "re-baseline work counts must be present exactly for Ok outcomes" }
+    }
+}
 
 /**
  * Drives the supervision-RESTART re-baseline path over a deterministic peer mesh

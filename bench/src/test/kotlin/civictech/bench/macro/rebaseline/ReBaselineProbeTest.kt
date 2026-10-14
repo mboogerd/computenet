@@ -14,6 +14,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
 
+/** Fast semantic pins for the G-43 RESTART re-baseline probe ([BEN2-36], [BEN2-41]). */
 class ReBaselineProbeTest {
 
     @Test
