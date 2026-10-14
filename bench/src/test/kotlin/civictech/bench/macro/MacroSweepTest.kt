@@ -303,7 +303,8 @@ class MacroSweepTest {
                 "This structural export has an empty calibration list. `CostQuery.coLocatedEdge` " +
                     "and `CostQuery.crossHostEdge` answer `NotMeasured` at every point until a " +
                     "per-host dispatch counter exists; `CostQuery.cellResidency` becomes answerable " +
-                    "when task 4 merges `retainedBytesPerElement`.",
+                    "afterwards, when `MacroCalibrationRenderTest` merges the calibration constants " +
+                        "through `CalibrationExport.merge`.",
             )
             appendLine()
             appendLine("### Candidate G-item")
