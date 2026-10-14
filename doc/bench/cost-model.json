@@ -1,0 +1,524 @@
+{
+    "schemaVersion": 1,
+    "harnessSha": "9f59de42",
+    "envelope": {
+        "numeric": {
+            "cardinality": {
+                "min": 1000.0,
+                "max": 1000000.0
+            },
+            "batchSize": {
+                "min": 1.0,
+                "max": 100.0
+            },
+            "hostCount": {
+                "min": 1.0,
+                "max": 8.0
+            },
+            "fanOut": {
+                "min": 1.0,
+                "max": 16.0
+            }
+        },
+        "categorical": {
+            "shape": [
+                "DIAMOND",
+                "CHAIN",
+                "FAN_OUT_TREE",
+                "FAN_IN_LATTICE",
+                "RANDOM_DAG"
+            ],
+            "replication": [
+                "false"
+            ],
+            "durability": [
+                "false",
+                "true"
+            ]
+        }
+    },
+    "structural": [
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 26583,
+                "wireBytes": 13605747,
+                "journalRecords": 0,
+                "simSteps": 63166
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "CHAIN",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 3250,
+                "wireBytes": 1647000,
+                "journalRecords": 0,
+                "simSteps": 16500
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 30000,
+                "wireBytes": 15410034,
+                "journalRecords": 0,
+                "simSteps": 70000
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "FAN_IN_LATTICE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 7500,
+                "wireBytes": 3735025,
+                "journalRecords": 0,
+                "simSteps": 25000
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "RANDOM_DAG",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 55000,
+                "wireBytes": 27781717,
+                "journalRecords": 0,
+                "simSteps": 120000
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 2583,
+                "wireBytes": 1314743,
+                "journalRecords": 0,
+                "simSteps": 6166
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 100000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 266583,
+                "wireBytes": 137235751,
+                "journalRecords": 0,
+                "simSteps": 633166
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 2666583,
+                "wireBytes": 1380735755,
+                "journalRecords": 0,
+                "simSteps": 6333166
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 26583,
+                "wireBytes": 13605747,
+                "journalRecords": 0,
+                "simSteps": 63166
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 100,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 26583,
+                "wireBytes": 13605747,
+                "journalRecords": 0,
+                "simSteps": 63166
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 10000
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 2,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 21458,
+                "wireBytes": 10789569,
+                "journalRecords": 0,
+                "simSteps": 52916
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 5,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 28125,
+                "wireBytes": 14592723,
+                "journalRecords": 0,
+                "simSteps": 66250
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 44791,
+                "wireBytes": 22978506,
+                "journalRecords": 0,
+                "simSteps": 99582
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 10000
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 80000,
+                "wireBytes": 40493424,
+                "journalRecords": 0,
+                "simSteps": 170000
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 26583,
+                "wireBytes": 13605747,
+                "journalRecords": 36583,
+                "simSteps": 63166
+            },
+            "harnessSha": "9f59de42"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000000,
+                "batchSize": 10,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "counts": {
+                "messages": null,
+                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "crossHostFrames": 4499791,
+                "wireBytes": 2335558514,
+                "journalRecords": 0,
+                "simSteps": 9999582
+            },
+            "harnessSha": "9f59de42"
+        }
+    ],
+    "calibration": [],
+    "laws": [],
+    "exclusions": [
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "kind": "NonConvergent",
+            "reason": "declared budget exhausted: simSteps=340000"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "kind": "NonConvergent",
+            "reason": "declared budget exhausted: simSteps=340000"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": true,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "kind": "NonConvergent",
+            "reason": "declared budget exhausted: simSteps=340000"
+        },
+        {
+            "at": {
+                "shape": "FAN_OUT_TREE",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "PROPAGATION",
+            "kind": "NonConvergent",
+            "reason": "declared budget exhausted: simSteps=340000"
+        }
+    ]
+}
