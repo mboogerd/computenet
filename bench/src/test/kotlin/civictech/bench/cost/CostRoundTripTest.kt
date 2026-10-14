@@ -58,6 +58,121 @@ class CostRoundTripTest {
     }
 
     @Test
+    fun `an envelope missing any dimension is rejected naming that dimension`() {
+        val model = populatedModel()
+
+        allDimensions.forEach { dimension ->
+            val envelope = if (dimension in model.envelope.numeric) {
+                model.envelope.copy(numeric = model.envelope.numeric - dimension)
+            } else {
+                model.envelope.copy(categorical = model.envelope.categorical - dimension)
+            }
+
+            parseFailure(model.copy(envelope = envelope)).message shouldContain dimension
+        }
+    }
+
+    @Test
+    fun `an envelope differing from admitted structural entries is rejected naming the dimension`() {
+        val model = populatedModel()
+
+        allDimensions.forEach { dimension ->
+            val envelope = if (dimension in model.envelope.numeric) {
+                val range = model.envelope.numeric.getValue(dimension)
+                model.envelope.copy(
+                    numeric = model.envelope.numeric +
+                        (dimension to range.copy(max = range.max + 1.0)),
+                )
+            } else {
+                val values = model.envelope.categorical.getValue(dimension)
+                model.envelope.copy(
+                    categorical = model.envelope.categorical +
+                        (dimension to (values + "not-admitted")),
+                )
+            }
+
+            parseFailure(model.copy(envelope = envelope)).message shouldContain dimension
+        }
+    }
+
+    @Test
+    fun `duplicate structural keys are rejected naming the key`() {
+        val model = populatedModel()
+        val duplicate = model.structural.first()
+
+        val exception = parseFailure(model.copy(structural = model.structural + duplicate))
+
+        exception.message shouldContain duplicate.subject.toString()
+        exception.message shouldContain duplicate.at.toString()
+    }
+
+    @Test
+    fun `duplicate calibration names are rejected naming the calibration`() {
+        val model = populatedModel()
+        val duplicate = model.calibration.single()
+
+        parseFailure(model.copy(calibration = model.calibration + duplicate)).message shouldContain
+            duplicate.name
+    }
+
+    @Test
+    fun `duplicate exclusion keys are rejected naming the key`() {
+        val model = populatedModel()
+        val duplicate = model.exclusions.single()
+
+        val exception = parseFailure(model.copy(exclusions = model.exclusions + duplicate))
+
+        exception.message shouldContain duplicate.subject.toString()
+        exception.message shouldContain duplicate.at.toString()
+    }
+
+    @Test
+    fun `an exclusion sharing an admitted structural key is rejected naming the key`() {
+        val model = populatedModel()
+        val admitted = model.structural.first()
+        val conflict = ExcludedPoint(
+            at = admitted.at,
+            subject = admitted.subject,
+            kind = "Failed",
+            reason = "synthetic conflict",
+        )
+
+        val exception = parseFailure(model.copy(exclusions = model.exclusions + conflict))
+
+        exception.message shouldContain admitted.subject.toString()
+        exception.message shouldContain admitted.at.toString()
+    }
+
+    @Test
+    fun `a structural entry measured under REAL drive is rejected naming its key`() {
+        val model = populatedModel()
+        val structural = model.structural.first()
+        val real = structural.copy(at = structural.at.copy(drive = Drive.REAL))
+
+        val exception = parseFailure(
+            model.copy(structural = listOf(real) + model.structural.drop(1)),
+        )
+
+        exception.message shouldContain "SIM"
+        exception.message shouldContain real.subject.toString()
+        exception.message shouldContain real.at.toString()
+    }
+
+    @Test
+    fun `growth laws duplicated with fitted points in another order are rejected naming the key`() {
+        val model = populatedModel()
+        val points = model.structural.map { it.at }
+        val law = model.laws.single().copy(fittedOver = points)
+        val permutedDuplicate = law.copy(fittedOver = points.reversed())
+
+        val exception = parseFailure(model.copy(laws = listOf(law, permutedDuplicate)))
+
+        exception.message shouldContain law.dimension
+        exception.message shouldContain law.subject.toString()
+        exception.message shouldContain law.metric
+    }
+
+    @Test
     fun `calibration constants require a real result`() {
         shouldThrow<IllegalArgumentException> {
             CalibrationConstant.from(
@@ -135,15 +250,15 @@ class CostRoundTripTest {
     private fun populatedModel(): CostModel {
         val envelope = Envelope(
             numeric = mapOf(
-                Dimensions.CARDINALITY to Envelope.Range(1.0, 1_000.0),
-                Dimensions.BATCH_SIZE to Envelope.Range(1.0, 32.0),
-                Dimensions.HOST_COUNT to Envelope.Range(1.0, 8.0),
-                Dimensions.FAN_OUT to Envelope.Range(1.0, 16.0),
+                Dimensions.CARDINALITY to Envelope.Range(100.0, 1_000.0),
+                Dimensions.BATCH_SIZE to Envelope.Range(4.0, 4.0),
+                Dimensions.HOST_COUNT to Envelope.Range(1.0, 1.0),
+                Dimensions.FAN_OUT to Envelope.Range(2.0, 2.0),
             ),
             categorical = mapOf(
-                Dimensions.SHAPE to setOf("chain", "diamond"),
-                Dimensions.REPLICATION to setOf("false", "true"),
-                Dimensions.DURABILITY to setOf("false", "true"),
+                Dimensions.SHAPE to setOf("chain"),
+                Dimensions.REPLICATION to setOf("false"),
+                Dimensions.DURABILITY to setOf("true"),
             ),
         )
         val firstCounts = StructuralCounts(10, null, 2, 80, 1, 20)
@@ -194,6 +309,19 @@ class CostRoundTripTest {
             ),
         )
     }
+
+    private fun parseFailure(model: CostModel): IllegalArgumentException =
+        shouldThrow { CostSchema.parse(CostSchema.encode(model)) }
+
+    private val allDimensions = listOf(
+        Dimensions.CARDINALITY,
+        Dimensions.BATCH_SIZE,
+        Dimensions.HOST_COUNT,
+        Dimensions.FAN_OUT,
+        Dimensions.SHAPE,
+        Dimensions.REPLICATION,
+        Dimensions.DURABILITY,
+    )
 
     private fun coordinate(drive: Drive): Coordinate = Coordinate(
         shape = "chain",
