@@ -10,6 +10,8 @@ import civictech.bench.cost.Calibration
 import civictech.bench.cost.CalibrationConstant
 import civictech.bench.cost.CostModel
 import civictech.bench.cost.CostSchema
+import civictech.bench.micro.Footprint
+import civictech.bench.micro.FootprintReport
 import civictech.bench.micro.ThroughputReport
 import java.io.File
 import java.nio.file.Files
@@ -91,6 +93,27 @@ object CalibrationExport {
                 ),
             )
         }
+    }
+
+    /** Runs the in-process retained-size probe that supplies the fifth constant. */
+    fun retainedBytesPerElement(
+        harnessCommitSha: String,
+        elements: Int = 100_000,
+    ): CalibrationConstant {
+        val stat = Footprint.measure(Footprint.byName("SetCell"), elements).bytesPerElement
+        return CalibrationConstant.from(
+            Calibration.RETAINED_BYTES_PER_ELEMENT,
+            BenchResult(
+                value = stat.mean,
+                unit = "bytes/element",
+                dispersion = stat.dispersion,
+                drive = Drive.REAL,
+                env = FootprintReport.environment(
+                    replicates = stat.samples,
+                    harnessCommitSha = harnessCommitSha,
+                ),
+            ),
+        )
     }
 
     /** Reuses the retained-size probe result already recorded in a prior export. */
