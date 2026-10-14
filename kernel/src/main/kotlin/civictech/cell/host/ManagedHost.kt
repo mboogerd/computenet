@@ -2117,6 +2117,15 @@ open class ManagedHost(
 
                 HostedPortInvocation.Type.PORT_API -> {
                     if (port is Use<*>) {
+                        // computenet-byl5s: a live frame can overtake replay when
+                        // recovery work is parked/reordered. Before its handler can
+                        // originate from a rewound durable outlet, move that outlet
+                        // above any processed frontier restored for the same epoch.
+                        // Replay-derived frames retain their provenance and skip this,
+                        // preserving exact historical counters on the ordinary path.
+                        if (hostedInvocation.replayOf == null) {
+                            hostDurability.floorLiveOutletEpochs(cellRef, cell)
+                        }
                         // Effectful processed-frontier (G-59, fixes C-9): an
                         // effect-boundary inlet's replay (journal replay or a
                         // post-recovery live re-delivery) at/behind the last

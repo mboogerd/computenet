@@ -475,6 +475,34 @@ internal class HostDurability(
     private val processedFrontier = mutableMapOf<Pair<CellRef, String>, MutableMap<UUID, Long>>()
 
     /**
+     * One-shot floors for a durable outlet whose recovered counter has not yet
+     * caught up to a processed frontier restored from the same journal.
+     *
+     * Recovery deliberately rewinds an outlet to its checkpoint high-water so
+     * replay can re-derive the historical positions. Usually replay runs first
+     * and naturally catches the counter up. If a live invocation overtakes that
+     * replay, however, letting it emit from the rewound counter would reuse a
+     * position the journal says an `Effectful` sink already acted on. The sink
+     * would then suppress genuinely live work under `[24-DUR-05]`.
+     *
+     * [prepareLiveOutletFloors] records only the unresolved gap after the whole
+     * journal has restored. [floorLiveOutletEpochs] consumes it only for a live
+     * delivery. Replay therefore keeps its exact historical counters on the
+     * ordinary path, while an overtaking live delivery moves above the durable
+     * frontier before it can originate a new wave. Keying by outlet, and
+     * carrying the expected source id, makes an intervening fresh-epoch rotation
+     * invalidate the floor instead of applying one epoch's counter to another.
+     *
+     * Limit: this protects only the live frame. Replay frames that drain after
+     * an overtaking live frame emit above the frontier too, so the `Effectful`
+     * sink acts on them a second time (double-fire, which `[KFX-11]` ranks
+     * below loss). Observed in the computenet-byl5s rig, SimulationController
+     * seeds 1-3: partial drain 2-3 re-fires 5, drain 4-8 re-fires 5 and 6.
+     */
+    private val pendingLiveOutletFloors =
+        ConcurrentHashMap<Pair<CellRef, String>, OutletWaveState>()
+
+    /**
      * Discharged baselines (`[24-DUR-08]`, spec 24 §Effectful): per
      * [civictech.cell.evolve.Effectful] inlet `(cellRef, portName)`, the exact positions of
      * baseline-marked frames the sink has already acted on. Durable via
@@ -633,6 +661,7 @@ internal class HostDurability(
                         throw RecoveryIncomplete(checkpointIndex, records.size, e)
                     }
                 }
+                prepareLiveOutletFloors(journal)
             } finally {
                 // Stage whatever decoded cleanly, whether or not the walk above completed.
                 // computenet-q37rn: by the time this runs, `applier` (ApplyContext) knows the
@@ -664,6 +693,57 @@ internal class HostDurability(
             replayedPositions[journal] = positions
         }
         return StagedRecovery(frames, positions.suppressedDuplicates)
+    }
+
+    /**
+     * After one complete journal restore, remember every journaled outlet whose
+     * current epoch is still below a processed frontier that this same journal
+     * restored. Nothing is advanced here: replay must first have the chance to
+     * reconstruct its historical positions unchanged.
+     */
+    private fun prepareLiveOutletFloors(journal: Journal) {
+        pendingLiveOutletFloors.keys.removeIf { (cellRef, _) ->
+            cellJournalSelector(cellRef) === journal
+        }
+
+        val frontierBySource = mutableMapOf<UUID, Long>()
+        processedFrontier.forEach { (target, sources) ->
+            if (journalSelector(target.first, target.second) !== journal) return@forEach
+            sources.forEach { (sourceId, highWater) ->
+                frontierBySource.merge(sourceId, highWater, ::maxOf)
+            }
+        }
+
+        cellsView().forEach { (cellRef, cell) ->
+            if (cellJournalSelector(cellRef) !== journal) return@forEach
+            forEachOutlet(cell) { portName, outlet ->
+                val state = outlet.waveState()
+                val durableFloor = frontierBySource[state.sourceId] ?: return@forEachOutlet
+                if (state.highWater < durableFloor) {
+                    pendingLiveOutletFloors[cellRef to portName] =
+                        OutletWaveState(state.sourceId, durableFloor)
+                }
+            }
+        }
+    }
+
+    /**
+     * Before a live invocation can originate from [cell], raise each still-
+     * rewound durable outlet above the frontier recovered for its current epoch.
+     * A replayed invocation never calls this method, so ordinary in-order replay
+     * remains byte-for-byte and position-for-position unchanged.
+     */
+    fun floorLiveOutletEpochs(cellRef: CellRef, cell: Cell) {
+        if (pendingLiveOutletFloors.isEmpty()) return
+        forEachOutlet(cell) { portName, outlet ->
+            val key = cellRef to portName
+            val floor = pendingLiveOutletFloors[key] ?: return@forEachOutlet
+            val current = outlet.waveState()
+            if (current.sourceId == floor.sourceId && current.highWater < floor.highWater) {
+                outlet.adoptWaveState(floor)
+            }
+            pendingLiveOutletFloors.remove(key, floor)
+        }
     }
 
     /**

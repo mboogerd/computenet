@@ -3,6 +3,7 @@ package civictech.cell.durability
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.evolve.Effectful
 import civictech.cell.host.HostedCellProxy
@@ -13,6 +14,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import io.kotest.assertions.withClue
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -238,5 +240,77 @@ class OutletHighWaterRecoveryTest {
         controller.runToIdle()
         effects.count { it == 4 } shouldBe 1
         effects shouldBe listOf(1, 2, 3, 4)
+    }
+
+    /**
+     * Regression for computenet-byl5s: recovery rewinds a durable outlet to the
+     * beginning of its replayed epoch, but a supervision suspend can move the
+     * replay frames behind a live frame accepted during that recovery. The live
+     * frame must not mint a position already covered by the sink's restored
+     * processed frontier, whatever order the replay frames later drain in.
+     */
+    @Test
+    fun `a live frame overtaking suspended recovery replay always emits above the durable frontier`() {
+        val failures = mutableListOf<String>()
+
+        fun traceEmissions(world: World, trace: MutableList<Pair<Int, MessageContext>>) {
+            world.relay.outlet.tap(
+                Use.fixed(
+                    object : Consumer<Int> {
+                        override fun provide(input: Int) {
+                            trace += input to checkNotNull(CurrentContext.get())
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+        }
+
+        for (seed in 1L..3L) {
+            for (partialDrain in 2..8) {
+                val controller = SimulationController(seed = seed)
+                val journal = InMemoryJournal()
+                val effects = mutableListOf<Int>()
+                val relayRef = CellRef(UUID.randomUUID())
+                val notifierRef = CellRef(UUID.randomUUID())
+
+                val before = World(controller, journal, relayRef, notifierRef, effects)
+                val beforeTrace = mutableListOf<Pair<Int, MessageContext>>()
+                traceEmissions(before, beforeTrace)
+                controller.runToIdle()
+                before.feed(5)
+                controller.runToIdle()
+                before.feed(6)
+                controller.runToIdle()
+                effects shouldBe listOf(5, 6)
+                val durableFrontier = beforeTrace.single { it.first == 6 }.second.timestamp
+
+                val after = World(controller, journal, relayRef, notifierRef, effects)
+                val recoveryTrace = mutableListOf<Pair<Int, MessageContext>>()
+                traceEmissions(after, recoveryTrace)
+                controller.runToIdle()
+                after.host.recoverFrom(journal)
+                after.host.managementInlet.call.suspend(relayRef)
+                repeat(partialDrain) { controller.step() }
+                after.feed(8)
+                after.host.managementInlet.call.resume(relayRef)
+                controller.runToIdle()
+
+                val liveEffectCount = effects.count { it == 8 }
+                val livePosition = recoveryTrace.singleOrNull { it.first == 8 }?.second?.timestamp
+                if (liveEffectCount != 1 || livePosition == null ||
+                    livePosition.sourceId != durableFrontier.sourceId ||
+                    livePosition.counter <= durableFrontier.counter
+                ) {
+                    failures += "seed=$seed partialDrain=$partialDrain liveEffectCount=$liveEffectCount " +
+                        "durableFrontier=$durableFrontier livePosition=$livePosition " +
+                        "recoveryTrace=${recoveryTrace.map { it.first to it.second.timestamp }} effects=$effects"
+                }
+            }
+        }
+
+        withClue(failures.joinToString("\n")) {
+            failures shouldBe emptyList()
+        }
     }
 }
