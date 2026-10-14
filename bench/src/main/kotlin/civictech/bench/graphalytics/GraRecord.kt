@@ -134,6 +134,7 @@ data class RunHeader(
     val env: RunEnvironment,
     val iterations: Iterations,
     val retainedState: RetainedState,
+    val recovered: Boolean? = null,
 ) {
     init {
         require(specVersion == SPEC_VERSION) {

@@ -4,11 +4,14 @@ import civictech.bench.Drive
 import civictech.bench.RunEnvironment
 import civictech.bench.graphalytics.algorithms.GraphalyticsWireSerializers
 import civictech.bench.graphalytics.algorithms.Lcc
+import civictech.cell.CellRef
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.durability.BatchedFileJournal
 import civictech.cell.durability.DurabilityClass
+import civictech.cell.durability.FileJournal
 import civictech.cell.durability.Journal
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.graph
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.ManagedHost
@@ -16,9 +19,12 @@ import civictech.cell.host.SimulationController
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.wire.WireCodec
 import civictech.testkit.awaitDrained
+import java.nio.charset.StandardCharsets
+import java.nio.file.Path
 import java.util.Properties
+import java.util.UUID
 
-internal enum class RunPhase { LOAD, COMPUTE }
+internal enum class RunPhase { LOAD, RECOVER, COMPUTE }
 
 internal class GraRunHooks(
     val hostFactory: (HostScheduler, Journal?, Int) -> ManagedHost = { scheduler, journal, dispatchBatch ->
@@ -49,6 +55,35 @@ object GraRun {
         env = env,
     )
 
+    /**
+     * Rebuild the edge relation from the synchronous WAL at [journalDir], then
+     * run the ordinary compute and validation phase without re-ingesting edges.
+     *
+     * The completed pre-crash run must have used a [FileJournal] opened at
+     * [journalPath]. Recovery opens a fresh journal instance for that same file.
+     */
+    fun recoverAndCompute(
+        dataset: DatasetRef,
+        journalDir: Path,
+        drive: Drive,
+        seed: Long? = null,
+        env: RunEnvironment,
+    ): GraRecord {
+        val journal: Journal? = FileJournal(journalPath(dataset, journalDir).toFile())
+        return recoverLoaded(
+            dataset = dataset,
+            loaded = GraphLoader.load(dataset),
+            drive = drive,
+            seed = seed,
+            journal = journal,
+            env = env,
+        )
+    }
+
+    /** File used by both the completed run and its fresh-host recovery. */
+    internal fun journalPath(dataset: DatasetRef, journalDir: Path): Path =
+        journalDir.resolve("${dataset.name}-edges.journal")
+
     internal fun runLoaded(
         dataset: DatasetRef,
         loaded: LoadedGraph,
@@ -75,60 +110,144 @@ object GraRun {
         val rig = rig(drive, seed, journal, dispatchBatch, hooks)
 
         try {
-            lateinit var edges: SetCell<Edge>
-            lateinit var edgeRef: civictech.cell.CellRef
-
             val loadStarted = System.nanoTime()
-            graph(rig.host.managementInlet) {
-                val handle = spawn("graphalytics-edges") { ref -> SetCell<Edge>(ref) }
-                edges = handle.cell
-                edgeRef = handle.ref
-            }
-            val edgeApi = rig.host.lookup<SetApi<Edge>>(edgeRef)
-                ?: error("loaded edge relation $edgeRef was not hosted")
+            val edges = spawnEdges(rig, dataset)
+            val edgeApi = rig.host.lookup<SetApi<Edge>>(edgeRef(dataset))
+                ?: error("loaded edge relation ${edgeRef(dataset)} was not hosted")
             loaded.edges.forEach(edgeApi.inlet.call::add)
             val loadFigure = rig.completePhase(RunPhase.LOAD, loadStarted)
 
             verifyLoadFidelity(loaded, edges.membership().size)
-
-            val computeStarted = System.nanoTime()
-            val lcc = lccBuilder.attach(rig.host.managementInlet, edges)
-            val computeFigure = rig.completePhase(RunPhase.COMPUTE, computeStarted)
-            val actual = lcc.read(loaded.vertices)
-            val validation = validate(
-                algorithm = Algorithm.LCC,
-                expected = Datasets.referenceOutput(dataset, Algorithm.LCC),
-                actual = actual,
-            )
-            val header = RunHeader(
-                dataset = DatasetFacts(
-                    name = loaded.name,
-                    declaredVertices = loaded.declaredVertices,
-                    declaredEdges = loaded.declaredEdges,
-                    sourceCommit = sourceCommit,
-                ),
-                algorithm = Algorithm.LCC,
-                parameters = rawProperties,
+            return computeAndValidate(
+                dataset = dataset,
+                loaded = loaded,
+                edges = edges,
+                lccBuilder = lccBuilder,
+                rig = rig,
+                loadFigure = loadFigure,
+                rawProperties = rawProperties,
+                sourceCommit = sourceCommit,
                 drive = drive,
-                scheduler = rig.schedulerLabel,
-                loadMode = loadMode(journal, dispatchBatch),
+                journal = journal,
+                dispatchBatch = dispatchBatch,
                 env = env,
-                iterations = Iterations.NonIterative,
-                retainedState = lcc.retainedState(edges.membership().size.toLong()),
+                recovered = null,
             )
-
-            return when (validation) {
-                is Validation.Passed -> GraRecord.Validated(
-                    header = header,
-                    load = loadFigure,
-                    compute = computeFigure,
-                    validation = validation,
-                )
-
-                is Validation.Failed -> GraRecord.Failed(header, validation)
-            }
         } finally {
             rig.close()
+        }
+    }
+
+    private fun recoverLoaded(
+        dataset: DatasetRef,
+        loaded: LoadedGraph,
+        drive: Drive,
+        seed: Long?,
+        journal: Journal?,
+        env: RunEnvironment,
+    ): GraRecord {
+        val lccBuilder = Lcc.builder()
+        val rawProperties = rawProperties(dataset)
+        val sourceCommit = sourceCommit()
+        journal?.let { ensureWireSerializers() }
+        val rig = rig(drive, seed, journal, dispatchBatch = 1, hooks = GraRunHooks())
+
+        try {
+            val edges = spawnEdges(rig, dataset)
+            val recoveryStarted = System.nanoTime()
+            journal?.let(rig.host::recoverFrom)
+            val recoveryFigure = rig.completePhase(RunPhase.RECOVER, recoveryStarted)
+
+            verifyLoadFidelity(loaded, edges.membership().size)
+            return computeAndValidate(
+                dataset = dataset,
+                loaded = loaded,
+                edges = edges,
+                lccBuilder = lccBuilder,
+                rig = rig,
+                loadFigure = recoveryFigure,
+                rawProperties = rawProperties,
+                sourceCommit = sourceCommit,
+                drive = drive,
+                journal = journal,
+                dispatchBatch = 1,
+                env = env,
+                recovered = true,
+            )
+        } finally {
+            rig.close()
+        }
+    }
+
+    private fun spawnEdges(rig: RunRig, dataset: DatasetRef): SetCell<Edge> {
+        lateinit var edges: SetCell<Edge>
+        graph(rig.host.managementInlet) {
+            edges = spawn(
+                name = "graphalytics-edges",
+                identity = IdentityBinding.Exact(edgeRef(dataset)),
+            ) { ref -> SetCell<Edge>(ref) }.cell
+        }
+        return edges
+    }
+
+    private fun edgeRef(dataset: DatasetRef): CellRef = CellRef(
+        UUID.nameUUIDFromBytes(
+            "civictech.bench.graphalytics/${dataset.name}/edges"
+                .toByteArray(StandardCharsets.UTF_8),
+        ),
+    )
+
+    private fun computeAndValidate(
+        dataset: DatasetRef,
+        loaded: LoadedGraph,
+        edges: SetCell<Edge>,
+        lccBuilder: Lcc.Builder,
+        rig: RunRig,
+        loadFigure: Figure,
+        rawProperties: Map<String, String>,
+        sourceCommit: String,
+        drive: Drive,
+        journal: Journal?,
+        dispatchBatch: Int,
+        env: RunEnvironment,
+        recovered: Boolean?,
+    ): GraRecord {
+        val computeStarted = System.nanoTime()
+        val lcc = lccBuilder.attach(rig.host.managementInlet, edges)
+        val computeFigure = rig.completePhase(RunPhase.COMPUTE, computeStarted)
+        val actual = lcc.read(loaded.vertices)
+        val validation = validate(
+            algorithm = Algorithm.LCC,
+            expected = Datasets.referenceOutput(dataset, Algorithm.LCC),
+            actual = actual,
+        )
+        val header = RunHeader(
+            dataset = DatasetFacts(
+                name = loaded.name,
+                declaredVertices = loaded.declaredVertices,
+                declaredEdges = loaded.declaredEdges,
+                sourceCommit = sourceCommit,
+            ),
+            algorithm = Algorithm.LCC,
+            parameters = rawProperties,
+            drive = drive,
+            scheduler = rig.schedulerLabel,
+            loadMode = loadMode(journal, dispatchBatch),
+            env = env,
+            iterations = Iterations.NonIterative,
+            retainedState = lcc.retainedState(edges.membership().size.toLong()),
+            recovered = recovered,
+        )
+
+        return when (validation) {
+            is Validation.Passed -> GraRecord.Validated(
+                header = header,
+                load = loadFigure,
+                compute = computeFigure,
+                validation = validation,
+            )
+
+            is Validation.Failed -> GraRecord.Failed(header, validation)
         }
     }
 
