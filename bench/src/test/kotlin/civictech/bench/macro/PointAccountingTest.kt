@@ -46,12 +46,14 @@ class PointAccountingTest {
     fun nonReplicatedCrossHostSimPointCountsRoutedFramesAndBytes() {
         // Seed 0 places the CHAIN across both peers and routes its inputs over
         // the first cross-host edge (observed: 26 frames for this coordinate).
+        // Pinned exactly, not `> 0`: a routed frame dropped on the edge stops the
+        // downstream hops, which lowers the count (observed 20) but not to zero.
         val at = coordinate(shapeSeed = 0)
 
         val outcome = SweepRunner().run(at).shouldBeInstanceOf<PointOutcome.Ok>()
 
         outcome.at shouldBe at
-        outcome.counts.crossHostFrames shouldBeGreaterThan 0L
+        outcome.counts.crossHostFrames shouldBe 26L
         outcome.counts.wireBytes shouldBeGreaterThan 0L
     }
 
@@ -71,6 +73,21 @@ class PointAccountingTest {
         outcome.cause shouldContain IllegalStateException::class.java.name
         outcome.cause shouldContain "bench: setup action throw"
         outcome.deadLetters shouldBe emptyList()
+    }
+
+    @Test
+    fun setupActionThrowOfAnotherTypeIsFailedInsteadOfEscaping() {
+        val at = coordinate()
+        val outcome = SweepRunner(
+            setupHook = SetupHook { mesh ->
+                mesh.world.controller.scheduler().submit(0) {
+                    throw UnsupportedOperationException("bench: setup action throw")
+                }
+            },
+        ).run(at).shouldBeInstanceOf<PointOutcome.Failed>()
+
+        outcome.cause shouldContain UnsupportedOperationException::class.java.name
+        outcome.cause shouldContain "bench: setup action throw"
     }
 
     @Test
