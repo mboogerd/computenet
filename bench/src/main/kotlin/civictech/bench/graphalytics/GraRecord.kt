@@ -147,7 +147,7 @@ data class RunHeader(
  * Relative variance above this threshold cannot be reported as a representative mean.
  *
  * The 0.10 boundary intentionally tolerates ordinary run-to-run measurement noise,
- * while treating a spread of 10% or more as material enough that a single mean could
+ * while treating a spread of more than 10% as material enough that a single mean could
  * hide meaningfully different performance.
  */
 const val VARIANCE_THRESHOLD = 0.10
