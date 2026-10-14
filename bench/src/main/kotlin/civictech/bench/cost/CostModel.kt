@@ -71,7 +71,7 @@ data class Envelope internal constructor(
     data class Range(
         val min: Double,
         val max: Double,
-    )
+    ) : Measured
 }
 
 /** The supported growth-law form ([BEN2-43], zbhyf-D5). */
