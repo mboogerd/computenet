@@ -30,6 +30,7 @@ data class StructuralCost(
  * check.
  */
 @Serializable
+@ConsistentCopyVisibility
 data class CalibrationConstant internal constructor(
     val name: String,
     val value: Double,
@@ -62,6 +63,7 @@ data class CalibrationConstant internal constructor(
  * declaring a range by hand.
  */
 @Serializable
+@ConsistentCopyVisibility
 data class Envelope internal constructor(
     val numeric: Map<String, Range>,
     val categorical: Map<String, Set<String>>,
