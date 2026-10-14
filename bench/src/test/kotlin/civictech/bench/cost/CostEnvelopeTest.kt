@@ -111,6 +111,41 @@ class CostEnvelopeTest {
     }
 
     @Test
+    fun `structural and excluded outcomes cannot coexist at one key`() {
+        val at = coordinate(hostCount = 2)
+        val ok = ok(at, messages = 10)
+        val excluded = PointOutcome.NonConvergent(
+            at = at,
+            subject = CostSubject.PROPAGATION,
+            budget = "10_000 steps",
+        )
+
+        val structuralFirst = CostWriter("abc1234")
+        structuralFirst.admit(ok)
+        val exclusionConflict = shouldThrow<IllegalArgumentException> {
+            structuralFirst.admit(excluded)
+        }
+        exclusionConflict.message shouldContain "PROPAGATION"
+        exclusionConflict.message shouldContain at.toString()
+        structuralFirst.model().structural.map { it.at } shouldBe listOf(at)
+        structuralFirst.model().exclusions shouldBe emptyList()
+
+        val exclusionFirst = CostWriter("abc1234")
+        exclusionFirst.admit(excluded)
+        val structuralConflict = shouldThrow<IllegalArgumentException> {
+            exclusionFirst.admit(ok)
+        }
+        structuralConflict.message shouldContain "PROPAGATION"
+        structuralConflict.message shouldContain at.toString()
+
+        val admittedAt = coordinate(hostCount = 3)
+        exclusionFirst.admit(ok(admittedAt, messages = 11))
+        val model = exclusionFirst.model()
+        model.structural.map { it.at } shouldBe listOf(admittedAt)
+        model.exclusions.map { it.at } shouldBe listOf(at)
+    }
+
+    @Test
     fun `calibration names and the writer sha are unique non-blank identities`() {
         shouldThrow<IllegalArgumentException> { CostWriter("  ") }
 
@@ -218,6 +253,56 @@ class CostEnvelopeTest {
         ).shouldBeInstanceOf<FitResult.Unfitted>()
         undefined.goodnessOfFit shouldBe null
         constant.model().laws.size shouldBe 0
+    }
+
+    @Test
+    fun `repeated coordinates cannot satisfy the fit sample threshold`() {
+        val first = coordinate(fanOut = 1)
+        val second = coordinate(fanOut = 4)
+        val writer = CostWriter("abc1234")
+        writer.admit(ok(first, messages = 10))
+        writer.admit(ok(second, messages = 99))
+
+        val duplicate = shouldThrow<IllegalArgumentException> {
+            writer.fit(
+                Dimensions.FAN_OUT,
+                CostSubject.PROPAGATION,
+                "messages",
+                GrowthForm.LINEAR,
+                listOf(first, first, second, second),
+            )
+        }
+
+        duplicate.message shouldContain "repeated coordinate"
+        duplicate.message shouldContain first.toString()
+        writer.model().laws shouldBe emptyList()
+    }
+
+    @Test
+    fun `the same successful fit cannot append a duplicate law`() {
+        val points = listOf(1, 4, 16, 64).map { coordinate(fanOut = it) }
+        val writer = CostWriter("abc1234")
+        points.forEach { at -> writer.admit(ok(at, messages = 3L * at.fanOut + 7L)) }
+
+        writer.fit(
+            Dimensions.FAN_OUT,
+            CostSubject.PROPAGATION,
+            "messages",
+            GrowthForm.LINEAR,
+            points,
+        ).shouldBeInstanceOf<FitResult.Law>()
+        val duplicate = shouldThrow<IllegalArgumentException> {
+            writer.fit(
+                Dimensions.FAN_OUT,
+                CostSubject.PROPAGATION,
+                "messages",
+                GrowthForm.LINEAR,
+                points,
+            )
+        }
+
+        duplicate.message shouldContain "duplicate growth law"
+        writer.model().laws.size shouldBe 1
     }
 
     @Test
