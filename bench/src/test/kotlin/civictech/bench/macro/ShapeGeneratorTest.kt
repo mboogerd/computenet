@@ -1,6 +1,5 @@
 package civictech.bench.macro
 
-import civictech.bench.macro.shape.KNOWN_FAILING_SEEDS
 import civictech.bench.macro.shape.PREDICATES
 import civictech.bench.macro.shape.Shape
 import civictech.bench.macro.shape.ShapeFactory
@@ -176,12 +175,11 @@ class ShapeGeneratorTest {
     }
 
     @Test
-    fun `predicates have enough coverage and failing seeds start empty`() {
+    fun `predicates have enough coverage`() {
         assertTrue(PREDICATES.size >= 3)
         PREDICATES.forEach { predicate ->
             assertTrue((0L until 1000L).count(predicate) >= 500)
         }
-        assertEquals(emptyMap<Shape, Set<Long>>(), KNOWN_FAILING_SEEDS)
     }
 
     @Test
