@@ -37,6 +37,14 @@ class ReBaselineProbeTest {
                         supersede = true,
                     )
                     tap.membership() shouldBe (0L until 10L).toSet()
+                    tap.inlet.call.propagate(
+                        SetDelta(
+                            adds = mapOf(
+                                -1L to setOf(Timestamp(preRestartSourceId, Long.MAX_VALUE)),
+                            ),
+                        ),
+                    )
+                    tap.membership() shouldBe (0L until 10L).toSet()
                 }
             },
         )

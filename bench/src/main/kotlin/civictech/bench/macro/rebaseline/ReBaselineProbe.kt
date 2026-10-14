@@ -413,7 +413,9 @@ object ReBaselineProbe {
             if (simSteps == budget.simSteps.toLong() && rig.mesh.world.controller.step()) {
                 exhausted = true
             }
-            inspect(rig)
+            if (!exhausted && rig.taps.sumOf { it.noticeDeliveries.size } == at.fanOut) {
+                inspect(rig)
+            }
         } catch (error: OutOfMemoryError) {
             outOfMemory = error
         } catch (error: Throwable) {
