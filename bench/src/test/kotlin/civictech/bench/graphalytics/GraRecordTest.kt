@@ -83,8 +83,37 @@ class GraRecordTest {
         assertEquals(0.25, record.variance)
         assertEquals(VARIANCE_THRESHOLD, record.threshold)
         assertThrows(IllegalArgumentException::class.java) {
+            GraRecord.Unreportable(header(), variance = VARIANCE_THRESHOLD)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GraRecord.Unreportable(header(), variance = VARIANCE_THRESHOLD / 2)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
             GraRecord.Unreportable(header(), variance = 0.25, threshold = 0.20)
         }
+    }
+
+    @Test
+    fun `every record carries the exact specification version`() {
+        val passed = Validation.Passed(ComparisonRule.Epsilon, EPSILON)
+        val failed = Validation.Failed(
+            rule = ComparisonRule.Epsilon,
+            epsilonUsed = EPSILON,
+            differing = emptyList(),
+            missing = emptySet(),
+            extra = emptySet(),
+        )
+        val records: List<GraRecord> = listOf(
+            GraRecord.Validated(header(), Figure.Work(1), Figure.Work(2), passed),
+            GraRecord.Failed(header(), failed),
+            GraRecord.MeasurementOnly(header(), Figure.Work(1), Figure.Work(2)),
+            GraRecord.Unreportable(header(), variance = 0.25),
+            GraRecord.Blocked(Algorithm.PR, "requires E5.2 and E5.3"),
+            GraRecord.NotExpressible(Algorithm.CDLP, "unsupported graph shape"),
+        )
+
+        assertEquals(6, records.size)
+        assertTrue(records.all { it.specVersion == SPEC_VERSION })
     }
 
     @Test

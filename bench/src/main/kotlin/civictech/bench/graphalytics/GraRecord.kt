@@ -143,7 +143,13 @@ data class RunHeader(
     }
 }
 
-/** Relative variance above this threshold cannot be reported as a representative mean. */
+/**
+ * Relative variance above this threshold cannot be reported as a representative mean.
+ *
+ * The 0.10 boundary intentionally tolerates ordinary run-to-run measurement noise,
+ * while treating a spread of 10% or more as material enough that a single mean could
+ * hide meaningfully different performance.
+ */
 const val VARIANCE_THRESHOLD = 0.10
 
 /** The mutually exclusive states a Graphalytics run can occupy. */
@@ -158,6 +164,9 @@ enum class Status {
 
 /** A record of an executed or deliberately unexecuted algorithm run. */
 sealed interface GraRecord {
+    val specVersion: String
+        get() = SPEC_VERSION
+
     val status: Status
 
     data class Validated(
@@ -198,6 +207,9 @@ sealed interface GraRecord {
             }
             require(threshold == VARIANCE_THRESHOLD) {
                 "threshold must be VARIANCE_THRESHOLD ($VARIANCE_THRESHOLD)"
+            }
+            require(variance > threshold) {
+                "variance must exceed threshold ($threshold)"
             }
         }
 
