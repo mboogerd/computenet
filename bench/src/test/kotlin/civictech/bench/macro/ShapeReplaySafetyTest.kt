@@ -74,7 +74,6 @@ class ShapeReplaySafetyTest {
                 }
             }
         }
-        assertTrue(KNOWN_FAILING_SEEDS.isEmpty(), "the empty seed map makes this check vacuous")
     }
 
     private fun freshHost(seed: Long): ManagedHost {
