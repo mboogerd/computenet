@@ -3650,6 +3650,14 @@ but pushes table-coherence work onto the composite; (2) the exact `@Key` surface
 for composite/derived keys; (3) whether key-less broadcast should be permitted at
 all for large N, or replaced by a scatter-gather read protocol.
 
+> Stacked decision (2026-10-15, `DUR-PART-01`, `computenet-u7mox`): a
+> journaled `PartitionedCell` recovers its pre-crash board by whole-tail replay
+> into a rebuilt composite under its recorded ref (no checkpoint: the current
+> composite is not `Stateful`). With the journaled upstream source deliberately
+> isolated on a different, unrecovered journal, the recovered board equals both
+> an uninterrupted partitioned twin and the batch oracle; organelle merging on
+> replay neither loses nor double-counts the disjoint scalar keys.
+
 ### I-9 — Attention as the resource lever: suspension triggers, priority mapping, fairness, and edge cases (G-6)
 
 > Member pairs: N5×N21, N6×N21, N8×N21, N14×N21, N16×N21, N17×N21, N18×N21, N19×N21, N20×N21, N21×N23, N21×N25, N21×N26, N21×N27
