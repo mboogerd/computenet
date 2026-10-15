@@ -1,0 +1,46 @@
+# Named-journal vocabulary is now landed, so this scenario makes the per-journal
+# boundary executable rather than relying on the single-default-journal cases.
+# It is deliberately non-vacuous: a driver mutation that leaks every journaled
+# ref into the controller's journal makes `vb` recover `[b1, b2]`, so its empty
+# golden fails instead of passing without checking journal ownership.
+id: DUR-SCOPE-01
+title: Recovering journal a re-delivers nothing to the co-hosted cell on journal b
+covers: [24-DUR-03]
+profile: dur
+kind: example
+narrative:
+  given: >
+    one durable host carrying two journaled source-to-view subgraphs, with the
+    first subgraph on journal a, the second on journal b, and a crash controller
+    bound to journal a
+  when: >
+    both sources accept two elements, the host is crashed through the journal-a
+    controller and rebuilt, then a further live element is accepted on source a
+  then: >
+    recovery restores the full journal-a history and continues live delivery,
+    while the journal-b view is rebuilt empty because journal b was not replayed
+graph:
+  cells:
+    - {id: sa, type: journal-set-source, journal: a, host: dur}
+    - {id: va, type: journal-set-view, journal: a, host: dur}
+    - {id: sb, type: journal-set-source, journal: b, host: dur}
+    - {id: vb, type: journal-set-view, journal: b, host: dur}
+    - {id: ctl, type: journal, journal: a, host: dur}
+  links:
+    - {from: sa, to: va}
+    - {from: sb, to: vb}
+script:
+  - {type: apply, on: sa, op: add, value: a1}
+  - {type: apply, on: sa, op: add, value: a2}
+  - {type: apply, on: sb, op: add, value: b1}
+  - {type: apply, on: sb, op: add, value: b2}
+  - {type: quiesce}
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  - {type: apply, on: sa, op: add, value: a3}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: va, equals: [a1, a2, a3]}
+  - {type: final-view, view: vb, equals: []}
+  - {type: incremental-equals-batch, view: va}
+  - {type: no-dead-letters}
