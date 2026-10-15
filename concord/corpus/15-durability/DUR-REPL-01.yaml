@@ -1,0 +1,48 @@
+# A recovered replica has two idempotent routes back to its pre-crash fold:
+# replay of its locally accepted journal frames, and the mesh's M10 re-announce
+# catch-up from its surviving peer. Tag union makes their overlap a no-op, so
+# this scenario pins convergence rather than choosing which route "wins".
+#
+# The non-replicated journal-only arm is deliberate mutation evidence. Without
+# it, removing recoverFrom could leave the replica checks green through M10
+# alone; its final view proves the same crash actually replayed the journal.
+id: DUR-REPL-01
+title: A journaled replica recovers and resumes bidirectional convergence
+covers: [24-DUR-02, 42-REPL-04]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a journaled set replica on the durable host, a volatile peer replica on h2,
+    and a non-replicated journal-only witness on the durable host
+  when: >
+    both replicas accept writes, the durable host crashes and rebuilds from its
+    journal, then each rebuilt side accepts another write
+  then: >
+    the replicas converge to the four-element union, the journal-only witness is
+    restored, and no crash or gossip path produces a dead letter
+graph:
+  hosts: [dur, h2]
+  cells:
+    - {id: r1, type: journal-set-source, host: dur, replica-of: shared, interest: {total: true}}
+    - {id: r2, type: set-source, host: h2, replica-of: shared}
+    - {id: journal-only, type: journal-set-source, host: dur}
+    - {id: journal-only-view, type: set-view, host: dur}
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: journal-only, to: journal-only-view}
+script:
+  - {type: apply, on: r1, op: add, value: x1}
+  - {type: apply, on: r2, op: add, value: x2}
+  - {type: apply, on: journal-only, op: add, value: from-journal}
+  - {type: quiesce}
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  - {type: apply, on: r2, op: add, value: x3}
+  - {type: apply, on: r1, op: add, value: x4}
+  - {type: quiesce}
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: final-view, view: r1, equals: [x1, x2, x3, x4]}
+  - {type: final-view, view: journal-only-view, equals: [from-journal]}
+  - {type: no-dead-letters}

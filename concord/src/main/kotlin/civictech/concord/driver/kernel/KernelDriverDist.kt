@@ -108,6 +108,19 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     private val instanceCounters = LinkedHashMap<String, Long>()
 
     /**
+     * Allocate the next full ref in a scenario's `replica-of` group.
+     *
+     * The durable capability calls this same seam for a replica on `host: dur`,
+     * so durable and ordinary replicas share one logical id and one instance-id
+     * sequence instead of forming two accidentally disjoint meshes.
+     */
+    internal fun allocateReplicaRef(logical: String): CellRef {
+        val logicalId = logicalIds.getOrPut(logical) { UUID.randomUUID() }
+        val instanceId = (instanceCounters[logical] ?: 0L).also { instanceCounters[logical] = it + 1 }
+        return CellRef(logicalId, instanceId)
+    }
+
+    /**
      * Exact envelopes produced by ordinary `signed-apply` steps, keyed only by
      * neutral scenario vocabulary. A replay reuses one of these objects rather
      * than reconstructing its driver-owned author counter or merge tags.
@@ -223,9 +236,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         authority: Value? = null,
     ) {
         val host = driver.hostFor(if (hostId == "") null else hostId)
-        val logicalId = logicalIds.getOrPut(logical) { UUID.randomUUID() }
-        val instanceId = (instanceCounters[logical] ?: 0L).also { instanceCounters[logical] = it + 1 }
-        val ref = CellRef(logicalId, instanceId)
+        val ref = allocateReplicaRef(logical)
 
         // The replica cell and the catalog id of the companion that folds ITS delta
         // shape — the two travel together, because a `tagged-map-view` cannot fold a

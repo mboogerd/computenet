@@ -10,6 +10,7 @@ import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.Aggregator
+import civictech.cell.data.Replicable
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -39,6 +40,7 @@ import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.replication.Replication
 import civictech.concord.driver.CellId
 import civictech.concord.driver.DeadLetter
 import civictech.concord.driver.Effect
@@ -165,6 +167,8 @@ internal class KernelDriverDur(
     private val scheduler: () -> HostScheduler,
     private val registryOf: (HostId) -> LocationRegistry,
     private val drainController: () -> Unit,
+    /** Allocate from the dist capability's shared `replica-of` namespace. */
+    private val replicaRefOf: (String) -> CellRef,
     /** Dead letters observed on the durable host flow into the driver's shared list. */
     private val onDeadLetter: (DeadLetter) -> Unit,
 ) {
@@ -180,6 +184,9 @@ internal class KernelDriverDur(
         private val OPTIONALLY_JOURNALED_TYPES = setOf(
             "set-source", "set-view", "quorum-set", "waterline", "partition", "count-view",
         )
+
+        /** Mergeable source bindings admitted to the durable replication mesh. */
+        private val REPLICA_TYPES = setOf("set-source", "journal-set-source")
 
         private const val DEFAULT_JOURNAL = "default"
 
@@ -249,6 +256,9 @@ internal class KernelDriverDur(
      */
     private val glitchFreeRefs = LinkedHashMap<CellId, CellRef>()
 
+    /** Stable refs for the volatile set-view companion of each durable replica. */
+    private val replicaViewRefs = LinkedHashMap<CellId, CellRef>()
+
     /** Observation streams, keyed by cell id so they survive a crash+rebuild. */
     private val logs = LinkedHashMap<CellId, MutableList<Value>>()
 
@@ -296,6 +306,13 @@ internal class KernelDriverDur(
 
     private var host: ManagedHost = newHost()
 
+    /**
+     * One mesh linker for the current durable [host]. A recovered host gets a
+     * fresh linker after the old replicas have been evicted, so no local-link
+     * bookkeeping can retain a cell instance owned by the discarded host.
+     */
+    private var replication: Replication = Replication(registryOf(DUR_HOST))
+
     private fun newHost(): ManagedHost =
         ManagedHost(
             scheduler = scheduler(),
@@ -324,11 +341,40 @@ internal class KernelDriverDur(
             controllerJournal[cellId] = journalOf(journalName(type, params) ?: DEFAULT_JOURNAL)
             return
         }
-        val ref = specs[cellId]?.ref ?: CellRef(UUID.randomUUID())
+        val replicaLogical = replicaLogical(type, params)
+        val ref = specs[cellId]?.ref ?: replicaLogical?.let(replicaRefOf) ?: CellRef(UUID.randomUUID())
         specs[cellId] = Spec(cellId, ref, type, params)
         journalByRef.remove(ref)
         selectedJournal(type, params)?.let { journalByRef[ref] = it }
         instantiate(specs.getValue(cellId))
+    }
+
+    /**
+     * Validate and return a durable cell's `replica-of` group, or `null` when
+     * the descriptor is absent. The durable seam admits only the OR-set source
+     * family and only total interest: partial interest belongs to the dist
+     * profile's instance-set binding and must never be silently ignored here.
+     */
+    private fun replicaLogical(type: String, params: Map<String, Value>): String? {
+        val raw = params["replica-of"] ?: return null
+        val logical = (raw as? Value.StrVal)?.value?.takeIf { it.isNotEmpty() }
+            ?: throw UnsupportedCatalogBinding("`replica-of` on a durable cell must be a non-empty string; got $raw")
+        if (type !in REPLICA_TYPES) {
+            throw UnsupportedCatalogBinding(
+                "replica-of on host: dur is bound only for 'set-source' and 'journal-set-source'; " +
+                    "type '$type' has no honest durable replicated binding",
+            )
+        }
+        params["interest"]?.let { interest ->
+            val fields = (interest as? Value.MapVal)?.entries
+            val total = fields?.size == 1 && (fields["total"] as? Value.BoolVal)?.value == true
+            if (!total) {
+                throw UnsupportedCatalogBinding(
+                    "interest on a host: dur replica must be {total: true} (Interest.Total); got $interest",
+                )
+            }
+        }
+        return logical
     }
 
     private fun journalOf(name: String): Journal = journals.getOrPut(name) { InMemoryJournal() }
@@ -356,12 +402,45 @@ internal class KernelDriverDur(
     /** Build + spawn one durable cell on the current [host] and register its bookkeeping. */
     private fun instantiate(spec: Spec) {
         val built = build(spec)
-        host.managementInlet.call.spawn(built.cell)
-        cells[spec.cellId] = built.copy(outletDelegate = glitchFreeDelegate(spec, built.ref))
+        cells[spec.cellId] = if (replicaLogical(spec.type, spec.params) != null) {
+            instantiateReplica(spec, built)
+        } else {
+            host.managementInlet.call.spawn(built.cell)
+            built.copy(outletDelegate = glitchFreeDelegate(spec, built.ref))
+        }
         // The observation stream is recorded at the fold in [build] (into this
         // cell's surviving [logs] entry), not through `sink.onChange` — the sink's
         // listener dispatch is asynchronous and nothing here waits for it, so a
         // recovered view's replayed observations could be missing at check time.
+    }
+
+    /**
+     * Join a durable [SetCell] to the current host's mesh, then attach a
+     * co-hosted volatile view under a recorded ref. The view is the observation
+     * surface `readView(replicaId)` and `replicas-converge` use; linking it after
+     * [Replication.replicate] is safe because SetCell's ordinary on-linked
+     * catch-up supplies any state received while the companion was absent.
+     */
+    private fun instantiateReplica(spec: Spec, built: Bound): Bound {
+        val replica = built.cell as Replicable<*>
+        replication.replicate(replica, host)
+
+        val companionRef = replicaViewRefs.getOrPut(spec.cellId) { CellRef(UUID.randomUUID()) }
+        val log = logs.getOrPut(spec.cellId) { mutableListOf() }
+        val companion = ObserveCell(RecordedView(View.set<Any?>(), KernelCatalog.ViewKind.SET, log), companionRef)
+        host.managementInlet.call.spawn(companion)
+        val result = host.managementInlet.call.connect(replica.ref, "outlet", companion.ref, "inlet")
+        check(result is civictech.cell.link.LinkResult.Connected) {
+            "durable replica view for '${spec.cellId}' was not admitted: $result"
+        }
+
+        return Bound(
+            ref = replica.ref,
+            type = spec.type,
+            cell = replica,
+            sink = companion,
+            viewKind = KernelCatalog.ViewKind.SET,
+        )
     }
 
     /**
@@ -1084,15 +1163,53 @@ internal class KernelDriverDur(
     }
 
     private fun crashAndRecover(journal: Journal) {
-        // CRASH: the old host, registry entries, and every live instance vanish; only
-        // the named journals survive. A fresh host reuses the same per-cell selector.
+        // Retire every live durable replica through the mesh before dropping the
+        // host. With a reachable peer, evict drains, sends one final catch-up and
+        // unpublishes the ref. If it refuses to destroy the only reachable copy,
+        // the host's impending crash makes that safety gate moot: explicitly
+        // despawn the suspended replica to remove its registry membership (a
+        // journaled replica can replay; a volatile one has ordinary crash loss).
+        // The returning instance keeps the same ref and is announced by a fresh
+        // Replication below; closeDepartedRow=false keeps the departure from
+        // claiming that same logical member is gone forever.
+        cells.forEach { (cellId, bound) ->
+            val spec = specs.getValue(cellId)
+            if (replicaLogical(spec.type, spec.params) != null) {
+                val replica = bound.cell as Replicable<*>
+                if (!replication.evict(replica, host, closeDepartedRow = false)) {
+                    host.managementInlet.call.despawn(replica.ref)
+                }
+            }
+        }
+        // Replication.evict's drain is gated, but its final management-band
+        // despawn is scheduled on the old host. Fence that scheduler before a
+        // replacement publishes the same ref; otherwise the old despawn can
+        // race after the new publication and unpublish the rebuilt endpoint.
+        drain()
+
+        // CRASH: every remaining live instance vanishes; only the named journals
+        // survive. A fresh host reuses the same per-cell selector and a fresh mesh
+        // linker, so rebuilt replicas re-announce before journal replay begins.
         host = newHost()
+        replication = Replication(registryOf(DUR_HOST))
         cells.clear()
         // Rebuild the graph (spawn the same cells with the same refs), then re-link —
         // recovery replays onto a wired graph so a source's restored deltas reach its view.
         specs.values.forEach { instantiate(it) }
         linkRecs.toList().forEach { l -> wire(cells.getValue(l.from), cells.getValue(l.to), l.inlet, l.outlet) }
         host.recoverFrom(journal)
+        // M10 anti-entropy: recovery has now applied the journal to the rebuilt
+        // instance. Re-announce its stable ref so every surviving peer re-fires
+        // catch-up through (or replaces) its existing inbound gossip link. The
+        // first publication above establishes membership before recoverFrom;
+        // this second one makes the recovered state, and the live endpoint that
+        // owns it, the peer-visible baseline before this crash step returns.
+        cells.forEach { (cellId, bound) ->
+            val spec = specs.getValue(cellId)
+            if (replicaLogical(spec.type, spec.params) != null) {
+                registryOf(DUR_HOST).publish(bound.ref, host, bound.cell)
+            }
+        }
         drain()
     }
 
