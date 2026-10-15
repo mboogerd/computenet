@@ -117,6 +117,31 @@ class WriteAuthorityGossipTest {
     }
 
     @Test
+    fun `anti-entropy catch-up over a pair's own first crossing is not reported as replay`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val a = AuthorityTestPeer(controller, pA, signing)
+        val b = AuthorityTestPeer(controller, pB, signing)
+        Peering.loopback(a.side, b.side)
+        val logicalId = UUID.randomUUID()
+        val onA = a.replica(logicalId, 0, WriteAuthority.Principal(pA))
+        val onB = b.replica(logicalId, 1, WriteAuthority.Principal(pA))
+        controller.runToIdle()
+
+        a.ops(onA).add("live")
+        controller.runToIdle()
+        listOf(onA.membership(), onB.membership()) shouldBe List(2) { setOf("live") }
+        listOf(a, b).flatMap { it.denialReasons() }.shouldBeEmpty()
+
+        val author = a.replication.authorityOf(onA.ref)!!
+        author.outlet.linking.fireLinked(author.outlet.linking.links.single())
+        controller.runToIdle()
+
+        listOf(onA.membership(), onB.membership()) shouldBe List(2) { setOf("live") }
+        listOf(a, b).flatMap { it.denialReasons() }.shouldBeEmpty()
+    }
+
+    @Test
     fun `forgery replay unsigned input and unauthorized batch member are independently refused`() {
         val mesh = threePeerMesh(WriteAuthority.Principal(pA))
         val logicalId = mesh.onC.ref.id
