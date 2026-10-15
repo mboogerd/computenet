@@ -1,0 +1,86 @@
+# The journal codec carries scalar elements, not list-valued ones, so this
+# scenario deliberately uses scalar integers. With `key-of`, each scalar is
+# its own group key and the observable board is one count per element: the
+# recovery interaction, not key-function variety, is what this scenario pins.
+#
+# There is no snapshot step. PartitionedCell is not Stateful on this baseline,
+# so the journaled composite recovers by whole-tail replay into a rebuilt cell
+# under its recorded ref.
+#
+# Both the source and partition use the same recovered journal, but only the
+# partition journal's direct inlet frames reach the rebuilt composite. A
+# temporary route marker distinguished direct replay frames (non-null
+# `replayFrontier`) from source-derived re-emissions (inherited `replayOf`, null
+# `replayFrontier`) at the partition target. Under
+#
+#   ./gradlew --no-daemon :concord:test \
+#     --tests civictech.concord.runner.CorpusRunner --rerun --no-build-cache \
+#     -Pconcord.profiles=dur
+#
+# 20 runs replayed five pre-crash positions each: the partition-journal route
+# was staged 100 times and delivered 100 times; the source-re-emission route
+# was suppressed 100 times and staged or delivered 0 times. The latter matches
+# the same `(cellRef, port, Timestamp)` positions already submitted directly
+# from that journal, so ManagedHost's exact replay-position gate suppresses it
+# before the composite handler.
+#
+# Consequently the twin and `views-converge` pin the result of the one surviving
+# route, not two-route overlap or double-apply idempotence. Corroborating this
+# boundary, a feature-review mutation that made GroupByCell double-apply an
+# already-live element left DUR-PART-WHOLE-01 PASSED under the same dur-profile
+# command (without `--no-build-cache`): there is no second delivery here for the
+# mutation to expose.
+id: DUR-PART-WHOLE-01
+title: A journaled partition recovered beside its source remains equal to its uninterrupted twin
+covers: [24-DUR-02, 24-PART-03]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a journaled set source feeding a journaled partition and volatile count
+    view on the durable host, with source and partition on the same journal,
+    plus an uninterrupted partitioned twin driven by the identical scalar history
+  when: >
+    five elements reach both graphs, the durable host crashes and rebuilds all
+    cells while recovering the shared journal, then both graphs accept one more
+    element
+  then: >
+    direct replay of the partition's inlet frames rebuilds the volatile board
+    while matching source re-emissions are suppressed at intake, the recovered
+    board equals the uninterrupted twin, the twin equals the independent batch
+    oracle, and recovery produces no dead letter
+graph:
+  cells:
+    - {id: ds, type: journal-set-source, host: dur}
+    - {id: dp, type: partition, fn: key-of, journal: default, host: dur}
+    - {id: dv, type: count-view, host: dur}
+    - {id: ctl, type: journal, journal: default, host: dur}
+    - {id: ts, type: set-source, host: twin}
+    - {id: tp, type: partition, fn: key-of, host: twin}
+    - {id: tv, type: count-view, host: twin}
+  links:
+    - {from: ds, to: dp}
+    - {from: dp, to: dv}
+    - {from: ts, to: tp}
+    - {from: tp, to: tv}
+script:
+  - {type: apply, on: ds, op: add, value: 1}
+  - {type: apply, on: ts, op: add, value: 1}
+  - {type: apply, on: ds, op: add, value: 2}
+  - {type: apply, on: ts, op: add, value: 2}
+  - {type: apply, on: ds, op: add, value: 3}
+  - {type: apply, on: ts, op: add, value: 3}
+  - {type: apply, on: ds, op: add, value: 4}
+  - {type: apply, on: ts, op: add, value: 4}
+  - {type: apply, on: ds, op: add, value: 5}
+  - {type: apply, on: ts, op: add, value: 5}
+  - {type: quiesce}
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  - {type: apply, on: ds, op: add, value: 6}
+  - {type: apply, on: ts, op: add, value: 6}
+  - {type: quiesce}
+checks:
+  - {type: views-converge, views: [dv, tv]}
+  - {type: incremental-equals-batch, view: tv}
+  - {type: no-dead-letters}
