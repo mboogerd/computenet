@@ -52,15 +52,9 @@ class GraFindingsRenderTest {
             }
         }
 
-        val results = measured.flatMap { (dataset, runs) ->
-            listOf(
-                result(dataset, "load", runs.map { (it.load as Figure.Work).steps }, env),
-                result(dataset, "compute", runs.map { (it.compute as Figure.Work).steps }, env),
-            )
-        }
+        val findingsRows = graFindingsRows(measured)
         val records = measured.flatMap { it.second }
-        // [BB-GRA-27]: a dataset whose seed-to-seed spread exceeds the threshold is unreportable.
-        val coverage = coverageFor(measured.map { (_, runs) -> summarise(runs) })
+        val coverage = coverageFor(findingsRows.summaries)
         val sourceCommit = records.map { it.header.dataset.sourceCommit }.distinct().single()
         val loadMode = records.map {
             "${it.header.loadMode.durability}/${it.header.loadMode.ingress}"
@@ -68,16 +62,16 @@ class GraFindingsRenderTest {
         val entry = Findings.entry(
             date = System.getProperty("civictech.bench.date") ?: LocalDate.now().toString(),
             subject = "BB-GRA — LDBC Graphalytics coverage after the KE5-independent slice " +
-                "(LCC validated; PR, CDLP, BFS, SSSP, WCC blocked on E5.2/E5.3[/E5.4])",
+                "(${findingsRows.lccOutcome}; PR, CDLP, BFS, SSSP, WCC blocked on " +
+                "E5.2/E5.3[/E5.4])",
             results = FindingsTable(
-                results = results,
-                labels = results.mapIndexed { index, _ ->
-                    measured[index / 2].first.name + " " + if (index % 2 == 0) "load" else "compute"
-                },
+                results = findingsRows.results,
+                labels = findingsRows.labels,
             ),
             trigger = TriggerClaim.Cited(
                 gapId = "G-41",
-                statement = "INCONCLUSIVE for cycle regions: five algorithms remain blocked on KE5 constructs; LCC validates.",
+                statement = "INCONCLUSIVE for cycle regions: five algorithms remain blocked on " +
+                    "KE5 constructs; ${findingsRows.lccOutcome}.",
             ),
         )
 
@@ -91,23 +85,6 @@ class GraFindingsRenderTest {
             appendLine()
             append(coverage.render())
         }.also(::println)
-    }
-
-    private fun result(
-        dataset: DatasetRef,
-        phase: String,
-        steps: List<Long>,
-        env: RunEnvironment,
-    ): BenchResult {
-        require(steps.isNotEmpty()) { "no $phase steps recorded for ${dataset.name}" }
-        val spread = steps.maxOrNull()!! - steps.minOrNull()!!
-        return BenchResult(
-            value = steps.average(),
-            unit = "steps",
-            dispersion = spread.toDouble(),
-            drive = Drive.SIM,
-            env = env,
-        )
     }
 
     private fun inProcessMeasuringJvm(): MeasuringJvm {
@@ -136,4 +113,82 @@ class GraFindingsRenderTest {
             "-XX:MaxRAM=",
         )
     }
+}
+
+internal data class GraFindingsRows(
+    val summaries: List<GraRecord>,
+    val results: List<BenchResult>,
+    val labels: List<String>,
+    val lccOutcome: String,
+)
+
+/**
+ * Convert repeated SIM runs to report rows without publishing a mean for an
+ * unreportable dataset ([BB-GRA-27]).
+ */
+internal fun graFindingsRows(
+    measured: List<Pair<DatasetRef, List<GraRecord.Validated>>>,
+): GraFindingsRows {
+    val grouped = measured.map { (dataset, runs) -> Triple(dataset, runs, summarise(runs)) }
+    val rows = grouped.flatMap { (dataset, runs, summary) ->
+        when (summary) {
+            is GraRecord.Validated -> listOf(
+                labelledResult(dataset, "load", runs.map { (it.load as Figure.Work).steps }, summary.header.env),
+                labelledResult(
+                    dataset,
+                    "compute",
+                    runs.map { (it.compute as Figure.Work).steps },
+                    summary.header.env,
+                ),
+            )
+            is GraRecord.Unreportable -> listOf(
+                LabelledResult(
+                    label = "${dataset.name} variance",
+                    result = BenchResult(
+                        value = summary.variance,
+                        unit = "relative spread",
+                        dispersion = 0.0,
+                        drive = summary.header.drive,
+                        env = summary.header.env,
+                    ),
+                ),
+            )
+            else -> error("validated repeats produced unexpected summary $summary")
+        }
+    }
+    val summaries = grouped.map { it.third }
+    val lccStatus = coverageFor(summaries).rows.single { it.algorithm == Algorithm.LCC }.status
+    val lccOutcome = when (lccStatus) {
+        Status.validated -> "LCC validated"
+        Status.unreportable -> "LCC unreportable"
+        else -> error("validated repeats produced unexpected LCC coverage status $lccStatus")
+    }
+    return GraFindingsRows(
+        summaries = summaries,
+        results = rows.map { it.result },
+        labels = rows.map { it.label },
+        lccOutcome = lccOutcome,
+    )
+}
+
+private data class LabelledResult(val label: String, val result: BenchResult)
+
+private fun labelledResult(
+    dataset: DatasetRef,
+    phase: String,
+    steps: List<Long>,
+    env: RunEnvironment,
+): LabelledResult {
+    require(steps.isNotEmpty()) { "no $phase steps recorded for ${dataset.name}" }
+    val spread = steps.maxOrNull()!! - steps.minOrNull()!!
+    return LabelledResult(
+        label = "${dataset.name} $phase",
+        result = BenchResult(
+            value = steps.average(),
+            unit = "steps",
+            dispersion = spread.toDouble(),
+            drive = Drive.SIM,
+            env = env,
+        ),
+    )
 }

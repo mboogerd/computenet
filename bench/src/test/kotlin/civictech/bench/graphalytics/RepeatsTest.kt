@@ -100,6 +100,23 @@ class RepeatsTest {
         }
     }
 
+    @Test
+    fun `an unreportable findings row records variance instead of a mean or validation claim`() {
+        val rows = graFindingsRows(
+            listOf(
+                Datasets.EXAMPLE_DIRECTED to listOf(validated(100, 200), validated(120, 200)),
+            ),
+        )
+
+        assertInstanceOf(GraRecord.Unreportable::class.java, rows.summaries.single())
+        assertEquals(listOf("example-directed variance"), rows.labels)
+        assertEquals(1, rows.results.size)
+        assertEquals(20.0 / 110.0, rows.results.single().value)
+        assertEquals("relative spread", rows.results.single().unit)
+        assertEquals(0.0, rows.results.single().dispersion)
+        assertEquals("LCC unreportable", rows.lccOutcome)
+    }
+
     private fun validated(loadNanos: Long, computeNanos: Long) = GraRecord.Validated(
         header = header(),
         load = Figure.Duration(loadNanos),
