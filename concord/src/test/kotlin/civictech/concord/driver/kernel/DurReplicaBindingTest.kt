@@ -1,5 +1,11 @@
 package civictech.concord.driver.kernel
 
+import civictech.cell.CellRef
+import civictech.cell.data.SetApi
+import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.SimulationController
+import civictech.concord.driver.DeadLetter
 import civictech.concord.oracle.Fx.list
 import civictech.concord.oracle.Fx.map
 import civictech.concord.oracle.Fx.s
@@ -8,6 +14,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
+import java.util.UUID
 import kotlin.test.Test
 
 /** Durable-host replication binding and crash/recovery composition (DUR-REPL-01). */
@@ -103,5 +110,35 @@ class DurReplicaBindingTest {
         // non-replicated arm makes the journal route independently observable.
         d.readView("journal-only-view") shouldBe list(s("from-journal"))
         d.deadLetters() shouldBe emptyList()
+    }
+
+    @Test
+    fun `crash retires the discarded replica before publishing its replacement`() {
+        val controller = SimulationController(0L)
+        val registry = LocationRegistry()
+        val replicaRef = CellRef(UUID.randomUUID(), 0L)
+        val deadLetters = mutableListOf<DeadLetter>()
+        val d = KernelDriverDur(
+            scheduler = { controller.scheduler() },
+            registryOf = { registry },
+            drainController = { controller.runToIdle() },
+            replicaRefOf = { replicaRef },
+            onDeadLetter = deadLetters::add,
+        )
+        d.spawn("r1", "journal-set-source", replica("shared"))
+        d.spawn("ctl", "journal", emptyMap())
+        val discardedHost = requireNotNull(registry.locate(replicaRef))
+
+        d.despawn("ctl")
+
+        // Address the host object that the crash discarded, bypassing the registry
+        // that now routes this stable ref to its replacement. It must reject the
+        // delivery: accepting it would prove the departed replica is still live.
+        @Suppress("UNCHECKED_CAST")
+        val staleReplica = HostedCellProxy.create(replicaRef, discardedHost, SetApi::class.java) as SetApi<Any?>
+        staleReplica.inlet.call.add("ghost")
+        controller.runToIdle()
+
+        deadLetters.map { it.reason } shouldBe listOf("unknown cell $replicaRef")
     }
 }
