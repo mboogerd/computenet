@@ -951,11 +951,12 @@ effect per delivered added element, keyed by the element). Anything else refuses
 - a direct upstream declares **`replica-of`**. A replicated set can gain elements
   no `add` names, by merging a peer's delta — a feed from outside the script
   entirely — so the derived set would omit them and an element that fired zero
-  times would pass over vacuously. This is a scenario-level guard independent of
-  which placement bindings a driver implements: a driver without the durable
-  `replica-of` binding refuses the placement earlier, while one with the binding
-  reaches this guard. Neither path permits a silent vacuous pass
-  (computenet-cr7g);
+  times would pass over vacuously. This is a scenario-level guard over the
+  declared `replica-of`, independent of which placement bindings a driver
+  implements. Before the durable binding lands, the dur driver ignores that
+  parameter during spawn; after it lands, the driver honours it. In both states
+  the declared parameter reaches this guard, which refuses the unkeyed form
+  rather than permitting a silent vacuous pass (computenet-cr7g);
 - the topology into the cone moves mid-script (`connect`/`disconnect` whose `to` is
   in the cone);
 - any cell in the cone is `despawn`ed, `restart`ed or `restore`d;
