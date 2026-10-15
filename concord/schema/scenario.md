@@ -120,10 +120,10 @@ optional descriptor param the driver binds. The v1 named params:
 | `glitch-free` | request wave-aligned semantics on a fan-in cell (`true`) |
 | `inlet-mode` | inlet admission policy (`single-writer`, `fan-in`) |
 | `host` | host placement (dist profile) |
-| `journal` | proposed non-empty journal name for a cell/controller on `host: dur` — see below |
-| `replica-of` | logical replica-group id (dist profile); proposed also on a `host: dur` `set-source`/`journal-set-source`, with the durable placement and recovery semantics below |
+| `journal` | non-empty journal name for a cell/controller on `host: dur` — see below |
+| `replica-of` | logical replica-group id (dist profile); also on a `host: dur` `set-source`/`journal-set-source`, with the durable placement and recovery semantics below |
 | `authority` | principal-owned replicated slice: `{principal: <actor>}` (dist profile; requires `replica-of`) — see below |
-| `interest` | interest-scoped instance-set assignment (dist profile) — see below |
+| `interest` | interest-scoped instance-set assignment (dist profile); on a `host: dur` `replica-of` cell only total interest is legal — see below |
 | `family` | keyed-family declaration (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
 | `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
@@ -136,11 +136,11 @@ typed field remains a schema-change ticket.
 
 #### `journal` (`computenet-elc`, feature `computenet-u7mox`)
 
-**Status.** Proposed — awaiting the maintainer's grant. This is the
-single-writer schema review in `computenet-elc`, under feature
-`computenet-u7mox`; after the grant, the separate driver task adds the typed
-`CellSpec.journal` field and named-journal binding under `concord/src/`, then
-rewrites this status to Landed.
+**Status.** Granted by the maintainer on 2026-10-14, with the durable
+`interest:` and `effect-count` amendments below. This is the single-writer
+schema review in `computenet-elc`, under feature `computenet-u7mox`; the
+separate driver task adds the typed `CellSpec.journal` field and named-journal
+binding under `concord/src/`, then rewrites this status to Landed.
 
 `journal` is an optional string whose value, when present, MUST be non-empty.
 It selects durability by placement and catalog type:
@@ -306,12 +306,18 @@ between two replicas of the same logical id, and to filter each emission to the
 target's interest. Absent ⇒ the kernel default, `Interest.Total` (plain
 replication, byte-identical to a `replica-of` cell with no `interest:`).
 
+A `host: dur` `replica-of` cell may also declare `interest`, but its only legal
+value is `{total: true}` (`Interest.Total`), which is byte-identical to omitting
+the attribute. Any other value is refused as `UnsupportedCatalogBinding`. This
+does not extend the neighbouring `authority` attribute: `authority` remains
+dist-profile only and still requires `replica-of`.
+
 ```yaml
 - {id: r1, type: set-source, of: string, host: h1, replica-of: shared, interest: {slots: [0], total-slots: 2}}
 ```
 
-A small, closed neutral grammar mirroring the kernel's `Interest` algebra —
-exactly one of these per cell:
+For a dist-profile replica, a small, closed neutral grammar mirrors the kernel's
+`Interest` algebra — exactly one of these per cell:
 
 | form | meaning |
 |---|---|
@@ -945,9 +951,11 @@ effect per delivered added element, keyed by the element). Anything else refuses
 - a direct upstream declares **`replica-of`**. A replicated set can gain elements
   no `add` names, by merging a peer's delta — a feed from outside the script
   entirely — so the derived set would omit them and an element that fired zero
-  times would pass over vacuously. The proposed durable `replica-of` placement
-  above makes this refusal reachable; the guard ensures that binding meets a
-  refusal rather than a silent vacuous pass (computenet-cr7g);
+  times would pass over vacuously. This is a scenario-level guard independent of
+  which placement bindings a driver implements: a driver without the durable
+  `replica-of` binding refuses the placement earlier, while one with the binding
+  reaches this guard. Neither path permits a silent vacuous pass
+  (computenet-cr7g);
 - the topology into the cone moves mid-script (`connect`/`disconnect` whose `to` is
   in the cone);
 - any cell in the cone is `despawn`ed, `restart`ed or `restore`d;

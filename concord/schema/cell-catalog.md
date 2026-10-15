@@ -109,10 +109,10 @@ driver-side by W4-B and recorded in `concord/corpus/DISPUTES.md` §"How it is dr
 the durable evicting-window pipeline) — the journaled twins of the core `window` and
 `count-view`, with no new op or descriptor field.
 
-The named-journal and durable-replica placement rules below are the proposed
-schema extension in `computenet-elc` under feature `computenet-u7mox`; they await
-the maintainer's grant and the separate typed-field/driver task described in
-`scenario.md` §`journal`.
+The named-journal and durable-replica placement rules below are the schema
+extension granted by the maintainer on 2026-10-14 in `computenet-elc`, under
+feature `computenet-u7mox`. Their typed-field/driver implementation is the
+separate task described in `scenario.md` §`journal`.
 
 | id | ops | semantic |
 |---|---|---|
