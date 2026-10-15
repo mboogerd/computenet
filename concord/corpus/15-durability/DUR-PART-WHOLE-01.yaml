@@ -18,7 +18,7 @@
 # closest available checks-level probe; it leaves source replay as the sole
 # route and stayed green. This scenario therefore records the unmutated
 # two-route overlap but does not claim mutation-killed coverage.
-id: DUR-PART-02
+id: DUR-PART-WHOLE-01
 title: A journaled partition remains equal to its twin when source and partition replay together
 covers: [24-DUR-02, 24-PART-03]
 profile: dur
