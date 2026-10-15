@@ -1,0 +1,72 @@
+# The journal codec carries scalar elements, not list-valued ones, so this
+# scenario deliberately uses scalar integers. With `key-of`, each scalar is
+# its own group key and the observable board is one count per element: the
+# recovery interaction, not key-function variety, is what this scenario pins.
+#
+# There is no snapshot step. PartitionedCell is not Stateful on this baseline,
+# so the journaled composite recovers by whole-tail replay into a rebuilt cell
+# under its recorded ref.
+#
+# Both the source and partition use the same recovered journal. After the
+# whole-host crash, the source's replayed re-emission and the partition's own
+# replayed inlet frames therefore reach the rebuilt composite. The twin and
+# `views-converge` check pin that the two routes are idempotent rather than
+# double-counting the scalar keys.
+#
+# Mutation boundary: a corpus-only mutation cannot preserve both replay routes
+# while changing one route's tag identity. Removing `dp`'s journal was the
+# closest available checks-level probe; it leaves source replay as the sole
+# route and stayed green. This scenario therefore records the unmutated
+# two-route overlap but does not claim mutation-killed coverage.
+id: DUR-PART-02
+title: A journaled partition remains equal to its twin when source and partition replay together
+covers: [24-DUR-02, 24-PART-03]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a journaled set source feeding a journaled partition and volatile count
+    view on the durable host, with source and partition on the same journal,
+    plus an uninterrupted partitioned twin driven by the identical scalar history
+  when: >
+    five elements reach both graphs, the durable host crashes and rebuilds all
+    cells while recovering the shared journal, then both graphs accept one more
+    element
+  then: >
+    the recovered volatile board equals the uninterrupted twin, the twin equals
+    the independent batch oracle, and no replay route produces a dead letter
+graph:
+  cells:
+    - {id: ds, type: journal-set-source, host: dur}
+    - {id: dp, type: partition, fn: key-of, journal: default, host: dur}
+    - {id: dv, type: count-view, host: dur}
+    - {id: ctl, type: journal, journal: default, host: dur}
+    - {id: ts, type: set-source, host: twin}
+    - {id: tp, type: partition, fn: key-of, host: twin}
+    - {id: tv, type: count-view, host: twin}
+  links:
+    - {from: ds, to: dp}
+    - {from: dp, to: dv}
+    - {from: ts, to: tp}
+    - {from: tp, to: tv}
+script:
+  - {type: apply, on: ds, op: add, value: 1}
+  - {type: apply, on: ts, op: add, value: 1}
+  - {type: apply, on: ds, op: add, value: 2}
+  - {type: apply, on: ts, op: add, value: 2}
+  - {type: apply, on: ds, op: add, value: 3}
+  - {type: apply, on: ts, op: add, value: 3}
+  - {type: apply, on: ds, op: add, value: 4}
+  - {type: apply, on: ts, op: add, value: 4}
+  - {type: apply, on: ds, op: add, value: 5}
+  - {type: apply, on: ts, op: add, value: 5}
+  - {type: quiesce}
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  - {type: apply, on: ds, op: add, value: 6}
+  - {type: apply, on: ts, op: add, value: 6}
+  - {type: quiesce}
+checks:
+  - {type: views-converge, views: [dv, tv]}
+  - {type: incremental-equals-batch, view: tv}
+  - {type: no-dead-letters}
