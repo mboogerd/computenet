@@ -175,7 +175,9 @@ for documentation maintenance.
     `computenet-07k`).
   - `demo/alignment/` (`:demo:alignment`): team alignment — ideas rated 1-9
     per creator-defined dimension, aggregated by a demo-local
-    `WeightedFusionCell` (ALN1, epic `computenet-6brvy`); the only demo that
+    `WeightedFusionCell` (ALN1, epic `computenet-6brvy`). AI raters (`AiRater`;
+    Jev via TypeSafe when `TYPESAFE_API_KEY` is set) rate as `ai:<model-version>`
+    and the same cells score them as a separate AI score (`RaterClass`); the only demo that
     defines its own KSP cell (backlog-triage consumes `:demograph`'s
     `RatingCell`/`MetaRankCell`, computenet-drz8.2).
   - `demo/allocator-observe/` (`:demo:allocator-observe`): spend-log

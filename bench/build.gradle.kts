@@ -3,6 +3,7 @@ plugins {
     // Toolchain 21, the JUnit5 stack, 2g test forks, forkEvery(80) and the 5m
     // per-method timeout all come from there — do not re-declare any of them here.
     id("buildsrc.convention.kotlin-jvm")
+    alias(libs.plugins.kotlin.plugin.serialization)
     alias(libs.plugins.jmh)
 }
 
@@ -19,6 +20,7 @@ plugins {
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":testkit"))
+    implementation(libs.kotlinx.serialization)
 }
 
 jmh {

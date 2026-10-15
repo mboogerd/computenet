@@ -70,3 +70,6 @@ __pycache__/
 # worktree can tell a LIVE MUTATION from finished work — committing one is a
 # silently broken production change. Never a tracked file.
 .mutation-in-progress
+
+# Pinned TLA+ model checker, downloaded and checksum-verified by formal/check.sh.
+formal/tools/tla2tools.jar

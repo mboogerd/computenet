@@ -14,7 +14,7 @@ bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 BIN=$ROOT/bin; mkdir -p "$BIN"; cp "$SCRIPT" "$BIN/resumable-epics.sh"
 cat > "$BIN/bd" <<'EOF'
 #!/usr/bin/env bash
-cat "$FEATURES"
+case "$*" in *--status=deferred*) cat "${DEFERRED:-/dev/null}" ;; *) cat "$FEATURES" ;; esac
 EOF
 cat > "$BIN/epic-of.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -68,6 +68,12 @@ out=$(run "$ROOT/f3")
   && grep -q "skipped unresolvable" "$ROOT/err" && grep -q "skipped orphan" "$ROOT/err" \
   && ok "unresolved and unparented are skipped with a note" \
   || bad "skip: out=$out err=$(cat "$ROOT/err")"
+
+# 5. a deferred epic is not resumable: claim-epic.sh refuses it (computenet-e8gjk
+#    was listed while deferred, computenet-2ubdj)
+echo '[{"id":"a"},{"id":"b"}]' > "$ROOT/f4"; echo '[{"id":"epic-of-b"}]' > "$ROOT/d4"
+[ "$(DEFERRED=$ROOT/d4 run "$ROOT/f4" | jq -c .)" = '["epic-of-a"]' ] \
+  && ok "a deferred epic is not listed" || bad "deferred: $(DEFERRED=$ROOT/d4 run "$ROOT/f4")"
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

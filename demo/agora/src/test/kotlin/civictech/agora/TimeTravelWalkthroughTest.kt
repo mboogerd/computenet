@@ -21,6 +21,7 @@ import civictech.timetravel.reconstruct.CellStateView
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.collections.shouldNotBeEmpty
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -99,7 +100,7 @@ class TimeTravelWalkthroughTest {
     private val allowListDegraded = FidelityDto(Verdict.DEGRADED, listOf(Reason.UNKNOWN_DETERMINISM))
 
     @Test
-    fun `inspect lists a record for every cell and every PORT_API frame hydrates as propagate`(@TempDir root: File) {
+    fun `inspect lists every journal-fed cell while the derived observation stays off the WAL`(@TempDir root: File) {
         val dir = File(root, "a")
         val (service, _) = record(dir)
 
@@ -108,7 +109,11 @@ class TimeTravelWalkthroughTest {
         val journal = json.decodeFromString<InspectReport>(result.out.trim()).journals.single()
 
         val refsInJournal = journal.records.mapNotNull { it.cellRef }.toSet()
-        refsInJournal shouldContainAll service.cells().map { it.ref.id.toString() }
+        val observationRef = service.observationGroupRef.id.toString()
+        refsInJournal shouldContainAll service.cells()
+            .filterNot { it.ref == service.observationGroupRef }
+            .map { it.ref.id.toString() }
+        refsInJournal shouldNotContain observationRef
 
         val portApi = journal.records.filter { it.type == "PORT_API" }
         portApi.shouldNotBeEmpty()

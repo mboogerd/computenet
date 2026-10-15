@@ -1,5 +1,6 @@
 package civictech.bench
 
+import kotlinx.serialization.Serializable
 import java.io.File
 
 /**
@@ -37,6 +38,7 @@ import java.io.File
  * @param harnessCommitSha the commit SHA of the harness (this repository) that
  *   produced the result.
  */
+@Serializable
 data class RunEnvironment(
     val jvmVendor: String,
     val jvmVersion: String,

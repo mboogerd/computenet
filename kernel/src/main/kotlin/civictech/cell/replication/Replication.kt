@@ -1,7 +1,12 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
+import civictech.cell.BoundarySeam
+import civictech.cell.BudgetClaim
+import civictech.cell.BudgetOutcome
+import civictech.cell.ClaimClass
 import civictech.cell.TagFrontier
+import civictech.cell.denyBudget
 import civictech.cell.consistency.CausalStability
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.consistency.ReplicaQuorum
@@ -10,6 +15,7 @@ import civictech.cell.control.StallNotice
 import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.data.WatermarkCell
+import civictech.cell.evolve.Effectful
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.notifyDownstream
@@ -17,11 +23,14 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
+import civictech.cell.link.NotificationFailures
+import civictech.cell.link.PeerStamp
 import civictech.cell.link.sliceTo
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.membrane.SignatureVerifier
 import java.util.*
 import civictech.cell.data.delta.WatermarkDelta
 import civictech.cell.data.delta.DeliveryTracking
@@ -74,9 +83,67 @@ class Replication(
         val deltaInlet: Use<Propagate<Any?>>
     }
 
+    /**
+     * Serializes the complete outbound-link lifecycle: local residency,
+     * formation, reconciliation, rollback, eviction, rebind, crash supersede,
+     * Retention holds, and the test reads over [linked].
+     *
+     * Link formation is two-phase: a reservation is installed under this
+     * monitor, [installLink]'s synchronous catch-up runs without it, then the
+     * link is published under the monitor. Retirement can therefore cancel a
+     * formation while catch-up is in flight; the post-install check removes
+     * the entry which the assignment could only write afterwards.
+     *
+     * **Lock order:** [LocationRegistry] may synchronously notify this linker
+     * while it holds a ref's park-queue monitor (a failed replay unpublishes
+     * its dead transport). Therefore this monitor is never held across a
+     * registry delivery or gossip catch-up, including first-link installation,
+     * re-announcement re-fire, and failed-install retry. The allowed nesting is
+     * park queue -> [linkLifecycle], never [linkLifecycle] -> park queue.
+     */
+    private val linkLifecycle = Any()
+
+    /** Guarded by [linkLifecycle]. */
     private val localReplicas = mutableMapOf<UUID, MutableList<Replicable<*>>>()
 
-    /** The host each local replica was spawned on — needed to suspend/despawn it later (eviction). */
+    /** Deterministic overlap seam; invoked immediately before formation enters [linkLifecycle]. */
+    @Volatile
+    internal var beforeLinkLifecycle: ((Replicable<*>, CellRef) -> Unit)? = null
+
+    /**
+     * Deterministic failure seam; invoked outside [linkLifecycle] before
+     * structural link installation.
+     */
+    @Volatile
+    internal var beforeLinkInstall: ((Replicable<*>, CellRef) -> Unit)? = null
+
+    private data class AuthorityBinding(
+        val authority: WriteAuthority,
+        val signer: WriteSigner,
+        val verifier: SignatureVerifier,
+    )
+
+    /** Authority adapters are lifecycle companions, never replica-set members. */
+    private val adapters = mutableMapOf<CellRef, AuthorityGossip>()
+    private val authorityBindings = mutableMapOf<CellRef, AuthorityBinding>()
+
+    /**
+     * One counter sequence per signing peer for this Replication's lifetime.
+     * A ref re-replicated here (rebind, evict-then-return, supersede) keeps
+     * signing above its earlier counters: peers retain those `(author, counter)`
+     * pairs, so restarting the sequence would refuse the owner's next writes
+     * as `REPLAY` while its own replica applied them. Cross-process restart is
+     * the incarnation's job (ermvz-D10), not this map's.
+     */
+    private val countingSigners = mutableMapOf<civictech.cell.link.PeerId, CountingWriteSigner>()
+
+    /** The local authority adapter for [ref], or null on the byte-identical open path. */
+    fun authorityOf(ref: CellRef): AuthorityGossip? = adapters[ref]
+
+    /**
+     * The host each local replica was spawned on — needed to suspend/despawn it
+     * later (eviction). Guarded by [linkLifecycle].
+     */
     private val hostOf = mutableMapOf<CellRef, ManagedHost>()
 
     /**
@@ -84,11 +151,128 @@ class Replication(
      * was reachable at eviction time (the suspend-when-partitioned gate,
      * G-45). Cleared, and the replica resumed, on the next re-announce that
      * makes a peer of the same logical id visible again (heal).
+     * Guarded by [linkLifecycle].
      */
     private val partitionSuspended = mutableSetOf<CellRef>()
 
-    /** Established gossip links per (local replica → remote replica) pair. */
+    /** Established gossip links per (local replica → remote replica) pair. Guarded by [linkLifecycle]. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
+
+    /**
+     * One in-flight first-link install per ordered replica pair. Guarded by
+     * [linkLifecycle]. Retirement marks the reservation cancelled rather than
+     * waiting for synchronous catch-up; completion then drops the just-built
+     * link and retries against any replacement endpoints that appeared while
+     * the old catch-up was in flight.
+     */
+    private class LinkFormation(
+        val local: Replicable<*>,
+        val other: CellRef,
+        val targetInterest: Interest,
+        val key: Pair<CellRef, CellRef>,
+        val hold: RetentionHold?,
+        /** Interest debit taken with [hold] by this formation, absent for a carried hold. */
+        val freshInterestUndo: (() -> Unit)?,
+    ) {
+        init {
+            check(freshInterestUndo == null || hold != null) {
+                "a fresh Interest debit must belong to a Retention hold"
+            }
+        }
+
+        var cancelled = false
+
+        /**
+         * The target was announced again while this formation's catch-up was
+         * in flight. That announcement found no entry in [linked] to re-fire
+         * through, so completion owes it the M10.1 anti-entropy catch-up: the
+         * in-flight one may have gone to the connection a recovering peer
+         * just replaced.
+         */
+        var reannounced = false
+    }
+
+    private val linkFormations = mutableMapOf<Pair<CellRef, CellRef>, LinkFormation>()
+
+    /**
+     * One Retention reservation for a charged gossip pair. A pending slot is
+     * installed before either ledger call, so a concurrent release can mark the
+     * admission as obsolete before its undo handle exists. It also owns an
+     * admitted Interest rollback until structural formation begins, allowing a
+     * same-ref replacement to resume either charge window without charging
+     * afresh. Map membership and charge-phase transitions happen under
+     * [linkLifecycle]; undo callbacks may run after an obsolete slot is removed.
+     */
+    private enum class AdmissionPhase {
+        INTEREST_CHARGING,
+        INTEREST_ADMITTED,
+        RETENTION_CHARGING,
+        INSTALLED,
+    }
+
+    private class RetentionHold(
+        val chargeHost: ManagedHost,
+        val announcer: PeerStamp,
+    ) {
+        private var phase = AdmissionPhase.INTEREST_CHARGING
+        private var interestUndo: (() -> Unit)? = null
+        private var retentionUndo: (() -> Unit)? = null
+        private var released = false
+
+        val installed: Boolean get() = phase == AdmissionPhase.INSTALLED
+
+        fun admitInterest(action: () -> Unit) {
+            check(!released && phase == AdmissionPhase.INTEREST_CHARGING) {
+                "cannot admit Interest in Retention phase $phase"
+            }
+            interestUndo = action
+            phase = AdmissionPhase.INTEREST_ADMITTED
+        }
+
+        fun beginRetentionCharge(): Boolean {
+            if (released || phase != AdmissionPhase.INTEREST_ADMITTED) return false
+            phase = AdmissionPhase.RETENTION_CHARGING
+            return true
+        }
+
+        fun admitRetention(action: () -> Unit) {
+            check(!released && phase == AdmissionPhase.RETENTION_CHARGING) {
+                "cannot install Retention in admission phase $phase"
+            }
+            retentionUndo = action
+            phase = AdmissionPhase.INSTALLED
+        }
+
+        fun freshInterestUndo(): (() -> Unit)? = interestUndo
+
+        fun transferInterestToFormation() {
+            check(installed) { "cannot transfer Interest before Retention is installed" }
+            interestUndo = null
+        }
+
+        fun release() {
+            if (released) return
+            released = true
+            retentionUndo?.also { retentionUndo = null }?.invoke()
+            // Before structural formation takes ownership, an admitted
+            // Interest debit is still part of this pending admission. A real
+            // retirement rolls both charges back; same-ref recovery leaves the
+            // slot in the map and transfers this callback to LinkFormation.
+            interestUndo?.also { interestUndo = null }?.invoke()
+        }
+    }
+
+    /**
+     * Retention reservations held for charged gossip links, keyed by the same
+     * pair as [linked]. [linkLifecycle] is their shared monitor: [maybeLink]
+     * installs a pending slot before charging, while unlink/rollback/eviction
+     * remove that same slot through [releaseHoldsMatchingLocked]. Thus a release that
+     * overlaps admission either releases an installed hold or causes the later
+     * admission to undo both charges without forming a link. Rebind and crash
+     * supersede deliberately leave the slot present, so their same-ref replacement
+     * completes the in-flight admission under the stable link identity (jtof7-D9).
+     */
+    private val retentionHolds = mutableMapOf<Pair<CellRef, CellRef>, RetentionHold>()
 
     /**
      * The tag-lane high-water of a replica that LEFT this peer, kept against the
@@ -325,7 +509,8 @@ class Replication(
             }
             for (notice in detector.evaluate(rows, open, closed)) {
                 stabilityStallListeners[logicalId]?.toList()?.forEach { it(notice) }
-                localReplicas[logicalId]?.toList()?.forEach { replica -> notifyDownstream(replica, notice) }
+                val replicas = synchronized(linkLifecycle) { localReplicas[logicalId]?.toList().orEmpty() }
+                replicas.forEach { replica -> notifyDownstream(replica, notice) }
             }
         }, PortRef.generate()))
     }
@@ -414,9 +599,10 @@ class Replication(
         registry.onPublish { ref -> linkOut(ref) }
         // reconcile (spec 42, G-45): a peer's despawn/eviction — or, since T21,
         // a whole peer dropped by `unpublishRemotes` — removes it from
-        // replicasOf; drop the now-stale outbound gossip link rather than
-        // leaving it targeting a gone ref (no ack protocol — this is purely
-        // local bookkeeping, the routed proxy would otherwise just dead-letter).
+        // replicasOf; release the link's Retention reservation and drop the
+        // now-stale outbound gossip link rather than leaving it targeting a
+        // gone ref (no ack protocol — this is purely local bookkeeping, the
+        // routed proxy would otherwise just dead-letter).
         //
         // Bookkeeping only, deliberately: the outlet attachment itself is left
         // in place and simply *replaced* if the peer comes back, because the
@@ -425,7 +611,11 @@ class Replication(
         // same guarantee — but it would have to be repeated in [evict] and
         // [rebind], and it is the derived key, not this call site, that makes
         // re-linking idempotent no matter which path dropped the entry.
-        registry.onUnpublish { ref -> linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) } }
+        registry.onUnpublish { ref ->
+            synchronized(linkLifecycle) {
+                releaseHoldsMatchingLocked { it.second == ref }
+            }
+        }
     }
 
     /**
@@ -438,7 +628,13 @@ class Replication(
      * see [supersedeLocalInstance] for why the superseded instance's local
      * bookkeeping has to be dropped here rather than by a cooperative path.
      */
-    fun replicate(cell: Replicable<*>, host: ManagedHost) {
+    fun replicate(
+        cell: Replicable<*>,
+        host: ManagedHost,
+        authority: WriteAuthority = WriteAuthority.Open,
+        signer: WriteSigner? = null,
+        verifier: SignatureVerifier? = null,
+    ) {
         // PN-17 effect-authority formation refusal (spec 31 §Effects on instance
         // sets, plan §3b). A [Replicable] that is ALSO
         // [civictech.cell.evolve.Effectful] joining THIS mergeable mesh has no
@@ -462,7 +658,7 @@ class Replication(
         // The authority-bearing path is [SingleWriterReplication.replicate] (a
         // SingleWriterReplicable leader fires, followers suppress) — a distinct
         // method this guard never sees, so authority-declaring cells stay admitted.
-        if (cell is civictech.cell.evolve.Effectful) {
+        if (cell is Effectful) {
             val interest = registry.instances.interestOf(cell.ref)
             val overlapsExisting = registry.instances.replicasOf(cell.ref.id)
                 .any { it != cell.ref && interest.overlaps(registry.instances.interestOf(it)) }
@@ -474,6 +670,34 @@ class Replication(
                 hasAuthority = false,
             )
         }
+        val adapter = if (authority == WriteAuthority.Open) {
+            null
+        } else {
+            val requiredSigner = requireNotNull(signer) {
+                "write authority for ${cell.ref} requires a WriteSigner"
+            }
+            val requiredVerifier = requireNotNull(verifier) {
+                "write authority for ${cell.ref} requires a SignatureVerifier"
+            }
+            require(registry.instances.interestOf(cell.ref) is Interest.Total) {
+                "write authority for ${cell.ref} requires total interest"
+            }
+            val localDelta = (HostedCellProxy.create(cell.ref, host, ReplicaDeltaInlet::class.java)
+                as ReplicaDeltaInlet).deltaInlet.call
+            AuthorityGossip(
+                cell = cell,
+                authority = authority,
+                signer = countingSigners.getOrPut(requiredSigner.peerId) {
+                    CountingWriteSigner(requiredSigner)
+                },
+                verifier = requiredVerifier,
+                writeAhead = localDelta::propagate,
+                afterRecoveryApplied = { block ->
+                    host.recoveryAwareQuiescence().asFuture().thenRun(block)
+                    Unit
+                },
+            )
+        }
         val superseded = supersedeLocalInstance(cell)
         // computenet-uju5: a ref that returns here continues the tag lane its previous
         // incarnation left, instead of restarting the counter and re-minting tags peers
@@ -481,9 +705,42 @@ class Replication(
         // behaviour, unchanged. `continueTagLaneAbove` never lowers, so a cell restored
         // from a checkpoint (which carries its own counter) is not disturbed.
         departedTagLanes[cell.ref]?.let { high -> (cell as? TagLaneContinuity)?.continueTagLaneAbove(high) }
-        localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
-        hostOf[cell.ref] = host
+        synchronized(linkLifecycle) {
+            localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
+            hostOf[cell.ref] = host
+        }
+        if (adapter == null) {
+            adapters.remove(cell.ref)
+            authorityBindings.remove(cell.ref)
+        } else {
+            adapters[cell.ref] = adapter
+            authorityBindings[cell.ref] = AuthorityBinding(authority, signer!!, verifier!!)
+        }
         host.managementInlet.call.spawn(cell)
+        if (adapter != null) {
+            try {
+                host.spawnDurabilityCompanion(adapter, cell.ref)
+            } catch (failure: Throwable) {
+                try {
+                    host.rollbackSpawn(cell.ref)
+                } catch (cleanupFailure: Throwable) {
+                    failure.addSuppressed(cleanupFailure)
+                }
+                synchronized(linkLifecycle) {
+                    localReplicas[cell.ref.id]?.let { replicas ->
+                        replicas.remove(cell)
+                        if (replicas.isEmpty()) localReplicas.remove(cell.ref.id)
+                    }
+                    if (hostOf[cell.ref] === host) hostOf.remove(cell.ref)
+                    releaseHoldsMatchingLocked { it.first == cell.ref }
+                }
+                if (adapters[cell.ref] === adapter) {
+                    adapters.remove(cell.ref)
+                    authorityBindings.remove(cell.ref)
+                }
+                throw failure
+            }
+        }
         registry.instances.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
         trackDeliveries(cell, host, rehome = superseded)
     }
@@ -511,10 +768,11 @@ class Replication(
      * this call — is the only event a crash and a rebuild both reach.
      *
      * Like [rebind] and unlike [evict] this does **not** close the
-     * delivered-watermark row: this peer is not departing, the same ref returns,
-     * and the row must keep constraining replica-fed frontier reads. And like
-     * [rebind] it leaves the stale outlet attachment alone — [gossipRef] makes
-     * the re-link *replace* it at the outlet.
+     * delivered-watermark row or release the Retention reservation: this peer
+     * is not departing, the same ref returns, and both remain authoritative
+     * across the rebuild. And like [rebind] it leaves the stale outlet
+     * attachment alone — [gossipRef] makes the re-link *replace* it at the
+     * outlet.
      *
      * A first replicate of a fresh ref, and [rebind]/[evict] (which already
      * removed the incumbent), find nothing here: the path is a no-op for every
@@ -554,16 +812,21 @@ class Replication(
     }
 
     private fun supersedeLocalInstance(cell: Replicable<*>): Boolean {
-        val locals = localReplicas[cell.ref.id] ?: return false
-        if (!locals.any { it !== cell && it.ref == cell.ref }) return false
-        // computenet-uju5: the superseded instance is a departing incarnation of this ref
-        // — the crash-and-rebuild shape — so its tag lane is carried the same way
-        // [evict]'s is. See [departedTagLanes].
-        locals.filter { it !== cell && it.ref == cell.ref }.forEach { rememberTagLane(it) }
-        locals.removeAll { it !== cell && it.ref == cell.ref }
-        linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
-        if (partitionSuspended.remove(cell.ref)) watermarks[cell.ref.id]?.resume()
-        return true
+        var resumeWatermark = false
+        val superseded = synchronized(linkLifecycle) {
+            val locals = localReplicas[cell.ref.id] ?: return@synchronized false
+            if (!locals.any { it !== cell && it.ref == cell.ref }) return@synchronized false
+            // computenet-uju5: the superseded instance is a departing incarnation of this ref
+            // — the crash-and-rebuild shape — so its tag lane is carried the same way
+            // [evict]'s is. See [departedTagLanes].
+            locals.filter { it !== cell && it.ref == cell.ref }.forEach { rememberTagLane(it) }
+            locals.removeAll { it !== cell && it.ref == cell.ref }
+            dropLinksMatchingLocked { it.first == cell.ref }
+            resumeWatermark = partitionSuspended.remove(cell.ref)
+            true
+        }
+        if (resumeWatermark) watermarks[cell.ref.id]?.resume()
+        return superseded
     }
 
     /**
@@ -595,7 +858,8 @@ class Replication(
             fresh = true
             WatermarkCell(watermarkRef(cell.ref)).also { replicate(it, host) }
         }
-        if (rehome && !fresh && hostOf[companion.ref] !== host) rehomeCompanion(companion, host)
+        val companionNeedsRehome = synchronized(linkLifecycle) { hostOf[companion.ref] !== host }
+        if (rehome && !fresh && companionNeedsRehome) rehomeCompanion(companion, host)
         // FU-2 converged-membership barrier: announce this covering member's
         // existence on the companion mesh (a transitively-gossiped CRDT), so a
         // settling peer holds keyed waves until its own membership view has caught
@@ -675,7 +939,7 @@ class Replication(
      * frontier is now provided. It is not; see E3.6(c) above.
      */
     private fun rehomeCompanion(companion: WatermarkCell, host: ManagedHost) {
-        hostOf[companion.ref] = host
+        synchronized(linkLifecycle) { hostOf[companion.ref] = host }
         host.managementInlet.call.spawn(companion)
     }
 
@@ -762,7 +1026,8 @@ class Replication(
      * Returns `true` if the replica despawned, `false` if it suspended
      * instead (no reachable peer).
      *
-     * On a real (despawn) departure this closes the local delivered-watermark
+     * On a real (despawn) departure this releases every Retention reservation
+     * held for the replica's outbound links, then closes the local delivered-watermark
      * row once this peer hosts no further replica of the logical id (PN-0c, spec
      * 40/42 §Delivered watermarks): [WatermarkCell.close] marks the row cleanly
      * departed so a downstream replica-fed frontier stops constraining reads on
@@ -778,7 +1043,8 @@ class Replication(
     fun evict(cell: Replicable<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
         val reachablePeers = registry.instances.replicasOf(cell.ref.id) - cell.ref
         if (reachablePeers.isEmpty()) {
-            if (partitionSuspended.add(cell.ref)) {
+            val newlySuspended = synchronized(linkLifecycle) { partitionSuspended.add(cell.ref) }
+            if (newlySuspended) {
                 host.managementInlet.call.suspend(cell.ref)
                 // PN-19: publish the recoverable Stall on the watermark mesh so a
                 // DEGRADE covering-quorum read drops this parked member (restored
@@ -791,7 +1057,9 @@ class Replication(
         // step 2; 93 I-3 §4.6). The link to catch up on is captured HERE, in the
         // caller's frame, because the local bookkeeping below drops `linked`
         // synchronously while the drain runs on the host's scheduler thread.
-        val catchUpTarget = linked.entries.firstOrNull { it.key.first == cell.ref }?.value?.second
+        val catchUpTarget = synchronized(linkLifecycle) {
+            linked.entries.firstOrNull { it.key.first == cell.ref }?.value?.second
+        }
         host.drainCellThenDespawn(cell.ref) {
             // Final push-catch-up to one reachable peer: anti-entropy for state
             // this replica holds that the peer may not have absorbed, idempotent
@@ -800,7 +1068,7 @@ class Replication(
             // just flushed (computenet-078s closed that ordering wart).
             catchUpTarget?.let { link ->
                 @Suppress("UNCHECKED_CAST")
-                (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+                gossipOutlet(cell).linking.fireLinked(link)
             }
         }
         // computenet-uju5: the replica is leaving on a ref that may come back here. Carry
@@ -809,14 +1077,19 @@ class Replication(
         // counter space their rows already cover. Recorded on the DESPAWN path only — the
         // suspend branch above returns early and keeps the very same object, so its lane
         // never restarts. See [departedTagLanes].
-        rememberTagLane(cell)
-        localReplicas[cell.ref.id]?.remove(cell)
+        val closeWatermarkRow = synchronized(linkLifecycle) {
+            rememberTagLane(cell)
+            localReplicas[cell.ref.id]?.remove(cell)
+            hostOf.remove(cell.ref)
+            releaseHoldsMatchingLocked { it.first == cell.ref }
+            partitionSuspended.remove(cell.ref)
+            closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()
+        }
         // clean-departure watermark close: only once the last local replica of
         // this id leaves (the companion carries this peer's single row).
-        if (closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()) watermarks[cell.ref.id]?.close()
-        hostOf.remove(cell.ref)
-        linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
-        partitionSuspended.remove(cell.ref)
+        if (closeWatermarkRow) watermarks[cell.ref.id]?.close()
+        adapters.remove(cell.ref)?.let { adapter -> host.managementInlet.call.despawn(adapter.ref) }
+        authorityBindings.remove(cell.ref)
         return true
     }
 
@@ -857,11 +1130,11 @@ class Replication(
      *    known peer and the candidate's own `catchUpOnLinked` re-syncs it.
      *
      * The incumbent's local bookkeeping and outbound links are dropped WITHOUT
-     * closing the delivered-watermark row (unlike [evict]): this peer stays a
-     * member — the same ref returns — so the row must keep constraining. Inbound
-     * gossip that arrives during the object swap parks at the registry on the
-     * despawn's unpublish and replays on the candidate's republish, so no peer
-     * delta is lost.
+     * closing the delivered-watermark row or releasing its Retention reservation
+     * (unlike [evict]): this peer stays a member — the same ref returns — so both
+     * remain authoritative. Inbound gossip that arrives during the object swap
+     * parks at the registry on the despawn's unpublish and replays on the
+     * candidate's republish, so no peer delta is lost.
      */
     fun rebind(
         incumbent: Replicable<*>,
@@ -874,14 +1147,18 @@ class Replication(
                 "continues the tag lane and the watermark row); candidate ${candidate.ref} != incumbent ${incumbent.ref}"
         }
         val ref = incumbent.ref
+        val authorityBinding = authorityBindings.remove(ref)
+        val adapter = adapters.remove(ref)
         if (carryTagState && incumbent is civictech.cell.Stateful && candidate is civictech.cell.Stateful) {
             candidate.restore(incumbent.snapshot())
         }
         // drop the incumbent's local bookkeeping + outbound gossip, but NEVER the
         // watermark row (this peer is not departing — the same ref returns).
-        localReplicas[ref.id]?.remove(incumbent)
-        hostOf.remove(ref)
-        linked.keys.filter { it.first == ref }.toList().forEach { linked.remove(it) }
+        synchronized(linkLifecycle) {
+            localReplicas[ref.id]?.remove(incumbent)
+            hostOf.remove(ref)
+            dropLinksMatchingLocked { it.first == ref }
+        }
         // Promotion COMMIT is an explicit management operation (spec 34
         // decision 5, [ECO1-DEN-08]), not a new resource request by the peer
         // whose stamp happens to surround promoteReplica. The caller's
@@ -889,10 +1166,18 @@ class Replication(
         // stamp while the local swap despawns and re-spawns, then let
         // CurrentPeer restore it for the caller.
         CurrentPeer.withStamp(null) {
+            adapter?.let { host.managementInlet.call.despawn(it.ref) }
             host.managementInlet.call.despawn(ref)
             // recovery: republish the candidate under the SAME ref and re-establish
             // this peer's gossip + watermark tracking (companion reused).
-            replicate(candidate, host)
+            if (authorityBinding == null) replicate(candidate, host)
+            else replicate(
+                candidate,
+                host,
+                authorityBinding.authority,
+                authorityBinding.signer,
+                authorityBinding.verifier,
+            )
         }
     }
 
@@ -903,16 +1188,29 @@ class Replication(
      * watermark companions the mesh also links — the assertion is "one link per
      * overlapping instance pair", the one-linker invariant.
      */
-    internal fun linkCountAmong(refs: Set<CellRef>): Int =
+    internal fun linkCountAmong(refs: Set<CellRef>): Int = synchronized(linkLifecycle) {
         linked.keys.count { it.first in refs && it.second in refs }
+    }
 
     private fun linkOut(newRef: CellRef) {
-        localReplicas[newRef.id]?.forEach { local ->
+        val locals = synchronized(linkLifecycle) { localReplicas[newRef.id]?.toList().orEmpty() }
+        locals.forEach { local ->
             maybeLink(local, newRef)
             // heal (G-45): a newly visible peer un-partitions a locally suspended replica
-            if (local.ref in partitionSuspended && (registry.instances.replicasOf(local.ref.id) - local.ref).isNotEmpty()) {
-                partitionSuspended -= local.ref
-                hostOf[local.ref]?.managementInlet?.call?.resume(local.ref)
+            val resumeHost = synchronized(linkLifecycle) {
+                if (
+                    localReplicas[local.ref.id]?.any { it === local } == true &&
+                    local.ref in partitionSuspended &&
+                    (registry.instances.replicasOf(local.ref.id) - local.ref).isNotEmpty()
+                ) {
+                    partitionSuspended -= local.ref
+                    hostOf[local.ref]
+                } else {
+                    null
+                }
+            }
+            if (resumeHost != null) {
+                resumeHost.managementInlet.call.resume(local.ref)
                 // PN-19: retract the recoverable Stall — the DEGRADE covering quorum
                 // re-admits this member; its post-resume catch-up (PN-2 baseline /
                 // anti-entropy) advances the row it froze while parked.
@@ -932,7 +1230,66 @@ class Replication(
         val targetInterest = registry.instances.interestOf(other)
         if (!registry.instances.interestOf(local.ref).overlaps(targetInterest)) return
         val key = local.ref to other
-        linked[key]?.let { (cell, link) ->
+        beforeLinkLifecycle?.invoke(local, other)
+
+        var interestAdmission: RetentionHold? = null
+        var retentionAdmission: RetentionHold? = null
+        var catchUp: Pair<Replicable<*>, Link>? = null
+        var formation: LinkFormation? = null
+        var formationDecided = false
+        synchronized(linkLifecycle) {
+            if (!linkEndpointsLiveLocked(local, other)) return
+            linked[key]?.let { (cell, link) ->
+                catchUp = cell to link
+                return@synchronized
+            }
+            // A first-link catch-up is already in flight. Its reservation is
+            // the pair's lifecycle identity until completion; a retirement
+            // marks it cancelled and completion retries against replacements.
+            // The announcement itself is recorded, so completion re-fires the
+            // catch-up this call would have sent through an established link.
+            linkFormations[key]?.let { inFlight ->
+                inFlight.reannounced = true
+                return
+            }
+
+            if (local !is WatermarkCell) {
+                val host = localHostIfLiveLocked(local)
+                val announcer = (registry.location(other) as? LocationRegistry.Remote)?.announcer
+                if (host != null && announcer != null) {
+                    retentionHolds[key]?.let { hold ->
+                        formationDecided = true
+                        if (hold.installed) {
+                            formation = beginHeldLinkFormationLocked(local, other, targetInterest, key, hold)
+                        } else if (hold.beginRetentionCharge()) {
+                            // A same-ref replacement arrived after Interest
+                            // admitted but before the retired caller could
+                            // continue. It inherits that admission and drives
+                            // the one remaining charge itself (jtof7-D9).
+                            retentionAdmission = hold
+                        }
+                        return@synchronized
+                    }
+                    if (!host.anyLedgerOnChain()) {
+                        formation = beginLinkFormationLocked(local, other, targetInterest, key)
+                        formationDecided = true
+                        return@synchronized
+                    }
+                    interestAdmission = RetentionHold(host, announcer)
+                        .also { retentionHolds[key] = it }
+                } else {
+                    formation = beginLinkFormationLocked(local, other, targetInterest, key)
+                    formationDecided = true
+                    return@synchronized
+                }
+            } else {
+                formation = beginLinkFormationLocked(local, other, targetInterest, key)
+                formationDecided = true
+                return@synchronized
+            }
+        }
+
+        catchUp?.let { (cell, link) ->
             // Anti-entropy on re-announce (M10.1): a re-announced replica may
             // be RECOVERING from a crash — frames the transport had already
             // swallowed at crash time were never journaled on its side, so
@@ -945,10 +1302,276 @@ class Replication(
             // a superseded instance's entry first ([supersedeLocalInstance],
             // computenet-h50w): `cell` here is whatever object was linked, and
             // re-firing a DISCARDED one's outlet reaches nobody.
+            //
+            // The lookup is lifecycle-serialized, but transport delivery is not:
+            // an echo can synchronously re-enter this Replication, and retirement
+            // must remain able to drop the captured link while catch-up is in flight.
             @Suppress("UNCHECKED_CAST")
-            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+            gossipOutlet(cell).linking.fireLinked(link)
             return
         }
+        formation?.let {
+            installLinkChecked(it)
+            return
+        }
+
+        retentionAdmission?.let {
+            chargeRetention(key, other, targetInterest, it)
+            return
+        }
+        if (formationDecided) return
+        chargeInterest(key, other, targetInterest, requireNotNull(interestAdmission))
+    }
+
+    private fun chargeInterest(
+        key: Pair<CellRef, CellRef>,
+        other: CellRef,
+        targetInterest: Interest,
+        admission: RetentionHold,
+    ) {
+        val claim = budgetClaim(admission.announcer, ClaimClass.Interest, key = key)
+        when (val interest = admission.chargeHost.chargeThroughAncestors(claim)) {
+            is BudgetOutcome.Refused -> {
+                synchronized(linkLifecycle) {
+                    if (retentionHolds[key] === admission) retentionHolds.remove(key)
+                }
+                denyLinkBudget(admission.chargeHost, interest, claim, key)
+            }
+            is BudgetOutcome.Admitted -> {
+                var continueWithRetention = false
+                val kept = synchronized(linkLifecycle) {
+                    if (retentionHolds[key] !== admission || registry.location(other) == null) {
+                        if (retentionHolds[key] === admission) retentionHolds.remove(key)
+                        false
+                    } else {
+                        admission.admitInterest(interest.undo)
+                        // The exact object that initiated the charge may have
+                        // retired. If its same-ref replacement is already live,
+                        // continue immediately; otherwise leave the admitted
+                        // slot for that replacement's maybeLink call to resume.
+                        if (liveLocalAtRefLocked(key.first) != null) {
+                            continueWithRetention = admission.beginRetentionCharge()
+                        }
+                        true
+                    }
+                }
+                if (!kept) {
+                    interest.undo()
+                } else if (continueWithRetention) {
+                    chargeRetention(key, other, targetInterest, admission)
+                }
+            }
+        }
+    }
+
+    private fun chargeRetention(
+        key: Pair<CellRef, CellRef>,
+        other: CellRef,
+        targetInterest: Interest,
+        admission: RetentionHold,
+    ) {
+        val claim = budgetClaim(admission.announcer, ClaimClass.Retention, hold = true)
+        when (val retention = admission.chargeHost.chargeThroughAncestors(claim)) {
+            is BudgetOutcome.Refused -> {
+                val owned = synchronized(linkLifecycle) {
+                    if (retentionHolds[key] !== admission) false
+                    else {
+                        retentionHolds.remove(key)
+                        true
+                    }
+                }
+                if (owned) admission.release()
+                denyLinkBudget(admission.chargeHost, retention, claim, key)
+            }
+            is BudgetOutcome.Admitted -> {
+                var formation: LinkFormation? = null
+                var releaseAdmission = false
+                val kept = synchronized(linkLifecycle) {
+                    if (retentionHolds[key] !== admission) {
+                        false
+                    } else if (registry.location(other) == null) {
+                        retentionHolds.remove(key)
+                        releaseAdmission = true
+                        false
+                    } else {
+                        admission.admitRetention(retention.undo)
+                        liveLocalAtRefLocked(key.first)?.let { current ->
+                            formation = beginHeldLinkFormationLocked(
+                                current,
+                                other,
+                                targetInterest,
+                                key,
+                                admission,
+                            )
+                        }
+                        // A same-ref swap can be between despawn and spawn at
+                        // this instant. Keep the installed admission in that
+                        // gap; the replacement resumes it without recharging.
+                        true
+                    }
+                }
+                if (!kept) {
+                    if (releaseAdmission) admission.release()
+                    retention.undo()
+                } else {
+                    formation?.let(::installLinkChecked)
+                }
+            }
+        }
+    }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun localHostIfLiveLocked(local: Replicable<*>): ManagedHost? {
+        if (localReplicas[local.ref.id]?.any { it === local } != true) return null
+        return hostOf[local.ref]
+    }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun liveLocalAtRefLocked(ref: CellRef): Replicable<*>? =
+        localReplicas[ref.id]
+            ?.lastOrNull { it.ref == ref }
+            ?.takeIf { localHostIfLiveLocked(it) != null }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun linkEndpointsLiveLocked(local: Replicable<*>, other: CellRef): Boolean =
+        localHostIfLiveLocked(local) != null && registry.location(other) != null
+
+    /** Must be called under [linkLifecycle]. */
+    private fun beginLinkFormationLocked(
+        local: Replicable<*>,
+        other: CellRef,
+        targetInterest: Interest,
+        key: Pair<CellRef, CellRef>,
+        hold: RetentionHold? = null,
+        freshInterestUndo: (() -> Unit)? = null,
+    ): LinkFormation? {
+        if (!linkEndpointsLiveLocked(local, other) || linkFormations.containsKey(key)) return null
+        return LinkFormation(local, other, targetInterest, key, hold, freshInterestUndo)
+            .also { linkFormations[key] = it }
+    }
+
+    /** Must be called under [linkLifecycle]. */
+    private fun beginHeldLinkFormationLocked(
+        local: Replicable<*>,
+        other: CellRef,
+        targetInterest: Interest,
+        key: Pair<CellRef, CellRef>,
+        hold: RetentionHold,
+    ): LinkFormation? {
+        val freshInterestUndo = hold.freshInterestUndo()
+        return beginLinkFormationLocked(
+            local,
+            other,
+            targetInterest,
+            key,
+            hold,
+            freshInterestUndo,
+        )?.also {
+            // Once structural formation starts, LinkFormation owns rollback
+            // for the debit. A later same-ref retry carries the installed hold
+            // and the already-spent Interest charge without a second debit.
+            hold.transferInterestToFormation()
+        }
+    }
+
+    /**
+     * Build the structural link and fire its synchronous catch-up without
+     * [linkLifecycle]. Retirement can therefore enter, cancel [formation], and
+     * return while a transport send is blocked. Completion publishes the link
+     * and validates the reservation atomically afterwards.
+     */
+    private fun installLinkChecked(formation: LinkFormation) {
+        val link = try {
+            installLink(
+                formation.local,
+                formation.other,
+                formation.targetInterest,
+                formation.key,
+            )
+        } catch (failure: Throwable) {
+            var releaseFreshHold: RetentionHold? = null
+            val retry = synchronized(linkLifecycle) {
+                if (linkFormations[formation.key] === formation) {
+                    linkFormations.remove(formation.key)
+                }
+
+                // Only a formation that admitted both charges itself owns
+                // their rollback. A same-ref rebind/crash-supersede enters
+                // with an installed hold and must carry it through a failed
+                // relink instead of releasing another call's reservation.
+                if (
+                    formation.freshInterestUndo != null &&
+                    retentionHolds[formation.key] === formation.hold
+                ) {
+                    retentionHolds.remove(formation.key)
+                    releaseFreshHold = formation.hold
+                }
+
+                (formation.cancelled || formation.reannounced) &&
+                    registry.location(formation.other) != null
+            }
+
+            // Ledger callbacks and the retry's synchronous catch-up are both
+            // outside linkLifecycle. Retirement may already have released the
+            // hold; in that case the identity check above leaves it alone, but
+            // this formation still refunds its own Interest debit.
+            releaseFreshHold?.release()
+            formation.freshInterestUndo?.invoke()
+            if (retry) {
+                try {
+                    linkOut(formation.other)
+                } catch (retryFailure: Throwable) {
+                    if (retryFailure !== failure) failure.addSuppressed(retryFailure)
+                }
+            }
+            throw failure
+        }
+
+        var refire = false
+        val retry = synchronized(linkLifecycle) {
+            val retry = installLinkCheckedLocked(formation, link)
+            refire = formation.reannounced && linked[formation.key]?.second === link
+            retry
+        }
+        if (retry) {
+            linkOut(formation.other)
+        } else if (refire) {
+            // Outside the monitor, like every other catch-up delivery.
+            @Suppress("UNCHECKED_CAST")
+            gossipOutlet(formation.local).linking.fireLinked(link)
+        }
+    }
+
+    /**
+     * Must be called under [linkLifecycle]. Publish the completed link, then
+     * discard it if retirement cancelled the formation, either endpoint left,
+     * or the charged Retention hold was released during catch-up. Returning
+     * true asks the caller to reconcile any replacement endpoint now visible.
+     */
+    private fun installLinkCheckedLocked(formation: LinkFormation, link: Link): Boolean {
+        check(linkFormations[formation.key] === formation) {
+            "replication link formation lost its lifecycle reservation for ${formation.key}"
+        }
+        linkFormations.remove(formation.key)
+        linked[formation.key] = formation.local to link
+        if (
+            formation.cancelled ||
+            !linkEndpointsLiveLocked(formation.local, formation.other) ||
+            (formation.hold != null && retentionHolds[formation.key] !== formation.hold)
+        ) {
+            linked.remove(formation.key)
+            return formation.cancelled && registry.location(formation.other) != null
+        }
+        return false
+    }
+
+    private fun installLink(
+        local: Replicable<*>,
+        other: CellRef,
+        targetInterest: Interest,
+        key: Pair<CellRef, CellRef>,
+    ): Link {
+        beforeLinkInstall?.invoke(local, other)
         // the proxy resolves the port by name; delta types are erased on this
         // path and re-checked at the receiving inlet's serve
         val routed = (HostedCellProxy.create(other, registry, ReplicaDeltaInlet::class.java)
@@ -961,9 +1584,73 @@ class Replication(
         // byte-identical.
         val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
+        val outlet = gossipOutlet(local)
+        val at = gossipRef(key.first, key.second)
         @Suppress("UNCHECKED_CAST")
-        linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(sink, at = gossipRef(local.ref, other))
+        return try {
+            outlet.streamTo(sink, at = at)
+        } catch (failure: Throwable) {
+            // streamTo installs the consumer and LinkSupport record before it
+            // fires onLinked catch-up. If that delivery throws, no Link is
+            // returned to installLinkChecked, so tear the partial topology down
+            // here — still outside linkLifecycle and before the outer catch
+            // releases this formation's Retention hold and Interest debit.
+            val teardownFailures = NotificationFailures()
+            outlet.linking.links.filter { it.to == at }.forEach { partial ->
+                teardownFailures.guard { partial.unlink() }
+            }
+            // Defensive half for a failure between subscribe and register.
+            outlet.unsubscribe(at)
+            try {
+                teardownFailures.rethrow()
+            } catch (teardownFailure: Throwable) {
+                if (teardownFailure !== failure) failure.addSuppressed(teardownFailure)
+            }
+            throw failure
+        }
     }
+
+    private fun budgetClaim(
+        announcer: PeerStamp,
+        claimClass: ClaimClass,
+        key: Any? = null,
+        hold: Boolean = false,
+    ): BudgetClaim = BudgetClaim(announcer, claimClass, key, hold)
+
+    private fun denyLinkBudget(
+        host: ManagedHost,
+        refused: BudgetOutcome.Refused,
+        claim: BudgetClaim,
+        key: Pair<CellRef, CellRef>,
+    ) {
+        host.budgetDenialSink.denyBudget(
+            refused,
+            claim,
+            BoundarySeam.LINK_AUTHORITY,
+            subject = gossipRef(key.first, key.second).toString(),
+        )
+    }
+
+    /** Must be called under [linkLifecycle]; drops links but carries Retention holds. */
+    private fun dropLinksMatchingLocked(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
+        linkFormations.values.filter { predicate(it.key) }.forEach { it.cancelled = true }
+        linked.keys.filter(predicate).toList().forEach { linked.remove(it) }
+    }
+
+    /** Must be called under [linkLifecycle]; retirement drops links and releases holds together. */
+    private fun releaseHoldsMatchingLocked(predicate: (Pair<CellRef, CellRef>) -> Boolean) {
+        dropLinksMatchingLocked(predicate)
+        // Default-off: do not build a filtered key list when no ledger ever
+        // installed a hold ([ECO1-BUD-04]).
+        if (retentionHolds.isEmpty()) return
+        retentionHolds.keys.filter(predicate).toList().forEach { key ->
+            retentionHolds.remove(key)?.release()
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun gossipOutlet(cell: Replicable<*>): FanOutlet<Propagate<Any?>> =
+        adapters[cell.ref]?.outlet ?: (cell.outlet as FanOutlet<Propagate<Any?>>)
 
     /**
      * The stable identity of the gossip subscription `local → other` carries on

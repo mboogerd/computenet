@@ -96,6 +96,11 @@ interface WeightedFusionApi {
  * dimension is REMOVED — unscored is an absent key. A [Scored] with a null
  * score is present: it carries the stats and names the unrated side
  * (k1d4g-D3).
+ *
+ * Each [RaterClass] is scored apart: the class rides in [IdeaDimKey] and
+ * [IdeaKey], so one idea has a human [Scored] and an AI [Scored] and no
+ * rating of one class ever reaches the other's statistics. Weights are per
+ * dimension and shared, so a dimension means the same thing to both.
  */
 class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFusionCellBase(ref) {
     private val statsOf = HashMap<IdeaDimKey, DimStats>()
@@ -112,14 +117,14 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
     /** [dir] must be COST or FACTOR — [dimsOfTopicByDir] carries no entry for VALUE, which is always required. */
     private fun hasDir(dir: Direction, topic: TopicId) = !dimsOfTopicByDir.getValue(dir)[topic].isNullOrEmpty()
 
-    /** topic → its ideas that currently have stats on any dimension: the has-cost/has-factor flip's touch set. */
-    private val ideasOfTopic = HashMap<TopicId, MutableSet<String>>()
+    /** topic → its (idea, class) keys that currently have stats on any dimension: the has-cost/has-factor flip's touch set. */
+    private val ideasOfTopic = HashMap<TopicId, MutableSet<IdeaKey>>()
 
     /** idea → its dimensions that currently have stats. */
     private val dimsOfIdea = HashMap<IdeaKey, MutableSet<String>>()
 
-    /** (topic, dim) → the ideas that currently have stats on it: the weights path's reverse index. */
-    private val ideasOfDim = HashMap<DimKey, MutableSet<String>>()
+    /** (topic, dim) → the (idea, class) keys that currently have stats on it: the weights path's reverse index. */
+    private val ideasOfDim = HashMap<DimKey, MutableSet<IdeaKey>>()
 
     private val publisher = MapDiffPublisher<IdeaKey, Scored>()
 
@@ -133,8 +138,8 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
         value.puts.forEach { (k, s) ->
             statsOf[k] = s
             dimsOfIdea.getOrPut(k.ideaKey) { mutableSetOf() } += k.dim
-            ideasOfTopic.getOrPut(k.topic) { mutableSetOf() } += k.idea
-            ideasOfDim.getOrPut(k.dimKey) { mutableSetOf() } += k.idea
+            ideasOfTopic.getOrPut(k.topic) { mutableSetOf() } += k.ideaKey
+            ideasOfDim.getOrPut(k.dimKey) { mutableSetOf() } += k.ideaKey
             touched += k.ideaKey
         }
         value.removals.forEach { k ->
@@ -142,10 +147,10 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
             dimsOfIdea[k.ideaKey]?.let {
                 if (it.remove(k.dim) && it.isEmpty()) {
                     dimsOfIdea.remove(k.ideaKey)
-                    ideasOfTopic[k.topic]?.let { t -> if (t.remove(k.idea) && t.isEmpty()) ideasOfTopic.remove(k.topic) }
+                    ideasOfTopic[k.topic]?.let { t -> if (t.remove(k.ideaKey) && t.isEmpty()) ideasOfTopic.remove(k.topic) }
                 }
             }
-            ideasOfDim[k.dimKey]?.let { if (it.remove(k.idea) && it.isEmpty()) ideasOfDim.remove(k.dimKey) }
+            ideasOfDim[k.dimKey]?.let { if (it.remove(k.ideaKey) && it.isEmpty()) ideasOfDim.remove(k.dimKey) }
             touched += k.ideaKey
         }
         publish(touched)
@@ -153,7 +158,7 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
 
     override fun onWeights(value: MapDelta<DimKey, DimConfig>) {
         val touched = LinkedHashSet<IdeaKey>()
-        fun touch(d: DimKey) = ideasOfDim[d]?.forEach { touched += IdeaKey(d.topic, it) }
+        fun touch(d: DimKey) = ideasOfDim[d]?.let { touched += it }
 
         /** Applies [config] (null = removal) to [d]'s [dir] index; [d]'s dim is in it iff [config] is that direction. */
         fun reindexDir(dir: Direction, d: DimKey, config: DimConfig?) {
@@ -178,7 +183,7 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
             val afterCost = hasDir(Direction.COST, d.topic)
             val afterFactor = hasDir(Direction.FACTOR, d.topic)
             if (beforeCost != afterCost || beforeFactor != afterFactor) {
-                ideasOfTopic[d.topic]?.forEach { touched += IdeaKey(d.topic, it) }
+                ideasOfTopic[d.topic]?.let { touched += it }
             }
         }
         value.puts.forEach { (d, c) -> configOf[d] = c; reindex(d, c); touch(d) }
@@ -203,7 +208,7 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
         val byDim = TreeMap<String, DimStats>()
         for (dim in dimsOfIdea[idea].orEmpty()) {
             if (configOf[DimKey(idea.topic, dim)] == null) continue
-            byDim[dim] = statsOf.getValue(IdeaDimKey(idea.topic, idea.idea, dim))
+            byDim[dim] = statsOf.getValue(IdeaDimKey(idea.topic, idea.idea, dim, idea.raters))
         }
         if (byDim.isEmpty()) return null
         fun config(dim: String) = configOf.getValue(DimKey(idea.topic, dim))
@@ -267,6 +272,10 @@ class WeightedFusionCell(ref: CellRef = CellRef(UUID.randomUUID())) : WeightedFu
  * stats -> fusion.stats ; weights -> fusion.weights
  * fusion   WeightedFusionCell -> MapDelta<IdeaKey, Scored>
  * ```
+ *
+ * Human and AI ratings share this one chain: the stats key and the fusion key
+ * carry the [RaterClass] read off the participant name, so the human score and
+ * the AI score are two keys of the same output, not two pipelines.
  */
 object AlignmentPipeline {
     internal data class Refs(

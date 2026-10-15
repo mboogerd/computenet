@@ -15,7 +15,7 @@ class ModuleDependencyTest {
         assertTrue(buildFile.isFile, "missing ${buildFile.absolutePath}")
 
         assertEquals(
-            setOf(":kernel", ":wire", ":iroh", ":inspect", ":economy", ":testkit"),
+            setOf(":kernel", ":wire", ":iroh", ":inspect", ":economy", ":identity", ":testkit"),
             projectReferences(buildFile).toSet(),
             ":runtime must be the one composition root over the kernel bindings",
         )
@@ -30,6 +30,7 @@ class ModuleDependencyTest {
             "iroh" to ":kernel",
             "inspect" to ":kernel",
             "economy" to ":kernel",
+            "identity" to ":kernel",
         )
 
         sentinels.forEach { (module, sentinel) ->

@@ -1,5 +1,7 @@
 # SnapshotView — wave-aligned glitch-free multi-outlet edge
 
+> **Status: ABSORBED** — computenet-axcyk (`civictech.cell.observe.observation`), 2026-10.
+
 **Type:** missing primitive / DX
 **Origin:** `:demo:skillmatch` folds six independent outlets into one HTTP/SSE
 snapshot. Cross-references `doc/demo-findings.md` **F-5**.

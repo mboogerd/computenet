@@ -18,7 +18,8 @@ case "$1" in
     [ -f "$CTRL/list-fail" ] && { echo "Error: database locked" >&2; exit 1; }
     case "$*" in
       *--label-pattern*) echo "stub: --label-pattern must not be relied on" >&2; exit 1 ;;
-      *--status=closed*) cat "$CTRL/closed.json" 2>/dev/null || echo '[]' ;;
+      *--status=closed*) echo "stub: closed rows come from the one --all listing" >&2; exit 1 ;;
+      *--all*) jq -s 'add' <(cat "$CTRL/closed.json" 2>/dev/null || echo '[]') <(cat "$CTRL/all.json" 2>/dev/null || echo '[]') ;;
       *--parent*) cat "$CTRL/kids.json" 2>/dev/null || echo '[]' ;;
       *) lbl=""; prev=""
          for a in "$@"; do [ "$prev" = --label ] && lbl=$a; prev=$a; done
@@ -123,6 +124,132 @@ out=$("$SCRIPT" 2>&1); rc=$?
 { [ "$rc" = 3 ] && ! grep -qE "^(undefer|comment|update) " "$BD_LOG"; } \
   && ok "verify-ready's exit 3 is exit 3, not WAITING, and writes nothing" \
   || bad "vr exit 3: rc=$rc out=$out"
+
+# --- the state pass: human-gated deferrals (computenet-2ubdj) -----------------
+G=deferred:human-gated
+nowrite() { ! grep -qE "^(undefer|comment|update) " "$BD_LOG"; }
+
+# 9. the park was answered (closed) and its dependent is unblocked -> undefer,
+#    drop the label, comment. computenet-e8gjk sat deferred 5 days in this state.
+fixture
+cat > "$CTRL/all.json" <<EOF
+[{"id":"x-e","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-e.1","issue_type":"bug","status":"closed","labels":["human"]},
+ {"id":"x-e.2","issue_type":"task","status":"open",
+  "dependencies":[{"issue_id":"x-e.2","depends_on_id":"x-e.1","type":"blocks"}]}]
+EOF
+printf 'READY x-e.2\n' > "$CTRL/vr.out"; echo 0 > "$CTRL/vr.rc"
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^UNDEFERRED x-e .*x-e.2" <<<"$out" && grep -q "^verify-ready x-e.2$" "$BD_LOG" \
+  && grep -q "^undefer x-e" "$BD_LOG" && grep -q "^update x-e --remove-label $G" "$BD_LOG" \
+  && grep -q "^comment x-e" "$BD_LOG"; } \
+  && ok "an answered park un-defers its human-gated epic" || bad "answered: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# 10. still gated: parked work, a dependent blocked on it, an open task under a
+#     PARKED feature, and an open feature whose only live child is parked. None
+#     is workable surface, and verify-ready is never asked.
+fixture
+cat > "$CTRL/all.json" <<EOF
+[{"id":"x-e","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-e.1","issue_type":"bug","status":"blocked","labels":["human"]},
+ {"id":"x-e.2","issue_type":"task","status":"open",
+  "dependencies":[{"issue_id":"x-e.2","depends_on_id":"x-e.1","type":"blocks"}]},
+ {"id":"x-e.3","issue_type":"feature","status":"blocked","labels":["human"]},
+ {"id":"x-e.3.1","issue_type":"task","status":"open"},
+ {"id":"x-e.4","issue_type":"feature","status":"open"},
+ {"id":"x-flat","issue_type":"bug","status":"open","labels":["human"],"parent":"x-e.4"}]
+EOF
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^WAITING x-e on x-e.1 x-e.3 x-flat" <<<"$out" && nowrite \
+  && ! grep -q "^verify-ready" "$BD_LOG"; } \
+  && ok "parked work, its dependents and what sits under it are not workable surface" \
+  || bad "gated: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# 11. an in_progress feature whose children all closed is workable (the #1318
+#     shape); --dry-run reports it and writes nothing
+fixture
+cat > "$CTRL/all.json" <<EOF
+[{"id":"x-e","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-e.1","issue_type":"feature","status":"in_progress"},
+ {"id":"x-e.1.1","issue_type":"bug","status":"closed","labels":["human"]}]
+EOF
+printf 'READY x-e.1\n' > "$CTRL/vr.out"; echo 0 > "$CTRL/vr.rc"
+out=$("$SCRIPT" --dry-run 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^UNDEFERRED x-e .*x-e.1" <<<"$out" && nowrite; } \
+  && ok "a half-built feature with its park closed is workable; --dry-run writes nothing" \
+  || bad "in_progress: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# 12. the edges look clear but verify-ready disagrees -> stays deferred
+fixture
+cat > "$CTRL/all.json" <<EOF
+[{"id":"x-e","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-e.2","issue_type":"task","status":"open"}]
+EOF
+printf 'BLOCKED x-e.2 by: y (closed) [unmerged on f]\n' > "$CTRL/vr.out"; echo 1 > "$CTRL/vr.rc"
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^WAITING x-e (verify-ready" <<<"$out" && ! grep -q "person" <<<"$out" && nowrite; } \
+  && ok "verify-ready has the last word on a candidate, and no person is blamed without a park" || bad "vr veto: rc=$rc out=$out"
+
+# 13. A MISSING LABEL IS REPORTED, never acted on: a deferred epic with parked
+#     work and no marker would be stranded; one deferred for another reason
+#     (workable child, no park) is left alone and not reported.
+fixture
+cat > "$CTRL/all.json" <<'EOF'
+[{"id":"x-e","issue_type":"epic","status":"deferred"},
+ {"id":"x-e.1","issue_type":"bug","status":"blocked","labels":["human"]},
+ {"id":"x-e.2","issue_type":"task","status":"open"},
+ {"id":"x-p","issue_type":"epic","status":"deferred","labels":["replan:postpone"]},
+ {"id":"x-p.1","issue_type":"task","status":"open"},
+ {"id":"x-m","issue_type":"epic","status":"deferred"},
+ {"id":"x-m.1","issue_type":"bug","status":"blocked","labels":["human"]},
+ {"id":"y-c.4","issue_type":"task","status":"open","labels":["undefers:x-m"]}]
+EOF
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^UNLABELLED x-e .*x-e.1" <<<"$out" && ! grep -q "x-p" <<<"$out" \
+  && ! grep -q "UNLABELLED x-m" <<<"$out" && nowrite && ! grep -q "^verify-ready" "$BD_LOG"; } \
+  && ok "an unlabelled human-gated deferral is reported, and nothing unlabelled is touched" \
+  || bad "unlabelled: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# 14. the label outlived the deferral (a person ran bd undefer) -> label removed
+fixture
+echo "[{\"id\":\"x-e\",\"issue_type\":\"epic\",\"status\":\"open\",\"labels\":[\"$G\"]}]" > "$CTRL/all.json"
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^CLEARED x-e (open)" <<<"$out" && grep -q "^update x-e --remove-label $G" "$BD_LOG" \
+  && ! grep -q "^undefer" "$BD_LOG"; } \
+  && ok "a spent label comes off an epic that is no longer deferred" || bad "stale label: rc=$rc out=$out"
+
+# 15. the park was answered by closing it and nothing else is open, or the only
+#     open child is edge-blocked outside the epic: nothing human gates either,
+#     so both are un-deferred (computenet-2o0z4 — they printed WAITING forever).
+fixture
+cat > "$CTRL/all.json" <<EOF
+[{"id":"x-e","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-e.1","issue_type":"bug","status":"closed","labels":["human"]},
+ {"id":"x-f","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"x-f.1","issue_type":"task","status":"open",
+  "dependencies":[{"issue_id":"x-f.1","depends_on_id":"y-o","type":"blocks"}]},
+ {"id":"y-o","issue_type":"task","status":"open"},
+ {"id":"x-g","issue_type":"epic","status":"deferred","labels":["$G"]},
+ {"id":"y-m","issue_type":"task","status":"open","labels":["undefers:x-g"]}]
+EOF
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^UNDEFERRED x-e " <<<"$out" && grep -q "^UNDEFERRED x-f " <<<"$out" \
+  && grep -q "^WAITING x-g on its undefers:x-g blockers" <<<"$out" && ! grep -q "^undefer x-g" "$BD_LOG" \
+  && ! grep -q "person" <<<"$out" && grep -q "^undefer x-e" "$BD_LOG" && grep -q "^undefer x-f" "$BD_LOG" \
+  && grep -q "^update x-e --remove-label $G" "$BD_LOG" && ! grep -q "^verify-ready" "$BD_LOG"; } \
+  && ok "a human-gated epic with no park left is un-deferred" || bad "free: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# 16. unlabelled, its park already answered, work open and no marker -> reported,
+#     never touched (the computenet-4vxtr shape)
+fixture
+cat > "$CTRL/all.json" <<'EOF'
+[{"id":"x-e","issue_type":"epic","status":"deferred"},
+ {"id":"x-e.1","issue_type":"bug","status":"closed","labels":["human"]},
+ {"id":"x-e.2","issue_type":"task","status":"open"}]
+EOF
+out=$("$SCRIPT" 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "^UNLABELLED x-e .*x-e.2" <<<"$out" && nowrite; } \
+  && ok "an unlabelled deferral with workable work and no marker is reported" || bad "openwork: rc=$rc out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

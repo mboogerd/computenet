@@ -22,6 +22,11 @@ no ops (they react to their inlets).
 | `ormap-source` | `put`, `remove` | An **observed-remove per-key map** (kernel `OrMapCell`): `put(key, value)` mints a fresh dot for the key and covers every dot the writer currently observes live there (reset-remove), `remove(key)` covers exactly the dots observed live here and now, so a concurrent `put`'s dot survives. Presence is add-wins; a key holding several surviving dots exposes one by dot order, which within a single stream is last-writer-wins. Observed through a `tagged-map-view`. |
 | `keyed-set` | `put`, `remove` | A **keyed upsert** to a set (kernel `KeyedSetCell`): `put(key, element)` sets the element under a key (last-writer-wins per key), `remove(key)` drops it; the output is the flat set of currently-held elements, observed through a `set-view`. (W3-0 refinement — this is NOT an add/remove-by-value partitioned set; see note 6.) |
 
+`set-source` may also be declared as the member type of a `family:` descriptor
+(computenet-vb7aq, `42-INTEREST-SPAWN-01`); each long key materializes one
+ordinary `set-source` member, while the family handle itself has no ports or
+view.
+
 `counter-source`/`pn-counter`: `increment`/`decrement` take an optional `value:` amount
 (default a unit step), or repeat a unit step with `times:` — both fold to the same total.
 
@@ -83,7 +88,8 @@ quantifies over".
 |---|---|---|
 | `nature-gate` | — | A sink whose inlet **declares a required nature** (idempotent merge). A plain default-nature producer's `connect` to it is refused at link time by the kernel's real `NatureNegotiation` (CP-F3) — resolves `12-NEGOTIATE-01`. |
 | `exclusive-source` | `push` | A source whose `outlet` carries an `Owned` (exclusive, SPSC) payload — resolves `23-SPSC-01`. `push` wraps `value:` in a fresh `Owned`. |
-| `exclusive-sink` | — | Consumes `exclusive-source`'s `Owned` payload; a **second** consume-link to the same `exclusive-source` outlet is rejected by the kernel's own FanOutlet exclusivity check (M5.6). Observed through a count (`final-view`/`readView` → the running delivery count). Only the reject half is covered — the observe/tap ADMIT half is the unbuilt G-47 gap (see `23-SPSC-01.yaml`). |
+| `exclusive-sink` | — | Consumes `exclusive-source`'s `Owned` payload; a **second** consume-link to the same `exclusive-source` outlet is rejected by the kernel's own FanOutlet exclusivity check (M5.6). Observed through a count (`final-view`/`readView` → the running delivery count). |
+| `exclusive-observer` | — | Borrows (`Owned.borrow`, never `take`) each `exclusive-source` delivery and counts it. Used as an Observe tap to prove that observation leaves the payload available to the sole consumer; observed through the running delivery count. |
 
 ## Cycles (34-CYCLE)
 
@@ -180,8 +186,9 @@ plain `combine-latest fn:sum`→`ScalarSumCombineCell` (the wave-aligned form,
 `feedback-undamped`→`FeedbackCell` (a `CycleHead`); `nature-gate`→
 `NatureGatedSinkCell` (a hand-registered `ContractRegistry` descriptor projects a
 required nature onto its inlet — CP-F2/F3, W4-A followup); `exclusive-source`/
-`exclusive-sink`→`ExclusiveSourceCell`/`ExclusiveSinkCell` (an `Owned`-carrying
-`FanOutlet` contract, likewise hand-registered — M5.6, W4-A followup); `window
+`exclusive-sink`/`exclusive-observer`→`ExclusiveSourceCell`/`ExclusiveSinkCell`/
+`ExclusiveObserverCell` (an `Owned`-carrying `FanOutlet` contract, likewise
+hand-registered — M5.6, W4-A followup); `window
 kind:tumbling`→a bare `GroupByCell` whose `keyFn` composes `Windows.tumbling`, and
 `window kind:tumbling lateness:L`→the same `GroupByCell` constructed with
 `lateness = Windows.Lateness(EventTimeOfPair, L)` and `keyTime(start) = start + size`

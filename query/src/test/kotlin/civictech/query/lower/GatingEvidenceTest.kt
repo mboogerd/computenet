@@ -201,9 +201,10 @@ class GatingEvidenceTest {
      * join's right inlet directly, and the join either emits or absorb-acks onto the antijoin's
      * left inlet — the join is the absorber and it links straight into the gated edge, which is
      * F-15's safe case. A two-operator-deep arm is therefore NOT sufficient for withholding; the
-     * silent arm must have no other path from the root. `F-15 reproduces on an equal-provenance
-     * compiled shape` below shows such a shape does withhold, so this negative does not license
-     * widening the depth rule (no production rule change here, per the task).
+     * silent arm must have no other path from the root. `F-15 relay - forcing the gate on a
+     * filter-over-filter arm` below showed such a shape withholding until the absorb-ack relay through
+     * `FilterCell` landed (computenet-6ovpx); it now settles too, which is a measured
+     * over-refusal of the depth rule on that shape, not a licence to widen it here.
      */
     @Test
     fun `F-15 negative - forcing the gate on the self-join depth shape does not withhold, because src e reaches the join directly on its other inlet`() {
@@ -245,20 +246,27 @@ class GatingEvidenceTest {
      * With the gate FORCED on in test scope: the prefix `e.add(2,1)` passes both filters and
      * settles with nothing buffered and `(2,1)` answered — the phantom-free prefix, asserted.
      * Then `e.add(1,2)` blocks `(2,1)` on the witness inlet, and on the left arm the INNER
-     * filter drops it (`X = 1`) and absorb-acks onto its own outlet, where the outer
-     * `Filter(Y > 0)` hop swallows the ack (F-15: no plain operator relays it). The gate holds
-     * that wave at rest and the stale `(2,1)` stays in `q` while the batch fold is empty. The
-     * shipped ungated lowering is the control and retracts it.
+     * filter drops it (`X = 1`) and absorb-acks onto its own outlet. Until computenet-6ovpx the
+     * outer `Filter(Y > 0)` hop swallowed that ack (F-15) and the gate held the wave at rest with
+     * a stale `(2,1)`. Since 6ovpx a single-input `FilterCell` relays the ack
+     * (`relayAbsorbAcks`), so the forced gate now settles and retracts `(2,1)` exactly like the
+     * shipped ungated control: on this shape the depth rule's refusal is a measured
+     * over-refusal. Removing the relay from `FilterCell` turns the forced-gate branch red.
      *
-     * Limit: this measures one equal-provenance shape (a filter-over-filter arm) on seeds
-     * [SEEDS]; it shows the depth rule refuses at least one gate that would withhold, not that
-     * every wave on a two-deep arm withholds — [F15_HOP_CONTROL_QUERY]'s test is a two-deep arm
-     * whose outer-dropped wave does not (and whose inner-dropped wave does). The earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was
-     * replaced because its forced-gate withholding was already produced by `f`'s phantom
-     * expected edge before any F-15 wave (computenet-cab.4.8 task review).
+     * Limit and decision (computenet-o8a0f): this measures one equal-provenance shape (a
+     * filter-over-filter arm) on seeds [SEEDS]. It shows that the current depth rule refuses a
+     * gate whose forced execution settles after computenet-6ovpx; it does not show that every
+     * two-deep arm is safe to admit. [F15_HOP_CONTROL_QUERY]'s test likewise settles both its
+     * outer-dropped and inner-dropped waves. The depth rule therefore remains fail-closed: the
+     * lowering has only plan nodes, while the relay's exactly-one-open-Consume predicate is
+     * evaluated from live runtime links and stops once a frontier is installed on the hop's own
+     * inlet. The
+     * earlier pin on `e(X, Y), Y > 0, f(Y, Z), not e(X, Z)` (computenet-cab.4.5) was replaced
+     * because its forced-gate withholding was already produced by `f`'s phantom expected edge
+     * before any F-15 wave (computenet-cab.4.8 task review).
      */
     @Test
-    fun `F-15 reproduces on an equal-provenance compiled shape - forcing the gate on a filter-over-filter arm withholds a retraction at rest`() {
+    fun `F-15 relay - forcing the gate on a filter-over-filter arm settles the inner-dropped wave and retracts at rest`() {
         val catalog = PlanFixtures.catalog("e" to 2)
         assertTwoFilterArm(F15_QUERY, innerColumn = "X", catalog)
         val compiled = compile(F15_QUERY, catalog)
@@ -282,16 +290,9 @@ class GatingEvidenceTest {
 
                 e.add(row(1, 2)); world.runToIdle() // blocks (2,1); the INNER filter (X > 1) drops it
                 val batch = emptySet<Row>() // e = {(2,1),(1,2)}: (2,1)'s witness (1,2) is present
-                if (!forceGate) {
-                    withClue("seed=$seed control: the shipped ungated lowering retracts (2,1)") {
-                        cell.bufferedWaves shouldBe 0
-                        q.current() shouldBe batch
-                    }
-                } else {
-                    withClue("seed=$seed forced gate: the witness wave is withheld at rest, (2,1) is stale") {
-                        cell.bufferedWaves shouldBeGreaterThanOrEqual 1
-                        q.current() shouldBe setOf(row(2, 1))
-                    }
+                withClue("seed=$seed forceGate=$forceGate: nothing held at rest, (2,1) retracted") {
+                    cell.bufferedWaves shouldBe 0
+                    q.current() shouldBe batch
                 }
             }
         }
@@ -306,16 +307,12 @@ class GatingEvidenceTest {
      * nothing buffered and agrees with the batch fold. What discriminates is how deep the
      * absorber of THAT WAVE sits, not how deep the arm is.
      *
-     * Limit (computenet-cab.4.9 task review): this is a per-wave control, not evidence that the
-     * swapped shape is safe to gate. Its inner filter (`Y > 0`) drops waves too, and a final
-     * `e.add(5,-1)` it drops is held at rest here exactly as in the pin — asserted below. On the
-     * scripts measured the held wave changes no answer (a row with `Y <= 0` can only block a
-     * left row with `X <= 0`, which the arm never carries), so `q` still equals the batch fold,
-     * but by this suite's own `bufferedWaves == 0` settling bar the depth rule's refusal of this
-     * shape is not a measured over-refusal.
+     * Its inner filter (`Y > 0`) drops waves too: a final `e.add(5,-1)` it drops was held at rest
+     * until computenet-6ovpx made a single-input `FilterCell` relay the absorb-ack. It now
+     * settles as well — asserted below — so on the scripts measured both hop orders settle.
      */
     @Test
-    fun `F-15 hop-order control - the outer filter's dropped wave settles under a forced gate, the inner filter's is still held at rest`() {
+    fun `F-15 hop-order control - under a forced gate both the outer and the inner filter's dropped waves settle`() {
         val catalog = PlanFixtures.catalog("e" to 2)
         assertTwoFilterArm(F15_HOP_CONTROL_QUERY, innerColumn = "Y", catalog)
         val compiled = compile(F15_HOP_CONTROL_QUERY, catalog)
@@ -337,10 +334,10 @@ class GatingEvidenceTest {
                 q.current() shouldBe emptySet()
             }
 
-            e.add(row(5, -1)); world.runToIdle() // the INNER filter (Y > 0) drops it: F-15 on this arm too
+            e.add(row(5, -1)); world.runToIdle() // the INNER filter (Y > 0) drops it; the outer relays the ack
             // Batch fold over e = {(2,1),(1,2),(5,-1)}: (5,-1) fails Y > 0 and (2,1) stays blocked.
-            withClue("seed=$seed forced gate, final wave dropped by the inner filter: held at rest, q unchanged") {
-                cell.bufferedWaves shouldBeGreaterThanOrEqual 1
+            withClue("seed=$seed forced gate, final wave dropped by the inner filter: settled, q unchanged") {
+                cell.bufferedWaves shouldBe 0
                 q.current() shouldBe emptySet()
             }
         }

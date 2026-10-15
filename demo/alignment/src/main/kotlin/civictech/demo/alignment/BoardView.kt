@@ -101,6 +101,9 @@ internal const val BOARD_MAIN = """
   #boardMode button { font-size: .75rem; padding: .25rem .7rem; border-radius: 999px; border: 1px solid var(--line);
                        background: var(--surface); color: var(--muted); cursor: pointer; }
   #boardMode button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  #boardMode #boardAiRate { margin-left: auto; color: var(--accent); border-color: var(--accent); }
+  #boardMode #boardAiRate[hidden] { display: none; }
+  #boardMode #boardAiRate:disabled { opacity: .6; cursor: default; }
   #ranking { position: relative; }
   .rankrow { position: absolute; left: 0; right: 0; top: 0; height: 58px; background: var(--surface);
              box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
@@ -156,6 +159,7 @@ internal const val BOARD_MAIN = """
                   font-size: .72rem; color: var(--muted); }
   .rankrow .sub div[hidden] { display: none; }
   .rankrow .sub .line1 { display: flex; gap: .5rem; align-items: baseline; }
+  .rankrow .sub .ai.diverges { color: var(--warn); }
   .rankrow.unranked { opacity: .5; }
   .rankrow.unranked .stack { visibility: hidden; } /* an unscored idea has no bar, not an empty one */
   .rankrow.unranked.enter, .rankrow.unranked.leave { opacity: 0; }
@@ -186,11 +190,12 @@ internal const val BOARD_MAIN = """
   <div id="boardMode" hidden>
     <button type="button" data-mode="score" aria-pressed="true">score</button>
     <button type="button" data-mode="spread" aria-pressed="false">spread</button>
+    <button type="button" id="boardAiRate" hidden>Get AI ratings</button>
   </div>
   <div id="ranking"></div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
   <div id="scatter" hidden></div>
-  <p class="note">Bar segments show each dimension's weighted contribution to the score; a × badge shows the factor multiplier and a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range.</p>
+  <p class="note">Bar segments show each dimension's weighted contribution to the score; a × badge shows the factor multiplier and a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range. "AI" is the AI raters' score, kept apart from the people's and never ranked on; "≠ AI" marks a dimension where the two disagree by 2 or more.</p>
 </section>
 <script>
 // ── Board: the aggregate view ──────────────────────────────────────────────
@@ -212,12 +217,12 @@ let boardMode = 'score'; // 'score' | 'spread', persisted below
 try { if (sessionStorage.boardMode === 'spread') boardMode = 'spread'; } catch (e) { /* ignore */ }
 
 function updateBoardModeButtons() {
-  document.querySelectorAll('#boardMode button').forEach(b => {
+  document.querySelectorAll('#boardMode button[data-mode]').forEach(b => {
     b.setAttribute('aria-pressed', b.dataset.mode === boardMode ? 'true' : 'false');
   });
 }
 updateBoardModeButtons();
-document.querySelectorAll('#boardMode button').forEach(b => {
+document.querySelectorAll('#boardMode button[data-mode]').forEach(b => {
   b.addEventListener('click', () => {
     if (b.dataset.mode === boardMode) return;
     boardMode = b.dataset.mode;
@@ -320,6 +325,7 @@ function renderBoard() {
   gateBox.hidden = true;
   weightsBox.hidden = false;
   modeBox.hidden = false;
+  renderAiRateButton(t);
   rankingBox.hidden = false;
   if (noteEl) noteEl.hidden = false;
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -347,6 +353,22 @@ function renderBoard() {
   renderDrill();
 }
 
+/**
+ * The facilitator's "Get AI ratings" (the same POST /topics/{t}/ai-rate as Setup's card): shown
+ * only to the topic's creator, and only when the server has an AI rater configured; disabled with
+ * "AI rating…" while a run is in flight. The new AI scores arrive over /events as each call returns.
+ */
+function renderAiRateButton(t) {
+  const btn = document.getElementById('boardAiRate');
+  const raters = t.aiRaters || [];
+  btn.hidden = !(isCreator(t) && raters.length > 0);
+  if (btn.hidden) return;
+  btn.disabled = t.aiRunning === true;
+  btn.textContent = t.aiRunning === true ? 'AI rating…' : 'Get AI ratings';
+  btn.title = 'ask ' + raters.join(', ') + ' to rate every idea it has not yet rated';
+  btn.onclick = () => send('POST', '/topics/' + t.id + '/ai-rate', { creator: me() }).then(renderBoard, () => {});
+}
+
 function renderGate(box, g) {
   box.innerHTML = '';
   const card = document.createElement('div');
@@ -356,7 +378,7 @@ function renderGate(box, g) {
   p.className = 'muted';
   if (g.reason === 'reveal') {
     h.textContent = 'waiting for the facilitator to reveal';
-    p.textContent = 'you have rated everything';
+    p.textContent = g.rated === g.total ? 'you have rated everything' : g.rated + ' of ' + g.total + ' rated';
   } else {
     h.textContent = 'rate everything to see the board';
     p.textContent = g.rated + ' of ' + g.total + ' rated';
@@ -604,7 +626,7 @@ function renderRanking(t, ideas, participants, stagger) {
                          '</div>' +
                          '<div class="score"></div><span class="pill" hidden></span>' +
                        '</div>' +
-                       '<div class="sub"><div class="line1"><div class="raters" hidden></div><div class="dots" hidden></div></div>' +
+                       '<div class="sub"><div class="line1"><div class="raters" hidden></div><div class="dots" hidden></div><div class="ai" hidden></div></div>' +
                        '<div class="vc" hidden></div><div class="reason" hidden></div></div>';
       // place without transition, flush that style, then fade in. A forced
       // style flush rather than backlog-triage's double requestAnimationFrame:
@@ -807,6 +829,33 @@ function renderRanking(t, ideas, participants, stagger) {
       dotsEl.textContent = f.dots > 0 ? '● ' + f.dots + (f.dots === 1 ? ' dot' : ' dots') : 'no dots yet';
     } else {
       dotsEl.hidden = true;
+    }
+
+    // the AI score (AiRater): beside the human one, never ranked on; "≠ AI on <dims>" where the
+    // human and AI means part by 2 or more. AI rater names never reach the Board, only a count.
+    const aiEl = row.querySelector('.ai');
+    const declined = Object.entries(f.aiDeclined || {});
+    if (f.ai || declined.length) {
+      aiEl.hidden = false;
+      const parts = [];
+      let apart = [];
+      if (f.ai) {
+        const aiScore = f.ai.score;
+        apart = (f.diverges || []).map(id => (dims.find(d => d.id === id) || { name: id }).name);
+        parts.push('AI ' + (aiScore === null || aiScore === undefined ? '—' : aiScore.toFixed(1)) +
+          (apart.length ? ' · ≠ AI on ' + apart.join(', ') : ''));
+      }
+      // an abstention is an answer: "declined" (every dimension) or "declined on <dims>"
+      for (const [model, ids] of declined) {
+        const all = dims.every(d => ids.includes(d.id));
+        parts.push(model + ' declined' + (all ? '' : ' on ' + ids.map(id => (dims.find(d => d.id === id) || { name: id }).name).join(', ')));
+      }
+      aiEl.textContent = parts.join(' · ');
+      aiEl.classList.toggle('diverges', apart.length > 0);
+      aiEl.title = (f.ai ? 'AI score from ' + (f.ai.models || []).join(', ') + ', aggregated apart from the people\'s score. ' : '') +
+        (declined.length ? 'A decline means the model judged the idea outside its knowledge: give it more description, then ask again.' : '');
+    } else {
+      aiEl.hidden = true;
     }
 
     row.querySelector('.pos').textContent = ranked ? String(f.rank) : '·';

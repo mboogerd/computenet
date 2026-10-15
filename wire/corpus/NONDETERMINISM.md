@@ -160,3 +160,11 @@ nothing to tolerate yet), and the bead or disposition that owns resolving it.
   unrecorded byte-variation gap. Strict mode remains unchanged and is left to
   `computenet-ncz.4` (ncz.3-D5): `pending = [Attention, Progress,
   SaturationSignal, EdgeOpen, EdgeClose, StateRequest]`.
+
+- **2026-10-12 — computenet-ncz.4 close-out.** The six discriminators the
+  entry above left pending are vectored as `PORT_PROTOCOL` `protocolMessage`
+  values under `frames/port-protocol/`; `manifest.json`'s `pending` is `[]`
+  and `RegistrationCoverageTest`'s strict mode is now the default
+  (`-Dwire.vectors.strict=false` opts out). The Nondeterminism table remains
+  `_(none yet)_`: `Attention` joined `EncodingDeterminismTest`'s selected
+  types and `WV-PORT-PROTOCOL-ATTENTION-01` showed no byte variation.

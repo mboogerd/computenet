@@ -161,6 +161,9 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     override val deltaInlet =
         registerPort("deltaInlet", FanInlet.create<Propagate<TaggedMapDelta<K, V>>>())
 
+    /** Optional authority check, evaluated before any local dot is minted. */
+    internal var localWriteGate: LocalWriteGate? = null
+
     // One causal namespace for the whole map (decided point 1) — dots are NOT
     // partitioned per key, because a per-key context re-admits stale values on
     // key re-creation. `puts` holds every dot ever minted here with the value
@@ -410,6 +413,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // methods read subclass state later, at message time.
     override fun inletHandler(): MapOps<K, V> = object : MapOps<K, V> {
         override fun put(key: K, value: V) {
+            if (localWriteGate?.admits("put", key) == false) return
             // `[KE1-04]` admission: a classified non-idempotent embedded value
             // is refused here — before any dot is minted, so the refusal leaves
             // no state and performs no fold.
@@ -446,6 +450,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }
 
         override fun remove(key: K) {
+            if (localWriteGate?.admits("remove", key) == false) return
             // `[24-TMAP-04]` reset-remove, tag-precise: tombstone exactly the
             // dots observed live here and now. A concurrent put's dot is not in
             // this set and therefore survives the merge.

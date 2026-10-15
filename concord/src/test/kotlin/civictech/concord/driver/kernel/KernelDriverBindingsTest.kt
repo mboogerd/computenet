@@ -326,6 +326,35 @@ class KernelDriverBindingsTest {
         closing.shouldBeInstanceOf<LinkResult.Rejected>()
     }
 
+    @Test fun `declare-interest threads the family spawn-on-interest flag`() {
+        fun family(spawnOnInterest: Boolean): Map<String, Value> = mapOf(
+            "family" to map(
+                "keys" to s("long"),
+                "spawn-on-interest" to Value.BoolVal(spawnOnInterest),
+            ),
+        )
+        val bounded = map("ranges" to list(list(i(2), i(4))))
+
+        val enabled = KernelDriver(0L)
+        enabled.spawn("h1", "f", "set-source", family(spawnOnInterest = true))
+        enabled.declareInterest("f", bounded)
+        enabled.familyKeys("f") shouldBe listOf(2L, 3L)
+
+        // An unbounded declaration is recorded but refused by the family. It
+        // neither adds a member nor becomes a dead letter, and the dedicated
+        // family refusal observation accounts it.
+        enabled.declareInterest("f", map("total" to Value.BoolVal(true)))
+        enabled.familyKeys("f") shouldBe listOf(2L, 3L)
+        enabled.interestRefusalCount("f") shouldBe 1L
+        enabled.deadLetters() shouldBe emptyList()
+
+        val disabled = KernelDriver(0L)
+        disabled.spawn("h1", "f", "set-source", family(spawnOnInterest = false))
+        disabled.declareInterest("f", bounded)
+        disabled.familyKeys("f") shouldBe emptyList()
+        disabled.interestRefusalCount("f") shouldBe 0L
+    }
+
     // ---- lifecycle verbs ---------------------------------------------------
 
     @Test fun `disconnect by endpoints stops further delivery`() {

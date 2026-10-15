@@ -10,11 +10,11 @@ import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
-import civictech.cell.observe.View
 import civictech.cell.host.link
-import civictech.cell.observe.observe
-import civictech.cell.observe.AlignedCompositeCell
-import civictech.cell.observe.observeAligned
+import civictech.cell.observe.Observation
+import civictech.cell.observe.ObservationFrame
+import civictech.cell.observe.observation
+import civictech.cell.port.PortRef
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.replication.Replication
@@ -128,15 +128,9 @@ class DemoApp(
     private fun unionRef(name: String, role: String) =
         CellRef(UUID.nameUUIDFromBytes("demo-union:$name@$role".toByteArray()))
 
-    private val state = Object()
-    private var items: Set<String> = emptySet()
-    private var votes: Set<String> = emptySet()
-    private var produce: Set<String> = emptySet()
-    private var wanted: Set<String> = emptySet()
-    private var voteCount: Long = 0
-
-    /** `--replicate` only: this JVM's fold of the one shared logical cell. */
-    private var shared: Set<String> = emptySet()
+    /** Stable opaque root for the per-user family, including before its first member exists. */
+    private fun writerFamilyRoot(name: String) =
+        PortRef(UUID.nameUUIDFromBytes("demo-writer-family:$name@$myRole".toByteArray()))
 
     private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
     private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
@@ -178,7 +172,9 @@ class DemoApp(
         namespace = "demo-writer@$myRole",
         factory = { key, ref ->
             val union = if (key.endsWith(":items")) itemsUnion else votesUnion
-            SetCell<String>(ref).also { it.outlet.streamTo(routedDelta(union.ref)) }
+            SetCell<String>(ref).also {
+                it.outlet.streamTo(routedDelta(union.ref), at = union.inlet.ref)
+            }
         },
     )
 
@@ -188,17 +184,18 @@ class DemoApp(
     private var produceRef: CellRef? = null
     private var wantedRef: CellRef? = null
 
-    /**
-     * The wave-aligned `{items, produce}` sink (`[22-OBS-01]`/`[22-OBS-02]`):
-     * both descend from [itemsUnion], so folding them through one
-     * [AlignedCompositeCell] instead of two independent `host.observe` hubs is
-     * what makes one SSE frame carry both fields' change together — see the
-     * comment above [broadcast].
-     */
-    private lateinit var aligned: AlignedCompositeCell
+    /** The canonical app-edge read, partitioned by equal structural root sets. */
+    private lateinit var observation: Observation
 
     /** Diagnostic (G-13): 0 at idle: no wave held awaiting a stalled or phantom arm. */
-    internal val alignedBufferedWaves: Int get() = aligned.bufferedWaves
+    internal val alignedBufferedWaves: Int get() = observation.bufferedWaves
+
+    /** The observation's computed root partition, used by the frame-level demo proof. */
+    internal val observationGroups: Set<String> get() = observation.groups
+
+    /** The latest aligned frontier for one observation group, for frame-level proofs. */
+    internal fun observationFrontier(group: String): Map<UUID, Long> =
+        observation.current().groups.getValue(group).frontier
 
     /** The inspector the Runtime serves for `--inspect-port`, null when the flag is absent. */
     val inspector: civictech.inspect.InspectorServer? get() = node.inspector
@@ -224,8 +221,7 @@ class DemoApp(
         manage.spawn(votesUnion)
 
         // the derived views are DSL-built with pure { ref -> ... } factories
-        // (replay-safe GraphSpec — no live instance captured in a step);
-        // observation sinks fold them into UI state
+        // (replay-safe GraphSpec — no live instance captured in a step)
         var produceHandle: TypedCellHandle<FilterCell<String>>? = null
         var wantedHandle: TypedCellHandle<IntersectSetCell<String>>? = null
         graph(host.managementInlet) {
@@ -240,24 +236,6 @@ class DemoApp(
         wantedRef = wantedCell.ref
         manage.link(itemsUnion.outlet, produceCell.cell.inlet)
 
-        // items+produce share itemsUnion as their common Consume root, so one
-        // AlignedCompositeCell settles one shared frontier over both arms and
-        // publishes one composite per settled wave — see the comment above
-        // [broadcast] for the boundary against the point-consistent hubs below.
-        aligned = host.observeAligned {
-            set("items", itemsUnion.ref)
-            set("produce", produceCell.ref)
-        }
-        aligned.onChange { snap ->
-            @Suppress("UNCHECKED_CAST")
-            synchronized(state) {
-                items = snap["items"] as Set<String>
-                produce = snap["produce"] as Set<String>
-            }
-            broadcast()
-        }
-        host.observe(votesUnion.ref, View.set<String>()) { synchronized(state) { votes = it }; broadcast() }
-
         // Derived view: items ∩ votes — "still wanted" is the incremental
         // intersection of two independently-mutating streams (the binary
         // set operator the filter chain didn't yet show). It feeds both the
@@ -268,9 +246,6 @@ class DemoApp(
         // out of the intersection, so it neither shows a ★ nor inflates the count.
         manage.link(itemsUnion.outlet, wantedCell.cell.left)
         manage.link(votesUnion.outlet, wantedCell.cell.right)
-        host.observe(wantedCell.ref, View.set<String>()) {
-            synchronized(state) { wanted = it; voteCount = it.size.toLong() }; broadcast()
-        }
 
         // V4-PILOT (`--replicate`): the shared replica, wired BEFORE peering so
         // Replication's registry hooks are already installed when the peer's
@@ -288,10 +263,29 @@ class DemoApp(
         if (replication != null && sharedCell != null) {
             replication.replicate(sharedCell, host)
             manage.link(sharedCell.outlet, itemsUnion.inlet)
-            host.observe(sharedCell.ref, View.set<String>()) {
-                synchronized(state) { shared = it }; broadcast()
-            }
         }
+
+        /*
+         * One app-edge observation. Equal root sets share a wave-aligned group:
+         * {items, produce}. Independent roots stay in their own groups so a
+         * silent vote or item source cannot hold another group's progress.
+         * `wanted` is intentionally unchecked because IntersectSetCell is the
+         * ungated independent-root operator recorded by F-27.
+         */
+        observation = host.observation {
+            // Writer members are lazy (and recovery runs below), so name each
+            // routed family before its first streamTo exists. The live links
+            // use the target inlet ref above and are discoverable too.
+            unmanagedFeed(itemsUnion.ref, writerFamilyRoot("items"))
+            unmanagedFeed(votesUnion.ref, writerFamilyRoot("votes"))
+            set("items", itemsUnion.ref)
+            set("produce", produceCell.ref)
+            set("votes", votesUnion.ref)
+            unchecked("wanted")
+            set("wanted", wantedCell.ref)
+            if (sharedCell != null) set("shared", sharedCell.ref)
+        }
+        observation.onChange { frame -> broadcast(frame) }
 
         // V4-PEERID: `peerName = netName` is in the manifest above, so the peer's
         // inspector labels our cells with our own --net-name and keeps that label
@@ -414,30 +408,41 @@ class DemoApp(
         exchange.respond(200, "ok")
     }
 
-    // ponytail: `items`/`produce` are the aligned pair — they share itemsUnion
-    // as their Consume root, so `aligned` (an AlignedCompositeCell) settles one
-    // shared wave frontier over both arms and calls broadcast() once per
-    // settled wave with both fields already written together (`[22-OBS-01]`):
-    // no frame can show a `produce` element absent from `items`. `votes`,
-    // `wanted` and `shared` stay separate host.observe hubs and are only
-    // point-consistent: each may lead or trail the aligned pair's frame by a
-    // beat before converging. `wanted` in particular descends from two
-    // independent roots (itemsUnion and votesUnion) and cannot be folded into
-    // the aligned pair without over-alignment across independent sources
-    // (`[22-LIVE-01]`, G-13's phantom-expected-edge) — see the demo-findings
-    // entry "Independent-root composite cannot be wave-aligned (shopping
-    // `wanted`)". Fine for the full-state SSE transport either way; coalescing
-    // every view into one frame per wave is M6+ material.
-    private fun broadcast() = shell.broadcast { stateJson() }
+    // The observation's `{items+produce}`, `{votes}`, `{wanted}` (and optional
+    // `{shared}`) groups are each internally aligned. Its delivered frame
+    // assembles the group publication that triggered this callback and
+    // serializes `crossRoot`, making the F-27 boundary visible instead of
+    // silently traversing it. `[22-LIVE-01]` is therefore preserved:
+    // independent groups never wait on one another.
+    private fun broadcast(frame: ObservationFrame) = shell.broadcast { stateJson(frame) }
 
-    private fun stateJson(): String = synchronized(state) {
+    private fun stateJson(): String = stateJson(observation.current())
+
+    private fun stateJson(frame: ObservationFrame): String {
+
+        @Suppress("UNCHECKED_CAST")
+        fun setOf(name: String): Set<String> = frame.views.getValue(name) as Set<String>
+
         fun arr(values: Set<String>) =
             values.sorted().joinToString(",", "[", "]") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
+
+        fun crossRootJson() = frame.crossRoot.entries.joinToString(",", "{", "}") { (pair, disclosure) ->
+            val lag = disclosure.lagBySource.entries.joinToString(",", "{", "}") { (source, value) ->
+                "\"$source\":$value"
+            }
+            "\"${pair.a}|${pair.b}\":{\"independent\":${disclosure.independent},\"lagBySource\":$lag}"
+        }
+
+        val items = setOf("items")
+        val votes = setOf("votes")
+        val produce = setOf("produce")
+        val wanted = setOf("wanted")
+        val voteCount = wanted.size
         // V4-PILOT: the `"shared"` field exists ONLY in replicate mode, so the
-        // default payload is byte-identical to what every existing test and the
-        // browser page already parse.
-        val sharedField = if (sharedCell == null) "" else ""","shared":${arr(shared)}"""
-        """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount$sharedField}"""
+        // default payload keeps the shared field absent, as every existing test
+        // and the browser page expect when replication is disabled.
+        val sharedField = if (sharedCell == null) "" else ",\"shared\":${arr(setOf("shared"))}"
+        return """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount,"crossRoot":${crossRootJson()}$sharedField}"""
     }
 
     /**
@@ -486,7 +491,9 @@ class DemoApp(
             put(votesUnion.ref, "votes")
             produceRef?.let { put(it, "produce") }
             wantedRef?.let { put(it, "wanted") }
-            put(aligned.ref, "ui-aligned")
+            observation.groups.forEach { group ->
+                put(observation.group(group).ref, if (group == "items+produce") "ui-aligned" else "ui-$group")
+            }
             if (wire != null) {
                 put(peerItems, "items@$peerRole")
                 put(peerVotes, "votes@$peerRole")

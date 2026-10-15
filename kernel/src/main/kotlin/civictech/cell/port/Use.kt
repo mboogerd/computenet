@@ -29,14 +29,19 @@ interface Use<Api> : LinkFrom<Api> {
     companion object {
         /**
          * Creates a [Use] implementation that always returns the provided [api].
+         * The endpoint retains [api]'s identity internally so an outlet that
+         * attaches it without a link handshake can mark the target as
+         * bypass-fed for source-provenance classification.
          * @param api The API instance to use.
          * @param fixedPortRef An optional [PortRef] for this consumer.
          */
-        fun <Api : Any> fixed(api: Api, fixedPortRef: PortRef? = null): Use<Api> = object : Use<Api> {
+        fun <Api : Any> fixed(api: Api, fixedPortRef: PortRef? = null): Use<Api> = object : FixedUse<Api> {
+            override val fixedApi: Api = api
+
             override val ref: PortRef
                 get() = fixedPortRef ?: throw IllegalArgumentException("Port has not been initialized")
 
-            override val call: Api = api
+            override val call: Api = fixedApi
 
             override fun at(portRef: PortRef): Api = api
 
@@ -49,6 +54,11 @@ interface Use<Api> : LinkFrom<Api> {
             }
         }
     }
+}
+
+/** Internal witness that an ad-hoc [Use.fixed] endpoint delegates to [fixedApi]. */
+internal interface FixedUse<Api : Any> : Use<Api> {
+    val fixedApi: Api
 }
 
 /**

@@ -24,6 +24,16 @@ import java.nio.file.Files
  */
 class ExchangeScaffoldTest {
 
+    @Test
+    fun `board observation is one group`() {
+        val app = ExchangeApp(port = 0).start()
+        try {
+            kotlin.test.assertEquals(mapOf("board" to "board"), app.observationGroups)
+        } finally {
+            app.stop()
+        }
+    }
+
     // `JvmPeer.launch` again (computenet-dqy.25). The local launcher and the local
     // log-folding wait that used to sit here existed only because the shared helper
     // redirected the peer to INHERIT, which Gradle's console never renders — the

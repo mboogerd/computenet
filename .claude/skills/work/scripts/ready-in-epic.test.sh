@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for ready-in-epic.sh. Stubs `bd`. Expect "23 passed, 0 failed".
+# Tests for ready-in-epic.sh. Stubs `bd`. Expect "26 passed, 0 failed".
 #
 # The load-bearing case is DEPTH: bd ready --parent reaches direct children
 # only, and this script exists because of that (computenet-28vn). Case 3 is the
@@ -130,6 +130,29 @@ nk "another epic's blocked row is not" "computenet-other.1" "$rows"
 ck "the primary rows still stand, and exit 0" "computenet-e.1.2.3	task	2	" "$rows$rc"
 ids=$("$SCRIPT" computenet-e --ids-only 2>/dev/null)
 ck "--ids-only carries the stale-blocked id bare" $'\ncomputenet-e.5' $'\n'"$ids"
+
+# --- parked work is not a ready row (computenet-2ubdj) ------------------------
+# computenet-rut3b (status=blocked, label human) was listed as workable surface.
+cat > "$ROOT/blocked.json" <<'EOF'
+[{"id":"computenet-e.7","status":"blocked","priority":1,"title":"parked for a person"}]
+EOF
+cp "$ROOT/ready.json" "$ROOT/ready.keep"
+python3 - "$ROOT/all.json" "$ROOT/ready.json" <<'PY3'
+import json, sys
+a, r = sys.argv[1], sys.argv[2]
+d = json.load(open(a))
+d += [{"id":"computenet-e.7","issue_type":"bug","parent":None,"status":"blocked","labels":["human"]},
+      {"id":"computenet-e.8","issue_type":"task","parent":None,"status":"open","labels":["human"]}]
+json.dump(d, open(a, "w"))
+d = json.load(open(r)); d += [{"id":"computenet-e.8","priority":2,"title":"open but human-labelled"}]
+json.dump(d, open(r, "w"))
+PY3
+: > "$ROOT/deps.computenet-e.7"
+rows=$("$SCRIPT" computenet-e 2>/dev/null)
+nk "a status=blocked label=human item is not a stale-blocked row (rut3b)" "computenet-e.7" "$rows"
+nk "a human-labelled row of bd ready is dropped" "computenet-e.8" "$rows"
+ck "and the workable rows still stand" "computenet-e.1.2.3	task	2	" "$rows"
+cp "$ROOT/ready.keep" "$ROOT/ready.json"
 cp "$ROOT/all.keep" "$ROOT/all.json"; rm -f "$ROOT/blocked.json"
 
 echo "$pass passed, $fail failed"

@@ -11,6 +11,7 @@ import civictech.cell.graph.KeyedCellFactory
 import civictech.cell.graph.KeyedFamily
 import civictech.cell.graph.SpawnStep
 import civictech.cell.graph.UnlinkStep
+import civictech.cell.graph.WriteStep
 import civictech.cell.link.LinkOptions
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -319,6 +320,29 @@ class PlacementPlanTest {
         assertEquals(
             List(3) { "link family.outlet->sink.inlet: family handle 'family' has no port" },
             familyMessages,
+        )
+    }
+
+    @Test
+    fun `cross-node writes are refused on every node before a plan is returned`() {
+        val manifest = threeNodeManifest("a" to "a", "b" to "b")
+        val spec = GraphSpec(
+            listOf(
+                spawn("left", placement = "a"),
+                spawn("right", placement = "b"),
+                WriteStep("updateBoth", listOf("left", "right")),
+            ),
+        )
+
+        val messages = listOf("a", "b", "c").map { node ->
+            assertThrows<IllegalStateException> {
+                PlacementPlan.of(spec, manifest, node)
+            }.message
+        }
+
+        assertEquals(
+            List(3) { "write 'updateBoth': cross-node write is not supported" },
+            messages,
         )
     }
 

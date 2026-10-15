@@ -132,6 +132,14 @@ abstract class CompositeCell(
     @Volatile
     private var budget: BudgetLedger? = null
 
+    /**
+     * Monotonic time for fixed-window boundary throttles. This is the
+     * membrane's one wall-clock read seam and is injected for deterministic
+     * tests, in the same shape as `civictech.cell.wire.AnnouncementAdmission`
+     * (3u0hk-D11).
+     */
+    protected open val boundaryClock: () -> Long = System::nanoTime
+
     final override fun attachBudget(ledger: BudgetLedger) {
         budget = ledger
     }
@@ -397,7 +405,12 @@ abstract class CompositeCell(
         organelleOutlet.onRepeatSuppression = policy.disclosure.asRepeatSuppressionHook(denials, subject)
         if (policy.protocolAuthority.isNotEmpty()) {
             ProtocolSupport.of(organelleOutlet).inboundFilter =
-                policy.protocolAuthority.asProtocolFilter(denials, budgetScope = "membrane:$ref") { budget }
+                policy.protocolAuthority.asProtocolFilter(
+                    denials,
+                    budgetScope = "membrane:$ref",
+                    budget = { budget },
+                    clock = boundaryClock,
+                )
         }
         exposureMapMutable[externalName] =
             Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
@@ -778,6 +791,8 @@ private fun BoundaryDenialSink.denyDisclosure(
     )
 }
 
+private data class RateWindow(val windowStart: Long, val count: Int)
+
 /**
  * [BoundaryPolicy.protocolAuthority] as a [ProtocolSupport.inboundFilter]
  * (spec 40/43 seam 3, 30/34 decision 6): refuses a [Principal] below
@@ -836,21 +851,37 @@ private fun BoundaryDenialSink.denyDisclosure(
  * `ratePerWindow` and the budget are two mechanisms by scope, not by
  * accident (`66m-D6`, epic `computenet-66m` §9 risk 4): the first is a
  * policy-declared per-protocol cap on SEC1's seam, the second a
- * per-`Principal` economic budget owned by the host's ledger. The rate
- * block's own defect — its `counts` map never resets or evicts, so it is a
- * per-lifetime cap over a map unbounded in the number of principals ever
- * seen — is filed as `computenet-hrp9n`, not fixed here.
+ * per-`Principal` economic budget owned by the host's ledger. A null
+ * [ProtocolAuthority.windowNanos] retains the original per-lifetime count.
+ * With a declared window, [clock] starts fixed windows and counts restart at
+ * one after the window elapses; each protocol retains at most
+ * [ProtocolAuthority.maxTrackedPrincipals] entries, evicting elapsed windows
+ * first and then the oldest live window. Eviction deliberately loses rate
+ * history (a returning principal starts a fresh window); the budget arm is
+ * the economic bound under a flood wider than this memory cap (3u0hk-D10).
  */
-private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
-    denials: BoundaryDenialSink,
-    budgetScope: String,
-    budget: () -> BudgetLedger?,
-): (ProtocolId, Any) -> Any? {
-    val counts = java.util.concurrent.ConcurrentHashMap<Pair<ProtocolId, Principal>, Int>()
-    return filter@{ id, message ->
-        val authority = this[id] ?: return@filter message
+internal class ProtocolAuthorityFilter(
+    private val authorities: Map<ProtocolId, ProtocolAuthority>,
+    private val denials: BoundaryDenialSink,
+    private val budgetScope: String,
+    private val budget: () -> BudgetLedger?,
+    private val clock: () -> Long,
+) : (ProtocolId, Any) -> Any? {
+    private val counts = java.util.concurrent.ConcurrentHashMap<Pair<ProtocolId, Principal>, RateWindow>()
+    private val windowedCountsLock = Any()
+
+    internal fun trackedEntryCount(id: ProtocolId): Int = synchronized(windowedCountsLock) {
+        trackedEntryCountUnlocked(id)
+    }
+
+    internal fun isTracked(id: ProtocolId, principal: Principal): Boolean = synchronized(windowedCountsLock) {
+        counts.containsKey(id to principal)
+    }
+
+    override fun invoke(id: ProtocolId, message: Any): Any? {
+        val authority = authorities[id] ?: return message
         val principal = currentPrincipal()
-        if (principal == Principal.LocalTrusted) return@filter message
+        if (principal == Principal.LocalTrusted) return message
         val peer = principal as Principal.Peer
         if (peer.auth < authority.minAuth) {
             denials.denyProtocol(
@@ -860,12 +891,15 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
                 detail = "auth=${peer.auth} < minAuth=${authority.minAuth}",
                 message = message,
             )
-            return@filter null
+            return null
         }
         authority.ratePerWindow?.let { limit ->
             val key = id to principal
-            val next = (counts[key] ?: 0) + 1
-            counts[key] = next
+            val next = authority.windowNanos?.let { windowNanos ->
+                nextWindowedCount(key, id, windowNanos, authority.maxTrackedPrincipals, clock())
+            } ?: counts.compute(key) { _, entry ->
+                RateWindow(windowStart = 0L, count = (entry?.count ?: 0) + 1)
+            }!!.count
             if (next > limit) {
                 denials.denyProtocol(
                     DenialReason.RATE,
@@ -874,7 +908,7 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
                     detail = "count=$next > ratePerWindow=$limit",
                     message = message,
                 )
-                return@filter null
+                return null
             }
         }
         // ECO1 budget arm (5o1rf-D7, 66m-D6: after ratePerWindow, before the
@@ -894,7 +928,7 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
                             subject = id.name,
                             deniedArgs = listOf(message),
                         )
-                        return@filter null
+                        return null
                     }
                     is BudgetOutcome.Admitted -> Unit
                 }
@@ -902,11 +936,64 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
         }
         if (id == Protocols.Attention && authority.ceiling != null && message is Attention) {
             // preserve the emitter's version: this is the same LWW update, only clamped
-            return@filter Attention(minOf(message.level, authority.ceiling.level), message.version)
+            return Attention(minOf(message.level, authority.ceiling.level), message.version)
         }
-        message
+        return message
+    }
+
+    private fun nextWindowedCount(
+        key: Pair<ProtocolId, Principal>,
+        id: ProtocolId,
+        windowNanos: Long,
+        maxTrackedPrincipals: Int,
+        now: Long,
+    ): Int = synchronized(windowedCountsLock) {
+        if (!counts.containsKey(key) && trackedEntryCountUnlocked(id) >= maxTrackedPrincipals) {
+            evictElapsed(id, windowNanos, now)
+            if (trackedEntryCountUnlocked(id) >= maxTrackedPrincipals) {
+                evictOldest(id)
+            }
+        }
+        counts.compute(key) { _, entry ->
+            if (entry == null || now - entry.windowStart >= windowNanos) {
+                RateWindow(windowStart = now, count = 1)
+            } else {
+                RateWindow(windowStart = entry.windowStart, count = entry.count + 1)
+            }
+        }!!.count
+    }
+
+    private fun trackedEntryCountUnlocked(id: ProtocolId): Int = counts.keys.count { it.first == id }
+
+    private fun evictElapsed(id: ProtocolId, windowNanos: Long, now: Long) {
+        counts.entries.forEach { (key, entry) ->
+            if (key.first == id && now - entry.windowStart >= windowNanos) {
+                counts.remove(key, entry)
+            }
+        }
+    }
+
+    private fun evictOldest(id: ProtocolId) {
+        var oldestKey: Pair<ProtocolId, Principal>? = null
+        var oldestEntry: RateWindow? = null
+        counts.entries.forEach { (key, entry) ->
+            if (key.first == id && (oldestEntry == null || entry.windowStart < oldestEntry!!.windowStart)) {
+                oldestKey = key
+                oldestEntry = entry
+            }
+        }
+        val key = oldestKey ?: return
+        val entry = oldestEntry ?: return
+        counts.remove(key, entry)
     }
 }
+
+private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
+    denials: BoundaryDenialSink,
+    budgetScope: String,
+    budget: () -> BudgetLedger?,
+    clock: () -> Long,
+): ProtocolAuthorityFilter = ProtocolAuthorityFilter(this, denials, budgetScope, budget, clock)
 
 /**
  * Accounts one refused `PORT_PROTOCOL` frame (seam 3 `protocolAuthority`) —

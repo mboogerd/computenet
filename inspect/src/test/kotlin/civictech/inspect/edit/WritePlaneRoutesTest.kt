@@ -150,7 +150,7 @@ class WritePlaneRoutesTest {
         response.statusCode() shouldBe 200
         val plan = inspectorJson.decodeFromString(PlanDto.serializer(), response.body())
         plan.appliable shouldBe true
-        plan.steps.map { it.key } shouldContainExactly listOf("s", "s.outlet->${a.ref}.deltaInlet")
+        plan.steps.map { it.key } shouldContainExactly listOf("s", "s.outlet->${InspectorServer.encodeRef(a.ref)}.deltaInlet")
         topology()["seq"]!!.jsonPrimitive.long shouldBe seqBefore
         registry.localRefs() shouldBe refsBefore
         send("GET", InspectorServer.APPLIES_PATH).body() shouldBe """{"entries":[]}"""
@@ -460,7 +460,7 @@ class WritePlaneRoutesTest {
         edge.from.port shouldBe "outlet"
         // the CUT_OVER failure is link 1's own: exactly one step failed, and it is the second boundary link
         // (observed: connecting to the despawned target answers "Target cell not found")
-        record.steps.filterValues { it is StepOutcome.Failed }.keys shouldBe setOf("e.outlet->${d.ref}.inlet")
+        record.steps.filterValues { it is StepOutcome.Failed }.keys shouldBe setOf("e.outlet->${InspectorServer.encodeRef(d.ref)}.inlet")
         // one shape for the event and the record (wczst-D5)
         done.payload["outcome"] shouldBe body(readBack)["outcome"]
         awaitUntil("ring holds the record") { entries().any { it["applyId"]!!.jsonPrimitive.content == id } }

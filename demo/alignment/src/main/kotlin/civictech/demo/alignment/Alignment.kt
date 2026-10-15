@@ -14,21 +14,47 @@ data class TopicId(val value: String) : Serializable {
     override fun toString(): String = value
 }
 
-/** One idea within a topic. */
-data class IdeaKey(val topic: TopicId, val idea: String) : Serializable
+/**
+ * Which population a rating belongs to. Each population is folded into a score of its own — an
+ * idea has a human score and an AI score, never one mixed mean.
+ *
+ * The class is read off the participant name, so it needs no field in the journaled [RatingKey]
+ * and no registry: a name with the reserved [AI_PREFIX] is an AI rater, every other name is a
+ * person. Human-facing endpoints refuse a name with that prefix, so no one can rate as an AI by
+ * picking a name. An AI rater's name is the prefix plus its model AND version (`ai:jev-1.13.0`):
+ * two versions of one model are two raters, rating concurrently and aggregated side by side.
+ */
+enum class RaterClass {
+    HUMAN, AI;
+
+    companion object {
+        const val AI_PREFIX = "ai:"
+
+        fun of(participant: String): RaterClass = if (participant.startsWith(AI_PREFIX)) AI else HUMAN
+    }
+}
+
+/** One idea within a topic, as one rater class sees it (the key of its [Scored]). */
+data class IdeaKey(val topic: TopicId, val idea: String, val raters: RaterClass = RaterClass.HUMAN) : Serializable
 
 /** One creator-defined dimension within a topic (the key of its weight). */
 data class DimKey(val topic: TopicId, val dim: String) : Serializable
 
-/** One idea on one dimension (the key of its rating statistics). */
-data class IdeaDimKey(val topic: TopicId, val idea: String, val dim: String) : Serializable {
-    val ideaKey: IdeaKey get() = IdeaKey(topic, idea)
+/** One idea on one dimension, as one rater class rated it (the key of its rating statistics). */
+data class IdeaDimKey(
+    val topic: TopicId,
+    val idea: String,
+    val dim: String,
+    val raters: RaterClass = RaterClass.HUMAN,
+) : Serializable {
+    val ideaKey: IdeaKey get() = IdeaKey(topic, idea, raters)
     val dimKey: DimKey get() = DimKey(topic, dim)
 }
 
 /** One participant's rating slot on one idea and dimension. */
 data class RatingKey(val topic: TopicId, val idea: String, val dim: String, val participant: String) : Serializable {
-    val ideaDimKey: IdeaDimKey get() = IdeaDimKey(topic, idea, dim)
+    val raters: RaterClass get() = RaterClass.of(participant)
+    val ideaDimKey: IdeaDimKey get() = IdeaDimKey(topic, idea, dim, raters)
 }
 
 /**
@@ -148,6 +174,13 @@ object Alignment {
     const val SPLIT_STDEV = 2.0
 
     /**
+     * The human/AI divergence threshold on the 1–9 scale: a dimension whose human mean and AI mean
+     * part by at least this much is named in the aggregate row's `diverges`. Same 2.0 as
+     * [SPLIT_STDEV], so "AI disagrees" reads at the same strength as "people disagree".
+     */
+    const val DIVERGE_GAP = 2.0
+
+    /**
      * The batch reference: every idea's [Scored] recomputed from scratch from
      * the write-side ratings and dimension configs. What stays independent of
      * the cell path (computenet-sigl0-D7) is the STATS DERIVATION — this
@@ -176,7 +209,7 @@ object Alignment {
     fun rankBatch(ratings: Map<RatingKey, Int>, dims: Map<DimKey, DimConfig>): Map<IdeaKey, Scored> {
         val costTopics = dims.filterValues { it.direction == Direction.COST }.keys.map { it.topic }.toSet()
         val factorTopics = dims.filterValues { it.direction == Direction.FACTOR }.keys.map { it.topic }.toSet()
-        val byIdea = ratings.entries.groupBy { IdeaKey(it.key.topic, it.key.idea) }
+        val byIdea = ratings.entries.groupBy { it.key.ideaDimKey.ideaKey }
         val out = HashMap<IdeaKey, Scored>()
         for ((idea, rows) in byIdea) {
             val stats = sortedMapOf<String, DimStats>()

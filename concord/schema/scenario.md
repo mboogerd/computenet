@@ -122,7 +122,9 @@ optional descriptor param the driver binds. The v1 named params:
 | `host` | host placement (dist profile) |
 | `journal` | proposed non-empty journal name for a cell/controller on `host: dur` — see below |
 | `replica-of` | logical replica-group id (dist profile); proposed also on a `host: dur` `set-source`/`journal-set-source`, with the durable placement and recovery semantics below |
+| `authority` | principal-owned replicated slice: `{principal: <actor>}` (dist profile; requires `replica-of`) — see below |
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
+| `family` | keyed-family declaration (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
 | `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
 | `lateness` | event-time lateness `L`, a non-negative integer, on `window` (tumbling), `join`, `semi-join`, `intersect` or `waterline` — see below (`computenet-t4od7`, additive) |
@@ -172,6 +174,23 @@ This extension is additive. Every existing `dur` scenario carries no
 `journal:` and keeps byte-identical meaning: the durable host has one journal
 named `default`; the five journaled catalog types and the controller use it,
 while the volatile-capable types remain volatile.
+
+#### `authority` (computenet-ermvz.5, `[43-FLOW-04]`)
+
+An authority-bearing replica declares the scenario-local actor that initially
+owns its whole logical slice:
+
+```yaml
+- {id: r1, type: set-source, host: h1, replica-of: slice, authority: {principal: alice}}
+```
+
+This attribute is **dist profile only** and valid only together with
+`replica-of`; a cell declaring `authority` without `replica-of` is a schema
+error. Every replica in one authority-bearing logical group declares the same
+initial principal. Actor names are neutral handles: the driver owns their
+identity, key material and counters, and a corpus file never states those
+implementation values. Omitting `authority` preserves ordinary open
+replication byte-for-byte.
 
 #### `window` (R2-B, `24-OP-WINDOW-01`/`-02`)
 
@@ -310,6 +329,27 @@ The parser runs **lenient** (unknown keys ignored) so a future param does not
 break older files; promoting a new param to a typed field is a schema-change
 ticket.
 
+#### `family` (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
+
+A `set-source` may be declared as a long-keyed family. The cell `id` names the
+family handle: it has membership, but no view or ports of its own, and therefore
+cannot be a link endpoint. The driver refuses a `family:` on any other catalog
+type. The descriptor is additive; absent means the ordinary single cell every
+existing scenario already declares.
+
+```yaml
+- {id: f, type: set-source, of: string, host: h1, family: {keys: long, spawn-on-interest: true}}
+```
+
+| field | meaning |
+|---|---|
+| `keys` | key codec; optional, defaults to `long` (the only admitted codec today) |
+| `spawn-on-interest` | optional boolean, default `false`; when true, bounded interests admitted on the family's host registry materialize their named members |
+
+Every member is the declared catalog type (`set-source` here). Member refs and
+construction details are driver-owned and have no scenario meaning. A family
+declaration is not a replica declaration and carries no `replica-of` identity.
+
 ### Link params
 
 `{from, to, inlet?, outlet?, role?}`. `role` selects consume vs observe
@@ -328,7 +368,12 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | verb | YAML | driver verb |
 |---|---|---|
 | apply | `{type: apply, on: a, op: add, value: apple}` (also `times: N`) | `apply(cell, op)` |
+| signed-apply | `{type: signed-apply, on: r1, actor: alice, op: add, value: apple}` | `signedApply(cell, actor, op, value)` (dist) |
+| forge-signed-apply | `{type: forge-signed-apply, on: r1, actor: alice, op: add, value: apple}` | `forgeSignedApply(cell, actor, op, value)` (dist) |
+| replay-signed-apply | `{type: replay-signed-apply, on: r1, actor: alice, op: add, value: apple}` | `replaySignedApply(cell, actor, op, value)` (dist) |
+| transfer-authority | `{type: transfer-authority, on: r1, actor: alice, to: bob}` | `transferAuthority(cell, actor, to)` (dist) |
 | quiesce | `{type: quiesce}` (also `budget: N`) | `quiesce(budget)` barrier |
+| declare-interest | `{type: declare-interest, on: f, interest: {ranges: [[2, 4]]}}` | `declareInterest(family, interest)` and await induced spawns |
 | connect | `{type: connect, from: s, to: late, inlet?, outlet?, role?, expect?}` | `connect(...)` |
 | disconnect | `{type: disconnect, from: s, to: late, inlet?, outlet?, expect?}` | `disconnect(linkRef)` |
 | snapshot | `{type: snapshot, on: c, as: blob1}` | `snapshot(cell)` |
@@ -363,6 +408,79 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   actor again"; there is no `counter:`, because a scenario that could state the
   position would be describing the graph's frame rather than an outsider's. See
   below.
+
+#### `signed-apply` and `transfer-authority` (computenet-ermvz.5, `[43-FLOW-04]`)
+
+These verbs are **dist profile only** and target an authority-bearing
+`set-source` replica. `signed-apply` accepts `add` and `remove`. The driver
+constructs the corresponding set delta, wraps its serialized bytes in a
+`SignedWrite` made by `actor`'s deterministic scenario-local signer, and drives
+that envelope through the target replica's real gossip inlet. For `remove`, it
+reads the target replica's live add tags and carries those tags plus a fresh
+remove dot; it never fabricates a source cell or bypasses the OR-set algebra.
+
+`transfer-authority` uses the same route and signing rules, with a
+`TransferAuthority(to)` payload. It does not call a privileged management
+shortcut: admission is decided by the same adapter and current-authority rule
+as any other signed write. Repeating an actor handle continues that actor's
+per-logical-cell counter lane for the whole run.
+
+Neither verb is an ordinary local `apply`. An ordinary `apply` reaches the
+cell's local app inlet and is signed by the adapter's configured local signer;
+these verbs deliberately let a scenario author as any actor, including one the
+slice must refuse.
+
+#### `forge-signed-apply` and `replay-signed-apply` (computenet-8m179, `[43-FLOW-04]`)
+
+**Status.** Landed. This subsection is the single-writer,
+schema-change-gated review of the extension; the matching
+`@SerialName("forge-signed-apply")` and `@SerialName("replay-signed-apply")`
+`Step`s, the two `Driver` SPI verbs, the `civictech.concord.driver.kernel`
+binding and the `CorpusRunner` dispatch arms moved with it in the same ticket,
+per D-C12's rule that a step verb's seams move together or the module does not
+compile. `43-FLOW-INTEGRITY-01` drives both verbs and covers the signature and
+replay arms of `[43-FLOW-04]`.
+
+Both verbs are **dist profile only**, target an authority-bearing `set-source`
+replica, and accept the same `on`, `actor`, `op` (`add` or `remove`) and `value`
+fields as `signed-apply`.
+
+**A forged apply changes only the signature.** The driver builds the same set
+delta and `SignedWrite` tuple an ordinary `signed-apply` would build, then
+corrupts only the signature before driving the envelope through the target's
+real gossip inlet. The author, per-logical-cell counter, serialized payload and
+merge tags remain the signer's own. It is therefore a test of signature
+verification, not of malformed decoding or missing key material.
+
+**A replay names its prior write in neutral vocabulary.** The driver
+re-delivers the exact envelope produced by the most recent prior
+`signed-apply` in the same run whose logical replica group, `actor`, `op` and
+`value` match. It does not sign again, advance a counter, rebuild a set delta or
+mint a merge tag. `on` may name another authority-bearing replica in the same
+logical group; the logical id, rather than the receiving instance, is the
+match key. With no matching prior `signed-apply`, the driver fails loudly. A
+scenario testing replay admission puts a `quiesce` after the original apply so
+that envelope is retained before its exact copy arrives.
+
+Neither verb accepts `times:`. Repeat the explicit step when separate forged
+or replayed arrivals are the behavior under test. Their refusals use the same
+`write-denials` observation as every other authority-boundary refusal; no new
+check vocabulary is needed.
+
+#### `declare-interest` (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
+
+`on` names a `family:` handle and `interest` uses the same closed
+total/empty/slots/ranges grammar as the cell descriptor above. The declaration
+is recorded on that family's host registry, then the driver awaits the
+admission's induced spawns before returning; a following `quiesce` therefore
+observes every admitted member. Which registry ref makes the declaration is a
+driver-owned detail and has no scenario meaning.
+
+A bounded `ranges` arm enumerates its half-open long-key ranges. An unbounded
+arm such as `{total: true}` is recorded but completes with a typed refusal; the
+step does not throw and does not create a dead letter. `interest-refusals`
+accounts that result. Declaring interest on a family whose
+`spawn-on-interest` is false records normally and materializes nothing.
 
 #### `restart` (D-C12, spec 21 §RESTART re-baselines / spec 30/31 rule 5)
 
@@ -775,6 +893,8 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | observations-all-satisfy | `{type: observations-all-satisfy, view: v, fn: even}` | every observation-stream event satisfies a catalog predicate |
 | observations-monotone | `{type: observations-monotone, view: v, order?: ...}` | stream never regresses under the order |
 | replicas-converge | `{type: replicas-converge, logical: shared}` | all live replicas of the logical id hold equal folds (dist) |
+| family-holds | `{type: family-holds, family: f, keys: [2, 3]}` | the family holds exactly this order-free long-key set |
+| interest-refusals | `{type: interest-refusals, family: f, count: 1}` | exactly N declarations made for this family completed with a typed spawn/budget refusal |
 | no-dead-letters | `{type: no-dead-letters}` | zero dead letters across all hosts |
 | effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) — unkeyed, per key the script *fed* it (see below) |
 | observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
@@ -783,6 +903,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 | emission-count | `{type: emission-count, cell: r2, since: 7, exactly: 0}` | `r2`'s outlet emitted exactly N times from just before script step `since` to check time (window must be `quiesce`-barriered) |
 | refusal-count | `{type: refusal-count, cell: s, exactly: 1}` | `s` refused exactly N deliveries as undeliverable-for-want-of-a-position, over the whole run |
+| write-denials | `{type: write-denials, cell: r1, exactly: 1, principal?: bob}` | authority adapter at `r1` recorded exactly N write-boundary denials, optionally attributed to actor `bob` (dist) |
 
 Inline construction-time expectations use `expect:` on the `connect`/`disconnect`
 step, not a check entry.
@@ -1008,6 +1129,40 @@ loudly rather than answer `0` — see the next section — and the evaluator rep
 that as this check's failure. A negative reading fails for the same reason: a
 tally that only ascends cannot produce one, so it is not a count of refusals.
 
+### `write-denials`: authority-boundary accounting (computenet-ermvz.5)
+
+`{type: write-denials, cell: r1, exactly: 1}` reads the monotonic
+`write-authority` sink owned by `r1`'s authority adapter. With `principal: bob`,
+it counts the adapter's structured denial audit records whose
+`BoundaryDenial.principal` names the scenario-local actor `bob`; it does not
+attribute the refusal to the host that happened to relay or receive the frame.
+
+This check is **dist profile only**. A cell with no write-authority adapter must
+make the driver fail loudly. It may never answer zero: `exactly: 0` is a valid
+passing assertion, so treating an absent adapter as an empty counter would be a
+vacuous green. The tally is whole-run, like `refusal-count`.
+
+An authority refusal is reported through the host's dead-letter outlet but is
+not a supervision fault. Therefore a scenario expecting one deliberately does
+not assert `no-dead-letters`; its header says why, following the
+`drive-contextless` precedent.
+
+### Family membership and interest refusals (computenet-vb7aq, `42-INTEREST-SPAWN-01`)
+
+`family-holds` compares the driver's exact membership of `family` with `keys`
+as sets: key order is not semantic, and both an extra and a missing member fail.
+The handle must name a declared family; a driver cannot answer with an empty
+list for a handle it does not observe.
+
+`interest-refusals` is deliberately separate from `refusal-count`.
+`refusal-count` is the spec-24 observation of a delivery rejected at an
+`Effectful` inlet for want of a message position. An interest-spawn refusal is
+a registry admission result instead: an unbounded arm (`InterestSpawnRefused`)
+or a budget refusal. Reusing the delivery count would conflate two different
+quantities and reporting channels. This check reads one ascending per-family
+run total; an unobserved family fails loudly rather than answering the
+plausibly-passing value `0`.
+
 ### `composite-whole-waves`: one common prefix across members
 
 (`computenet-5ubdv`, spec 22 `[22-OBS-01]`/`[22-OBS-02]`.) An `aligned-view`
@@ -1034,14 +1189,15 @@ an inlet with zero or several inbound links, an arm not ending at `source`, a
 `members:` name not in `views:`, or a source op other than `add`/`remove`. An
 empty observation stream fails as for the other `observations-*` checks.
 
-### What a conforming driver must observe (the four checks that need one)
+### What a conforming driver must observe (the six checks that need one)
 
 A check is only a conformance check if a **second, non-kernel** implementation
-could evaluate it from the specification alone. Four checks require an
+could evaluate it from the specification alone. Six checks require an
 observation beyond the existing verbs — the two added with `read-state`
-(V1C-CONCORD), `emission-count` (`computenet-dvim`) and `refusal-count`
-(`computenet-em9i`) — and each is stated here in the spec's vocabulary, not any
-implementation's.
+(V1C-CONCORD), `emission-count` (`computenet-dvim`), `refusal-count`
+(`computenet-em9i`), `family-holds` and `interest-refusals`
+(`computenet-vb7aq`) — and each is stated here in the spec's vocabulary, not
+any implementation's.
 
 **`wave-plane-unchanged`** requires the driver to report, for a named cell, the
 **wave plane that cell has reached**: for every wave source visible at that
@@ -1145,6 +1301,25 @@ same rule as `emission-count` and `retransmit`: `0` is exactly what an
 `exactly: 0` check accepts, so a silent 0 converts an unwatched cell into a
 green check — the one failure this observation exists to prevent, and the one
 that leaves no trace in a passing run.
+
+**`write-denials`** requires the driver to report the named replica adapter's
+`write-authority` sink total and, when requested, the count of its structured
+denial records attributed to one author principal. A driver with no adapter at
+that cell refuses the observation rather than returning zero. The principal is
+the denied write's author, read from the audit record, not inferred from a host
+or relay.
+
+**`family-holds`** requires the driver to report the exact set of long keys the
+named family has materialized. The result is membership only: no member cell
+state, ref, port, scheduling event or spawn order is exposed. This is the
+boundary-observable content of a family handle, and a driver that does not hold
+the named family fails loudly.
+
+**`interest-refusals`** requires the driver to report an ascending per-family
+count of declarations whose induced spawn admission completed with a typed
+interest or budget refusal. It observes neither exception class nor reason;
+those are implementation details. The count is per run, and an unobserved
+family fails loudly rather than reporting zero.
 
 ## `generator` (kind: generative)
 

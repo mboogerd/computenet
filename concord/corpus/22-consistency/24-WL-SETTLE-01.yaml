@@ -1,0 +1,37 @@
+# Settlement consequence of [24-WL-04] (computenet-tcovt). The other half of the
+# requirement -- the floor is not a wave position and is in no completeness set
+# or frontier -- has no neutral observable and stays disputed (DISPUTES.md).
+id: 24-WL-SETTLE-01
+title: A wave that does not move the floor is absorb-acked, so a wave-aligned consumer of data and waterline settles it
+covers: [24-WL-04]
+profile: core
+kind: example
+narrative:
+  given: >-
+    one set source feeding both an aligned-view data member and a waterline (lateness 5),
+    whose floor feeds the same aligned-view through a value-view member
+  when: the source adds an element that raises the floor, then two further elements that leave the floor unmoved
+  then: >-
+    the waterline emits nothing for the no-rise waves yet absorb-acks them, so the aligned
+    consumer settles every wave -- the data member holds all three elements, the floor member
+    reads 5, and the data member only ever exposes whole waves of the source
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: wl, type: waterline, lateness: 5}
+    - {id: c, type: aligned-view, views: {d: set-view, f: value-view}}
+  links:
+    - {from: a, to: c, inlet: d}
+    - {from: a, to: wl}
+    - {from: wl, to: c, inlet: f}
+script:
+  - {type: apply, on: a, op: add, value: [10, x]}   # floor 5
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [3, y]}    # floor unmoved: wl emits nothing, absorb-acks
+  - {type: quiesce}
+  - {type: apply, on: a, op: add, value: [8, z]}    # floor unmoved
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: c, equals: {d: [[3, y], [8, z], [10, x]], f: 5}}
+  - {type: composite-whole-waves, view: c, source: a, members: [d]}
+  - {type: no-dead-letters}

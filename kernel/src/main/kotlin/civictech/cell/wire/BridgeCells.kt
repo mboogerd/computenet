@@ -226,19 +226,15 @@ class BridgeIngressCell(
      * [RemoteLinkRequests.standInRef], whose KDoc also states the residual
      * (link-record accumulation is not collapsed, only delivery).
      *
-     * **And the aim is bound at the request, not for the link's lifetime**
-     * (measured in review, computenet-zlm2). This check runs once; the endpoint
-     * [RemoteLinkRequests.translate] builds then re-resolves `(cell, port)`
-     * through `LocationRegistry.deliver` on *every* delivery. Because a
-     * mirrored announcement overwrites `locations[ref]` whoever sent it, a
-     * *different* admitted peer that later announces the same [CellRef]
-     * captures the stream — and, announcing first, can even turn a ref this
-     * side hosts locally into a `Remote` that then passes [namedByPeer]. That
-     * is not specific to this seam: the same announcement captures an ordinary
-     * `HostedCellProxy` link P made itself, with no link request in play, which
-     * is why it is filed as its own defect rather than fixed here. Read this
-     * seam as "a peer may only ask for a link to a ref it has announced", not
-     * as "the data can only ever reach that peer".
+     * **The aim remains bound for the link's lifetime** (computenet-zlm2).
+     * The endpoint [RemoteLinkRequests.translate] builds still re-resolves
+     * `(cell, port)` through `LocationRegistry.deliver` on every delivery, but
+     * `RegistryMirrorCell` now admits a mirrored publication only when the ref
+     * is fresh or already belongs to the same peer. A different peer cannot
+     * re-aim the ref, and no peer can replace a binding whose local host still
+     * serves the cell. The same admission rule protects ordinary
+     * `HostedCellProxy` links; this request-time check remains the positive
+     * proof that the named endpoint belongs to the requesting peer.
      *
      * **Defaults to `{ null }`, which refuses every link request** — fail
      * closed. [Peering.hostIngress] is the only production construction and
@@ -298,15 +294,12 @@ class BridgeIngressCell(
      * peering therefore cannot establish a remote link; it never had an
      * identity to bind one to.
      *
-     * Two measured limits on how much that buys (computenet-zlm2, review of
-     * this change): "a [CellRef] this side hosts itself" is refused only while
-     * no peer has *announced* it — a mirrored announcement overwrites a
-     * [civictech.cell.host.LocationRegistry.Local] location, and the ref then
-     * resolves as that peer's [civictech.cell.host.LocationRegistry.Remote] and
-     * passes here; and only the **cell** half is judged — the `port` half of
-     * the named address is never checked, so a peer may name any port name on
-     * its own cell (deliveries then dead-letter at the requester, on its side
-     * of the boundary, not this one).
+     * Only the **cell** half is judged: the `port` half of the named address is
+     * not checked here, so a peer may name any port name on its own cell
+     * (deliveries then dead-letter at the requester, on its side of the
+     * boundary, not this one). The cell-ownership answer cannot be changed by
+     * another peer's announcement while the binding is live; that collision is
+     * refused earlier by [RegistryMirrorCell].
      */
     private fun namedByPeer(named: CellRef): Boolean {
         val whose = peer ?: return false

@@ -1,24 +1,19 @@
 package civictech.demo.alignment
 
 /**
- * Jev: the automated triage rater (feature computenet-i00bh).
+ * The beads-triage heuristic: the triage board's automated rater (feature computenet-i00bh).
  *
- * One of the three rater classes on a triage board, alongside the human and the
- * coding agent, and — like both of them — an ordinary alignment participant.
- * Its ratings go through the same `rate` op the sliders use, under the
- * participant name [PARTICIPANT], so they land in the same ratings map, fold
- * through the same [WeightedFusionCell], and disagree with a human exactly the
- * way two humans disagree: a spread of 2.0 or more on one (idea, dimension)
- * sets [Scored.split] and the idea joins the board's Discuss group. There is no
- * separate aggregation path for machine judgement, and no weighting of Jev
- * against people.
+ * Arithmetic over [Candidate] fields, not a model — it was named "Jev" until real Jev arrived
+ * as an [AiRater] ([TypeSafeJevRater]). Its ratings go into the AI population under
+ * [MODEL], so they fold into the board's AI score beside the human one, and a human who
+ * disagrees with it shows up in the aggregate's `diverges`, not as a human-side `split`. Before
+ * the AI score existed it wrote as participant `jev` into the human ratings; [seedBeadsTriage]
+ * clears those legacy rows.
  *
  * ## Why a heuristic and not a model call
  *
- * `demo/deliberate`'s `JevJudge` calls TypeSafe System One over HTTP and needs
- * `TYPESAFE_API_KEY`. This one deliberately does not (user decision,
- * 2026-09-29: build it fresh, self-contained). The Eisenhower axes are the one
- * place where that costs nothing, because **beads already carries the signal**:
+ * The Eisenhower axes are the one place where skipping the model costs nothing (user decision,
+ * 2026-09-29: build it self-contained), because **beads already carries the signal**:
  * importance and urgency are questions about the tracker's own graph and
  * timestamps, not about the world. A model asked "is computenet-8x9 important?"
  * would be guessing at `dependent_count` from prose; reading it is both cheaper
@@ -26,7 +21,10 @@ package civictech.demo.alignment
  * makes it deterministic, free, offline, and unit-testable against stated
  * numbers rather than against a recorded fixture.
  *
- * ## Jev rates the ROUND, not the item
+ * It is not an [AiRater] because of the next section: an [AiRater] answers per idea, blind to
+ * the others, and this rates the whole round at once.
+ *
+ * ## It rates the ROUND, not the item
  *
  * [rate] takes the whole candidate set and answers a rating per candidate,
  * because the raw terms below are **rank-normalized within the round** rather
@@ -41,13 +39,13 @@ package civictech.demo.alignment
  *
  * Rank-normalizing fixes that for any distribution: whatever the corpus looks
  * like, the round spreads across the full scale and the quadrants populate. It
- * also makes Jev's claim an honest one — "these are the important ones *of
+ * also makes its claim an honest one — "these are the important ones *of
  * this set*" — and matches how a human uses the Compare view, placing every
  * idea on one axis relative to the others rather than against an absolute
  * anchor.
  *
- * The consequence to know about: **Jev's ratings are relative, so a re-seed
- * whose candidate set changed re-rates Jev.** Human ratings are untouched, and
+ * The consequence to know about: **its ratings are relative, so a re-seed
+ * whose candidate set changed re-rates it.** Human ratings are untouched, and
  * an unchanged set re-derives identical values (so the seed stays
  * journal-silent).
  *
@@ -81,14 +79,18 @@ package civictech.demo.alignment
  * see the input should decline, not average. Abstainers are also excluded from
  * the rank normalization, so one unrateable row does not distort the rest.
  */
-internal object Jev {
-
-    /** Jev's participant name on every board. Stable, like an agent handle. */
-    const val PARTICIPANT = "jev"
+internal object BeadsHeuristic {
 
     /**
-     * Jev's ratings of [candidates] on [dim], as `[1, 9]` values keyed by
-     * [Candidate.id]. Candidates Jev abstains on, and an unknown [dim], are
+     * The heuristic's model name and version; it rates as participant `ai:beads-heuristic-1`
+     * ([RaterClass]). Bump the version whenever the weights in [rate] change, so the new arithmetic
+     * is a new rater beside the old rather than silently overwriting what the old one said.
+     */
+    const val MODEL = "beads-heuristic-1"
+
+    /**
+     * The heuristic's ratings of [candidates] on [dim], as `[1, 9]` values keyed by
+     * [Candidate.id]. Candidates it abstains on, and an unknown [dim], are
      * absent from the answer rather than defaulted.
      */
     fun rate(candidates: List<Candidate>, dim: String): Map<String, Double> {

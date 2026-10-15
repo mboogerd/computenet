@@ -27,12 +27,13 @@ class SlotFinderServerTest {
                 }
             }
 
-            // ops flow writer → intersect chain → hubs asynchronously; poll /state.
+            // ops flow writer → quorum chain → observation asynchronously; poll /state.
             // Await the JOINT condition, never one arm of it (computenet-i6vx). The
-            // panels are folded by `observeAll`, the point-consistent composite, so a
-            // read can pair `common` at wave t-1 with `byDay` at wave t (the F-5 flash;
-            // `observeAligned` is the wave-aligned sibling this demo does not use). The
-            // old gate — `byDay` reaching {"Tue":1} — carried *zero* information about
+            // canonical observation aligns the equal-root derived views
+            // (`nearMiss`, `common`, `filtered`, `byDay`, and `late`) in one group;
+            // the participant source views remain independent root groups, as exposed
+            // by `ObservationFrame.groupOf`. The old gate — `byDay` reaching {"Tue":1}
+            // — carried *zero* information about
             // the Tue-19 half of the assertion below: `byDay` counts the business-hours
             // FILTERED set, which admits Tue-14 only, so it reads {"Tue":1} whether
             // Tue-19 has propagated or not (measured: it holds identically when Tue-19

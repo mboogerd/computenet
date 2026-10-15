@@ -6,6 +6,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.link.catchUpOnLinked
@@ -109,6 +110,9 @@ class WaterlineCell<E> internal constructor(
     fun maxima(): Map<UUID, Long> = maxima.toMap()
 
     init {
+        // WaterlineCell is a unary transparent hop for waves it does not see as
+        // data. Preserve an upstream absorb-ack for the downstream waterline arm.
+        inlet.relayAbsorbAcks()
         inlet.serve(object : Propagate<SetDelta<E>> {
             override fun propagate(value: SetDelta<E>) = onDelta(value)
         })

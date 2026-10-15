@@ -19,7 +19,9 @@
  * registers the interest `Interest.Ranges([Range(k, k + 1)])` for its author
  * key `k` as it is spawned (feature `computenet-8eb53` design 8eb53-D4), so a
  * [FeedSession] can check a leg against `registry.interestOf(ref)` rather than
- * the `Interest.Total` an unregistered ref reads as.
+ * the `Interest.Total` an unregistered ref reads as. With [interestDriven],
+ * that authored family is declared `spawnOnInterest`; the kernel materializes
+ * every bounded key before the declaring admission completes.
  *
  * **Journal layout** (jo2jk-D4): [build] still supplies the four named family
  * journal directories — `person/`, `authored/`, `forum/`, `message/` — to the
@@ -118,9 +120,15 @@ object SnbPipeline {
      * and so [build] runs at most once per host.
      *
      * [registry], when given, receives each `snb-authored` cell's per-author
-     * interest at spawn (8eb53-D4); `null` registers nothing.
+     * interest at spawn (8eb53-D4); `null` registers nothing. [interestDriven]
+     * opts only that family into the kernel's interest-driven spawn policy.
      */
-    fun build(host: ManagedHost, journalDir: File?, registry: LocationRegistry? = null): Graph {
+    fun build(
+        host: ManagedHost,
+        journalDir: File?,
+        registry: LocationRegistry? = null,
+        interestDriven: Boolean = false,
+    ): Graph {
         val context = ApplyContext(
             host = host,
             journalDirs = journalDir?.let { root ->
@@ -152,6 +160,7 @@ object SnbPipeline {
                         namespace = "snb-authored",
                         keys = KeyCodec.Longs,
                         journalId = journalDir?.let { "authored" },
+                        spawnOnInterest = interestDriven,
                         factory = KeyedCellFactory { key, ref ->
                             val author = key as Long
                             registry?.setInterest(ref, Interest.Ranges(listOf(Interest.Ranges.Range(author, author + 1))))

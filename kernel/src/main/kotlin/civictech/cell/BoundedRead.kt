@@ -462,10 +462,12 @@ data class ExclusiveEntry(
 
     /**
      * What the fold knows about an exclusive payload's obligation. Deliberately
-     * coarse: neither `Owned` nor `Leased` exposes a non-consuming predicate for
-     * "already taken" / "already released", and a read may not use reflection to
-     * find out (kernel changes stay reflection-free), so a cell reports what it
-     * knows about *its own* handling and nothing more.
+     * coarse: `Owned.isConsumed` and `Leased.isReleased` are the only
+     * non-consuming predicates, and they are internal accounting state for
+     * [civictech.cell.proxy.Proxy.discharge], not a state contract for this
+     * fold, so the read deliberately does not inspect them. A read may not use
+     * reflection to find out more (kernel changes stay reflection-free), so a
+     * cell reports what it knows about *its own* handling and nothing more.
      */
     enum class Disposition {
         /** The fold holds the reference and has neither taken nor released it. */

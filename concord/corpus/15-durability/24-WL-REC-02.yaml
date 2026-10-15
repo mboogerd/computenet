@@ -1,0 +1,100 @@
+# The no-checkpoint twin of 24-WL-REC-01 (computenet-638io, qfi22-D3/D11):
+# the same graph, script (minus the `snapshot` step) and goldens. A journaled
+# evicting window and its journaled source recover across a crash by FULL
+# journal replay. [22-REC-01]: observers converge to the pre-crash fold, so the
+# `late` outlet reads exactly its pre-crash stream (empty) plus the genuinely
+# late post-recovery add (5). [24-WL-07]: a baseline-stamped replayed duplicate
+# of an already-applied add is NOT a late emission (qfi22-D2); the kernel rule
+# is that a journaled->journaled tail is delivered once at the host intake
+# (qfi22-D7/D8, computenet-qfi22.1), so the source's full-history re-emission
+# (3, 12, 25, 28) does not reach the window a second time after its replayed
+# floor 26 is back. Elements are bare event times (see 24-WL-REC-01's header).
+#
+# WHAT DISCRIMINATES.
+# (a) The kernel once-delivery predicate disabled (`HostDurability.
+# suppressReplayedDuplicates` defaulted to false; measured 2026-10-05, darwin/
+# arm64, `-Pconcord.profiles=dur --rerun`): the scenario fails on 20 of 20
+# runs, `final-view(l): expected [5] but read [12,25,3,5]` — identical to the
+# pre-fix reading t4od7.8 observed. `jv` stays `{"20": 3, "30": 1}` (the
+# window's own journal reconstructs its state and floor).
+# (b) `journal-window` made volatile in `KernelDriverDur` (removed from
+# `JOURNALED_TYPES`, REC-01's mutation (1); measured 2026-10-05 in task review,
+# darwin/arm64, `-Pconcord.profiles=dur --rerun --no-build-cache`): fails on 20
+# of 20 runs, `final-view(l): expected [5] but read []`. Unlike REC-01, `jv`
+# stays green here (inferred, not traced: with no checkpoint the source's
+# full-history re-emission refills the rebuilt window, so window 20 still ends
+# with three elements); only the lost floor shows, admitting 5 instead of
+# late-dropping it. So only `l` discriminates this mutation in this file.
+#
+id: 24-WL-REC-02
+title: An evicting window recovered by full journal replay, with no checkpoint, converges to the pre-crash fold and its late outlet carries only the genuinely late add
+covers: [22-REC-01, 24-WL-07]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a journaled set source of event times
+    feeding a volatile waterline (lateness 2) and a journaled tumbling window
+    (size 10, count, lateness 2) guarded by that waterline's floor, the window's
+    output folded by a journaled count view and its late outlet by a volatile
+    set view, plus a journal controller
+  when: >
+    adds raise the floor to 26 so windows 0 and 10 are evicted, no checkpoint
+    is taken, the host crashes and recovers from its journal (the whole WAL
+    replays), then a post-recovery add lands below the rebuilt floor and two
+    land above it, one into the recovered live window
+  then: >
+    the count view equals the full pre-crash fold plus the post-recovery
+    above-floor adds, the late set view holds ONLY the post-recovery
+    below-floor add (the replayed historical adds 3, 12 and 25 reach the window
+    once, from its own replayed records, never as late duplicates), and nothing
+    was dead-lettered
+graph:
+  cells:
+    - {id: s, type: journal-set-source, host: dur}
+    # volatile: rebuilt empty on the crash, recomputes from live traffic only
+    - {id: wl, type: waterline, lateness: 2, host: dur}
+    # journaled: its own full journal rebuilds the window state AND the floor
+    - {id: jw, type: journal-window, agg: count, window: {kind: tumbling, size: 10}, lateness: 2, host: dur}
+    # journaled: its fold is rebuilt by replaying its journal
+    - {id: jv, type: journal-count-view, host: dur}
+    # volatile: receives only post-recovery late adds
+    - {id: l, type: set-view, host: dur}
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: s, to: wl}
+    - {from: s, to: jw}
+    - {from: wl, to: jw, inlet: waterline}
+    - {from: jw, to: jv}
+    - {from: jw, to: l, outlet: late}
+script:
+  # floor = max event time - 2 (one source).
+  - {type: apply, on: s, op: add, value: 3}     # floor 1 -> jv {"0": 1}
+  - {type: quiesce}
+  - {type: apply, on: s, op: add, value: 12}    # floor 10: window 0 (end 10) evicted -> jv {"10": 1}
+  - {type: quiesce}
+  - {type: apply, on: s, op: add, value: 25}    # floor 23: window 10 (end 20) evicted -> jv {"20": 1}
+  - {type: quiesce}
+  # NO CHECKPOINT: the whole WAL is the tail. Floor 26, window 20 (end 30 > 26) stays live -> jv {"20": 2}
+  - {type: apply, on: s, op: add, value: 28}
+  - {type: quiesce}
+  # CRASH + recover: jw and jv replay their full journals, rebuilding state and
+  # floor 26 from their own records (nothing is restored); s's full-history
+  # re-emission reaches jw once (qfi22-D7/D8), not as late duplicates; wl comes back empty
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  # 5 < the replayed floor 26: late, window 0 is not re-created
+  - {type: apply, on: s, op: add, value: 5}
+  - {type: quiesce}
+  # wl's live max 29 -> candidate 27, the window's floor 26 -> 27: window 20
+  # (end 30 > 27) stays live and folds 29 onto the replayed 25 and 28 -> jv {"20": 3}
+  - {type: apply, on: s, op: add, value: 29}
+  - {type: quiesce}
+  # floor 29: window 20 (end 30 > 29) stays live, 31 opens window 30 -> jv {"20": 3, "30": 1}
+  - {type: apply, on: s, op: add, value: 31}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: jv, equals: {"20": 3, "30": 1}}
+  - {type: final-view, view: l, equals: [5]}
+  # a crash + recovery is not a dead letter (DUR-REPLAY-01 asserts the same)
+  - {type: no-dead-letters}
