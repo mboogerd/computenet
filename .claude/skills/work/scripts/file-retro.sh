@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do case $1 in
   --skill-version) ver=$2; shift 2 ;; --started) started=$2; shift 2 ;;
   --model) model=$2; shift 2 ;; --recurs-of) recurs=$2; shift 2 ;;
   *) echo "file-retro: unknown argument $1" >&2; exit 2 ;; esac; done
-[ -n "$skill" ] && [ -r "$file" ] || { echo "usage: file-retro.sh --skill S --file F [--skill-version V] [--started T] [--model M]" >&2; exit 2; }
+[ -n "$skill" ] && [ -r "$file" ] || { echo "usage: file-retro.sh --skill S --file F [--skill-version V] [--started T] [--model M] [--recurs-of ID[,ID]]" >&2; exit 2; }
 
 # The template is the contract the retrospective parses: refuse a record
 # missing a section rather than file one it cannot read.

@@ -143,6 +143,11 @@ def main(argv):
         a = ap.parse_args(argv[1:])
     except SystemExit:
         return 2
+    # Compared as a string against created_at: a non-date ("yesterday") would
+    # silently hide every report, so refuse it.
+    if a.since and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.since):
+        print("recurrence-audit: --since takes YYYY-MM-DD", file=sys.stderr)
+        return 2
 
     jsonl = a.jsonl
     if not os.path.exists(jsonl):

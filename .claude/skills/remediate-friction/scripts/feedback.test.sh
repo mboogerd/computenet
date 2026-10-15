@@ -32,8 +32,15 @@ cat > "$F" <<EOF
 {"id":"rep-a","status":"open","title":"same symptom, new words","created_at":"2026-10-07T12:02:00Z","metadata":{"recurs_of":"fix-a"},$E}
 {"id":"retro-b","status":"open","issue_type":"retro","title":"retro","created_at":"2026-10-08T00:00:00Z","metadata":{"recurs_of":["fix-b"]}}
 {"id":"old","status":"open","title":"fix-a recurred","created_at":"2026-09-01T00:00:00Z","metadata":{"recurs_of":"fix-b"},$E}
+{"id":"rep-c","status":"open","title":"unlike fix-a in detail","created_at":"2026-10-09T00:00:00Z","metadata":{"recurs_of":"fix-a, fix-b"},$E}
+{"id":"fix-c","status":"closed","close_reason":"fixed in #3","closed_at":"2026-10-09T00:00:00Z","created_at":"2026-10-08T00:00:00Z","metadata":{"recurs_of":"fix-c"},$E}
 EOF
 out=$($S/recurrence-audit.py --jsonl "$F" --since 2026-10-07 2>&1) || true
+grep -q 'FAILED-FIX  fix-b .*->  rep-c  linked' <<<"$out" && ok "comma-string recurs_of names both fixes" || bad "comma-string recurs_of not split"
+grep -q 'CITED .*rep-c' <<<"$out" && bad "linked repeat also listed as CITED" || ok "a linked pair is not re-listed as a citation"
+grep -q -- '-> *fix-c' <<<"$out" && bad "self-link reported" || ok "self-link ignored"
+$S/recurrence-audit.py --jsonl "$F" --since yesterday >/dev/null 2>&1 && rc=0 || rc=$?
+[ "$rc" = 2 ] && ok "non-date --since is bad usage" || bad "--since yesterday gave exit $rc"
 grep -q 'FAILED-FIX  fix-a .*->  rep-a  linked' <<<"$out" && ok "linked repeat without a prose citation is reported" || bad "missed linked 2jx46-shaped repeat"
 grep -q 'FAILED-FIX  fix-b .*->  retro-b  linked' <<<"$out" && ok "retro-only repeat is reported" || bad "missed cz5c1-shaped retro repeat"
 grep -q -- '-> *old' <<<"$out" && bad "--since listed a report from before the window" || ok "--since hides older reports"
