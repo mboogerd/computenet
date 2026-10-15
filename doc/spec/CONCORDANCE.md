@@ -87,8 +87,8 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 24-BOUND-02 | 24-BOUND-02 | covered |
 | 24-CATCHUP-01 | 24-GEN-01 | covered |
 | 24-DUR-01 | DUR-REPLAY-01 | covered |
-| 24-DUR-02 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-GF-01, DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
-| 24-DUR-03 | DUR-SNAPTAIL-01 | covered |
+| 24-DUR-02 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-GF-01, DUR-PART-01, DUR-REPL-01, DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
+| 24-DUR-03 | DUR-SCOPE-01, DUR-SNAPTAIL-01 | covered |
 | 24-DUR-04 | DUR-SRCID-01, DUR-SRCID-02 | covered |
 | 24-DUR-05 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-CONTEXTLESS-01, DUR-LIVE-01, DUR-REPLAY-01, DUR-SRCID-01, DUR-SRCID-02, DUR-STAMPED-01 | covered |
 | 24-DUR-06 | DUR-CONTEXTLESS-01 | covered |
@@ -125,7 +125,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 24-OP-WINDOW-02 | 24-OP-WINDOW-01, 24-WL-LATE-01 | covered |
 | 24-PART-01 | — | gap |
 | 24-PART-02 | — | gap |
-| 24-PART-03 | 24-OP-PARTITION-01 | covered |
+| 24-PART-03 | 24-OP-PARTITION-01, DUR-PART-01 | covered |
 | 24-PART-04 | — | gap |
 | 24-PART-05 | — | gap |
 | 24-REPLAY-01 | 24-REPLAY-01 | covered |
@@ -170,7 +170,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 33-MOVE-01 | 33-MIGRATE-01 | covered |
 | 41-LOC-01 | 41-SPLIT-01 | covered |
 | 42-INT-01 | 42-INTEREST-01, 42-INTEREST-SPAWN-01 | covered |
-| 42-REPL-04 | 42-REPL-01, 42-REPL-DELDOT-01, 42-REPL-LATE-01, 42-TMAP-REPL-01 | covered |
+| 42-REPL-04 | 42-REPL-01, 42-REPL-DELDOT-01, 42-REPL-LATE-01, 42-TMAP-REPL-01, DUR-REPL-01 | covered |
 | 42-REPL-05 | 42-REPL-LATE-01 | covered |
 | 42-REPL-06 | 42-REPL-DEPART-01, CTL-REPLCONV-ID-01 | covered |
 | 42-WM-01 | — | gap |
