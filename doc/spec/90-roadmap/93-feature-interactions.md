@@ -3042,6 +3042,13 @@ fresh `[24-DUR-07]` firing at an already-acted `Effectful` sink remains open und
 - **RESTART within a replicated logical cell** (carried from I-2) — whether a durable replica
   should prefer local journal restore or mesh re-catch-up when its journal lags the mesh.
 
+> Stacked decision (2026-10-15, `DUR-REPL-01`, `computenet-u7mox`): a crashed
+> durable replica of a mergeable cell is recovered by **both** routes — its own
+> journal replay and the mesh's M10 re-announce catch-up — and converges because
+> both are idempotent by tag union. The “prefer” question therefore has no
+> observable answer for the mergeable class and remains open only for
+> leader+follower replication (I-25).
+
 #### 9. Confidence & open questions
 
 **Confidence: medium-high.** The amended mechanism describes the tested recovery path:
