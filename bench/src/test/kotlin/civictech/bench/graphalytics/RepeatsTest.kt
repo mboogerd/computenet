@@ -1,6 +1,8 @@
 package civictech.bench.graphalytics
 
 import civictech.bench.Drive
+import civictech.bench.Findings
+import civictech.bench.FindingsTable
 import civictech.bench.RunEnvironment
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -116,8 +118,24 @@ class RepeatsTest {
         assertEquals(1, rows.results.size)
         assertEquals(20.0 / 110.0, rows.results.single().value)
         assertEquals("relative spread", rows.results.single().unit)
-        assertEquals(0.0, rows.results.single().dispersion)
+        assertEquals(listOf(false), rows.dispersionObserved)
         assertEquals("LCC unreportable", rows.lccOutcome)
+
+        val rendered = Findings.entry(
+            date = "2026-10-16",
+            subject = "Graphalytics variance",
+            results = FindingsTable(
+                rows.results,
+                rows.labels,
+                dispersionObserved = rows.dispersionObserved,
+            ),
+        )
+        assertTrue(
+            rendered.contains(
+                "| example-directed variance | ${20.0 / 110.0} ± n/a relative spread | |",
+            ),
+            rendered,
+        )
     }
 
     private fun validated(loadNanos: Long, computeNanos: Long) = GraRecord.Validated(

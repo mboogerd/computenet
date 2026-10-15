@@ -52,7 +52,8 @@ data class BenchResult(
 /**
  * A table of [BenchResult]s that all share exactly one [Drive] (`[BEN1-27]`, BS-12) and
  * exactly one [RunEnvironment], each optionally paired with a caller-supplied per-row
- * entry in [labels] (`[BEN1-30]`).
+ * entry in [labels] (`[BEN1-30]`) and an observation marker in
+ * [dispersionObserved].
  *
  * The single-[RunEnvironment] requirement closes the same class of dishonesty
  * [BEN1-27]'s single-[Drive] requirement refuses, applied to environment instead of
@@ -77,6 +78,11 @@ data class BenchResult(
  * built that way carries no rendering label, and [Findings.entry] refuses to render it
  * (`[BEN1-30]`) rather than inventing one.
  *
+ * [dispersionObserved] defaults to `null`, which means every row's numeric
+ * [BenchResult.dispersion] was observed. A `false` entry marks a row whose dispersion was
+ * not observed; [Findings.renderTable] renders that row as `± n/a` while keeping
+ * [BenchResult] non-nullable for its other consumers.
+ *
  * Construction refuses:
  * - an empty [results] collection,
  * - a [results] collection whose [BenchResult.drive] values form a `Set<Drive>` of
@@ -85,13 +91,18 @@ data class BenchResult(
  *   another, naming which [RunEnvironment] field(s) differ, and
  * - a non-null [labels] whose size does not equal [results]'s, or that contains a
  *   blank entry.
+ * - a non-null [dispersionObserved] whose size does not equal [results]'s.
  *
  * All refusals throw [IllegalArgumentException] from the constructor itself, so a
  * `FindingsTable` instance is proof its results are drive-homogeneous,
  * environment-homogeneous, and its labels (when present) are well-formed — there is no
  * post-construction check a caller could forget to run.
  */
-class FindingsTable(val results: List<BenchResult>, val labels: List<String>? = null) {
+class FindingsTable(
+    val results: List<BenchResult>,
+    val labels: List<String>? = null,
+    val dispersionObserved: List<Boolean>? = null,
+) {
 
     /** The single [Drive] shared by every result in [results]. */
     val drive: Drive
@@ -118,6 +129,12 @@ class FindingsTable(val results: List<BenchResult>, val labels: List<String>? = 
             }
             require(labels.all { it.isNotBlank() }) {
                 "FindingsTable requires every label to be non-blank, found $labels"
+            }
+        }
+        if (dispersionObserved != null) {
+            require(dispersionObserved.size == results.size) {
+                "FindingsTable requires exactly one dispersion observation marker per result " +
+                    "(${results.size}), found ${dispersionObserved.size}"
             }
         }
     }
