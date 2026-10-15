@@ -36,6 +36,15 @@ class DurReplicaBindingTest {
     }
 
     @Test
+    fun `dur replica-of on a journal controller is refused, not ignored`() {
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            KernelDriver(0L).spawn(KernelDriverDur.DUR_HOST, "ctl", "journal", replica("shared"))
+        }
+
+        refused.message!! shouldContain "journal-set-source"
+    }
+
+    @Test
     fun `dur replica admits only total interest`() {
         assertDoesNotThrow {
             KernelDriver(0L).spawn(

@@ -337,11 +337,13 @@ internal class KernelDriverDur(
     fun owns(cellId: CellId): Boolean = cellId in specs || cellId in controllerJournal
 
     fun spawn(cellId: CellId, type: String, params: Map<String, Value>) {
+        // Validate `replica-of` before the controller early return, so a
+        // `journal` carrying it is refused rather than silently ignored.
+        val replicaLogical = replicaLogical(type, params)
         if (type == "journal") {
             controllerJournal[cellId] = journalOf(journalName(type, params) ?: DEFAULT_JOURNAL)
             return
         }
-        val replicaLogical = replicaLogical(type, params)
         val ref = specs[cellId]?.ref ?: replicaLogical?.let(replicaRefOf) ?: CellRef(UUID.randomUUID())
         specs[cellId] = Spec(cellId, ref, type, params)
         journalByRef.remove(ref)
