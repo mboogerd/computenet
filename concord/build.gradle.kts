@@ -32,6 +32,19 @@ tasks.withType<Test>().configureEach {
     // W4-C: the generative sweep (24-GEN-01) defaults to its `generator: instances:`
     // count; `-Pconcord.gen.instances=N` overrides it for a deeper local sweep.
     (project.findProperty("concord.gen.instances") as String?)?.let { systemProperty("concord.gen.instances", it) }
+
+    // The test runner discovers and parses scenario YAML at runtime rather than
+    // through the test classpath. Keep the test cache key honest when a scenario
+    // is added or edited. The neutrality guard likewise scans these source trees
+    // as text, so comment/import-only changes must invalidate its cached result.
+    inputs.dir("corpus")
+        .withPropertyName("concordCorpus")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .ignoreEmptyDirectories()
+    inputs.files("src/main/kotlin", "src/test/kotlin")
+        .withPropertyName("concordScannedSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .ignoreEmptyDirectories()
 }
 
 // W1-D: the concordance generator (Concord §1.5 / `concord/schema/provenance.md`).
