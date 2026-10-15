@@ -1,5 +1,5 @@
 {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "harnessSha": "6940663d",
     "envelope": {
         "numeric": {
@@ -2820,6 +2820,1073 @@
                 }
             ],
             "goodnessOfFit": 1.0
+        }
+    ],
+    "unfitted": [
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=1 REBASELINE_LOCAL_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=3 REBASELINE_LOCAL_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=8 REBASELINE_LOCAL_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=1 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=1 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=4 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=4 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=16 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=16 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=64 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=64 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=256 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=256 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=1 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=4 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=16 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=64 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=256 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=1 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=4 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=16 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=64 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=256 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=1 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=4 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=16 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=64 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [],
+            "reason": "ordinary least squares requires at least two points",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=256 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [],
+            "reason": "ordinary least squares requires at least two points",
+            "goodnessOfFit": null
         }
     ],
     "exclusions": [

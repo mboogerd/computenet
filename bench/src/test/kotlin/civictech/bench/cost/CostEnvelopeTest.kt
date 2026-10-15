@@ -237,6 +237,7 @@ class CostEnvelopeTest {
             subject = CostSubject.PROPAGATION,
             metric = "messages",
             form = GrowthForm.LINEAR,
+            slice = "all fan-outs",
             points = points,
         ).shouldBeInstanceOf<FitResult.Law>().law
         law.coefficients[0] shouldBe (3.0 plusOrMinus 1e-9)
@@ -253,12 +254,20 @@ class CostEnvelopeTest {
             CostSubject.PROPAGATION,
             "messages",
             GrowthForm.LINEAR,
+            "noisy fan-outs",
             points,
         ).shouldBeInstanceOf<FitResult.Unfitted>()
         val expectedR2 = linearRSquared(fanOuts.map(Int::toDouble), noisyValues.map(Long::toDouble))
         unfitted.goodnessOfFit!! shouldBe (expectedR2 plusOrMinus 1e-9)
         (unfitted.goodnessOfFit!! < CostWriter.MIN_GOODNESS_OF_FIT) shouldBe true
         noisy.model().laws.size shouldBe 0
+        noisy.model().unfitted shouldBe listOf(unfitted.record)
+        unfitted.record.slice shouldBe "noisy fan-outs"
+        unfitted.record.fittedOver shouldBe points
+        val encodedUnfitted = CostSchema.encode(noisy.model())
+        encodedUnfitted shouldContain "\"unfitted\""
+        encodedUnfitted shouldContain unfitted.reason
+        CostSchema.parse(encodedUnfitted).unfitted shouldBe listOf(unfitted.record)
 
         val threePoints = points.take(3)
         val tooFew = CostWriter("abc1234")
@@ -268,6 +277,7 @@ class CostEnvelopeTest {
             CostSubject.PROPAGATION,
             "messages",
             GrowthForm.LINEAR,
+            "three fan-outs",
             threePoints,
         ).shouldBeInstanceOf<FitResult.Unfitted>()
         tooFew.model().laws.size shouldBe 0
@@ -279,6 +289,7 @@ class CostEnvelopeTest {
             CostSubject.PROPAGATION,
             "messages",
             GrowthForm.LINEAR,
+            "constant messages",
             points,
         ).shouldBeInstanceOf<FitResult.Unfitted>()
         undefined.goodnessOfFit shouldBe null
@@ -299,6 +310,7 @@ class CostEnvelopeTest {
                 CostSubject.PROPAGATION,
                 "messages",
                 GrowthForm.LINEAR,
+                "repeated fan-outs",
                 listOf(first, first, second, second),
             )
         }
@@ -319,6 +331,7 @@ class CostEnvelopeTest {
             CostSubject.PROPAGATION,
             "messages",
             GrowthForm.LINEAR,
+            "all fan-outs",
             points,
         ).shouldBeInstanceOf<FitResult.Law>()
         val duplicate = shouldThrow<IllegalArgumentException> {
@@ -327,6 +340,7 @@ class CostEnvelopeTest {
                 CostSubject.PROPAGATION,
                 "messages",
                 GrowthForm.LINEAR,
+                "all fan-outs",
                 points.reversed(),
             )
         }
@@ -347,6 +361,7 @@ class CostEnvelopeTest {
                 CostSubject.PROPAGATION,
                 "messages",
                 GrowthForm.LINEAR,
+                "unsupported dimension",
                 points,
             )
         }
@@ -356,6 +371,7 @@ class CostEnvelopeTest {
                 CostSubject.PROPAGATION,
                 "messages",
                 GrowthForm.LINEAR,
+                "missing coordinate",
                 points + coordinate(fanOut = 256),
             )
         }
@@ -371,6 +387,7 @@ class CostEnvelopeTest {
             CostSubject.PROPAGATION,
             "messages",
             GrowthForm.LINEAR,
+            "unmeasured messages",
             points,
         ).shouldBeInstanceOf<FitResult.Unfitted>().goodnessOfFit shouldBe null
         unmeasured.model().laws.size shouldBe 0

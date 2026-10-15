@@ -10,7 +10,7 @@ import kotlinx.serialization.json.intOrNull
  * The stable JSON boundary for the versioned cost model ([BEN2-30], [BEN2-31], [BEN2-32]).
  */
 object CostSchema {
-    const val VERSION = 1
+    const val VERSION = 2
     const val STABLE_PATH = "doc/bench/cost-model.json"
 
     /** Kernel-style JSON: pretty output, default omission, and strict unknown keys. */
@@ -72,6 +72,41 @@ object CostSchema {
 
         model.laws.map { it.key() }.duplicate()?.let { key ->
             invalid("duplicate growth-law key $key")
+        }
+        model.unfitted.forEach { fit ->
+            if (fit.dimension !in NUMERIC_DIMENSIONS) {
+                invalid(
+                    "unfitted growth-law dimension '${fit.dimension}' must be one of " +
+                        NUMERIC_DIMENSIONS.joinToString(),
+                )
+            }
+            if (fit.metric !in STRUCTURAL_METRICS) {
+                invalid(
+                    "unfitted growth-law metric '${fit.metric}' must be one of " +
+                        STRUCTURAL_METRICS.joinToString(),
+                )
+            }
+            fit.fittedOver.duplicate()?.let { at ->
+                invalid("unfitted growth-law '${fit.slice}' repeats coordinate $at")
+            }
+            fit.fittedOver.firstOrNull { at ->
+                EntryKey(fit.subject, at) !in structuralKeys
+            }?.let { at ->
+                invalid(
+                    "unfitted growth-law '${fit.slice}' references non-admitted point " +
+                        "${EntryKey(fit.subject, at)}",
+                )
+            }
+        }
+        model.unfitted.map { it.key() }.duplicate()?.let { key ->
+            invalid("duplicate unfitted growth-law key $key")
+        }
+
+        val lawKeys = model.laws.map { it.key() }.toSet()
+        model.unfitted.firstOrNull { fit ->
+            fit.fittedOver.isNotEmpty() && fit.evidenceKey() in lawKeys
+        }?.let { fit ->
+            invalid("unfitted growth-law '${fit.slice}' conflicts with a fitted law")
         }
 
         validateDerivedEnvelope(model)
@@ -151,6 +186,22 @@ object CostSchema {
         fittedOver = fittedOver.toSet(),
     )
 
+    private fun UnfittedFit.evidenceKey(): GrowthLawKey = GrowthLawKey(
+        dimension = dimension,
+        subject = subject,
+        metric = metric,
+        form = form,
+        fittedOver = fittedOver.toSet(),
+    )
+
+    private fun UnfittedFit.key(): UnfittedFitKey = UnfittedFitKey(
+        dimension = dimension,
+        slice = slice,
+        subject = subject,
+        metric = metric,
+        form = form,
+    )
+
     private fun <T> List<T>.duplicate(): T? {
         val seen = mutableSetOf<T>()
         return firstOrNull { !seen.add(it) }
@@ -173,6 +224,14 @@ object CostSchema {
         val fittedOver: Set<Coordinate>,
     )
 
+    private data class UnfittedFitKey(
+        val dimension: String,
+        val slice: String,
+        val subject: CostSubject,
+        val metric: String,
+        val form: GrowthForm,
+    )
+
     private val NUMERIC_DIMENSIONS = linkedSetOf(
         Dimensions.CARDINALITY,
         Dimensions.BATCH_SIZE,
@@ -184,6 +243,14 @@ object CostSchema {
         Dimensions.SHAPE,
         Dimensions.REPLICATION,
         Dimensions.DURABILITY,
+    )
+
+    private val STRUCTURAL_METRICS = linkedSetOf(
+        "messages",
+        "crossHostFrames",
+        "wireBytes",
+        "journalRecords",
+        "simSteps",
     )
 }
 
