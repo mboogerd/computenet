@@ -6652,3 +6652,487 @@ retained footprint elements=100000 replicates=10
 With this export, `CostQuery.cellResidency` answers `Priced` at admitted structural points; `CostQuery.coLocatedEdge`, `CostQuery.crossHostEdge`, and `CostQuery.reBaseline` remain `NotMeasured` because local messages and REBASELINE structural evidence are unmeasured.
 
 **Host was NOT quiesced for this calibration run**, and this is disclosed rather than hidden. On this 16-core machine, retained `uptime` records show load averages (1/5/15 min) of 5.43/8.64/8.29 immediately before the JMH run (2026-10-14T16:32:40Z) and 7.56/8.26/8.17 immediately after it (16:34:47Z). No separate load reading was retained for the in-process retained-bytes probe that followed. The dispersions above are what that host produced. `localDispatchNanos` in particular separates by fork in the run log (fork 1 measurement iterations 8652–9029 ns/op, forks 2–3 11429–12319 ns/op), so its ± spans a between-fork shift, not only within-fork noise.
+
+## 2026-10-15 — RESTART re-baseline structural counts per (cardinality, fan-out, host count), SIM drive — G-43 study, SIM half
+Harness: 6bc0caf4 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=SIM RESTART re-baseline probe (JUnit @Tag("bench"), one deterministic BenchMesh per attempt; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both) forks=1 warmup=1 iters=2 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=1 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=1 reassertedElements | 1000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=1 reassertedTags | 1000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=3 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=3 reassertedElements | 1000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=3 reassertedTags | 1000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=3 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=3 crossHostFrames | 1.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=3 wireBytes | 88275.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=3 simSteps | 4.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=3 reassertedElements | 1000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=3 reassertedTags | 1000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=8 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=8 reassertedElements | 1000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=1 h=8 reassertedTags | 1000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=8 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=8 crossHostFrames | 1.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=8 wireBytes | 88275.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=8 simSteps | 4.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=8 reassertedElements | 1000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=1 h=8 reassertedTags | 1000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=1 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=1 reassertedElements | 4000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=1 reassertedTags | 4000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=3 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=3 reassertedElements | 4000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=3 reassertedTags | 4000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=3 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=3 crossHostFrames | 4.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=3 wireBytes | 353100.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=3 simSteps | 10.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=3 reassertedElements | 4000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=3 reassertedTags | 4000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=8 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=8 reassertedElements | 4000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=4 h=8 reassertedTags | 4000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=8 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=8 crossHostFrames | 4.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=8 wireBytes | 353100.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=8 simSteps | 10.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=8 reassertedElements | 4000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=4 h=8 reassertedTags | 4000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=1 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=1 reassertedElements | 16000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=1 reassertedTags | 16000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=3 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=3 reassertedElements | 16000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=3 reassertedTags | 16000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=3 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=3 crossHostFrames | 16.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=3 wireBytes | 1412400.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=3 simSteps | 34.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=3 reassertedElements | 16000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=3 reassertedTags | 16000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=8 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=8 reassertedElements | 16000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=16 h=8 reassertedTags | 16000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=8 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=8 crossHostFrames | 16.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=8 wireBytes | 1412400.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=8 simSteps | 34.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=8 reassertedElements | 16000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=16 h=8 reassertedTags | 16000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=1 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=1 reassertedElements | 64000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=1 reassertedTags | 64000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=3 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=3 reassertedElements | 64000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=3 reassertedTags | 64000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=3 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=3 crossHostFrames | 64.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=3 wireBytes | 5649600.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=3 simSteps | 130.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=3 reassertedElements | 64000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=3 reassertedTags | 64000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=8 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=8 reassertedElements | 64000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=64 h=8 reassertedTags | 64000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=8 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=8 crossHostFrames | 64.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=8 wireBytes | 5649600.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=8 simSteps | 130.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=8 reassertedElements | 64000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=64 h=8 reassertedTags | 64000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=1 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=1 reassertedElements | 256000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=1 reassertedTags | 256000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=3 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=3 reassertedElements | 256000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=3 reassertedTags | 256000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=3 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=3 crossHostFrames | 256.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=3 wireBytes | 2.25984E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=3 simSteps | 514.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=3 reassertedElements | 256000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=3 reassertedTags | 256000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=8 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=8 reassertedElements | 256000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=1000 f=256 h=8 reassertedTags | 256000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=8 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=8 crossHostFrames | 256.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=8 wireBytes | 2.25984E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=8 simSteps | 514.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=8 reassertedElements | 256000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=1000 f=256 h=8 reassertedTags | 256000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=1 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=1 reassertedElements | 10000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=1 reassertedTags | 10000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=3 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=3 reassertedElements | 10000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=3 reassertedTags | 10000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=3 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=3 crossHostFrames | 1.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=3 wireBytes | 898276.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=3 simSteps | 4.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=3 reassertedElements | 10000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=3 reassertedTags | 10000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=8 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=8 reassertedElements | 10000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=1 h=8 reassertedTags | 10000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=8 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=8 crossHostFrames | 1.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=8 wireBytes | 898276.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=8 simSteps | 4.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=8 reassertedElements | 10000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=1 h=8 reassertedTags | 10000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=1 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=1 reassertedElements | 40000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=1 reassertedTags | 40000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=3 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=3 reassertedElements | 40000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=3 reassertedTags | 40000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=3 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=3 crossHostFrames | 4.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=3 wireBytes | 3593104.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=3 simSteps | 10.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=3 reassertedElements | 40000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=3 reassertedTags | 40000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=8 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=8 reassertedElements | 40000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=4 h=8 reassertedTags | 40000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=8 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=8 crossHostFrames | 4.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=8 wireBytes | 3593104.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=8 simSteps | 10.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=8 reassertedElements | 40000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=4 h=8 reassertedTags | 40000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=1 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=1 reassertedElements | 160000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=1 reassertedTags | 160000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=3 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=3 reassertedElements | 160000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=3 reassertedTags | 160000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=3 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=3 crossHostFrames | 16.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=3 wireBytes | 1.4372416E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=3 simSteps | 34.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=3 reassertedElements | 160000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=3 reassertedTags | 160000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=8 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=8 reassertedElements | 160000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=16 h=8 reassertedTags | 160000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=8 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=8 crossHostFrames | 16.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=8 wireBytes | 1.4372416E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=8 simSteps | 34.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=8 reassertedElements | 160000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=16 h=8 reassertedTags | 160000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=1 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=1 reassertedElements | 640000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=1 reassertedTags | 640000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=3 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=3 reassertedElements | 640000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=3 reassertedTags | 640000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=3 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=3 crossHostFrames | 64.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=3 wireBytes | 5.7489664E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=3 simSteps | 130.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=3 reassertedElements | 640000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=3 reassertedTags | 640000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=8 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=8 reassertedElements | 640000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=64 h=8 reassertedTags | 640000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=8 messages | 64.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=8 crossHostFrames | 64.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=8 wireBytes | 5.7489664E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=8 simSteps | 130.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=8 reassertedElements | 640000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=64 h=8 reassertedTags | 640000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=1 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=1 reassertedElements | 2560000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=1 reassertedTags | 2560000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=3 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=3 reassertedElements | 2560000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=3 reassertedTags | 2560000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=3 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=3 crossHostFrames | 256.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=3 wireBytes | 2.29958656E8 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=3 simSteps | 514.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=3 reassertedElements | 2560000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=3 reassertedTags | 2560000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=8 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=8 reassertedElements | 2560000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=10000 f=256 h=8 reassertedTags | 2560000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=8 messages | 256.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=8 crossHostFrames | 256.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=8 wireBytes | 2.29958656E8 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=8 simSteps | 514.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=8 reassertedElements | 2560000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=10000 f=256 h=8 reassertedTags | 2560000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=1 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=1 reassertedElements | 100000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=1 reassertedTags | 100000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=3 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=3 reassertedElements | 100000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=3 reassertedTags | 100000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=3 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=3 crossHostFrames | 1.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=3 wireBytes | 9178277.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=3 simSteps | 4.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=3 reassertedElements | 100000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=3 reassertedTags | 100000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=8 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=8 reassertedElements | 100000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=1 h=8 reassertedTags | 100000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=8 messages | 1.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=8 crossHostFrames | 1.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=8 wireBytes | 9178277.0 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=8 simSteps | 4.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=8 reassertedElements | 100000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=1 h=8 reassertedTags | 100000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=1 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=1 reassertedElements | 400000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=1 reassertedTags | 400000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=3 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=3 reassertedElements | 400000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=3 reassertedTags | 400000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=3 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=3 crossHostFrames | 4.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=3 wireBytes | 3.6713108E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=3 simSteps | 10.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=3 reassertedElements | 400000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=3 reassertedTags | 400000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=8 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=8 reassertedElements | 400000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=4 h=8 reassertedTags | 400000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=8 messages | 4.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=8 crossHostFrames | 4.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=8 wireBytes | 3.6713108E7 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=8 simSteps | 10.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=8 reassertedElements | 400000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=4 h=8 reassertedTags | 400000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=1 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=1 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=1 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=1 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=1 reassertedElements | 1600000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=1 reassertedTags | 1600000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=3 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=3 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=3 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=3 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=3 reassertedElements | 1600000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=3 reassertedTags | 1600000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=3 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=3 crossHostFrames | 16.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=3 wireBytes | 1.46852432E8 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=3 simSteps | 34.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=3 reassertedElements | 1600000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=3 reassertedTags | 1600000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=8 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=8 crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=8 wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=8 simSteps | 2.0 ± 0.0 simSteps/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=8 reassertedElements | 1600000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_LOCAL_TAPS n=100000 f=16 h=8 reassertedTags | 1600000.0 ± 0.0 reassertedTags/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=8 messages | 16.0 ± 0.0 messages/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=8 crossHostFrames | 16.0 ± 0.0 crossHostFrames/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=8 wireBytes | 1.46852432E8 ± 0.0 wireBytes/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=8 simSteps | 34.0 ± 0.0 simSteps/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=8 reassertedElements | 1600000.0 ± 0.0 reassertedElements/point | |
+| REBASELINE_REMOTE_TAPS n=100000 f=16 h=8 reassertedTags | 1600000.0 ± 0.0 reassertedTags/point | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+### Plan
+
+- Cardinalities: 1000, 10000, 100000
+- Fan-outs: 1, 4, 16, 64, 256
+- Host/variant crossings: H=1 REBASELINE_LOCAL_TAPS, H=3 REBASELINE_LOCAL_TAPS, H=3 REBASELINE_REMOTE_TAPS, H=8 REBASELINE_LOCAL_TAPS, H=8 REBASELINE_REMOTE_TAPS
+- Executed combinations: 3 × 5 × 5 = 75
+- Nesting: cardinality -> fan-out -> host/variant
+- Coordinate seed: 0; batchSize=1; replication=false; durability=false; drive=SIM
+- Topology: FULL_MESH
+- Determinism check: true for every point
+- Budget: 60000 + 4 * fan-out * host count, clamped to 2147483647 SIM steps
+- Per-invocation timeout: 30 minutes
+
+### Omissions
+
+- 1 shadow-promotion comparison point — reason: j27rc-D20: promotion drives a different lifecycle and is not comparable to the RESTART grid
+- 75 REAL drive at each grid coordinate — reason: SIM supplies structural counts ([BEN2-33]); the REAL JMH companion measures H=1 wall time (j27rc-D16)
+- 2 declared host counts H in {2, 5} — reason: the G-43 grid is H in {1, 3, 8} (j27rc-D2)
+- 75 replication-mode RESTART grid points — reason: replication-mode RESTART is G-43's open kernel-lane question, not this structural probe
+- REBASELINE_LOCAL_TAPS n=100000 f=64 h=1: Unschedulable — java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648
+- REBASELINE_LOCAL_TAPS n=100000 f=64 h=3: Unschedulable — java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648
+- REBASELINE_REMOTE_TAPS n=100000 f=64 h=3: Unschedulable — java.lang.OutOfMemoryError: Java heap space; observed limit: maxHeap=2147483648
+- REBASELINE_LOCAL_TAPS n=100000 f=64 h=8: Unschedulable — java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648
+- REBASELINE_REMOTE_TAPS n=100000 f=64 h=8: Unschedulable — java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648
+- REBASELINE_LOCAL_TAPS n=100000 f=256 h=1: Unschedulable — java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648
+- REBASELINE_LOCAL_TAPS n=100000 f=256 h=3: Unschedulable — java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648
+- REBASELINE_REMOTE_TAPS n=100000 f=256 h=3: Unschedulable — java.lang.OutOfMemoryError: Java heap space; observed limit: maxHeap=2147483648
+- REBASELINE_LOCAL_TAPS n=100000 f=256 h=8: Unschedulable — java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648
+- REBASELINE_REMOTE_TAPS n=100000 f=256 h=8: Unschedulable — java.lang.OutOfMemoryError: Java heap space; observed limit: maxHeap=2147483648
+
+### Growth laws
+
+- dimension=fanOut slice=[n=1000 H=1 REBASELINE_LOCAL_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=1, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=1, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=1, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=1, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=1, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=1000 H=3 REBASELINE_LOCAL_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=1000 H=3 REBASELINE_REMOTE_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=1000 H=8 REBASELINE_LOCAL_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=1000 H=8 REBASELINE_REMOTE_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=10000 H=1 REBASELINE_LOCAL_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=1, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=1, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=1, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=1, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=1, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=10000 H=3 REBASELINE_LOCAL_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=10000 H=3 REBASELINE_REMOTE_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=10000 H=8 REBASELINE_LOCAL_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=10000 H=8 REBASELINE_REMOTE_TAPS] metric=messages form=LINEAR coefficients=[1.0, 0.0] R²=1.0 fitted-over=5 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=100000 H=1 REBASELINE_LOCAL_TAPS] metric=messages Unfitted: a law requires at least 4 points, found 3; R²=1.0; fitted-over=3 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=1, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=1, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=1, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=100000 H=3 REBASELINE_LOCAL_TAPS] metric=messages Unfitted: a law requires at least 4 points, found 3; R²=1.0; fitted-over=3 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=100000 H=3 REBASELINE_REMOTE_TAPS] metric=messages Unfitted: a law requires at least 4 points, found 3; R²=1.0; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=100000 H=8 REBASELINE_LOCAL_TAPS] metric=messages Unfitted: a law requires at least 4 points, found 3; R²=1.0; fitted-over=3 points=Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_LOCAL_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=fanOut slice=[n=100000 H=8 REBASELINE_REMOTE_TAPS] metric=messages Unfitted: a law requires at least 4 points, found 3; R²=1.0; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=1 H=3 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 3; R²=0.9999971167913491; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=1 H=8 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 3; R²=0.9999971167913491; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=4 H=3 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 3; R²=0.9999971167913491; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=4 H=8 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 3; R²=0.9999971167913491; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=16 H=3 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 3; R²=0.9999971167913491; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=16 H=8 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 3; R²=0.9999971167913491; fitted-over=3 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=64 H=3 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 2; R²=1.0; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=64 H=8 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 2; R²=1.0; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=256 H=3 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 2; R²=1.0; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=cardinality slice=[f=256 H=8 REBASELINE_REMOTE_TAPS] metric=wireBytes Unfitted: a law requires at least 4 points, found 2; R²=1.0; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=1000 f=1 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=1000 f=4 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=1000 f=16 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=1000 f=64 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=1000 f=256 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=1000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=10000 f=1 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=10000 f=4 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=10000 f=16 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=10000 f=64 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=64, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=64, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=10000 f=256 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=3, fanOut=256, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=10000, batchSize=1, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=100000 f=1 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=1, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=1, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=100000 f=4 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=100000 f=16 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: metric 'crossHostFrames' has no variance, so R² is undefined; R²=null; fitted-over=2 points=Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=3, fanOut=16, replication=false, durability=false, drive=SIM), Coordinate(shape=REBASELINE_REMOTE_TAPS, shapeSeed=0, cardinality=100000, batchSize=1, hostCount=8, fanOut=16, replication=false, durability=false, drive=SIM)
+- dimension=hostCount slice=[n=100000 f=64 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: ordinary least squares requires at least two points; R²=null; fitted-over=0 points=
+- dimension=hostCount slice=[n=100000 f=256 REBASELINE_REMOTE_TAPS] metric=crossHostFrames Unfitted: ordinary least squares requires at least two points; R²=null; fitted-over=0 points=
+
+### Outcome tally
+
+admitted=65 NonConvergent=0 NonDeterministic=0 Unschedulable=10 Failed=0 Unreportable=0
+
+### Export
+
+- Run harness SHA: `6bc0caf4`
+- Merged REBASELINE structural entries: 65
+- A `MacroSweepTest` re-run rewrites this file whole; `MacroReBaselineTest` and `MacroCalibrationRenderTest` must then be re-run or re-merged.
+
+### Verdict
+
+The G-43 verdict is stated by the REAL companion entry below; this entry is the structural half.
