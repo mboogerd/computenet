@@ -122,8 +122,8 @@ class SocialRecovery(
  * written by [SocialGraph.addPost]/[SocialGraph.addComment] before the
  * `snb-message` cell's own `Body`). Anything else — no invocation, or a
  * non-creating call — falls back to [DeadLetter.description]. Reads
- * [DeadLetter.invocation] with inferred types only: `civictech.cell.proxy` is
- * not an allowed demo import ([DemoSurfaceAllowlistTest]).
+ * [DeadLetter.invocation] with inferred types only; no proxy type import is
+ * needed here.
  */
 private fun describeDeadLetter(letter: DeadLetter): String =
     when (val arg = letter.invocation?.invocation?.args?.firstOrNull()) {
