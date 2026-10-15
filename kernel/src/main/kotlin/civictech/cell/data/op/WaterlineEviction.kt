@@ -4,7 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.ExclusiveEntry
 import civictech.cell.Timestamp
-import civictech.cell.data.Replicable
+import civictech.cell.data.Gossiping
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
@@ -13,14 +13,14 @@ import civictech.cell.data.delta.TagState
  * The destructive half of waterline-driven eviction (spec 24 §Lateness and
  * waterlines, `[24-WL-05]`/`[24-WL-06]`/`[24-WL-18]`), kept behind one seam so
  * the single-instance restriction is checked where the host is a parameter
- * rather than re-derived per operator (an in-class `this is Replicable` on a
- * final class is statically decidable and so says nothing).
+ * rather than re-derived per operator.
  *
- * `[24-WL-18]`: a `Replicable` host's state is refused — eviction is
- * destructive, and on a replicated structure it is safe only once the floor is
- * tied to the replication layer's stable frontier (`Replication.stableFrontier`,
- * lxo-D3), which is a separate item. Until then the seam serves single-instance
- * state only and throws for anything else, leaving the state untouched.
+ * `[24-WL-18]`: a cell is evictable or replicable, never both. A [Gossiping]
+ * host that admits replication is refused because local destructive eviction
+ * is safe only once the floor is tied to the replication layer's stable
+ * frontier (`Replication.stableFrontier`, lxo-D3). A gossip-capable host whose
+ * [Gossiping.replicationRefusal] is non-null remains single-instance and may
+ * evict, leaving the state untouched if any other guard refuses it.
  *
  * **Callers and their units.** [GroupByCell] evicts by *window*
  * (`[24-WL-06]`): a window passes once `keyTime(k) <= floor`, and a window is
@@ -52,10 +52,10 @@ internal object WaterlineEviction {
      * Kill every live element of [state] that [evictee] admits and return the
      * killed tags as `dels` (via `TagState.evictBelow`), for the caller to fold
      * through its ordinary retraction path. Throws [IllegalStateException]
-     * before touching [state] when [host] is [Replicable] (`[24-WL-18]`).
+     * before touching [state] when [host] admits [Gossiping] (`[24-WL-18]`).
      */
     fun <E> evict(host: Cell, state: TagState<E>, evictee: (E) -> Boolean): SetDelta<E> {
-        check(host !is Replicable<*>) {
+        check(host !is Gossiping<*> || host.replicationRefusal != null) {
             "Cell ${host.ref}: destructive eviction of Replicable state is refused ([24-WL-18]); " +
                 "single-instance state only — lifting it ties the floor to Replication.stableFrontier, " +
                 "a separate item"

@@ -15,6 +15,7 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.Aggregator
+import civictech.cell.data.Gossiping
 import civictech.cell.data.Windows
 import civictech.cell.control.absorbAck
 import civictech.cell.control.relayAbsorbAcks
@@ -40,11 +41,12 @@ interface GroupByApi<E, K, A> {
  * emission is effective-only by value equality (21). All groups touched by
  * one input delta emit as one `MapDelta` under the input's wave id (22).
  *
- * The cell is the single writer of its output stream, which is exactly
- * `MapDelta`'s documented contract — so it is not `Replicable`, and needn't
- * be: an aggregate is a deterministic function of convergent membership, so
- * peers recompute from their replicated inputs and converge with no
- * aggregate-level gossip (42).
+ * The cell is the single writer of its `MapDelta` output stream and is not
+ * `Replicable`. It is instead [Gossiping] over its tagged input membership:
+ * peers exchange effective [SetDelta]s on [membership]/[deltaInlet], then each
+ * recomputes its own aggregate from convergent membership. Aggregate-level
+ * gossip remains the separate [MergeableGroupByCell] route (42,
+ * `[24-OP-GROUPBY-06]`).
  *
  * **G-23 note (96 §E1.5) — this cell's INLET is [SetDelta], not [MapDelta].**
  * Unlike [CombineLatestCell]/[LookupJoinCell]/[JoinCell], this cell was never
@@ -140,9 +142,10 @@ interface GroupByApi<E, K, A> {
  * Only a top-level exclusive element is detected, not one nested inside a
  * plain element (computenet-woto).
  *
- * **Single-instance only (`[24-WL-18]`).** The `Replicable` refusal lives in
- * [WaterlineEviction.evict], where the host is a parameter: this class is
- * final and not `Replicable`, so an in-class check would be vacuous.
+ * **Replication excludes lateness (`[24-WL-18]`).** A cell constructed with
+ * lateness remains eligible for single-instance eviction, but
+ * [replicationRefusal] rejects it before replication mutates host or registry
+ * state. A cell without lateness may gossip membership and never evicts.
  */
 class GroupByCell<E, K, A, ACC : Serializable>(
     ref: CellRef = CellRef(UUID.randomUUID()),
@@ -154,8 +157,17 @@ class GroupByCell<E, K, A, ACC : Serializable>(
     private val keyTime: ((K) -> Long)? = null,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-) : GroupByCellBase<E, K, A>(ref), Stateful, BoundedStateful {
-    private val state = TagState<E>()
+) : GroupByCellBase<E, K, A>(ref), Stateful, BoundedStateful, Gossiping<SetDelta<E>> {
+    /**
+     * Membership gossip lets a del minted at one replica race an older add
+     * arriving over another stream. Retaining the covered tag is what makes
+     * that OR-set merge a fixpoint instead of an add/del echo cycle. Retention
+     * is unconditional for no-lateness cells, including before/without actual
+     * replication, so a later membership catch-up has the same ledger shape.
+     * Cost: every distinct deleted tag and its checkpoint entry remain until
+     * G-25 compaction. Lateness cells cannot replicate and stay non-retaining.
+     */
+    private val state = TagState<E>(retainTombstones = lateness == null)
 
     private class Group<ACC>(var count: Int, var acc: ACC)
 
@@ -195,6 +207,19 @@ class GroupByCell<E, K, A, ACC : Serializable>(
     /** Sub-floor adds, forwarded verbatim — original tags — under the delivery that carried them (`[24-WL-07]`). */
     val late = registerPort("late", FanOutlet.create<Propagate<SetDelta<E>>>())
 
+    /** Peer membership gossip intake; the stable port name is resolved by [civictech.cell.replication.Replication]. */
+    override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<E>>>())
+
+    /** Effective tagged membership, distinct from the single-writer aggregate [outlet]. */
+    val membership = registerPort("membership", FanOutlet.create<Propagate<SetDelta<E>>>())
+
+    override val gossipOutlet: Subscribe<Propagate<SetDelta<E>>> get() = membership
+
+    override val replicationRefusal: String?
+        get() = if (lateness == null) null else
+            "GroupByCell $ref: a cell with a lateness declaration cannot be replicated ([24-WL-18]); " +
+                "replicated eviction ties the floor to Replication.stableFrontier, a separate item"
+
     init {
         require((lateness == null) == (keyTime == null)) {
             "GroupByCell needs both lateness and keyTime, or neither (lateness=$lateness, keyTime=$keyTime)"
@@ -211,6 +236,8 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         waterline.serve(object : Propagate<WaterlineDelta> {
             override fun propagate(value: WaterlineDelta) = onWaterline(value)
         })
+        deltaInlet.serve(Propagate<SetDelta<E>>(::onGossip))
+        membership.catchUpOnLinked { state.asDelta().takeIf { it.adds.isNotEmpty() || it.dels.isNotEmpty() } }
     }
 
     private fun onWaterline(delta: WaterlineDelta) {
@@ -274,7 +301,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
 
         val touched = admitted.adds.keys + admitted.dels.keys
         val liveBefore = touched.filterTo(mutableSetOf()) { it in state }
-        state.apply(admitted)
+        val gossipDelta = applyMembership(admitted)
 
         val delta = foldMembership(touched, liveBefore)
         if (delta != null) {
@@ -288,6 +315,39 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         } else {
             late.absorbAck()
         }
+        if (gossipDelta.adds.isNotEmpty() || gossipDelta.dels.isNotEmpty()) {
+            membership.call.propagate(gossipDelta)
+        } else {
+            membership.absorbAck()
+        }
+    }
+
+    /** Merge peer membership, recompute locally, and re-originate both aggregate and gossip echoes. */
+    private fun onGossip(value: SetDelta<E>) {
+        val touched = value.adds.keys + value.dels.keys
+        val liveBefore = touched.filterTo(mutableSetOf()) { it in state }
+        val gossipDelta = applyMembership(value)
+        if (gossipDelta.adds.isEmpty() && gossipDelta.dels.isEmpty()) return
+
+        foldMembership(touched, liveBefore)?.let { delta ->
+            outlet.originate { propagate(delta) }
+        }
+        membership.originate { propagate(gossipDelta) }
+    }
+
+    /**
+     * Apply one membership delta and return the information the OR-set gossip
+     * mesh has not seen through this replica. [TagState.apply] reports dels
+     * only when they kill a locally-live tag, but a retained del that arrived
+     * before its add is also new replicated state and must echo. Otherwise an
+     * older add arriving over another path resurrects and can alternate with
+     * the del forever. Lateness cells retain no tombstones and take the
+     * ordinary effective-delta path. [TagState.applyAndReportRetainedDels]
+     * reports that negative knowledge while probing only the elements and tags
+     * in [value], so this apply path is O(delta), not O(the whole ledger).
+     */
+    private fun applyMembership(value: SetDelta<E>): SetDelta<E> {
+        return if (lateness == null) state.applyAndReportRetainedDels(value) else state.apply(value)
     }
 
     /**
@@ -406,8 +466,10 @@ class GroupByCell<E, K, A, ACC : Serializable>(
      * for why an intermediate page carries the opening stamp with
      * [civictech.cell.ReadCaveat.STALE_FRONTIER] instead). Its equality across
      * a walk is **necessary but not sufficient** for "the union is a snapshot":
-     * this `TagState` is non-retaining, so a mid-walk membership retraction
-     * deletes tags rather than minting one and is invisible to the check.
+     * a membership retraction never advances a tag counter: the no-lateness
+     * form moves the covered tag from live state to retained tombstones, while
+     * the lateness form deletes it. Either change is invisible to the max-tag
+     * frontier check.
      * [supportsSince] stays `false` accordingly.
      *
      * `[24-OP-GROUPBY-01]`/`-02`/`-03`/`-06` and `[24-AGG-01]` are untouched:

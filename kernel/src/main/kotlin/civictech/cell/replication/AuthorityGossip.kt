@@ -12,9 +12,9 @@ import civictech.cell.Propagate
 import civictech.cell.ReplayProvenance
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
+import civictech.cell.data.Gossiping
 import civictech.cell.data.LocalWriteGate
 import civictech.cell.data.OrMapCell
-import civictech.cell.data.Replicable
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
@@ -94,7 +94,7 @@ import java.util.concurrent.ConcurrentHashMap
  * acknowledgement or ordering protocol.
  */
 class AuthorityGossip internal constructor(
-    private val cell: Replicable<*>,
+    private val cell: Gossiping<*>,
     authority: WriteAuthority,
     private val signer: CountingWriteSigner,
     private val verifier: SignatureVerifier,
@@ -123,7 +123,7 @@ class AuthorityGossip internal constructor(
     private val state = AuthorityState(authority)
     private val inbound = ThreadLocal<InboundDelivery?>()
     private val firstCrossing = ConcurrentHashMap<WriteKey, FirstCrossing>()
-    private val localWriteAheadPort = cell.outlet.ref
+    private val localWriteAheadPort = cell.gossipOutlet.ref
     private val replayBatches = java.util.IdentityHashMap<Any, ReplayBatch>()
 
     @Volatile
@@ -139,7 +139,7 @@ class AuthorityGossip internal constructor(
         installLocalGate()
         interposeDeltaInlet()
         @Suppress("UNCHECKED_CAST")
-        (cell.outlet as civictech.cell.port.Subscribe<Propagate<Any?>>).subscribe(
+        (cell.gossipOutlet as civictech.cell.port.Subscribe<Propagate<Any?>>).subscribe(
             Use.fixed(Propagate(::onCellEmission), PortRef.of(ref, "source")),
         )
 

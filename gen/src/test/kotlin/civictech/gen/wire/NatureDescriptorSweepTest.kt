@@ -33,7 +33,8 @@ class NatureDescriptorSweepTest {
     private val dataStubs = """
         package civictech.cell.data
         import civictech.cell.Cell
-        interface Replicable<D> : Cell
+        interface Gossiping<D> : Cell
+        interface Replicable<D> : Gossiping<D>
         """.trimIndent()
     private val controlStubs = """
         package civictech.cell.control
@@ -97,6 +98,30 @@ class NatureDescriptorSweepTest {
                 "natures = NatureVector.of(Color.BLOCKING, MergeClass.IDEMPOTENT, Monotonicity.MONOTONE))" in table,
             table,
         )
+    }
+
+    @Test
+    fun `Gossiping marks replication without stamping idempotent port natures`() {
+        val (compilation, result) = compileKeepingSources(
+            cellStubs, dataStubs, portStubs, graphStubs,
+            """
+            package example
+            import civictech.cell.data.Gossiping
+            import civictech.cell.port.FanInlet
+
+            interface SharedOps { fun ping() }
+            class GossipOnlyCell : Gossiping<String> {
+                val shared: FanInlet<SharedOps> = FanInlet()
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_")
+        val row = table.substringAfter("CellDescriptor(fqn = \"example.GossipOnlyCell\"")
+            .substringBefore("CellDescriptor(")
+        assertTrue("manifest = setOf(Manifest.REPLICATED)" in row, row)
+        assertTrue("natures" !in row, row)
     }
 
     @Test

@@ -2,7 +2,7 @@ package civictech.cell.observe
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.Replicable
+import civictech.cell.data.Gossiping
 import civictech.cell.data.op.FrontierGateable
 import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.data.op.UnionSetCell
@@ -72,7 +72,7 @@ private class ViewAncestry(
  * whose ancestry crosses an opaque host boundary: their eager path can advance
  * one output edge before every input edge has settled. Their opt-in fan-in gate
  * makes the output a valid frontier edge. Second, a [CycleHead] or a
- * [Replicable] whose `deltaInlet` is linked as a Consume re-origination point
+ * [Gossiping] whose `deltaInlet` is linked as a Consume re-origination point
  * may not sit on only one branch of shared upstream provenance. [unchecked]
  * exempts its named view from the first rule only.
  *
@@ -205,7 +205,7 @@ private fun Cell.portName(ref: PortRef): String {
 
 private fun Cell.isReoriginationPoint(): Boolean = when (this) {
     is CycleHead<*> -> true
-    is Replicable<*> -> {
+    is Gossiping<*> -> {
         val deltaInlet = PortRegistry.of(this)["deltaInlet"] as? Linked
         deltaInlet?.linking?.links?.any { it.role == LinkRole.Consume } == true
     }

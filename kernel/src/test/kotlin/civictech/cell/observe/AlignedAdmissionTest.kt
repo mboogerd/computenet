@@ -5,9 +5,11 @@ import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
+import civictech.cell.data.Aggregators
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.IntersectSetCell
+import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.op.MergeableGroupByCell
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.LocationRegistry
@@ -83,6 +85,11 @@ class AlignedAdmissionTest {
         keyOf = { it },
         accumulate = { it },
         merge = ::maxOf,
+    )
+
+    private fun gossipingGrouped() = GroupByCell<Int, Int, Long, Long>(
+        keyFn = { it },
+        aggregator = Aggregators.count(),
     )
 
     @Test
@@ -197,6 +204,31 @@ class AlignedAdmissionTest {
         error.message!! shouldContain "grouped"
         error.message!! shouldContain "raw"
         error.message!! shouldContain root.ref.toString()
+    }
+
+    @Test
+    fun `linked gossiping non replicable branch with shared provenance is rejected`() {
+        val fixture = Fixture()
+        val root = SetCell<Int>()
+        val grouped = gossipingGrouped()
+        val peer = gossipingGrouped()
+        fixture.spawn(root, grouped, peer)
+        fixture.connect(root, "outlet", grouped, "inlet")
+        fixture.connect(peer, "membership", grouped, "deltaInlet")
+
+        val error = assertThrows<AlignedAdmissionException> {
+            fixture.host.observeAligned {
+                map("grouped", grouped.ref)
+                set("raw", root.ref)
+                unchecked("grouped")
+            }
+        }
+
+        val verdict = error.verdict.shouldBeInstanceOf<AdmissionVerdict.Rejected.DivergentOrigination>()
+        verdict.point shouldBe grouped.ref
+        verdict.viewsUpstreamOfIt shouldBe setOf("grouped")
+        verdict.viewsNotUpstreamOfIt shouldBe setOf("raw")
+        verdict.sharedAncestor shouldBe root.ref
     }
 
     @Test

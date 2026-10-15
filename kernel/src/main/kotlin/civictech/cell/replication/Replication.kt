@@ -13,6 +13,7 @@ import civictech.cell.consistency.ReplicaQuorum
 import civictech.cell.consistency.StabilityFreezeDetector
 import civictech.cell.control.StallNotice
 import civictech.cell.Propagate
+import civictech.cell.data.Gossiping
 import civictech.cell.data.Replicable
 import civictech.cell.data.WatermarkCell
 import civictech.cell.evolve.Effectful
@@ -104,18 +105,18 @@ class Replication(
     private val linkLifecycle = Any()
 
     /** Guarded by [linkLifecycle]. */
-    private val localReplicas = mutableMapOf<UUID, MutableList<Replicable<*>>>()
+    private val localReplicas = mutableMapOf<UUID, MutableList<Gossiping<*>>>()
 
     /** Deterministic overlap seam; invoked immediately before formation enters [linkLifecycle]. */
     @Volatile
-    internal var beforeLinkLifecycle: ((Replicable<*>, CellRef) -> Unit)? = null
+    internal var beforeLinkLifecycle: ((Gossiping<*>, CellRef) -> Unit)? = null
 
     /**
      * Deterministic failure seam; invoked outside [linkLifecycle] before
      * structural link installation.
      */
     @Volatile
-    internal var beforeLinkInstall: ((Replicable<*>, CellRef) -> Unit)? = null
+    internal var beforeLinkInstall: ((Gossiping<*>, CellRef) -> Unit)? = null
 
     private data class AuthorityBinding(
         val authority: WriteAuthority,
@@ -156,7 +157,7 @@ class Replication(
     private val partitionSuspended = mutableSetOf<CellRef>()
 
     /** Established gossip links per (local replica → remote replica) pair. Guarded by [linkLifecycle]. */
-    private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
+    private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Gossiping<*>, Link>>()
 
     /**
      * One in-flight first-link install per ordered replica pair. Guarded by
@@ -166,7 +167,7 @@ class Replication(
      * the old catch-up was in flight.
      */
     private class LinkFormation(
-        val local: Replicable<*>,
+        val local: Gossiping<*>,
         val other: CellRef,
         val targetInterest: Interest,
         val key: Pair<CellRef, CellRef>,
@@ -629,12 +630,13 @@ class Replication(
      * bookkeeping has to be dropped here rather than by a cooperative path.
      */
     fun replicate(
-        cell: Replicable<*>,
+        cell: Gossiping<*>,
         host: ManagedHost,
         authority: WriteAuthority = WriteAuthority.Open,
         signer: WriteSigner? = null,
         verifier: SignatureVerifier? = null,
     ) {
+        cell.replicationRefusal?.let { throw IllegalStateException(it) }
         // PN-17 effect-authority formation refusal (spec 31 §Effects on instance
         // sets, plan §3b). A [Replicable] that is ALSO
         // [civictech.cell.evolve.Effectful] joining THIS mergeable mesh has no
@@ -806,12 +808,12 @@ class Replication(
      * retire cannot lose ground. A cell that does not mint a ref-derived lane
      * ([civictech.cell.data.delta.TagLaneContinuity]) records nothing.
      */
-    private fun rememberTagLane(cell: Replicable<*>) {
+    private fun rememberTagLane(cell: Gossiping<*>) {
         val high = (cell as? TagLaneContinuity)?.tagLaneHighWater() ?: return
         departedTagLanes[cell.ref] = maxOf(departedTagLanes[cell.ref] ?: 0L, high)
     }
 
-    private fun supersedeLocalInstance(cell: Replicable<*>): Boolean {
+    private fun supersedeLocalInstance(cell: Gossiping<*>): Boolean {
         var resumeWatermark = false
         val superseded = synchronized(linkLifecycle) {
             val locals = localReplicas[cell.ref.id] ?: return@synchronized false
@@ -851,7 +853,7 @@ class Replication(
      * [supersedeLocalInstance]; read that KDoc before assuming more is offered
      * here than there is.
      */
-    private fun trackDeliveries(cell: Replicable<*>, host: ManagedHost, rehome: Boolean = false) {
+    private fun trackDeliveries(cell: Gossiping<*>, host: ManagedHost, rehome: Boolean = false) {
         if (cell is WatermarkCell) return
         var fresh = false
         val companion = watermarks.getOrPut(cell.ref.id) {
@@ -893,7 +895,7 @@ class Replication(
         // retained — its per-outlet-epoch watermark is a distinct key space from
         // the per-origin advances above (both ride the one companion, one mesh).
         @Suppress("UNCHECKED_CAST")
-        companion.trackDeliveriesOf(cell.outlet as FanOutlet<Propagate<Any?>>)
+        companion.trackDeliveriesOf(cell.gossipOutlet as FanOutlet<Propagate<Any?>>)
     }
 
     /**
@@ -1040,7 +1042,7 @@ class Replication(
      * fix; `false` reproduces the pre-PN-0c wedge). Non-replica-fed graphs never
      * read the row, so closing it is unobservable to them.
      */
-    fun evict(cell: Replicable<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
+    fun evict(cell: Gossiping<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
         val reachablePeers = registry.instances.replicasOf(cell.ref.id) - cell.ref
         if (reachablePeers.isEmpty()) {
             val newlySuspended = synchronized(linkLifecycle) { partitionSuspended.add(cell.ref) }
@@ -1137,8 +1139,8 @@ class Replication(
      * candidate's republish, so no peer delta is lost.
      */
     fun rebind(
-        incumbent: Replicable<*>,
-        candidate: Replicable<*>,
+        incumbent: Gossiping<*>,
+        candidate: Gossiping<*>,
         host: ManagedHost,
         carryTagState: Boolean = true,
     ) {
@@ -1219,7 +1221,7 @@ class Replication(
         }
     }
 
-    private fun maybeLink(local: Replicable<*>, other: CellRef) {
+    private fun maybeLink(local: Gossiping<*>, other: CellRef) {
         if (other == local.ref) return
         // Interest gate (spec 40/42 §Interest-scoped instance sets, CP-D2): a
         // gossip link forms only where the two instances' interests overlap —
@@ -1234,7 +1236,7 @@ class Replication(
 
         var interestAdmission: RetentionHold? = null
         var retentionAdmission: RetentionHold? = null
-        var catchUp: Pair<Replicable<*>, Link>? = null
+        var catchUp: Pair<Gossiping<*>, Link>? = null
         var formation: LinkFormation? = null
         var formationDecided = false
         synchronized(linkLifecycle) {
@@ -1421,24 +1423,24 @@ class Replication(
     }
 
     /** Must be called under [linkLifecycle]. */
-    private fun localHostIfLiveLocked(local: Replicable<*>): ManagedHost? {
+    private fun localHostIfLiveLocked(local: Gossiping<*>): ManagedHost? {
         if (localReplicas[local.ref.id]?.any { it === local } != true) return null
         return hostOf[local.ref]
     }
 
     /** Must be called under [linkLifecycle]. */
-    private fun liveLocalAtRefLocked(ref: CellRef): Replicable<*>? =
+    private fun liveLocalAtRefLocked(ref: CellRef): Gossiping<*>? =
         localReplicas[ref.id]
             ?.lastOrNull { it.ref == ref }
             ?.takeIf { localHostIfLiveLocked(it) != null }
 
     /** Must be called under [linkLifecycle]. */
-    private fun linkEndpointsLiveLocked(local: Replicable<*>, other: CellRef): Boolean =
+    private fun linkEndpointsLiveLocked(local: Gossiping<*>, other: CellRef): Boolean =
         localHostIfLiveLocked(local) != null && registry.location(other) != null
 
     /** Must be called under [linkLifecycle]. */
     private fun beginLinkFormationLocked(
-        local: Replicable<*>,
+        local: Gossiping<*>,
         other: CellRef,
         targetInterest: Interest,
         key: Pair<CellRef, CellRef>,
@@ -1452,7 +1454,7 @@ class Replication(
 
     /** Must be called under [linkLifecycle]. */
     private fun beginHeldLinkFormationLocked(
-        local: Replicable<*>,
+        local: Gossiping<*>,
         other: CellRef,
         targetInterest: Interest,
         key: Pair<CellRef, CellRef>,
@@ -1566,7 +1568,7 @@ class Replication(
     }
 
     private fun installLink(
-        local: Replicable<*>,
+        local: Gossiping<*>,
         other: CellRef,
         targetInterest: Interest,
         key: Pair<CellRef, CellRef>,
@@ -1649,8 +1651,8 @@ class Replication(
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun gossipOutlet(cell: Replicable<*>): FanOutlet<Propagate<Any?>> =
-        adapters[cell.ref]?.outlet ?: (cell.outlet as FanOutlet<Propagate<Any?>>)
+    private fun gossipOutlet(cell: Gossiping<*>): FanOutlet<Propagate<Any?>> =
+        adapters[cell.ref]?.outlet ?: (cell.gossipOutlet as FanOutlet<Propagate<Any?>>)
 
     /**
      * The stable identity of the gossip subscription `local → other` carries on

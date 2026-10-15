@@ -16,8 +16,8 @@ whether every `[SOC1-*]` id has a named test or a recorded justification.
 | Requirement | Test class | Method | Note |
 |---|---|---|---|
 | `[SOC1-MOD-01]` | `ModuleDependencyTest` | `SOC1-MOD-01 no forbidden module is on the demo-social test runtime classpath` | also `SOC1-MOD-01 demo-social build file declares exactly kernel, demo-shell and testkit` |
-| `[SOC1-MOD-02]` | `civictech.cell.architecture.DemoSurfaceAllowlistTest` (kernel module) | `application-surface main sources only import their allowed civictech-cell slice` | B20; external module, `kernel/src/test/kotlin/civictech/cell/architecture/DemoSurfaceAllowlistTest.kt` |
-| `[SOC1-MOD-03]` | `civictech.cell.architecture.DemoSurfaceAllowlistTest` (kernel module) | `application-surface main sources only import their allowed civictech-cell slice` | same allowlist test is the enforcement mechanism: an import needing `protocol`/`partition` would fail it, forcing the escalation this requirement describes; no `src/main` import currently needs either package |
+| `[SOC1-MOD-02]` | uncheckable: the former demo kernel-package allowlist was retired | — | The 2026-10-14 maintainer answer on `computenet-7afo4.5` says, “The demo may use any kernel packages.” The retired surface requirement therefore has no current enforcing test. |
+| `[SOC1-MOD-03]` | uncheckable: the former no-widen/escalation policy was retired | — | The 2026-10-14 maintainer answer on `computenet-7afo4.5` says, “The demo may use any kernel packages.” Rewording this requirement is a separate epic decision, so this ledger records why the original clause is not currently checkable. |
 | `[SOC1-HTTP-01]` | `SocialServerTest` | `SOC1-HTTP-01 serves slash, state and op through DemoShell` | |
 | `[SOC1-HTTP-02]` | `SocialServerTest` | `SOC1-HTTP-02 state is byte-identical across repeated fetches and across two apps given the same ops` | |
 | `[SOC1-HTTP-03]` | `SocialServerTest` | `SOC1-HTTP-03 the first SSE frame carries current state before any change frame` | |
