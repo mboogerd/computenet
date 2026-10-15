@@ -120,12 +120,13 @@ import java.util.UUID
  * family — a strictly weaker position than `SetCell`'s, and stated here rather
  * than discovered:
  *
- * - These [TagState] folds are **non-retaining** (`retainTombstones = false`
- *   everywhere except `UnionSetCell`, which this ticket excludes), so a del
- *   *deletes* tags from the live map instead of tombstoning them. A mid-walk
- *   removal therefore mints nothing, and can even *lower* the max for its
- *   source — so this frontier is not even monotone, and two equal endpoint
- *   stamps do not by themselves prove that nothing moved in between.
+ * - These [TagState] folds are **non-retaining** except `UnionSetCell` (which
+ *   this ticket excludes) and a no-lateness `GroupByCell`, whose membership
+ *   gossip retains tombstones. A non-retaining del deletes tags from the live
+ *   map; the retaining group-by moves them to its tombstone map. Neither mints
+ *   a tag or advances the max, and the non-retaining form can lower it — so two
+ *   equal endpoint stamps do not by themselves prove that nothing moved in
+ *   between.
  * - `MintedLedger.exit`/`AdvertisedLedger.exit` remove an advertised tag with
  *   the same effect.
  *

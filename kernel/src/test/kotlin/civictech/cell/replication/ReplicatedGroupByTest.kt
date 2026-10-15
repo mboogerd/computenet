@@ -12,6 +12,7 @@ import civictech.cell.data.Replicable
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.TagState
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.op.GroupByCell
@@ -264,6 +265,27 @@ class ReplicatedGroupByTest {
             .shouldNotBeNull()
             .ports.first { it.name == "inlet" }
         inlet.natures.level(NatureAxis.MERGE_IDEMPOTENCE) shouldBe MergeClass.NON_IDEMPOTENT
+    }
+
+    @Test
+    fun `retaining apply reports only newly retained dels beside existing membership`() {
+        val state = TagState<Int>(retainTombstones = true)
+        val source = UUID.nameUUIDFromBytes("retained-del-report".toByteArray())
+        val existing = (0 until 4_096).associateWith { index ->
+            setOf(Timestamp(source, index.toLong() + 1))
+        }
+        state.apply(SetDelta(adds = existing))
+
+        val unseen = Timestamp(source, 4_097)
+        val unseenDel = SetDelta<Int>(dels = mapOf(-1 to setOf(unseen)))
+        state.applyAndReportRetainedDels(unseenDel) shouldBe unseenDel
+        state.applyAndReportRetainedDels(unseenDel) shouldBe SetDelta<Int>()
+        state.asDelta().adds shouldBe existing
+
+        val liveTag = existing.getValue(2_048).single()
+        val liveDel = SetDelta<Int>(dels = mapOf(2_048 to setOf(liveTag)))
+        state.applyAndReportRetainedDels(liveDel) shouldBe liveDel
+        state.asDelta().adds.size shouldBe existing.size - 1
     }
 
     /**

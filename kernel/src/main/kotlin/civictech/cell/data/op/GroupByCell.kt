@@ -158,10 +158,15 @@ class GroupByCell<E, K, A, ACC : Serializable>(
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
 ) : GroupByCellBase<E, K, A>(ref), Stateful, BoundedStateful, Gossiping<SetDelta<E>> {
-    // Membership gossip lets a del minted at one replica race an older add
-    // arriving over another stream. Retaining the covered tag is what makes
-    // that OR-set merge a fixpoint instead of an add/del echo cycle. Lateness
-    // cells cannot replicate and keep the eviction ledger's bounded shape.
+    /**
+     * Membership gossip lets a del minted at one replica race an older add
+     * arriving over another stream. Retaining the covered tag is what makes
+     * that OR-set merge a fixpoint instead of an add/del echo cycle. Retention
+     * is unconditional for no-lateness cells, including before/without actual
+     * replication, so a later membership catch-up has the same ledger shape.
+     * Cost: every distinct deleted tag and its checkpoint entry remain until
+     * G-25 compaction. Lateness cells cannot replicate and stay non-retaining.
+     */
     private val state = TagState<E>(retainTombstones = lateness == null)
 
     private class Group<ACC>(var count: Int, var acc: ACC)
@@ -337,23 +342,12 @@ class GroupByCell<E, K, A, ACC : Serializable>(
      * before its add is also new replicated state and must echo. Otherwise an
      * older add arriving over another path resurrects and can alternate with
      * the del forever. Lateness cells retain no tombstones and take the
-     * ordinary effective-delta path without this extra ledger read. A
-     * del-bearing gossip fold is O(current membership + retained tombstones)
-     * here because [TagState] exposes no narrower tombstone read.
+     * ordinary effective-delta path. [TagState.applyAndReportRetainedDels]
+     * reports that negative knowledge while probing only the elements and tags
+     * in [value], so this apply path is O(delta), not O(the whole ledger).
      */
     private fun applyMembership(value: SetDelta<E>): SetDelta<E> {
-        if (lateness != null || value.dels.isEmpty()) return state.apply(value)
-        val knownDels = state.asDelta().dels
-        val effective = state.apply(value)
-
-        val newlyRetained = value.dels.mapNotNull { (element, tags) ->
-            (tags - (knownDels[element] ?: emptySet())).takeIf { it.isNotEmpty() }?.let { element to it }
-        }.toMap()
-        if (newlyRetained.isEmpty()) return effective
-        val dels = (effective.dels.keys + newlyRetained.keys).associateWith { element ->
-            (effective.dels[element] ?: emptySet()) + (newlyRetained[element] ?: emptySet())
-        }
-        return SetDelta(effective.adds, dels)
+        return if (lateness == null) state.applyAndReportRetainedDels(value) else state.apply(value)
     }
 
     /**
@@ -472,8 +466,10 @@ class GroupByCell<E, K, A, ACC : Serializable>(
      * for why an intermediate page carries the opening stamp with
      * [civictech.cell.ReadCaveat.STALE_FRONTIER] instead). Its equality across
      * a walk is **necessary but not sufficient** for "the union is a snapshot":
-     * this `TagState` is non-retaining, so a mid-walk membership retraction
-     * deletes tags rather than minting one and is invisible to the check.
+     * a membership retraction never advances a tag counter: the no-lateness
+     * form moves the covered tag from live state to retained tombstones, while
+     * the lateness form deletes it. Either change is invisible to the max-tag
+     * frontier check.
      * [supportsSince] stays `false` accordingly.
      *
      * `[24-OP-GROUPBY-01]`/`-02`/`-03`/`-06` and `[24-AGG-01]` are untouched:
