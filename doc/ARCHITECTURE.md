@@ -341,10 +341,12 @@ executable, not just prose, each wired into the normal test task so it gates
 `NeutralityGateTest` (`concord/src/test/kotlin/civictech/concord/provenance/`)
 fails the build if any `:concord` file outside `civictech.concord.driver.kernel`
 imports `civictech.cell.*`, enforcing the L3 rule above; `DemoSurfaceAllowlistTest`
-(`kernel/src/test/kotlin/civictech/cell/architecture/`) fails if a demo's
-`src/main` reaches past the allowed `civictech.cell` surface (root vocabulary,
-`.host`/`.port`/`.graph`/`.data*`/`.observe`/`.link`/`.wire`/`.consistency`/
-`.control`/`.durability`, plus `civictech.testkit`); `ArchitectureRatchetTest`
+(`kernel/src/test/kotlin/civictech/cell/architecture/`) scans only `:inspect`'s
+`src/main` and fails if it reaches past the allowed `civictech.cell` surface
+(root vocabulary, `.host`/`.port`/`.data*`/`.observe`/`.link`/`.wire`/`.proxy`/
+`.partition`/`.graph`/`.membrane`); demo modules may import any kernel package.
+The separate guardrail for demo-to-demo imports is tracked in computenet-yvzfh;
+`ArchitectureRatchetTest`
 (same directory) pins the current `civictech.cell` package→package import edge
 set against a checked-in baseline
 (`kernel/src/test/resources/architecture/package-edges.txt`) — see
