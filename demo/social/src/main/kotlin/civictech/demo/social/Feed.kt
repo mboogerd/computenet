@@ -6,10 +6,10 @@
  * `[24-PART-05]`.
  *
  * The kernel's own PN-5 machinery (`StateRequestProtocol`,
- * `RetainedFrontiers`, `PartitionedShardSet.pull`) lives in packages this demo
- * may not import (`DemoSurfaceAllowlistTest`, `[SOC1-MOD-03]`). This file
- * re-realises the same rules from the demo-legal surface: the [BoundedReader]
- * seam, [StateRead.since], and the [TagFrontier] each page reports.
+ * `RetainedFrontiers`, `PartitionedShardSet.pull`) is separate from this
+ * demo's app-facing implementation. This file re-realises the same rules
+ * through the [BoundedReader] seam, [StateRead.since], and the [TagFrontier]
+ * each page reports.
  *
  * **PN-5, rule by rule.**
  *
