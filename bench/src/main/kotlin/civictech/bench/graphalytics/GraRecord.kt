@@ -26,21 +26,37 @@ data class LoadModeLabel(
 
 /** A phase figure whose unit is determined by the run's [Drive]. */
 sealed interface Figure {
-    /** Deterministic simulation work; wall-clock nanoseconds are intentionally absent. */
-    data class Work(val steps: Long) : Figure {
+    /**
+     * Deterministic simulation work; wall-clock nanoseconds are intentionally absent.
+     *
+     * [dispersionSteps] is `null` for a single run, which observes no run-to-run
+     * dispersion; only [summarise] over repeated runs sets it.
+     */
+    data class Work(
+        val steps: Long,
+        val dispersionSteps: Long? = null,
+    ) : Figure {
         init {
             require(steps >= 0) { "simulation work steps must be non-negative" }
+            require(dispersionSteps == null || dispersionSteps >= 0) {
+                "simulation work dispersionSteps must be non-negative"
+            }
         }
     }
 
-    /** Real elapsed time and its non-negative dispersion. */
+    /**
+     * Real elapsed time and its non-negative dispersion.
+     *
+     * [dispersionNanos] is `null` for a single run, which observes no run-to-run
+     * dispersion; only [summarise] over repeated runs sets it.
+     */
     data class Duration(
         val nanos: Long,
-        val dispersionNanos: Long,
+        val dispersionNanos: Long? = null,
     ) : Figure {
         init {
             require(nanos >= 0) { "duration nanos must be non-negative" }
-            require(dispersionNanos >= 0) {
+            require(dispersionNanos == null || dispersionNanos >= 0) {
                 "duration dispersionNanos must be non-negative"
             }
         }

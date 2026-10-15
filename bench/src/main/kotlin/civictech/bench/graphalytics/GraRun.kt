@@ -365,9 +365,10 @@ object GraRun {
                 override fun completePhase(phase: RunPhase, started: PhaseStart): Figure {
                     scheduler.awaitDrained("Graphalytics ${phase.name.lowercase()} phase")
                     hooks.phaseQuiesced(phase)
+                    // One sample observes no dispersion; [summarise] folds repeats.
                     return Figure.Duration(
                         nanos = System.nanoTime() - started.startedNanos,
-                        dispersionNanos = 0,
+                        dispersionNanos = null,
                     )
                 }
 

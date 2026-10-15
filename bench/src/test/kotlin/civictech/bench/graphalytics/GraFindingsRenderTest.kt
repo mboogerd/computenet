@@ -59,7 +59,8 @@ class GraFindingsRenderTest {
             )
         }
         val records = measured.flatMap { it.second }
-        val coverage = coverageFor(records)
+        // [BB-GRA-27]: a dataset whose seed-to-seed spread exceeds the threshold is unreportable.
+        val coverage = coverageFor(measured.map { (_, runs) -> summarise(runs) })
         val sourceCommit = records.map { it.header.dataset.sourceCommit }.distinct().single()
         val loadMode = records.map {
             "${it.header.loadMode.durability}/${it.header.loadMode.ingress}"

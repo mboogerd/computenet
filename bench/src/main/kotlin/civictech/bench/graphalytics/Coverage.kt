@@ -47,6 +47,9 @@ private fun lccRow(records: List<GraRecord>): CoverageRow {
         )
     }
 
+    // An unreportable dataset must not be hidden behind a later validated one.
+    records.firstOrNull { it is GraRecord.Unreportable }?.let { return it.toCoverageRow() }
+
     if (records.isNotEmpty() && records.all { it is GraRecord.Validated }) {
         return CoverageRow(Algorithm.LCC, Status.validated, cause = null)
     }
