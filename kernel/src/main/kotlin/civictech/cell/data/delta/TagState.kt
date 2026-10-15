@@ -136,31 +136,65 @@ internal class TagState<E>(
      * The del-fold shared by [apply] and (b)'s del pass in [applyReBaseline]
      * (T07 finding 4): identical tombstone logic — which tags counted as
      * "killed", whether an element's live-tag entry empties out — the ONE
-     * declared difference being whether a killed tag REPLACES or ACCUMULATES
+     * declared difference being whether a reported del REPLACES or ACCUMULATES
      * onto [into] ([accumulateKilled]). `applyReBaseline` needs accumulation
      * because its (a) pass may already have recorded a drop for the same
      * element before this (b) pass runs; `apply` never has a prior entry, so
-     * replace and accumulate are byte-identical there. The documented
-     * add-path divergence between the two callers is untouched — only the
-     * del-fold is shared.
+     * replace and accumulate are byte-identical there. [reportRetainedDels]
+     * additionally reports first-seen tombstones that killed no live tag; it
+     * is used only by [applyAndReportRetainedDels]. The documented add-path
+     * divergence between the callers is untouched — only the del-fold is shared.
      */
-    private fun foldDels(delta: SetDelta<E>, into: MutableMap<E, Set<Timestamp>>, accumulateKilled: Boolean) {
+    private fun foldDels(
+        delta: SetDelta<E>,
+        into: MutableMap<E, Set<Timestamp>>,
+        accumulateKilled: Boolean,
+        reportRetainedDels: Boolean = false,
+    ) {
         delta.dels.forEach { (element, tags) ->
             // D-UNION: retain BEFORE the liveness check — a del whose add this
             // ledger has not seen yet (another path, a later catch-up) is
             // exactly the one retention exists to remember.
-            if (retainTombstones && tags.isNotEmpty()) tombstones.getOrPut(element) { mutableSetOf() } += tags
-            val had = live[element] ?: return@forEach
-            val killed = tags intersect had
+            val newlyRetained = if (retainTombstones && tags.isNotEmpty()) {
+                val retained = tombstones.getOrPut(element) { mutableSetOf() }
+                val fresh = if (reportRetainedDels) tags - retained else emptySet()
+                retained += tags
+                fresh
+            } else {
+                emptySet()
+            }
+            val had = live[element]
+            val killed = if (had == null) emptySet() else tags intersect had
             if (killed.isNotEmpty()) {
-                had -= killed
-                if (had.isEmpty()) live.remove(element)
-                into[element] = if (accumulateKilled) (into[element] ?: emptySet()) + killed else killed
+                val liveTags = checkNotNull(had)
+                liveTags -= killed
+                if (liveTags.isEmpty()) live.remove(element)
+            }
+            val reported = if (newlyRetained.isEmpty()) killed else killed + newlyRetained
+            if (reported.isNotEmpty()) {
+                into[element] = if (accumulateKilled) (into[element] ?: emptySet()) + reported else reported
             }
         }
     }
 
-    fun apply(delta: SetDelta<E>): SetDelta<E> {
+    fun apply(delta: SetDelta<E>): SetDelta<E> = apply(delta, reportRetainedDels = false)
+
+    /**
+     * Fold [delta] and report every piece of newly learned retained state.
+     * Unlike [apply], a del-tag first retained before its add is locally live
+     * is returned even though it killed nothing. A gossiping OR-set must echo
+     * that negative knowledge or a stale add on another path can resurrect.
+     *
+     * This is a narrow O(delta) read: it probes only the tombstone buckets for
+     * elements named by [delta], never copying [asDelta]'s whole live and
+     * tombstone ledger. It is valid only for a retaining state.
+     */
+    fun applyAndReportRetainedDels(delta: SetDelta<E>): SetDelta<E> {
+        check(retainTombstones) { "retained dels can only be reported by a tombstone-retaining TagState" }
+        return apply(delta, reportRetainedDels = true)
+    }
+
+    private fun apply(delta: SetDelta<E>, reportRetainedDels: Boolean): SetDelta<E> {
         val newAdds = mutableMapOf<E, Set<Timestamp>>()
         val newDels = mutableMapOf<E, Set<Timestamp>>()
 
@@ -174,7 +208,7 @@ internal class TagState<E>(
                 newAdds[element] = fresh
             }
         }
-        foldDels(delta, newDels, accumulateKilled = false)
+        foldDels(delta, newDels, accumulateKilled = false, reportRetainedDels = reportRetainedDels)
         return SetDelta(newAdds, newDels)
     }
 

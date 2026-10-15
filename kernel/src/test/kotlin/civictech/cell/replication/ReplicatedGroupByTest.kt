@@ -12,6 +12,7 @@ import civictech.cell.data.Replicable
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.TagState
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.op.GroupByCell
@@ -38,6 +39,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
+import io.kotest.matchers.ints.shouldBeLessThan
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -46,6 +48,7 @@ import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.Random
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 /** 7afo4-D6/D7/D8 — GroupBy membership gossip without making its MapDelta outlet mergeable. */
 class ReplicatedGroupByTest {
@@ -264,6 +267,63 @@ class ReplicatedGroupByTest {
             .shouldNotBeNull()
             .ports.first { it.name == "inlet" }
         inlet.natures.level(NatureAxis.MERGE_IDEMPOTENCE) shouldBe MergeClass.NON_IDEMPOTENT
+    }
+
+    @Test
+    fun `retaining apply reports only newly retained dels beside existing membership`() {
+        val state = TagState<Int>(retainTombstones = true)
+        val source = UUID.nameUUIDFromBytes("retained-del-report".toByteArray())
+        val existing = (0 until 4_096).associateWith { index ->
+            setOf(Timestamp(source, index.toLong() + 1))
+        }
+        state.apply(SetDelta(adds = existing))
+
+        val unseen = Timestamp(source, 4_097)
+        val unseenDel = SetDelta<Int>(dels = mapOf(-1 to setOf(unseen)))
+        state.applyAndReportRetainedDels(unseenDel) shouldBe unseenDel
+        state.applyAndReportRetainedDels(unseenDel) shouldBe SetDelta<Int>()
+        state.asDelta().adds shouldBe existing
+
+        val liveTag = existing.getValue(2_048).single()
+        val liveDel = SetDelta<Int>(dels = mapOf(2_048 to setOf(liveTag)))
+        state.applyAndReportRetainedDels(liveDel) shouldBe liveDel
+        state.asDelta().adds.size shouldBe existing.size - 1
+    }
+
+    /** Element whose [hashCode] counts its calls: a whole-ledger copy hashes every key. */
+    private class Probed(val id: Int, val hashes: AtomicInteger) : Serializable {
+        override fun equals(other: Any?): Boolean = other is Probed && other.id == id
+        override fun hashCode(): Int {
+            hashes.incrementAndGet()
+            return id
+        }
+    }
+
+    /**
+     * qkfy9: a del on an unreplicated no-lateness GroupByCell's inlet must cost
+     * O(delta), not a copy of the whole live + tombstone ledger. Counting element
+     * hashes is the deterministic proxy: the former `state.asDelta()` read hashed
+     * all 2,048 live and 2,048 tombstoned keys on every del.
+     */
+    @Test
+    fun `an inlet del hashes only the delta, not the whole membership ledger`() {
+        val hashes = AtomicInteger()
+        val cell = GroupByCell(
+            CellRef(UUID.nameUUIDFromBytes("group-by-del-cost".toByteArray())),
+            { e: Probed -> e.id % 8 },
+            Aggregators.count<Probed>(),
+        )
+        val source = UUID.nameUUIDFromBytes("group-by-del-cost-tags".toByteArray())
+        val tags = (0 until 4_096).associate { Probed(it, hashes) to setOf(Timestamp(source, it.toLong() + 1)) }
+        cell.inlet.call.propagate(SetDelta(adds = tags))
+        cell.inlet.call.propagate(SetDelta(dels = tags.filterKeys { it.id % 2 == 0 }))
+
+        val target = tags.keys.first { it.id == 1 }
+        hashes.set(0)
+        cell.inlet.call.propagate(SetDelta(dels = mapOf(target to tags.getValue(target))))
+        withClue("element hashCode calls for a one-element del against 2,048 live + 2,048 tombstoned") {
+            hashes.get() shouldBeLessThan 64
+        }
     }
 
     /**
