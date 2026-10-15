@@ -256,6 +256,7 @@ class MacroReBaselineTest {
                 subject = CostSubject.REBASELINE,
                 metric = metric,
                 form = GrowthForm.LINEAR,
+                slice = slice,
                 points = fittedOver,
             ),
         )
@@ -307,6 +308,14 @@ class MacroReBaselineTest {
             expectedLaws,
             model.laws.filter { it.subject == CostSubject.REBASELINE },
             "every honestly fitted REBASELINE law must enter the merged export",
+        )
+        val expectedUnfitted = fits.mapNotNull { fit ->
+            (fit.result as? FitResult.Unfitted)?.record
+        }
+        assertEquals(
+            expectedUnfitted,
+            model.unfitted.filter { it.subject == CostSubject.REBASELINE },
+            "every unfitted REBASELINE slice must enter the merged export",
         )
 
         val shapes = model.envelope.categorical.getValue(Dimensions.SHAPE)

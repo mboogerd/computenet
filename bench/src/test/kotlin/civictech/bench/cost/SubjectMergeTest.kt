@@ -32,6 +32,9 @@ class SubjectMergeTest {
             existing.exclusions.filter { it.subject == CostSubject.PROPAGATION } + replacement.exclusions
         merged.laws shouldBe
             existing.laws.filter { it.subject == CostSubject.PROPAGATION } + replacement.laws
+        merged.unfitted shouldBe
+            existing.unfitted.filter { it.subject == CostSubject.PROPAGATION } +
+            replacement.unfitted
         merged.envelope.categorical.getValue(Dimensions.SHAPE) shouldBe setOf(
             "chain",
             "diamond",
@@ -93,6 +96,21 @@ class SubjectMergeTest {
         val replacement = replacementModel()
         val invalid = replacement.copy(
             laws = replacement.laws + replacement.laws.first().copy(subject = CostSubject.PROPAGATION),
+        )
+
+        val failure = shouldThrow<IllegalArgumentException> {
+            SubjectMerge.replaceSubject(existingModel(), CostSubject.REBASELINE, invalid)
+        }
+
+        failure.message shouldContain "PROPAGATION"
+    }
+
+    @Test
+    fun `refuses a replacement unfitted fit carrying another subject`() {
+        val replacement = replacementModel()
+        val invalid = replacement.copy(
+            unfitted = replacement.unfitted + replacement.unfitted.first()
+                .copy(subject = CostSubject.PROPAGATION),
         )
 
         val failure = shouldThrow<IllegalArgumentException> {
@@ -204,6 +222,7 @@ class SubjectMergeTest {
             subject = CostSubject.PROPAGATION,
             metric = "messages",
             form = GrowthForm.LINEAR,
+            slice = "propagation hosts",
             points = propagation,
         )
         writer.fit(
@@ -211,7 +230,16 @@ class SubjectMergeTest {
             subject = CostSubject.REBASELINE,
             metric = "messages",
             form = GrowthForm.LINEAR,
+            slice = "old re-baseline fan-outs",
             points = old,
+        )
+        writer.fit(
+            dimension = Dimensions.FAN_OUT,
+            subject = CostSubject.REBASELINE,
+            metric = "messages",
+            form = GrowthForm.LINEAR,
+            slice = "old incomplete fan-outs",
+            points = old.take(3),
         )
         check(writer.model().laws.size == 2) { "existing fixture must carry one law per subject" }
         writer.calibrate(calibration("first", 10.0))
@@ -247,7 +275,16 @@ class SubjectMergeTest {
             subject = CostSubject.REBASELINE,
             metric = "messages",
             form = GrowthForm.LINEAR,
+            slice = "replacement fan-outs",
             points = points,
+        )
+        writer.fit(
+            dimension = Dimensions.FAN_OUT,
+            subject = CostSubject.REBASELINE,
+            metric = "messages",
+            form = GrowthForm.LINEAR,
+            slice = "replacement incomplete fan-outs",
+            points = points.take(3),
         )
         writer.calibrate(calibration("replacement-only", 99.0))
         return writer.model()

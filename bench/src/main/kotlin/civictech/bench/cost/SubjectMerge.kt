@@ -7,11 +7,11 @@ import java.nio.file.Path
  * Replaces one subject's evidence in an existing cost export.
  *
  * The replacement model contributes only its structural entries, exclusions, and
- * growth laws for [subject]. Its calibration section is intentionally ignored: the
- * existing calibration remains authoritative, and calibration replacement belongs to
- * [civictech.bench.macro.CalibrationExport.merge]. The existing model's schema version
- * and top-level harness SHA are retained; per-entry structural SHAs remain those of
- * the model that supplied each entry.
+ * growth-law evidence for [subject], fitted or unfitted. Its calibration section is
+ * intentionally ignored: the existing calibration remains authoritative, and
+ * calibration replacement belongs to [civictech.bench.macro.CalibrationExport.merge].
+ * The existing model's schema version and top-level harness SHA are retained; per-entry
+ * structural SHAs remain those of the model that supplied each entry.
  *
  * The path overload validates the encoded result before changing the file. This means
  * a replacement with an entry for another subject is refused without rewriting the
@@ -25,8 +25,8 @@ import java.nio.file.Path
  */
 object SubjectMerge {
     /**
-     * Returns [existing] with every structural entry, exclusion, and law of [subject]
-     * replaced by [replacement]'s.
+     * Returns [existing] with every structural entry, exclusion, fitted law, and
+     * unfitted fit of [subject] replaced by [replacement]'s.
      *
      * [replacement.calibration] is ignored; [existing]'s calibration is kept. Use the
      * calibration route in [civictech.bench.macro.CalibrationExport.merge] when that
@@ -55,6 +55,12 @@ object SubjectMerge {
                     "${law.subject}; expected $subject"
             }
         }
+        replacement.unfitted.forEach { fit ->
+            require(fit.subject == subject) {
+                "replacement unfitted growth law '${fit.dimension}/${fit.metric}' carries " +
+                    "${fit.subject}; expected $subject"
+            }
+        }
 
         val structural = existing.structural.filterNot { it.subject == subject } +
             replacement.structural
@@ -64,6 +70,8 @@ object SubjectMerge {
             exclusions = existing.exclusions.filterNot { it.subject == subject } +
                 replacement.exclusions,
             laws = existing.laws.filterNot { it.subject == subject } + replacement.laws,
+            unfitted = existing.unfitted.filterNot { it.subject == subject } +
+                replacement.unfitted,
         )
     }
 

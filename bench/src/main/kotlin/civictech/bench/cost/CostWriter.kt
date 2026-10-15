@@ -20,10 +20,10 @@ sealed interface FitResult {
     data class Law(val law: GrowthLaw) : FitResult
 
     /** A proposed law that could not be stated honestly. */
-    data class Unfitted(
-        val reason: String,
-        val goodnessOfFit: Double?,
-    ) : FitResult
+    data class Unfitted(val record: UnfittedFit) : FitResult {
+        val reason: String get() = record.reason
+        val goodnessOfFit: Double? get() = record.goodnessOfFit
+    }
 }
 
 /**
@@ -47,9 +47,19 @@ class CostWriter(private val harnessSha: String) {
         val fittedOver: Set<Coordinate>,
     )
 
+    private data class GrowthFitKey(
+        val dimension: String,
+        val slice: String,
+        val subject: CostSubject,
+        val metric: String,
+        val form: GrowthForm,
+    )
+
     private val structural = linkedMapOf<StructuralKey, StructuralCost>()
     private val calibration = linkedMapOf<String, CalibrationConstant>()
     private val laws = mutableListOf<GrowthLaw>()
+    private val unfitted = mutableListOf<UnfittedFit>()
+    private val growthFits = mutableSetOf<GrowthFitKey>()
     private val exclusions = mutableListOf<ExcludedPoint>()
 
     init {
@@ -109,8 +119,30 @@ class CostWriter(private val harnessSha: String) {
         metric: String,
         form: GrowthForm,
         points: List<Coordinate>,
+    ): FitResult = fit(
+        dimension = dimension,
+        subject = subject,
+        metric = metric,
+        form = form,
+        slice = points.joinToString(prefix = "coordinates=[", postfix = "]"),
+        points = points,
+    )
+
+    /**
+     * Fits one explicitly named [slice], retaining an [UnfittedFit] when the
+     * evidence cannot support a law. Callers with an empty admitted point set must use
+     * this overload so the attempted slice remains identifiable.
+     */
+    fun fit(
+        dimension: String,
+        subject: CostSubject,
+        metric: String,
+        form: GrowthForm,
+        slice: String,
+        points: List<Coordinate>,
     ): FitResult {
         require(form == GrowthForm.LINEAR) { "unsupported growth form '$form'" }
+        require(slice.isNotBlank()) { "growth-law slice must not be blank" }
         require(dimension in NUMERIC_DIMENSIONS) {
             "growth dimension '$dimension' must be one of ${NUMERIC_DIMENSIONS.joinToString()}"
         }
@@ -130,13 +162,25 @@ class CostWriter(private val harnessSha: String) {
             numericDimension(at, dimension) to metric(entry.counts, metric)
         }
         if (samples.any { (_, y) -> y == null }) {
-            return FitResult.Unfitted(
+            return recordUnfitted(
+                dimension = dimension,
+                slice = slice,
+                subject = subject,
+                metric = metric,
+                form = form,
+                points = points,
                 reason = "metric '$metric' was not measured at every fitted coordinate",
                 goodnessOfFit = null,
             )
         }
         if (samples.size < 2) {
-            return FitResult.Unfitted(
+            return recordUnfitted(
+                dimension = dimension,
+                slice = slice,
+                subject = subject,
+                metric = metric,
+                form = form,
+                points = points,
                 reason = "ordinary least squares requires at least two points",
                 goodnessOfFit = null,
             )
@@ -148,14 +192,26 @@ class CostWriter(private val harnessSha: String) {
         val yMean = y.average()
         val xVariation = x.sumOf { value -> squared(value - xMean) }
         if (xVariation == 0.0) {
-            return FitResult.Unfitted(
+            return recordUnfitted(
+                dimension = dimension,
+                slice = slice,
+                subject = subject,
+                metric = metric,
+                form = form,
+                points = points,
                 reason = "dimension '$dimension' does not vary across the fitted coordinates",
                 goodnessOfFit = null,
             )
         }
         val totalVariation = y.sumOf { value -> squared(value - yMean) }
         if (totalVariation == 0.0) {
-            return FitResult.Unfitted(
+            return recordUnfitted(
+                dimension = dimension,
+                slice = slice,
+                subject = subject,
+                metric = metric,
+                form = form,
+                points = points,
                 reason = "metric '$metric' has no variance, so R² is undefined",
                 goodnessOfFit = null,
             )
@@ -171,13 +227,25 @@ class CostWriter(private val harnessSha: String) {
         val goodnessOfFit = normalizeUnitBoundary(1.0 - residualVariation / totalVariation)
 
         if (points.size < MIN_POINTS) {
-            return FitResult.Unfitted(
+            return recordUnfitted(
+                dimension = dimension,
+                slice = slice,
+                subject = subject,
+                metric = metric,
+                form = form,
+                points = points,
                 reason = "a law requires at least $MIN_POINTS points, found ${points.size}",
                 goodnessOfFit = goodnessOfFit,
             )
         }
         if (goodnessOfFit < MIN_GOODNESS_OF_FIT) {
-            return FitResult.Unfitted(
+            return recordUnfitted(
+                dimension = dimension,
+                slice = slice,
+                subject = subject,
+                metric = metric,
+                form = form,
+                points = points,
                 reason = "R² $goodnessOfFit is below the $MIN_GOODNESS_OF_FIT threshold",
                 goodnessOfFit = goodnessOfFit,
             )
@@ -196,6 +264,7 @@ class CostWriter(private val harnessSha: String) {
         require(laws.none { existing -> existing.key() == lawKey }) {
             "duplicate growth law $lawKey"
         }
+        recordGrowthFit(dimension, slice, subject, metric, form)
         laws += law
         return FitResult.Law(law)
     }
@@ -211,6 +280,7 @@ class CostWriter(private val harnessSha: String) {
             structural = entries,
             calibration = calibration.values.toList(),
             laws = laws.toList(),
+            unfitted = unfitted.toList(),
             exclusions = exclusions.toList(),
         )
     }
@@ -266,6 +336,42 @@ class CostWriter(private val harnessSha: String) {
         form = form,
         fittedOver = fittedOver.toSet(),
     )
+
+    private fun recordUnfitted(
+        dimension: String,
+        slice: String,
+        subject: CostSubject,
+        metric: String,
+        form: GrowthForm,
+        points: List<Coordinate>,
+        reason: String,
+        goodnessOfFit: Double?,
+    ): FitResult.Unfitted {
+        val record = UnfittedFit(
+            dimension = dimension,
+            slice = slice,
+            subject = subject,
+            metric = metric,
+            form = form,
+            fittedOver = points.toList(),
+            reason = reason,
+            goodnessOfFit = goodnessOfFit,
+        )
+        recordGrowthFit(dimension, slice, subject, metric, form)
+        unfitted += record
+        return FitResult.Unfitted(record)
+    }
+
+    private fun recordGrowthFit(
+        dimension: String,
+        slice: String,
+        subject: CostSubject,
+        metric: String,
+        form: GrowthForm,
+    ) {
+        val key = GrowthFitKey(dimension, slice, subject, metric, form)
+        require(growthFits.add(key)) { "duplicate growth fit $key" }
+    }
 
     private fun deriveEnvelope(entries: List<StructuralCost>): Envelope = Envelope(
         numeric = linkedMapOf(
