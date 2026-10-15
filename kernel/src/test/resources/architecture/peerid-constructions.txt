@@ -37,3 +37,12 @@ demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 runtime/src/main/kotlin/civictech/runtime/Runtime.kt
 # configured name — Runtime maps the manifest's `peerName` through a
 # constructor reference before assigning the bridge side's asserted peer.
+
+economy/src/main/kotlin/civictech/economy/TokenBucketLedger.kt
+# checkpoint restore — `restoreState` reads back `BucketRecord.peer`, the stable name `checkpointTo` wrote from `PeerId.name`; a persisted name, never derived from key material (xbs8t-D1, 66m-D9).
+
+concord/src/main/kotlin/civictech/concord/driver/kernel/StubWriteSigning.kt
+# configured name — a Concord scenario's actor handle becomes the stub signer's PeerId; the stub secret is derived from that name, never the name from key material (computenet-ermvz.5, ermvz-D18).
+
+bench/src/main/kotlin/civictech/bench/macro/mesh/BenchPeer.kt
+# configured name — a benchmark mesh peer's index becomes its loopback side's asserted `Side.peer` (`bench-<index>`); the in-process mesh holds no key material to derive from (computenet-huf6a, huf6a-D2).

@@ -925,7 +925,7 @@ def drop_unmerged_blocked(candidates):
         if line.startswith("BLOCKED "):
             current = line.split()[1]
             blocked[current] = []
-        elif line.startswith("READY "):
+        elif line.startswith(("READY ", "PARKED ")):
             current = None
         elif current:
             blocked[current].append(line.strip())

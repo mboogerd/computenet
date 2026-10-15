@@ -16,6 +16,15 @@ import civictech.cell.control.AttentionBand
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.host.DeadLetter
+import civictech.cell.graph.BoundaryLink
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.Direction
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.HostLiveView
+import civictech.cell.graph.SpawnStep
+import civictech.cell.graph.StepCheck
+import civictech.cell.graph.precheck
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.CurrentPeer
@@ -280,7 +289,8 @@ class BudgetProtocolSeamTest {
 
     private class LinkRig(budget: BudgetLedger, seed: Long, linkAuthority: List<LinkPolicy> = emptyList()) {
         val controller = SimulationController(seed)
-        val host = ManagedHost(scheduler = controller.scheduler(), budget = budget)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry, budget = budget)
         val letters = CopyOnWriteArrayList<DeadLetter>()
         val membrane = LinkMembrane(linkAuthority = linkAuthority)
         val membraneRef: CellRef
@@ -436,6 +446,37 @@ class BudgetProtocolSeamTest {
         rig.link(rig.source(), mallory).shouldBeInstanceOf<LinkResult.Rejected>()
         rig.sink.denialCount shouldBe 1L
         rig.letters.single().denial!!.reason shouldBe DenialReason.LEDGER_FAILURE
+    }
+
+    @Test
+    fun `cold precheck under a remote stamp constructs no claim and records no denial, a real handshake still charges once`() {
+        // computenet-fh9cc: Precheck.policyCheck walks the same LinkPolicy chain
+        // as the handshake with CurrentPeer.get() as identity. The dry run must
+        // not charge (or record a LEDGER_FAILURE for) the stamped peer.
+        val ledger = RecordingLedger("p-host")
+        val rig = LinkRig(ledger, seed = 17)
+        val view = HostLiveView(rig.host, rig.registry)
+        val spec = GraphSpec(listOf(SpawnStep("s", CellFactory { LinkSource(it) })))
+        val boundary = listOf(BoundaryLink(rig.membraneRef, "exposedInlet", "s", "outlet", Direction.OUTBOUND))
+
+        val plan = CurrentPeer.with(mallory) { spec.precheck(boundary, view) }
+        plan.steps.map { it.result }.none { it is StepCheck.Refused } shouldBe true
+        ledger.charges.shouldBeEmpty()
+        rig.sink.denialCount shouldBe 0L
+
+        // A ledger that throws on any call: the dry run must not even reach it.
+        val throwing = LinkRig(ThrowingLedger, seed = 18)
+        val throwingView = HostLiveView(throwing.host, throwing.registry)
+        val throwingBoundary = listOf(BoundaryLink(throwing.membraneRef, "exposedInlet", "s", "outlet", Direction.OUTBOUND))
+        val throwingPlan = CurrentPeer.with(mallory) { spec.precheck(throwingBoundary, throwingView) }
+        throwingPlan.steps.map { it.result }.none { it is StepCheck.Refused } shouldBe true
+        throwing.sink.denialCount shouldBe 0L
+        throwing.letters.shouldBeEmpty()
+
+        // The real stamped handshake on the same inlet is charged exactly once.
+        rig.link(rig.source(), mallory).shouldBeInstanceOf<LinkResult.Connected>()
+        ledger.charges.size shouldBe 1
+        ledger.balance(mallory, ClaimClass.Link) shouldBe 9L
     }
 
     @Test

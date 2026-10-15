@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "15 passed, 0 failed".
+# Tests for verify-ready.sh. Stubs `bd` on PATH. Expect "20 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-ready.sh"}
@@ -14,8 +14,9 @@ case "$1" in
   show) [ -f "$CTRL/show.$2" ] || exit 1
         read -r p ty st < "$CTRL/show.$2"
         b=""; [ -f "$CTRL/base.$2" ] && read -r b < "$CTRL/base.$2"
-        printf '[{"id":"%s","parent":"%s","issue_type":"%s","status":"%s","metadata":{"base_branch":"%s"}}]\n' \
-          "$2" "$p" "$ty" "$st" "$b" ;;
+        l=""; [ -f "$CTRL/labels.$2" ] && read -r l < "$CTRL/labels.$2"
+        printf '[{"id":"%s","parent":"%s","issue_type":"%s","status":"%s","labels":[%s],"metadata":{"base_branch":"%s"}}]\n' \
+          "$2" "$p" "$ty" "$st" "$l" "$b" ;;
 esac
 STUB
 chmod +x "$ROOT/bin/bd"
@@ -64,6 +65,22 @@ echo "  t62: x [P2] (closed) via blocks" > "$ROOT/deps.t7"   # no show.t7: its b
 sh "$SCRIPT" t7 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && { pass=$((pass+1)); echo "  PASS own bd show failing exits 3, not a false BLOCKED"; } \
   || { fail=$((fail+1)); echo "  FAIL own bd show failing: exit $rc, wanted 3"; }
+
+# --- parked work is not ready (computenet-2ubdj) ---
+# A park has no blocking edge, so the edge test alone said READY for these:
+# computenet-n2jwi and computenet-zw4d0 (status=blocked, label human) and a
+# replan:pause deferred bead.
+: > "$ROOT/deps.p1"; echo "e bug blocked" > "$ROOT/show.p1"; echo '"human"' > "$ROOT/labels.p1"
+check "status=blocked label=human is PARKED, not READY (n2jwi)" p1 PARKED
+: > "$ROOT/deps.p2"; echo "e feature blocked" > "$ROOT/show.p2"
+check "status=blocked alone is PARKED (zw4d0)" p2 PARKED
+: > "$ROOT/deps.p3"; echo "e task deferred" > "$ROOT/show.p3"
+check "a deferred bead is PARKED" p3 PARKED
+: > "$ROOT/deps.p4"; echo "e task open" > "$ROOT/show.p4"; echo '"human"' > "$ROOT/labels.p4"
+check "label=human on an open bead is PARKED" p4 PARKED
+sh "$SCRIPT" p1 p2 p3 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 1 ] && { pass=$((pass+1)); echo "  PASS only parked ids exits 1 (none ready)"; } \
+  || { fail=$((fail+1)); echo "  FAIL only parked ids: exit $rc, wanted 1"; }
 
 # --- metadata.base_branch staleness (computenet-osax) ---
 note() { # $1 name, $2 id, $3 expected substring

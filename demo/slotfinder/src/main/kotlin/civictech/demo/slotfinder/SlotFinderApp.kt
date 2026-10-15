@@ -13,7 +13,15 @@ import civictech.cell.graph.lookupOrThrow
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.observe.observeAll
+import civictech.cell.observe.Observation
+import civictech.cell.observe.ObservationFrame
+import civictech.cell.observe.observation
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.FilterSetApi
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.GroupByApi
+import civictech.cell.data.op.QuorumSetCell
+import civictech.cell.data.op.QuorumSetApi
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
@@ -23,12 +31,7 @@ import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
 import java.net.URLDecoder
-import civictech.cell.data.op.FilterCell
-import civictech.cell.data.op.FilterSetApi
-import civictech.cell.data.op.GroupByCell
-import civictech.cell.data.op.GroupByApi
-import civictech.cell.data.op.QuorumSetCell
-import civictech.cell.data.op.QuorumSetApi
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Meeting-slot finder: three participants each maintain a set of available
@@ -201,12 +204,13 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         host.lookupOrThrow(tref).inlet.call
     }
 
-    // The observation edge: one composite sink folds every observed outlet into a
-    // materialized, thread-safe snapshot with built-in late-join catch-up — no hand-rolled
-    // hub cells, no synchronized mutable snapshot. Typed overloads (T08 finding 2): the
-    // element/key type flows from each TypedRef's API shape, so a wrong-shaped source
-    // here is a compile error, not an Any?-erased fold read back with an unchecked cast.
-    private val view = host.observeAll {
+    // The observation edge: each structural root set is an aligned group, and the
+    // observation assembles their latest views into one point-consistent frame with
+    // built-in late-join catch-up — no hand-rolled hub cells, no synchronized mutable
+    // snapshot. Typed overloads (T08 finding 2): the element/key type flows from each
+    // TypedRef's API shape, so a wrong-shaped source here is a compile error, not an
+    // Any?-erased fold read back with an unchecked cast.
+    private val view: Observation = host.observation {
         PARTICIPANTS.forEach { set(it, refs.participants.getValue(it)) }
         set("nearMiss", refs.nearMiss)
         set("common", refs.common)
@@ -215,7 +219,23 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         // [24-WL-07] / [KE4-39]: the observable half of a late drop — byDay's `late`
         // outlet (a SetDelta port not on GroupByApi, so observed by CellRef + name).
         set("late", refs.byDay.ref, outletName = "late")
+    }.let { inner ->
+        object : Observation by inner {
+            override fun current(): ObservationFrame {
+                observationCurrentReads.incrementAndGet()
+                return inner.current()
+            }
+        }
     }
+
+    internal val observationGroups: Map<String, String>
+        get() = view.current().groupOf
+
+    internal val observationGroupBufferedWaves: Map<String, Int>
+        get() = view.groups.associateWith { view.group(it).bufferedWaves }
+
+    /** Test-only proof that each rendered payload obtains one observation frame. */
+    internal val observationCurrentReads = AtomicLong()
 
     private val shell = DemoShell(port)
 
@@ -263,12 +283,14 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
     private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
+        val frame = view.current()
+
         // T08 finding 2: checked accessors — a wrong-shaped registration now
         // throws naming what was registered vs requested, instead of degrading
         // to a silently-empty panel (the prior `as? ... ?: emptySet()` unwrap).
-        fun slotsOf(name: String) = view.get<Set<Slot>>(name)
+        fun slotsOf(name: String) = frame.get<Set<Slot>>(name)
 
-        val byDay = view.get<Map<String, Long>>("byDay")
+        val byDay = frame.get<Map<String, Long>>("byDay")
 
         fun arr(values: Set<Slot>) =
             values.sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
@@ -289,12 +311,19 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
     fun stop() {
         inspector?.stop()
         shell.stop()
-        // T08 finding 4: stop this composite's listener-dispatch thread — the
-        // per-outlet ObserveCells close themselves via onDeactivate on despawn,
-        // but nothing despawns them for a demo that runs for the process
-        // lifetime, so stop() is this app's shutdown hook instead.
+        // Stop the canonical observation's group dispatchers; the demo keeps its
+        // graph alive for the process lifetime, so stop() is its shutdown hook.
         view.close()
     }
+}
+
+private inline fun <reified T> ObservationFrame.get(view: String): T {
+    require(view in views) { "no observe named '$view' (available: ${views.keys})" }
+    val value = views.getValue(view)
+    return value as? T ?: throw IllegalStateException(
+        "'$view' has snapshot type ${value?.let { it::class.simpleName } ?: "null"}, " +
+            "requested ${T::class.simpleName ?: T::class}",
+    )
 }
 
 fun main(args: Array<String>) {

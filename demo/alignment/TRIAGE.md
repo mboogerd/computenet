@@ -6,6 +6,8 @@ parts — multi-dimension rating, `value × factor ÷ cost` scoring, a
 Bradley–Terry pairwise→rating bridge, disagreement surfacing, a facilitator
 override. This adds the three integrations it was missing: real candidates in,
 machine raters alongside the human, and a bias-safe worklist a machine can walk.
+(Machine raters now feed a separate AI score; see `AiScoreTest` for the general
+mechanism.)
 
 ## What it is
 
@@ -18,24 +20,34 @@ One **standing round** — a single topic, `triage`, re-seeded in place — over
 | `urgency` | VALUE | 1.0 | can wait → needed now |
 
 The score is their weighted mean, which is the right single ordering. The 2×2 it
-necessarily flattens comes back as `quadrant` on every `/aggregate` row:
+necessarily flattens comes back as `quadrant` on every `/aggregate` row (and as
+`ai.quadrant` for the AI score):
 `do` (important + urgent), `schedule` (important, not urgent), `delegate`
 (urgent, not important), `drop` (neither), or `null` while either axis is
 unrated.
 
-Three rater classes, all **ordinary alignment participants in one ratings map**:
+Three rater classes, in **two populations**:
 
 - **human** — the Rate view's sliders, or the Compare view (place every idea on
   one axis at once; much faster for a whole backlog).
 - **coding agent** — pairwise, `POST /topics/triage/judge`, which `PairwiseFit`
-  turns into that agent's own `[1, 9]` ratings.
-- **Jev** — a direct scalar per (idea, dimension), under the participant name
-  `jev`, written at seed time.
+  turns into that agent's own `[1, 9]` ratings. It rates in the human population.
+- **the beads heuristic** — a direct scalar per (idea, dimension), written at
+  seed time as participant `ai:beads-heuristic-1` — the **AI** population, since
+  an `ai:` prefix is what makes a rater an AI (and people cannot take it). The
+  `-1` is its version: bump it when the weights change, so the new arithmetic is
+  a new rater beside the old.
 
-There is no separate aggregation path for machine judgement and no weighting of
-machines against people. A human disagreeing with Jev shows up exactly as two
-humans disagreeing: a spread of 2.0 or more on one (idea, dimension) sets
-`split` and the idea joins the board's Discuss group.
+Each population has its own score (`score` and `ai.score` on every `/aggregate`
+row); neither is weighted against the other. The ranking is the human score;
+rows nobody has rated yet read in AI-score order. A human disagreeing with the
+heuristic by 2.0 or more on a dimension names it in the row's `diverges`; `split`
+stays what it always meant, people disagreeing with people. Any configured
+`AiRater` (real Jev, with `TYPESAFE_API_KEY` set) also rates the triage topic
+from Setup's "Get AI ratings", into the same AI population.
+
+Until 2026-10 the heuristic was called "Jev" and wrote as participant `jev`
+into the *human* ratings; a re-seed drops those legacy rows.
 
 ## Run it
 
@@ -53,8 +65,8 @@ Then open `http://localhost:8097/t/triage`.
 `--seed-beads <workspace>` runs `bd -C <workspace> ready --type=epic --json`,
 creates the topic if absent, upserts one idea per ready epic **keyed by the bead
 id verbatim** (`computenet-8x9`, already a valid slug — so Phase 2 maps an
-ordered board back onto `bd` ids with no lookup table), and writes Jev's
-ratings. It is idempotent: an unchanged tracker appends nothing to the journal,
+ordered board back onto `bd` ids with no lookup table), and writes the
+heuristic's ratings. It is idempotent: an unchanged tracker appends nothing to the journal,
 so it is safe on every boot.
 
 **A failed seed writes nothing** (`computenet-1f8b4`). The candidate fetch runs
@@ -141,11 +153,11 @@ judgements on orderings you disagree with — the same two-phase discipline
 `/me` is a read of one participant's own state in board order: it tells an agent
 nothing about *where* to spend its next judgement.
 
-## The Jev design, and why it is arithmetic
+## The heuristic's design, and why it is arithmetic
 
-`demo/deliberate`'s `JevJudge` calls TypeSafe System One over HTTP and needs
-`TYPESAFE_API_KEY`. This one is **built fresh, self-contained, and makes no
-external call** (user decision, 2026-09-29).
+Real Jev (`TypeSafeJevRater`) calls TypeSafe System One over HTTP and needs
+`TYPESAFE_API_KEY`. The heuristic (`BeadsHeuristic`) is **self-contained and
+makes no external call** (user decision, 2026-09-29).
 
 The Eisenhower axes are the one place where that costs nothing, because **beads
 already carries the signal**. Importance and urgency here are questions about
@@ -181,7 +193,7 @@ whatever its label says. `a` is *cost of delay accrued* — an item untouched fo
 two months is treated as **more** urgent, because neglect is the failure this
 board exists to surface.
 
-### Jev rates the round, not the item
+### The heuristic rates the round, not the item
 
 The rank normalization is not a flourish, and it was measured rather than
 reasoned. An earlier version mapped the raw terms onto `[1, 9]` with absolute
@@ -193,16 +205,16 @@ structurally cross the midpoint and the 2×2 collapsed onto one corner.
 
 Rank-normalizing spreads any distribution, so the quadrants populate whatever
 the corpus looks like (`delegate=6 do=3 drop=4 schedule=5` on that same queue).
-It also makes Jev's claim an honest one — "these are the important ones *of this
+It also makes the heuristic's claim an honest one — "these are the important ones *of this
 set*" — and matches how a human uses the Compare view, placing every idea on one
 axis relative to the others rather than against an absolute anchor.
 
-**The consequence to know about:** Jev's ratings are relative, so a re-seed whose
-candidate set changed re-rates Jev. Human ratings are untouched, and an
+**The consequence to know about:** the heuristic's ratings are relative, so a
+re-seed whose candidate set changed re-rates it. Human ratings are untouched, and an
 unchanged set re-derives identical values, so the seed stays journal-silent.
 
 **Abstention is a real answer.** A candidate with no usable priority is absent
-from `Jev.rate`'s answer entirely and the seeding path writes no rating for it,
+from `BeadsHeuristic.rate`'s answer entirely and the seeding path writes no rating for it,
 leaving the slot *absent* — which is alignment's honest unrated state, never a
 middling 5. That mirrors the real `JevJudge`'s `knowledge` gate returning
 `OUTSIDE_KNOWLEDGE` whatever the score said: a judge that cannot see the input
@@ -210,11 +222,11 @@ should decline, not average. Abstainers are left out of the normalization too,
 so one unrateable row does not distort the rest of the round.
 
 **Where to calibrate.** There are no cap constants any more — the scaling is the
-round's own. The tuning surface is the two weight literals `Jev.rate` passes to
+round's own. The tuning surface is the two weight literals `BeadsHeuristic.rate` passes to
 `rawTerms`: `dependentWeight = 0.65` for importance and `ageWeight = 0.35` for
 urgency, with `priority` taking the remainder in both cases. They set which
 signal dominates each axis, and the first real round is expected to move them.
-Changing one re-rates Jev on the next seed and leaves every human rating
+Changing one re-rates the heuristic on the next seed and leaves every human rating
 untouched.
 
 ## Deliberately not in this phase
@@ -243,11 +255,11 @@ untouched.
 ```
 
 `TriageTest` covers the pure units — the `bd ready` parse (both JSON shapes,
-`bd`'s preamble, dropped and defaulted rows), Jev's arithmetic (the worked
+`bd`'s preamble, dropped and defaulted rows), the heuristic's arithmetic (the worked
 corners, scale bounds, cap saturation, abstention, axis independence) and the
 2×2 (corners, the midpoint rule, null while unrated). `TriageBoardTest` covers
 the board end to end against a fixture `CandidateSource` — seeding, bead-id
-keying, Jev's abstention arriving unrated, journal-silent re-seeding, a departed
-candidate keeping its ratings, the three rater classes in one population with
-`split` and `override`, the worklist's bias-safety and coverage ordering, and
+keying, the heuristic's abstention arriving unrated, journal-silent re-seeding,
+the legacy-`jev` cleanup, a departed candidate keeping its ratings, the human and
+AI populations with `diverges` and `override`, the worklist's bias-safety and coverage ordering, and
 restart over a journal.

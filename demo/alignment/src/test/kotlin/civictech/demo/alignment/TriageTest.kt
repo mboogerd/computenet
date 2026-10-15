@@ -8,11 +8,11 @@ import kotlin.test.assertTrue
 
 /**
  * The triage feature's pure units (feature computenet-i00bh): the `bd ready`
- * parse, [Jev]'s arithmetic, and [Eisenhower.quadrantOf]'s 2×2. All three are
+ * parse, [BeadsHeuristic]'s arithmetic, and [Eisenhower.quadrantOf]'s 2×2. All three are
  * free of HTTP and of the dataflow; the board end to end is [TriageBoardTest].
  *
  * Every expected number below is computed by hand from the formulas stated in
- * [Jev]'s KDoc, not read off this code.
+ * [BeadsHeuristic]'s KDoc, not read off this code.
  */
 class TriageTest {
 
@@ -60,7 +60,7 @@ class TriageTest {
 
     /**
      * Defaults and drops: no id is unusable so the row goes, a title falls back
-     * to the id, an out-of-range or absent priority becomes null (Jev's
+     * to the id, an out-of-range or absent priority becomes null (the heuristic's
      * abstention trigger), and a missing stamp is age 0 rather than a throw.
      */
     @Test
@@ -81,20 +81,20 @@ class TriageTest {
         assertEquals(emptyList(), BdCandidateSource.parse("no issues are ready\n", nowMillis))
     }
 
-    // ── Jev ──────────────────────────────────────────────────────────────
+    // ── BeadsHeuristic ──────────────────────────────────────────────────────────────
 
-    private fun importance(vararg c: Candidate) = Jev.rate(c.toList(), Eisenhower.IMPORTANCE)
+    private fun importance(vararg c: Candidate) = BeadsHeuristic.rate(c.toList(), Eisenhower.IMPORTANCE)
 
-    private fun urgency(vararg c: Candidate) = Jev.rate(c.toList(), Eisenhower.URGENCY)
+    private fun urgency(vararg c: Candidate) = BeadsHeuristic.rate(c.toList(), Eisenhower.URGENCY)
 
     /**
      * The scale's ends are always reached, whatever the corpus looks like: the
      * round's lowest raw term is 1.0 and its highest 9.0. This is the property
      * the absolute-cap version lacked, which put 16 of 18 real epics in DROP
-     * (see [Jev]'s KDoc).
+     * (see [BeadsHeuristic]'s KDoc).
      */
     @Test
-    fun `Jev spreads a round across the whole scale`() {
+    fun `the heuristic spreads a round across the whole scale`() {
         val low = candidate(id = "low", priority = 3, dependentCount = 0)
         val mid = candidate(id = "mid", priority = 2, dependentCount = 1)
         val high = candidate(id = "high", priority = 0, dependentCount = 4)
@@ -110,7 +110,7 @@ class TriageTest {
      * signal is rank-normalized rather than capped.
      */
     @Test
-    fun `Jev spreads a round in which no candidate has any dependents`() {
+    fun `the heuristic spreads a round in which no candidate has any dependents`() {
         val got = importance(
             candidate(id = "p3", priority = 3),
             candidate(id = "p1", priority = 1),
@@ -122,7 +122,7 @@ class TriageTest {
 
     /** Ties share the midpoint of the positions they span, so equal evidence ranks equally. */
     @Test
-    fun `Jev gives tied candidates the same mid-rank value`() {
+    fun `the heuristic gives tied candidates the same mid-rank value`() {
         val got = importance(
             candidate(id = "a", priority = 3),
             candidate(id = "b", priority = 1),
@@ -137,14 +137,14 @@ class TriageTest {
 
     /** Every output is on the rating scale, so no caller needs to clamp. */
     @Test
-    fun `Jev never leaves the 1 to 9 scale`() {
+    fun `the heuristic never leaves the 1 to 9 scale`() {
         val round = (0..3).flatMap { p ->
             listOf(0, 3, 500).flatMap { dep ->
                 listOf(0L, 30L, 9999L).map { age -> candidate("p$p-d$dep-a$age", p, dep, age) }
             }
         }
         for (dim in listOf(Eisenhower.IMPORTANCE, Eisenhower.URGENCY)) {
-            val got = Jev.rate(round, dim)
+            val got = BeadsHeuristic.rate(round, dim)
             assertEquals(round.size, got.size, dim)
             got.forEach { (id, v) -> assertTrue(RatingScale.valid(v), "$dim of $id was $v") }
         }
@@ -162,12 +162,12 @@ class TriageTest {
     }
 
     /**
-     * The knowledge gate: no priority means Jev declines, and the declining row
+     * The knowledge gate: no priority means the heuristic declines, and the declining row
      * is left out of the normalization too, so one unrateable candidate does not
      * distort the rest of the round.
      */
     @Test
-    fun `Jev abstains without a priority, and the abstainer does not distort the round`() {
+    fun `the heuristic abstains without a priority, and the abstainer does not distort the round`() {
         val blind = candidate(id = "blind", priority = null, dependentCount = 5, ageDays = 60)
         val low = candidate(id = "low", priority = 3)
         val high = candidate(id = "high", priority = 0)
@@ -177,9 +177,9 @@ class TriageTest {
     }
 
     @Test
-    fun `Jev rates only the two Eisenhower axes`() {
-        assertEquals(emptyMap(), Jev.rate(listOf(candidate()), "effort"))
-        assertEquals(emptyMap(), Jev.rate(emptyList(), Eisenhower.IMPORTANCE))
+    fun `the heuristic rates only the two Eisenhower axes`() {
+        assertEquals(emptyMap(), BeadsHeuristic.rate(listOf(candidate()), "effort"))
+        assertEquals(emptyMap(), BeadsHeuristic.rate(emptyList(), Eisenhower.IMPORTANCE))
     }
 
     /**
@@ -189,12 +189,12 @@ class TriageTest {
      * (0.65).
      */
     @Test
-    fun `Jev's axes are independent enough to populate opposite quadrants`() {
+    fun `the heuristic's axes are independent enough to populate opposite quadrants`() {
         val structural = candidate(id = "structural", priority = 3, dependentCount = 5, ageDays = 0)
         val pressing = candidate(id = "pressing", priority = 0, dependentCount = 0, ageDays = 60)
         val round = listOf(structural, pressing)
-        val imp = Jev.rate(round, Eisenhower.IMPORTANCE)
-        val urg = Jev.rate(round, Eisenhower.URGENCY)
+        val imp = BeadsHeuristic.rate(round, Eisenhower.IMPORTANCE)
+        val urg = BeadsHeuristic.rate(round, Eisenhower.URGENCY)
         assertTrue(near(9.0, imp["structural"]) && near(1.0, imp["pressing"]), "importance follows dependents: $imp")
         assertTrue(near(9.0, urg["pressing"]) && near(1.0, urg["structural"]), "urgency follows priority: $urg")
         assertEquals(Quadrant.SCHEDULE, quadrantOf(imp, urg, "structural"), "important, not urgent")

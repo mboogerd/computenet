@@ -59,4 +59,38 @@ class DemoServerTest {
             app.stop()
         }
     }
+
+    @Test
+    fun `state discloses cross-root staleness for independent observation groups`() {
+        val app = DemoApp(port = 0).start()
+        try {
+            val base = "http://localhost:${app.boundPort}"
+            val probe = HttpProbe(base)
+            fun op(action: String, item: String) = probe.post("user=tester&action=$action&item=$item")
+
+            // Establish the same item writer in both the aligned items group and
+            // the independent wanted group, then advance only the item group.
+            op("vote", "bread")
+            op("add", "bread")
+            awaitSseData("$base/events", timeoutMs = 5_000) { "\"wanted\":[\"bread\"]" in it }
+            op("add", "apples")
+
+            val lag = Regex(""""items\+produce\|wanted":\{"independent":false,"lagBySource":\{([^}]*)\}\}""")
+            val json = awaitSseData("$base/events", timeoutMs = 5_000) {
+                "\"apples\"" in it && !lag.find(it)?.groupValues?.get(1).isNullOrBlank()
+            }
+
+            assertTrue(
+                "\"items+produce|votes\":{\"independent\":true,\"lagBySource\":{}" in json,
+                "independent item/vote groups were not disclosed: $json",
+            )
+            assertTrue(
+                !lag.find(json)?.groupValues?.get(1).isNullOrBlank(),
+                "item/wanted shared-source lag was not disclosed: $json",
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
 }

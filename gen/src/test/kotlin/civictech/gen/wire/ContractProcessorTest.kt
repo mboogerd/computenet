@@ -266,10 +266,10 @@ class ContractProcessorTest {
                 "public class $moduleClassName : ContractModule {\n" +
                 "  override val contracts: List<ContractDescriptor> = listOf(\n" +
                 "        ContractDescriptor(contractId = ${pingContractId}L, fqn = \"example.PingContract\", management = false, effect = false, methods = listOf(\n" +
-                "          MethodDescriptor(methodId = ${pingContractMethodId}L, name = \"ping\", jvmDescriptor = \"(Ljava/lang/String;)V\", exclusive = false, magnitude = false, idempotentMerge = false, keyIndex = -1),\n" +
+                "          MethodDescriptor(methodId = ${pingContractMethodId}L, name = \"ping\", jvmDescriptor = \"(Ljava/lang/String;)V\", exclusive = false, magnitude = false, idempotentMerge = false, keyIndex = -1, exclusiveParameters = listOf()),\n" +
                 "        )),\n" +
                 "        ContractDescriptor(contractId = ${pingProtocolContractId}L, fqn = \"example.PingProtocol\", management = true, effect = false, methods = listOf(\n" +
-                "          MethodDescriptor(methodId = ${pingProtocolMethodId}L, name = \"ping\", jvmDescriptor = \"(Ljava/lang/String;)V\", exclusive = false, magnitude = false, idempotentMerge = false, keyIndex = -1),\n" +
+                "          MethodDescriptor(methodId = ${pingProtocolMethodId}L, name = \"ping\", jvmDescriptor = \"(Ljava/lang/String;)V\", exclusive = false, magnitude = false, idempotentMerge = false, keyIndex = -1, exclusiveParameters = listOf()),\n" +
                 "        )),\n" +
                 "      )\n" +
                 "\n" +
@@ -798,6 +798,38 @@ class ContractProcessorTest {
 
         val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
         assertEquals(false, exclusiveBitOf(table, "push"), table)
+    }
+
+    // computenet-dmwl: the descriptor names WHICH parameters carry an exclusive, so the
+    // runtime discharge walk is bounded to them. A parameter declared as a holder of `Any`
+    // is invisible to the scan and must not be listed.
+    @Test
+    fun `exclusiveParameters lists only parameters whose declared type reaches an exclusive`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package civictech.cell
+            class Owned<T : Any>(private val value: T)
+            """.trimIndent(),
+            """
+            package example
+            import civictech.cell.Owned
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Key
+
+            class Holder(val any: Any)
+
+            @Contract
+            interface PushContract {
+                fun push(@Key item: Owned<String>, holder: Holder)
+                fun plain(@Key name: String, holder: Holder)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertTrue(Regex("""name = "push",.*?exclusive = true,.*?exclusiveParameters = listOf\(0\)""").containsMatchIn(table), table)
+        assertTrue(Regex("""name = "plain",.*?exclusive = false,.*?exclusiveParameters = listOf\(\)""").containsMatchIn(table), table)
     }
 
     /** Reads one `MethodDescriptor` row's `exclusive` flag out of a whitespace-normalised table. */

@@ -103,6 +103,18 @@
       "file": "payloads/WV-PAYLOAD-ASSIGNMENT-01.json"
     },
     {
+      "id": "WV-PAYLOAD-SIGNEDWRITE-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-SIGNEDWRITE-01.json"
+    },
+    {
+      "id": "WV-PAYLOAD-SIGNEDWRITEBATCH-01",
+      "category": "payloads",
+      "kind": "frame",
+      "file": "payloads/WV-PAYLOAD-SIGNEDWRITEBATCH-01.json"
+    },
+    {
       "id": "WV-INTEREST-TOTAL-01",
       "category": "payloads",
       "kind": "frame",
@@ -335,14 +347,103 @@
       "category": "payloads",
       "kind": "frame",
       "file": "payloads/WV-PAYLOAD-BORROWED-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-CONTEXT-PRESENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-CONTEXT-PRESENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-CONTEXT-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-CONTEXT-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-PROTOCOL-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-PROTOCOL-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-NATURES-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-NATURES-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-NATURES-EMPTY-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-NATURES-EMPTY-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-NATURES-UNKNOWN-AXIS-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-NATURES-UNKNOWN-AXIS-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-ROUTINGEPOCH-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-ROUTINGEPOCH-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-ROUTINGEPOCH-DECODE-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-ROUTINGEPOCH-DECODE-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-SIGNED-ABSENT-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-SIGNED-ABSENT-01.json"
+    },
+    {
+      "id": "WV-ADDITIVE-SIGNED-DECODE-01",
+      "category": "frames/additive",
+      "kind": "frame",
+      "file": "frames/additive/WV-ADDITIVE-SIGNED-DECODE-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-EDGEOPEN-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-EDGEOPEN-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-EDGECLOSE-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-EDGECLOSE-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-ATTENTION-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-ATTENTION-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-PROGRESS-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-PROGRESS-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-SATURATION-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-SATURATION-01.json"
+    },
+    {
+      "id": "WV-PORT-PROTOCOL-STATEREQUEST-01",
+      "category": "frames/port-protocol",
+      "kind": "frame",
+      "file": "frames/port-protocol/WV-PORT-PROTOCOL-STATEREQUEST-01.json"
     }
   ],
-  "pending": [
-    {"discriminator": "Attention", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "Progress", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "SaturationSignal", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "EdgeOpen", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "EdgeClose", "owedBy": "computenet-ncz.4"},
-    {"discriminator": "StateRequest", "owedBy": "computenet-ncz.4"}
-  ]
+  "pending": []
 }

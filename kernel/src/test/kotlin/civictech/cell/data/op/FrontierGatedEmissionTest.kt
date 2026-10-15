@@ -535,28 +535,19 @@ class FrontierGatedEmissionTest {
      * mirror image for a right-kind element.
      *
      * The wave that an arm structurally cannot deliver is retired by that arm's
-     * CP-A3 absorb-ack ([civictech.cell.control.absorbAck]) — but the ack is
-     * **edge-local**. It is minted by the absorbing operator onto its own outlet
-     * links and **no plain cell relays it**: a `FlatMapSetCell`/`FilterCell` hop
-     * has no [civictech.cell.protocol.Protocols.Progress] handler, so an ack
-     * arriving on its inlet neither advances anything nor is re-emitted. Only a
-     * cell that installs a frontier ([WaveGate], `WaveFrontier`,
-     * `CoalescingCombineCell`, `AlignedCompositeCell`) consumes one.
-     *
-     * So the depth of the silent arm decides everything, and it is the *depth*,
-     * not the disjointness, that breaks the gate:
+     * CP-A3 absorb-ack ([civictech.cell.control.absorbAck]). Standard transparent
+     * set operators relay that metadata-plane [civictech.cell.control.Progress]
+     * unchanged until it reaches a frontier. This pair pins both delivery paths:
      *
      *  - **one hop** (the absorber links straight into the gated inlet): the ack
-     *    lands on the expected edge, the wave completes, the gate is correct —
-     *    this is `a gated cell settles a wave one arm absorbs entirely` above;
-     *  - **two or more hops** (an absorber with a pure hop below it, which is the
-     *    AGO1 relation leg's shape): the ack dies at the hop, the expected edge
-     *    never settles for that wave, and the wave is held until the arm delivers
-     *    a *later* wave — so mid-stream output LAGS, and at rest, when the final
-     *    wave is one the arm never carries, output is WITHHELD PERMANENTLY.
+     *    lands directly on the expected edge;
+     *  - **two hops** (the AGO1 relation leg's reduced shape): the same ack
+     *    crosses an identity [FlatMapSetCell], then lands on the expected edge.
      *
-     * That is the answer to the discriminating question this test exists for:
-     * **both, and which one you see depends only on whether a later wave follows**.
+     * Both must settle at rest and publish the matched value in wave 2. The
+     * `CombineDisjointArmRig` below deliberately retains a custom [MapArm] with
+     * no relay, preserving the residual control for an unconverted transparent
+     * hop rather than weakening what this pair protects.
      */
     private inner class DisjointArmRig(hops: Int) {
         val controller = SimulationController()
@@ -628,36 +619,26 @@ class FrontierGatedEmissionTest {
     }
 
     @Test
-    fun `disjoint-wave arms TWO hops deep withhold output at rest - the absorb-ack dies at the intervening hop`() {
+    fun `disjoint-wave arms TWO hops deep settle at rest through the intervening FlatMapSetCell relay`() {
         val rig = DisjointArmRig(hops = 2)
 
         rig.send(1L, "L1")
-        withClue("the right arm's ack died at its identity hop, so wave 1 never completes") {
-            rig.join.bufferedWaves shouldBe 1
+        withClue("the right arm's ack crosses its identity hop, so wave 1 settles") {
+            rig.join.bufferedWaves shouldBe 0
+            rig.seen.shouldBeEmpty()
         }
 
         rig.send(2L, "R1")
-        withClue("WITHHELD AT REST: L1 is matched and live, and nothing has been emitted") {
-            // wave 1 did retire here — the right arm's real wave-2 delta advanced
-            // its edge watermark past wave 1 (monotone `max`), which is the third
-            // advance mechanism standing in for the ack that died. But it retired
-            // BEFORE wave 2's right fold was applied, so it reconciled L1 against
-            // an empty right side and emitted nothing; and wave 2 itself, the wave
-            // that actually makes L1 enter, has no later left wave to release it.
-            rig.seen.shouldBeEmpty()
-            rig.join.bufferedWaves shouldBe 1
-        }
-
-        // ...and the withholding is released only by a LATER wave on the stalled
-        // arm (monotone `max` on the per-edge watermark), never by quiescence:
-        // this is the LAG half of the same mechanism.
-        rig.send(3L, "L3")
-        withClue("waves 1 and 2 flush once the left arm delivers wave 3") {
+        withClue("the left arm's relayed ack settles wave 2 with the matching right value") {
+            rig.join.bufferedWaves shouldBe 0
             rig.seen.single().delta.adds.keys shouldBe setOf("L1")
             rig.seen.single().timestamp.counter shouldBe 2L
         }
-        withClue("wave 3 is now the one held: the right arm never carries it") {
-            rig.join.bufferedWaves shouldBe 1
+
+        rig.send(3L, "L3")
+        withClue("the final disjoint wave also settles at quiescence without another real arm delivery") {
+            rig.join.bufferedWaves shouldBe 0
+            rig.seen.size shouldBe 1
         }
     }
 

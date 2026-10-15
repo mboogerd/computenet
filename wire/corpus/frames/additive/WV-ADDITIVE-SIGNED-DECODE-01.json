@@ -1,0 +1,30 @@
+{
+  "id": "WV-ADDITIVE-SIGNED-DECODE-01",
+  "title": "A decode-only PORT_API frame reads announcement signing fields",
+  "category": "frames/additive",
+  "kind": "frame",
+  "covers": ["WIR1-C06", "WIR1-C09", "WIR1-I02", "WIR1-I19", "WIR1-C16", "DSC1-WIRE-01"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "direction": "decode",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{"type": "Stall", "fields": {"reason": "SUSPENDED"}}],
+      "signature": "c2lnbmF0dXJlLWJ5dGVzLW5vdC1hLXJlYWwtc2lnbmF0dXJl",
+      "signerKeyId": "key-1",
+      "sigCounter": 7,
+      "notAfter": 1700000000000
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]],\"signature\":\"c2lnbmF0dXJlLWJ5dGVzLW5vdC1hLXJlYWwtc2lnbmF0dXJl\",\"signerKeyId\":\"key-1\",\"sigCounter\":7,\"notAfter\":1700000000000}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU3RhbGwiLHsicmVhc29uIjoiU1VTUEVOREVEIn1dXSwic2lnbmF0dXJlIjoiYzJsbmJtRjBkWEpsTFdKNWRHVnpMVzV2ZEMxaExYSmxZV3d0YzJsbmJtRjBkWEpsIiwic2lnbmVyS2V5SWQiOiJrZXktMSIsInNpZ0NvdW50ZXIiOjcsIm5vdEFmdGVyIjoxNzAwMDAwMDAwMDAwfQ=="
+  },
+  "notes": "pinned-because-current: decodeFrame reads the signing quartet but never verifies it here; verification belongs to DSC1 ([DSC1-WIRE-01], epic computenet-ssa). The literals are transcribed from WireCodecTest's BS-18 additive-signing test. Encoding remains unsigned, so this decode-only vector's absent twin is WV-ADDITIVE-SIGNED-ABSENT-01 and [WIR1-I19] is asserted."
+}

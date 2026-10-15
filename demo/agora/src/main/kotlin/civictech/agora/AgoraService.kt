@@ -5,7 +5,10 @@ import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.ReplayScope
+import civictech.cell.Stateful
+import civictech.cell.data.delta.MapDelta
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
@@ -18,7 +21,76 @@ import civictech.cell.graph.UnlinkStep
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.inlet
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.link.LinkOptions
+import civictech.cell.observe.Observation
+import civictech.cell.observe.get
+import civictech.cell.observe.observation
+import civictech.cell.onEach
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.registerPort
+import java.io.Serializable
+
+private const val CREDENCES_VIEW = "credences"
+
+private val AGORA_HUB_REF =
+    CellRef(java.util.UUID.nameUUIDFromBytes("agora:hub".toByteArray()))
+
+private val AGORA_OBSERVATION_REF =
+    CellRef(java.util.UUID.nameUUIDFromBytes("agora:observation".toByteArray()))
+
+/**
+ * Dynamic credence ingress in front of Agora's canonical app-edge observation.
+ *
+ * Claims and edges are created after the observation itself, so their outlets
+ * cannot be registered as a fixed builder block. They continue to link to this
+ * stable source, which translates each [CredenceUpdate] into the canonical
+ * map-delta vocabulary consumed by `host.observation { map(...) }`.
+ *
+ * The source keeps the historical `agora:hub` ref and the old [CredenceView]
+ * snapshot shape. Journal replay and checkpoints therefore still address and
+ * restore the same durable fold; [publishCurrent] seeds the derived observation
+ * after recovery, including from a checkpoint written before the migration.
+ */
+class CredenceObservationSource internal constructor(
+    override val ref: CellRef,
+    onUpdate: (CellRef, Double) -> Unit,
+) : Cell, Stateful {
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<CredenceUpdate>>())
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<CellRef, Double>>>())
+
+    private val fold = CredenceView(onUpdate)
+    private lateinit var observation: Observation
+
+    init {
+        inlet.onEach { update ->
+            if (fold.apply(update)) {
+                outlet.call.propagate(MapDelta(mapOf(update.source to update.credence), emptySet()))
+            }
+        }
+        outlet.catchUpOnLinked {
+            fold.current().takeIf { it.isNotEmpty() }?.let { MapDelta(it, emptySet()) }
+        }
+    }
+
+    internal fun attach(observation: Observation) {
+        check(!this::observation.isInitialized) { "credence observation already attached" }
+        this.observation = observation
+    }
+
+    internal fun publishCurrent() {
+        fold.current().takeIf { it.isNotEmpty() }
+            ?.let { outlet.call.propagate(MapDelta(it, emptySet())) }
+    }
+
+    fun credenceOf(ref: CellRef): Double? =
+        observation.get<Map<CellRef, Double>>(CREDENCES_VIEW)[ref]
+
+    override fun snapshot(): Serializable = fold.snapshot()
+
+    override fun restore(state: Serializable) = fold.restore(state)
+}
 
 /** The durable construction record for one claim. */
 data class ClaimFactory(
@@ -83,7 +155,7 @@ private class RemovalIntentCell(override val ref: CellRef) : Cell
  * magnitude-based prioritization remains active even for co-hosted cells, and
  * the topology records the same links the kernel admits for cycle safety. Hops
  * into a `ClaimCell` or `EdgeCell` use their registered port-name strings; the
- * `hub` (`ObserveCell`, generic) keeps the reified string form.
+ * app-local credence source keeps the reified string form.
  */
 class AgoraService(
     private val host: ManagedHost,
@@ -116,11 +188,10 @@ class AgoraService(
     private val manage = host.managementInlet.call
     private val context = context ?: ApplyContext(host)
 
-    // deterministic ref: journaled hub frames re-deliver after a restart
-    val hub = civictech.cell.observe.ObserveCell(
-        CredenceView(onCredence),
-        ref = CellRef(java.util.UUID.nameUUIDFromBytes("agora:hub".toByteArray())),
-    )
+    // Stable ingress identity: journaled credence frames re-deliver after a restart.
+    val hub = CredenceObservationSource(AGORA_HUB_REF, onCredence)
+
+    private val observation: Observation
 
     private val cells = mutableMapOf<CellRef, ClaimCell>()
 
@@ -141,8 +212,24 @@ class AgoraService(
     init {
         require(this.context.host === host) { "AgoraService context belongs to a different host" }
         manage.spawn(hub)
+        observation = host.observation(groupRef = { AGORA_OBSERVATION_REF }) {
+            // This app-owned source is the explicit alignment boundary for a
+            // dynamically growing set of claim/edge feeds.
+            unchecked(CREDENCES_VIEW)
+            map(CREDENCES_VIEW, hub.ref)
+        }
+        hub.attach(observation)
         this.context.adopt(HUB_HANDLE, hub.ref)
     }
+
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
+
+    internal val observationGroupRef: CellRef
+        get() = observation.group(CREDENCES_VIEW).ref
+
+    internal val observationBufferedWaves: Int
+        get() = observation.bufferedWaves
 
     /** Apply one claim and its hub link as one write-ahead topology delta. */
     fun createClaim(
@@ -271,6 +358,7 @@ class AgoraService(
             nodes.putAll(rebuiltNodes)
         }
         rebuiltCells.values.forEach { it.catchUp = true }
+        hub.publishCurrent()
     }
 
     /**
@@ -402,8 +490,9 @@ class AgoraService(
     }
 
     /**
-     * Every cell instance this service spawned and still holds: [hub] plus every
-     * live claim and edge cell. A point-in-time copy for callers at rest — the
+     * Every cell instance this service spawned and still holds: [hub], its
+     * canonical observation group, and every live claim and edge cell. A
+     * point-in-time copy for callers at rest — the
      * underlying map is mutated by [createClaim]/[createEdge]/[remove] on the
      * app's mutation thread, so a caller racing those sees one side of the race.
      *
@@ -412,7 +501,9 @@ class AgoraService(
      * *all* of the spawned instances or the reconstructor refuses with
      * `GRAPH_SOURCE_INCOMPLETE`.
      */
-    fun cells(): Collection<Cell> = synchronized(nodesLock) { listOf<Cell>(hub) + cells.values.toList() }
+    fun cells(): Collection<Cell> = synchronized(nodesLock) {
+        listOf<Cell>(hub, observation.group(CREDENCES_VIEW)) + cells.values.toList()
+    }
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }
 

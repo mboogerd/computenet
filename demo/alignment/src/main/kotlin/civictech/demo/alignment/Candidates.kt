@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 /**
  * One triage candidate: a beads issue to be rated (feature computenet-i00bh).
  *
- * The fields are exactly those `bd ready --json` emits and that [Jev] reads —
+ * The fields are exactly those `bd ready --json` emits and that [BeadsHeuristic] reads —
  * nothing is derived here, so a candidate is a faithful record of what the
  * tracker said at ingest time. [id] is the bead id verbatim (`computenet-8x9`),
  * which is already a valid [slug], so it becomes the alignment idea's id
@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
  * lookup table.
  *
  * [priority] is beads' own scale — 0 (most urgent) to 3 — and null when the
- * export carried no usable value, which is [Jev]'s abstention trigger.
+ * export carried no usable value, which is [BeadsHeuristic]'s abstention trigger.
  * [dependentCount] is how many issues depend on this one, [ageDays] the whole
  * days since `updated_at`.
  */

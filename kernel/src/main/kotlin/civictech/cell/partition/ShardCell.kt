@@ -52,7 +52,7 @@ import java.util.UUID
  * and keeps sheddable elements, so a flip forks a group across two shards and
  * the board diverges from a batch group-by.
  */
-class ShardCell<E>(
+open class ShardCell<E>(
     override val ref: CellRef,
     private val keyFn: (E) -> Any?,
     initialInterest: Interest,

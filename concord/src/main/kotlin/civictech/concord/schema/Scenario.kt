@@ -145,6 +145,13 @@ data class CellSpec(
     /** Logical replica group this cell is a member of (dist profile). */
     @SerialName("replica-of") val replicaOf: String? = null,
     /**
+     * Per-principal write authority for a replicated slice (dist profile,
+     * `[43-FLOW-04]`). Present only with [replicaOf]: the driver installs the
+     * authority adapter on that replica and resolves the scenario-local actor
+     * name to its deterministic signing identity.
+     */
+    val authority: AuthoritySpec? = null,
+    /**
      * Interest-scoped instance-set assignment (dist profile, spec 40/42
      * §Interest-scoped instance sets, `42-INTEREST-01`). Optional and additive
      * (W4-A followup): absent ⇒ the kernel's own default (total interest —
@@ -154,6 +161,13 @@ data class CellSpec(
      * before the replica joins the mesh (`KernelDriverDist.spawnReplica`).
      */
     val interest: InterestSpec? = null,
+    /**
+     * A lazily materialized keyed family (`computenet-vb7aq`,
+     * `42-INTEREST-SPAWN-01`). Present only when [type] is a catalog cell the
+     * driver admits as a family member; today that is `set-source`. The cell id
+     * names the family handle, not a cell with ports or a view of its own.
+     */
+    val family: FamilySpec? = null,
     /**
      * Window descriptor (M11.6 "windowing = key derivation",
      * `24-data-cells.md` §Grouped aggregation, `24-OP-WINDOW-01`/`-02`):
@@ -188,6 +202,13 @@ data class CellSpec(
      * explicit waterline wiring: `concord/schema/scenario.md` §`lateness`.
      */
     val lateness: Long? = null,
+)
+
+/** The closed write-authority descriptor admitted by the Concord dist binding. */
+@Serializable
+data class AuthoritySpec(
+    /** Scenario-local actor handle naming the slice's initial principal. */
+    val principal: String,
 )
 
 /**
@@ -237,6 +258,18 @@ data class InterestSpec(
     @SerialName("total-slots") val totalSlots: Int? = null,
     /** Half-open `[lo, hi)` integer ranges this instance admits, over a numeric key. */
     val ranges: List<List<Long>>? = null,
+)
+
+/**
+ * A keyed-family descriptor (`computenet-vb7aq`, `42-INTEREST-SPAWN-01`).
+ * Long keys are the only neutral family-key vocabulary today. When
+ * [spawnOnInterest] is true, bounded interests declared on the family's host
+ * materialize their named members; false keeps the family touch-driven.
+ */
+@Serializable
+data class FamilySpec(
+    val keys: String = "long",
+    @SerialName("spawn-on-interest") val spawnOnInterest: Boolean = false,
 )
 
 /**

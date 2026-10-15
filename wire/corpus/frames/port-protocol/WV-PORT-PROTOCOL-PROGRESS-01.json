@@ -1,0 +1,32 @@
+{
+  "id": "WV-PORT-PROTOCOL-PROGRESS-01",
+  "title": "Progress crosses as a downstream PORT_PROTOCOL frame",
+  "category": "frames/port-protocol",
+  "kind": "frame",
+  "covers": ["WIR1-C05", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "41 point 4", "WIR1-C04", "WIR1-I10", "WIR1-C06"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": 0,
+      "methodId": 0,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000043"},
+      "portName": "inlet",
+      "type": "PORT_PROTOCOL",
+      "protocolId": "progress",
+      "protocolMessage": {"type": "Progress", "fields": {"sourceId": "00000000-0000-0000-0000-0000000000b1", "thru": 41}},
+      "edge": {
+        "id": "00000000-0000-0000-0000-00000000e001",
+        "fromRef": {"id": "00000000-0000-0000-0000-0000000000c1", "cell": {"id": "00000000-0000-0000-0000-000000000042"}},
+        "fromCell": {"id": "00000000-0000-0000-0000-000000000042"},
+        "fromPortName": "outlet",
+        "toRef": {"id": "00000000-0000-0000-0000-0000000000c2", "cell": {"id": "00000000-0000-0000-0000-000000000043"}},
+        "toCell": {"id": "00000000-0000-0000-0000-000000000043"},
+        "toPortName": "inlet"
+      }
+    }
+  },
+  "encoded": {"utf8": "{\"contractId\":0,\"methodId\":0,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"portName\":\"inlet\",\"type\":\"PORT_PROTOCOL\",\"protocolId\":\"progress\",\"protocolMessage\":[\"Progress\",{\"sourceId\":\"00000000-0000-0000-0000-0000000000b1\",\"thru\":41}],\"edge\":{\"id\":\"00000000-0000-0000-0000-00000000e001\",\"fromRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c1\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"}},\"fromCell\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"fromPortName\":\"outlet\",\"toRef\":{\"id\":\"00000000-0000-0000-0000-0000000000c2\",\"cell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"}},\"toCell\":{\"id\":\"00000000-0000-0000-0000-000000000043\"},\"toPortName\":\"inlet\"}}", "base64": "eyJjb250cmFjdElkIjowLCJtZXRob2RJZCI6MCwiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfUFJPVE9DT0wiLCJwcm90b2NvbElkIjoicHJvZ3Jlc3MiLCJwcm90b2NvbE1lc3NhZ2UiOlsiUHJvZ3Jlc3MiLHsic291cmNlSWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwYjEiLCJ0aHJ1Ijo0MX1dLCJlZGdlIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDBlMDAxIiwiZnJvbVJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDBjMSIsImNlbGwiOnsiaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDIifX0sImZyb21DZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQyIn0sImZyb21Qb3J0TmFtZSI6Im91dGxldCIsInRvUmVmIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMGMyIiwiY2VsbCI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MyJ9fSwidG9DZWxsIjp7ImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDQzIn0sInRvUG9ydE5hbWUiOiJpbmxldCJ9fQ=="},
+  "notes": "Pins the downstream delivery target (consumer cell …43/inlet) for the shared edge per ncz.4-D7. contractId/methodId are required 0/0 and emitted; protocolId, protocolMessage, and the full edge are present. Default natures, args, context, and version are absent."
+}

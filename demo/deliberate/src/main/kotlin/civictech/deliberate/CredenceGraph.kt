@@ -1,7 +1,10 @@
 package civictech.deliberate
 
 import civictech.agora.cell.Polarity
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Propagate
+import civictech.cell.data.delta.MapDelta
 import civictech.cell.graph.ApplyContext
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
@@ -13,8 +16,14 @@ import civictech.cell.graph.TopologyFold
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.inlet
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.link.LinkOptions
-import civictech.cell.observe.ObserveCell
+import civictech.cell.observe.Observation
+import civictech.cell.observe.observation
+import civictech.cell.onEach
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.registerPort
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -83,9 +92,55 @@ data class IssueFactory(
 }
 
 /**
+ * Adapts the deliberate graph's domain-valued fan-in to the canonical
+ * observation builder's map fold. The cell is a protocol adapter, not the
+ * app-facing materialization: [CredenceGraph.Hub.current] reads the
+ * [Observation] behind it.
+ *
+ * [equivalent] preserves the effective-change rules of the former custom
+ * views (notably, scheduling-only `size` changes do not publish a new frame).
+ */
+private class ObservationMapFeed<D : Any>(
+    override val ref: CellRef,
+    private val keyOf: (D) -> CellRef,
+    private val equivalent: (D, D) -> Boolean,
+    private val onEffectiveChange: (() -> Unit)? = null,
+) : Cell {
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<D>>())
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<CellRef, D>>>())
+
+    private val stateLock = Any()
+    private val latest = linkedMapOf<CellRef, D>()
+
+    init {
+        inlet.onEach { value ->
+            val delta = synchronized(stateLock) {
+                val key = keyOf(value)
+                val previous = latest[key]
+                if (previous != null && equivalent(previous, value)) {
+                    null
+                } else {
+                    latest[key] = value
+                    MapDelta(mapOf(key to value), emptySet())
+                }
+            }
+            if (delta != null) {
+                onEffectiveChange?.invoke()
+                outlet.call.propagate(delta)
+            }
+        }
+        outlet.catchUpOnLinked {
+            synchronized(stateLock) {
+                if (latest.isEmpty()) null else MapDelta(latest.toMap(), emptySet())
+            }
+        }
+    }
+}
+
+/**
  * One cell graph for every credence layer (SPEC CRED-04): a [ClaimNode] per
  * claim, an [EdgeNode] per edge, every credence a vector over [layers], and a
- * hub fold ([CredenceHubView]) the snapshot reads. Graph management — the
+ * canonical observation map the snapshot reads. Graph management — the
  * index, cycle-head designation, wiring — is modelled on agora's
  * `AgoraService`: all wiring is admitted through the host's staged link
  * primitive, so cycle admission, topology bookkeeping, EdgeClose ordering,
@@ -153,6 +208,51 @@ class CredenceGraph(
     /** One link the graph installed: [outlet] of cell [from] streams to [inlet] of cell [to]. */
     data class Wire(val from: CellRef, val outlet: String, val to: CellRef, val inlet: String)
 
+    /**
+     * A stable dynamic fan-in endpoint whose app-facing read is one canonical
+     * one-view [Observation]. [ref] remains the topology target used by old
+     * journals; [current] exposes only the canonical observation's snapshot.
+     */
+    class Hub<D : Any> internal constructor(
+        host: ManagedHost,
+        ref: CellRef,
+        observationRef: CellRef,
+        private val viewName: String,
+        keyOf: (D) -> CellRef,
+        equivalent: (D, D) -> Boolean,
+        onEffectiveChange: (() -> Unit)? = null,
+        onPublication: (() -> Unit)? = null,
+    ) {
+        private val feed = ObservationMapFeed(ref, keyOf, equivalent, onEffectiveChange)
+        private val observation: Observation = run {
+            host.managementInlet.call.spawn(feed)
+            host.observation(groupRef = { observationRef }) {
+                map(viewName, feed.ref)
+            }
+        }
+
+        init {
+            if (onPublication != null) {
+                // onChange has late-join catch-up. Skip that initial empty
+                // frame; dispatcher ordering guarantees later publications
+                // cannot overtake it.
+                var caughtUp = false
+                observation.onChange {
+                    if (caughtUp) onPublication() else caughtUp = true
+                }
+            }
+        }
+
+        val ref: CellRef get() = feed.ref
+
+        @Suppress("UNCHECKED_CAST")
+        fun current(): Map<CellRef, D> =
+            observation.current().views.getValue(viewName) as Map<CellRef, D>
+
+        internal val groupId: String get() = observation.groups.single()
+        internal val groupRef: CellRef get() = observation.group(groupId).ref
+    }
+
     private val recordsTopology = context?.topology != null
     private val manage = host.managementInlet.call
     private val context = context ?: ApplyContext(host)
@@ -160,26 +260,60 @@ class CredenceGraph(
     /** Credence, stance or topology changes invalidate the pure exact-VoI memo. */
     private val evaluationVersion = AtomicLong()
 
-    /** Volatile: its content is recomputed after every restart. */
-    val hub = ObserveCell(
-        CredenceHubView {
+    /** Volatile: its canonical observation content is recomputed after every restart. */
+    val hub = Hub(
+        host = host,
+        ref = hubRef("hub"),
+        observationRef = hubRef("hub-observation"),
+        viewName = HUB_HANDLE,
+        keyOf = Credence::source,
+        equivalent = { old, new ->
+            old.values == new.values && old.neutral == new.neutral && old.argued == new.argued
+        },
+        // Invalidate once on receipt so an evaluator cannot survive a value
+        // already in flight, and once on publication so a racing read of the
+        // preceding frame cannot remain cached under the new version.
+        onEffectiveChange = ::invalidateExact,
+        onPublication = {
             invalidateExact()
             onCredence()
         },
-        ref = hubRef("hub"),
     )
 
     /** Legacy restore endpoint for sensitivity links recorded by older topology journals. */
-    val sensitivityHub = ObserveCell(
-        SensitivityHubView(),
+    val sensitivityHub = Hub(
+        host = host,
         ref = hubRef("sensitivity-hub"),
+        observationRef = hubRef("sensitivity-hub-observation"),
+        viewName = SENSITIVITY_HUB_HANDLE,
+        keyOf = Sensitivity::source,
+        equivalent = { old, new -> old.values == new.values && old.root == new.root },
     )
 
-    /** Model A: the shares fold of every POSITIONS issue. Volatile, like [hub]. */
-    val sharesHub = ObserveCell(
-        SharesHubView(onCredence),
+    /** Model A: the canonical shares observation of every POSITIONS issue. Volatile, like [hub]. */
+    val sharesHub = Hub(
+        host = host,
         ref = hubRef("shares-hub"),
+        observationRef = hubRef("shares-hub-observation"),
+        viewName = SHARES_HUB_HANDLE,
+        keyOf = Shares::source,
+        equivalent = { old, new -> old.values == new.values && old.consensus == new.consensus },
+        onPublication = onCredence,
     )
+
+    internal val observationGroups: Map<String, String>
+        get() = mapOf(
+            HUB_HANDLE to hub.groupId,
+            SENSITIVITY_HUB_HANDLE to sensitivityHub.groupId,
+            SHARES_HUB_HANDLE to sharesHub.groupId,
+        )
+
+    internal val observationGroupRefs: Map<String, CellRef>
+        get() = mapOf(
+            HUB_HANDLE to hub.groupRef,
+            SENSITIVITY_HUB_HANDLE to sensitivityHub.groupRef,
+            SHARES_HUB_HANDLE to sharesHub.groupRef,
+        )
 
     private val cells = HashMap<CellRef, ClaimNode>()
 
@@ -216,9 +350,6 @@ class CredenceGraph(
 
     init {
         require(this.context.host === host) { "CredenceGraph context belongs to a different host" }
-        manage.spawn(hub)
-        manage.spawn(sensitivityHub)
-        manage.spawn(sharesHub)
         this.context.adopt(HUB_HANDLE, hub.ref)
         this.context.adopt(SENSITIVITY_HUB_HANDLE, sensitivityHub.ref)
         this.context.adopt(SHARES_HUB_HANDLE, sharesHub.ref)

@@ -37,6 +37,7 @@ internal data class DimensionRecord(
     val highLabel: String,
     val weight: Double,
     val direction: String,
+    val description: String = "",
 ) : java.io.Serializable
 
 internal data class IdeaRecord(
@@ -155,6 +156,13 @@ private fun TopicRecord.toFields(): List<String> = buildList {
     notes.toSortedMap().forEach { (id, note) -> add(id); add(note.text); add(note.author) }
     add(overrides.size.toString())
     overrides.toSortedMap().forEach { (id, score) -> add(id); add(score.toString()) }
+    // dimension descriptions: an optional trailing section, written only when one is set, so a
+    // record with none stays byte-identical to the format before descriptions existed
+    val described = dimensions.toSortedMap().filterValues { it.description.isNotEmpty() }
+    if (described.isNotEmpty()) {
+        add(described.size.toString())
+        described.forEach { (id, d) -> add(id); add(d.description) }
+    }
 }
 
 private fun topicRecord(fields: List<String>): TopicRecord {
@@ -178,6 +186,12 @@ private fun topicRecord(fields: List<String>): TopicRecord {
     repeat(next().toInt()) { notes[next()] = NoteRecord(next(), next()) }
     val overrides = LinkedHashMap<String, Double>()
     repeat(next().toInt()) { overrides[next()] = next().toDouble() }
+    if (index < fields.size) repeat(next().toInt()) {
+        val id = next()
+        val description = next()
+        dimensions[id] = checkNotNull(dimensions[id]) { "description for unknown dimension $id" }
+            .copy(description = description)
+    }
     check(index == fields.size) { "trailing alignment.TopicRecord fields: ${fields.size - index}" }
     return TopicRecord(
         id, title, creator, ideaPolicy, boardVisibility, dimensions, ideas, notes, overrides, revealed, gutCheck, dotBudget,

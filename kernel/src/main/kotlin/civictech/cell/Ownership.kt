@@ -32,6 +32,13 @@ class Owned<T : Any>(private val value: T) {
     @Transient
     private var consumed = false
 
+    /**
+     * Internal accounting state for [civictech.cell.proxy.Proxy.discharge]. This is not a
+     * guard for callers to branch on; exactly-once ownership discipline remains [take].
+     */
+    internal val isConsumed: Boolean
+        get() = consumed
+
     /** Take ownership; any later access is a use-after-move error. */
     fun take(): T {
         check(!consumed) { "Owned value already consumed (use after move)" }
@@ -64,6 +71,13 @@ class Owned<T : Any>(private val value: T) {
  */
 class Leased<T : Any>(val value: T, private val returnToPool: (T) -> Unit = {}) {
     private var released = false
+
+    /**
+     * Internal accounting state for [civictech.cell.proxy.Proxy.discharge]. This is not a
+     * guard for callers to branch on; exactly-once ownership discipline remains [release].
+     */
+    internal val isReleased: Boolean
+        get() = released
 
     /**
      * Return this value to its pool; a lease obligation is discharged exactly once.

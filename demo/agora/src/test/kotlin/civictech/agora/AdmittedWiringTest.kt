@@ -6,7 +6,6 @@ import civictech.agora.cell.InfluenceDelta
 import civictech.agora.cell.Polarity.ATTACK
 import civictech.agora.cell.Polarity.SUPPORT
 import civictech.agora.cell.StanceDelta
-import civictech.agora.cell.credenceOf
 import civictech.cell.CellRef
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.LinkOptions

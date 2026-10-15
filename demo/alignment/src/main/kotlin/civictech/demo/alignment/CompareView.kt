@@ -288,7 +288,7 @@ function cmpPaint(t, view, override) {
   const ghostSeen = new Set();
   if (d && boardGate(t).open && cmpEl('cmpOthers').checked) {
     const titles = new Map(view.ideas.map(i => [i.id, i.title]));
-    const others = state.ratings.filter(r => r.topic === t.id && r.dim === d.id && r.participant !== me());
+    const others = state.ratings.filter(r => r.topic === t.id && r.dim === d.id && r.participant !== me() && !isAi(r.participant));
     for (const r of others) {
       if (!titles.has(r.idea) || typeof r.value !== 'number') continue;
       const k = r.participant + '\n' + r.idea;

@@ -4,6 +4,19 @@
 
 Architecture reference: `doc/ARCHITECTURE.md`. User-facing intro: `README.md`.
 
+## Running the alignment demo
+
+When the user asks to start/run the alignment demo, start it **durably**, as a
+background command: `scripts/alignment-durable.sh [port]` (default 18431). It
+reuses the latest journal under `~/.local/share/computenet/alignment/` (outside
+the repo, so topics survive worktree cleanup). If that journal cannot be
+replayed — corrupt, or made incompatible by a code change — the script keeps
+it, writes the error to `<journal>/FAILED`, and starts on a new empty journal
+with a `!!!` banner: **tell the user** their previous topics were not loaded
+and why, rather than reporting a normal start. Never start it without
+`--journal` unless the user asks for a throwaway instance. LLM ideation needs
+`TYPESAFE_API_KEY` in the environment (it prints a line when disabled).
+
 
 ## Choosing work: bv (beads_viewer)
 

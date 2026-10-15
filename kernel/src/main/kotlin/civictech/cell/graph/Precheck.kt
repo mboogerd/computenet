@@ -9,6 +9,7 @@ import civictech.cell.host.RoutedInletResolution
 import civictech.cell.host.TopologyIndex
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.CurrentPeer
+import civictech.cell.link.LinkDryRun
 import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
@@ -146,10 +147,11 @@ sealed interface StepCheck {
 
 /**
  * What a planned step would do ([WKB2-14]). Precheck produces [SPAWN], [LINK]
- * and [UNLINK]; [DESPAWN] and [PROMOTE] are arms for the write plane's draft
+ * and [UNLINK]; [WRITE] is a check-only declaration, while [DESPAWN] and
+ * [PROMOTE] are arms for the write plane's draft
  * (WKB2 F3/F9).
  */
-enum class PlannedAction { SPAWN, LINK, UNLINK, DESPAWN, PROMOTE }
+enum class PlannedAction { SPAWN, LINK, UNLINK, DESPAWN, WRITE, PROMOTE }
 
 /**
  * One step of a [Plan]. [key] mirrors [ApplyReport] (91xzn-D8): the spawn
@@ -205,6 +207,18 @@ fun GraphSpec.precheck(boundary: List<BoundaryLink> = emptyList(), live: LiveVie
             is ConnectStep -> planned += scratch.connect(step)
             is UnlinkStep -> planned += scratch.unlink(step)
             is DespawnStep -> planned += scratch.despawn(step)
+            is WriteStep -> planned += scratch.write(step)
+            is PromoteStep -> planned += PlannedStep(
+                step.handle,
+                step.handle,
+                PlannedAction.PROMOTE,
+                emptySet(),
+                StepCheck.Refused(
+                    RefusalCode.POLICY_DENIAL,
+                    "promote step '${step.handle}': cold precheck of a promotion is the write plane's " +
+                        "(computenet-8joqm)",
+                ),
+            )
             is InstanceSetStep -> {
                 val lowered = try {
                     step.lower()
@@ -378,6 +392,21 @@ private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
             }
         }
         return PlannedStep(key, step.handle, PlannedAction.DESPAWN, emptySet(), StepCheck.Ok)
+    }
+
+    fun write(step: WriteStep): PlannedStep {
+        val unresolved = step.cells.firstOrNull { it !in staged }
+        val result = if (unresolved == null) {
+            StepCheck.Ok
+        } else {
+            val reason = if (unresolved in familyHandles) {
+                familyUnresolved(unresolved, "declared write '${step.name}'")
+            } else {
+                unresolvedHandle(unresolved, "declared write '${step.name}'")
+            }
+            StepCheck.Refused(RefusalCode.UNRESOLVED_HANDLE, reason)
+        }
+        return PlannedStep(step.name, step.name, PlannedAction.WRITE, emptySet(), result)
     }
 
     fun boundary(link: BoundaryLink, live: LiveView): PlannedStep {
@@ -578,9 +607,10 @@ private class Scratch(live: LiveView, private val familyHandles: Set<String>) {
      */
     private fun policyCheck(c: LinkCandidate): StepCheck.Refused? {
         val request = LinkRequest(c.outlet.ref, c.inlet.ref, CurrentPeer.get(), c.options.role)
-        val rejected = (c.inlet as? Linked)?.linking?.reject(request)
-            ?: (c.outlet as? Linked)?.linking?.reject(request)
-            ?: return null
+        val rejected = LinkDryRun.during {
+            (c.inlet as? Linked)?.linking?.reject(request)
+                ?: (c.outlet as? Linked)?.linking?.reject(request)
+        } ?: return null
         return rejected.toRefused(RefusalCode.POLICY_DENIAL)
     }
 }

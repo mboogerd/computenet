@@ -29,6 +29,9 @@ dependencies {
     // computenet-gyvli.3: WsPeerTransportContractTest subclasses the seam's
     // executable contract, civictech.testkit.PeerTransportContract.
     testImplementation(project(":testkit"))
+    // computenet-xbs8t.3: test scope only — :wire main must not depend on
+    // :economy; [ECO1-PAR-09r] is verified over a real socket here.
+    testImplementation(project(":economy"))
 }
 
 // The burst/stress probes read `wire.burst.*` and `wire.stress.*` from the JVM
@@ -69,8 +72,8 @@ dependencies {
 // `./gradlew :wire:test -Dwire.stress.artifacts=DIR` was silently ignored —
 // the same defect, found by the guard on its first run.
 //
-// `wire.vectors.strict` is `RegistrationCoverageTest`'s strict mode (an empty
-// `pending` list in wire/corpus/manifest.json is required when it is `true`).
+// `wire.vectors.strict` is `RegistrationCoverageTest`'s strict mode (ON by
+// default; `-Dwire.vectors.strict=false` opts out of the empty-pending check).
 val forwardedSystemProperties = listOf(
     "wire.burst.iterations",
     "wire.burst.refs",

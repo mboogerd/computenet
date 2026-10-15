@@ -96,6 +96,57 @@ is only known at runtime — and rollback is journal reversal. Two
 graphs-as-data forms, two jobs: GraphSpec = what topology; the journal =
 what was done.
 
+### Recovery provenance for an in-flight shadow (decided computenet-q37rn)
+
+The imperative buffer/judge/swap loop is journaled as *what was done*, not as
+reconstructible `GraphSpec` state (the "graphs-as-data cut" above); crash
+recovery therefore rebuilds the pinned spawns and links a run of `Evolve`
+left behind, but cannot reconstruct the lost in-memory judge, wave counter,
+violation subscriptions, or `EvolutionHandle` (computenet-zp3ab). Recovery's
+decided response — abort any shadow left tapped with no completed `Promote`
+— needs to tell "a shadow `Evolve` is actively judging" apart from "a shadow
+a `GraphSpec` merely declared, with the identical staged link shape." A link
+alone cannot carry that distinction: `ApplyContext.evolve`'s write-ahead tap
+and `GraphSpec.apply`/the graph construction DSL's declared links both
+journal the same `TopoEvent.Connect(options = LinkOptions(staged = true))`,
+so a discriminator keyed on link shape or declaration order is unsound (the
+false positive is computenet-q37rn's finding: a declared shadow whose
+invariant edge happens to be declared before its gate tap satisfied the old,
+order-sensitive check and was permanently despawned on recovery for it,
+although no evolution had ever run).
+
+The decided fix is an **additive** `TopoEvent.EvolutionTap(candidate)`
+record, written only by `ApplyContext.evolve`'s hooks, immediately before the
+tap `Connect` it precedes, and never by a declarative `GraphSpec`/`graph{}`
+writer. It is retired implicitly — never by a paired "end" record — the
+moment its candidate is folded into a completed `TopoEvent.Promote` or
+removed by a `TopoEvent.Despawn` (the live reject path and the recovery
+abort-cleanup path both end in one). `TopologyFold.activeEvolutions` is the
+live set of candidates with an open marker and no retirement yet, carried
+through checkpoint compaction (`TopologyFold.events()`) so a checkpoint taken
+mid-evolution does not lose the provenance; recovery classifies "interrupted
+evolution" as exactly that set once the complete journal has replayed,
+replacing the old link-shape/invariant-edge heuristic entirely. Existing
+`TopoEvent.Connect` bytes are untouched — this is a wholly new journal event,
+not a widened existing one — so a journal written before this decision
+contains no `EvolutionTap` and decodes unchanged; a build predating this
+decision cannot decode a journal that contains one (`ObjectInputStream`
+fails closed on the unknown class), which is this record's explicit
+downgrade boundary.
+
+Recovery's frame delivery has a companion requirement: a candidate's own
+journaled frames must not be staged for delivery once recovery's abort
+cleanup is about to despawn it, or the delivery dead-letters as "unknown
+cell" against a ref that no longer exists. `HostDurability.recoverFrom`
+therefore defers frame submission until the complete journal has applied —
+topology events (including `EvolutionTap`/`Promote`/`Despawn`) still apply
+eagerly in one forward pass, as before — and excludes, from that deferred
+submission, every decoded frame whose target is still in
+`TopologyApplier.activeEvolutions()` at that point (`ApplyContext` exposes
+its fold's `activeEvolutions` through this seam). This determines the final
+aborted-candidate set before any of its frames reach the intake, rather than
+staging them immediately and excluding them after the fact.
+
 ## The promotion swap (decided in 93 I-11, implemented)
 
 Promotion/rollback is a **local, membrane-scoped, pre-validated two-phase
@@ -153,6 +204,9 @@ the post-retire checkpoint).
 (management-preempts-data single-consumer serialization; no global lock, no
 coordinator) and emits no topology event: an instance swap leaves the
 logical edge set intact, so downstream wave completeness never observes it.
+A journaled host nevertheless appends the committed swap as a `TopoEvent.Promote`
+durability record (93 I-7), after the COMMIT checkpoint and before green; it is a
+recovery record, not a wave-observable `EdgeEvent`.
 A remote candidate is first migrated onto the membrane host so the swap
 stays a purely local transaction; remote inbound links re-resolve through
 registry re-announcement, in-flight remote traffic parking at the bridge for
@@ -231,6 +285,16 @@ candidate). [53-STATE-04] For a `PartitionedCell` the swap membrane and the expo
 unit are per organelle — per partition, never the whole composite (a
 whole-composite atomic transaction would be the distributed barrier P4
 forbids); mixed-version partitions coexist safely under the invariance line.
+The one carve-out (decided in 93 I-11, computenet-gmlrc; decided, not built) is
+a `PartitionedCell` replicated as one composite instance per peer — the
+computenet-7afo4-D9 shape, which is not yet on `main`. There the swap membrane
+and export/import unit are instead the whole composite on each peer, applied
+through the existing per-peer `promoteReplica` rebind. Each peer journals and
+commits its own rebind independently; no barrier spans peers. All partitions on
+one peer therefore switch version together, although versions may still differ
+across peers. Every other case keeps the per-organelle rule unchanged: an
+unreplicated composite, and organelles replicated individually as ordinary
+ref-addressed instances (the `ShardCell`/`PartitionedShardSet` route).
 
 *(G-49 resolved for the swap transaction, W3.5)*: `Promotion.promote` is the
 four-phase protocol as an explicit state machine, not by convention. PRECHECK
@@ -341,6 +405,9 @@ unchanged, and a graph that never opts into replicated promotion is unaffected.
 COMMIT is the rebind (reuse-ref crash-recovery). [53-REPL-03] Inbound gossip arriving during
 the object swap parks at the registry on the despawn's unpublish and replays on
 the candidate's republish, so no peer delta is lost.
+Each peer journals its own rebind the same way, so a peer killed mid-roll
+recovers as its candidate under the reused ref and re-converges with peers still
+on the incumbent by ordinary merge.
 
 **Partitioned nodes extend by the same rolling form, shard-by-shard.** A
 partitioned node's shards are ref-addressed instances (PN-6); promoting one is

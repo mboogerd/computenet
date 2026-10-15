@@ -28,11 +28,21 @@
 # `Decided 2026-08-31 (…)`, `Human decision 2026-08-25:`, `HUMAN ANSWER
 # (Merlijn, …)`, `HUMAN CLARIFICATION (…)`, `MAINTAINER DECISION (mlboogerd,
 # …)`, `Maintainer confirmation (…)`, `AMENDMENT TO THE DECISION (…)`,
-# `APPROVED 2026-08-19 by the maintainer (…)`. A first cut fitted to ONE bead's
-# wording reported four of five real answers as "the park stands" — the failure
-# this tool exists to prevent, wearing its own uniform — and the second cut
-# still missed computenet-em9i, the bead the maintainer cites as the four-times
-# recurrence.
+# `APPROVED 2026-08-19 by the maintainer (…)`, `COUNCIL DECISION (deliberate,
+# …): <id> — <title>`, `COUNCIL ADVICE (deliberate, …): <outcome>` (the
+# deliberate council's verdict on a maintainer-reserved park — advisory, not
+# binding, but still answer-shaped and worth reading; see
+# .claude/skills/sync-report/references/council.md). A first cut fitted to ONE
+# bead's wording reported four of five real answers as "the park stands" —
+# the failure this tool exists to prevent, wearing its own uniform — and the
+# second cut still missed computenet-em9i, the bead the maintainer cites as
+# the four-times recurrence; a third cut missed COUNCIL ADVICE specifically,
+# hit twice in one /sync-report run on computenet-7afo4.5 and computenet-elc
+# (2026-10-08).
+#
+# `COUNCIL NO-CONSENSUS (…): a person decides` and `COUNCIL SKIPPED (…)` are
+# deliberately NOT answer markers — both explicitly mean the park still
+# awaits a human — so they fall through to "note", same as any other comment.
 #
 # COVERAGE IS NOT COMPLETE AND CANNOT BE. A date-prefixed answer —
 # `2026-08-13: user approved the Linux re-run` (computenet-dqy.44, dqy.31) —
@@ -63,7 +73,7 @@ CLASSIFY='
   def first_line: (.text // .body // .content // "") | split("\n")[0];
   def kind: (first_line | ascii_downcase) as $l
     | if   ($l | test("^(question|parked|re-park)"))                             then "PARK"
-      elif ($l | test("^(answered|answer to |council decision|human answer|human clarification|human decision|maintainer|decided |decision |amendment to the decision|approved |human respond)")) then "ANSWER"
+      elif ($l | test("^(answered|answer to |council decision|council advice|human answer|human clarification|human decision|maintainer|decided |decision |amendment to the decision|approved |human respond)")) then "ANSWER"
       else "note" end;
   (if type=="array" then . else (.comments // []) end)
   | sort_by(.created_at // "")'

@@ -1,0 +1,25 @@
+{
+  "id": "WV-ADDITIVE-SIGNED-ABSENT-01",
+  "title": "An unsigned PORT_API frame omits the signing quartet",
+  "category": "frames/additive",
+  "kind": "frame",
+  "covers": ["WIR1-C06", "WIR1-C09", "WIR1-I01", "WIR1-I02", "WIR1-I03", "WIR1-I19", "DSC1-WIRE-01"],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {"id": "00000000-0000-0000-0000-000000000042"},
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [{"type": "Stall", "fields": {"reason": "SUSPENDED"}}]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"Stall\",{\"reason\":\"SUSPENDED\"}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU3RhbGwiLHsicmVhc29uIjoiU1VTUEVOREVEIn1dXX0="
+  },
+  "notes": "The unsigned seed frame omits signature, signerKeyId, sigCounter and notAfter, all null by default. The omission is [WIR1-I19]; WV-ADDITIVE-SIGNED-DECODE-01 is the decode-only signed twin, with literals sourced from WireCodecTest's BS-18 test."
+}

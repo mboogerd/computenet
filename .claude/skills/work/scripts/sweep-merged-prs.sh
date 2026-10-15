@@ -123,6 +123,9 @@ withbranch=$(bd list --has-metadata-key branch --limit 0 --json) \
 #    work. So a branch-only match is REPORTED, never closed.
 # A deferred bead is likewise reported, not closed — deferral is a deliberate
 # park and a merged PR does not revoke it.
+# A bare NUMBER is accepted as a PR number in this repo: `bd update
+# --set-metadata pr=1299` stores the JSON number 1299, and capture() on a
+# non-string aborted the whole sweep for every session (computenet-dkg4i).
 # An EMPTY metadata.pr counts as absent on both sides. SKILL.md's squash-resume
 # path writes `--set-metadata pr=` on purpose, and "" is neither a joinable url
 # nor `null`, so testing `== null` alone made those beads invisible to both
@@ -137,7 +140,7 @@ plan=$(jq -n \
   | ("^https?://[^/]+/" + ($slug | gsub("\\."; "\\.")) + "/pull/(?<n>[0-9]+)") as $pat
   | [ $withpr[]
       | select((.metadata.pr // "") != "")
-      | select([.metadata.pr | capture($pat) | .n] as $n
+      | select([.metadata.pr | tostring | (capture("^(?<n>[0-9]+)$"), capture($pat)) | .n] as $n
                | ($n | length) > 0 and (($nums | index($n[0])) != null))
       | {id, worktree: (.metadata.worktree // "-"),
          action: (if .status == "deferred" then "report" else "close" end),
@@ -204,7 +207,7 @@ while IFS=$'\t' read -r id action worktree why; do
     echo "  worktree not on this machine: $worktree"
     continue
   fi
-  if ! git worktree list --porcelain | grep -qxF "worktree $wt"; then
+  if ! git worktree list --porcelain | grep -xF "worktree $wt" >/dev/null; then  # not -q: SIGPIPE under pipefail
     echo "  not a registered worktree, left alone: $wt"
     continue
   fi

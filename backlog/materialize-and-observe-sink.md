@@ -1,5 +1,7 @@
 # Materialize-and-observe: a first-class sink for derived streams
 
+> **Status: ABSORBED** — computenet-axcyk (`civictech.cell.observe.observation`), 2026-10.
+
 ## Origin
 `demo/shopping/src/main/kotlin/civictech/demo/Main.kt` hand-rolls three pieces of
 plumbing that every demo re-invents:

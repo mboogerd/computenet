@@ -1,0 +1,414 @@
+package civictech.runtime
+
+import civictech.cell.BoundarySeam
+import civictech.cell.BudgetLedger
+import civictech.cell.CellRef
+import civictech.cell.ClaimClass
+import civictech.cell.DenialReason
+import civictech.cell.Propagate
+import civictech.cell.control.Attention
+import civictech.cell.control.AttentionBand
+import civictech.cell.data.SetApi
+import civictech.cell.data.SetCell
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.SpawnStep
+import civictech.cell.host.DeadLetter
+import civictech.cell.host.LocationRegistry
+import civictech.cell.link.PeerId
+import civictech.cell.membrane.BoundaryPolicy
+import civictech.cell.membrane.CompositeCell
+import civictech.cell.membrane.ProtocolAuthority
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
+import civictech.cell.wire.PortAddress
+import civictech.cell.wire.WireEdgeLink
+import civictech.economy.EconomicPolicy
+import civictech.economy.InvalidEconomicPolicyException
+import civictech.economy.TokenBucketLedger
+import civictech.economy.startupRecord
+import civictech.testkit.awaitUntil
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import org.junit.jupiter.api.Assertions.assertAll
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
+import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+
+private class RuntimeBudgetMembrane(ref: CellRef) : CompositeCell(ref) {
+    private val source = SetCell<String>()
+
+    val exposure = mediateOutlet(
+        "attention",
+        "outlet",
+        source.outlet,
+        policy = BoundaryPolicy(
+            protocolAuthority = mapOf(
+                Protocols.Attention to ProtocolAuthority(ceiling = AttentionBand.LOW),
+            ),
+        ),
+    )
+}
+
+class BudgetedNodeTest {
+
+    companion object {
+        private const val CONVERGENCE_MS = 15_000L
+    }
+
+    @TempDir
+    lateinit var tempDir: Path
+
+    @Test
+    fun `budgeted boot emits one startup record and its unvouched warning through the sink`() {
+        val policy = EconomicPolicy.placeholder().copy(
+            fitted = true,
+            label = "runtime-test-policy",
+            unvouchedBootstrap = mapOf(ClaimClass.Attention to 2L),
+        )
+        val policyFile = tempDir.resolve("startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.serializer(), policy))
+        val captured = mutableListOf<String>()
+
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+            startupSink = captured::add,
+        )
+        try {
+            val record = requireNotNull(node.budgetStartupRecord)
+            val expected = policy.applied().startupRecord()
+            assertEquals(expected, record)
+            assertEquals(listOf(record.toString()) + record.warnings, captured)
+            assertTrue(captured.single { it.startsWith("WARNING:") }.contains("unbounded by identity cost"))
+            assertTrue(node.hosts.values.all { !it.isDrained }, "the warned node is not live")
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `a throwing startup sink does not prevent a budgeted node from booting`() {
+        val policyFile = tempDir.resolve("throwing-startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.placeholder()))
+
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+            startupSink = { throw IllegalStateException("startup sink unavailable") },
+        )
+        try {
+            assertTrue(node.budgetStartupRecord != null)
+            assertTrue(node.hosts.values.all { !it.isDrained })
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `a startup sink that throws an Error does not prevent a budgeted node from booting`() {
+        // StartupRecord.emit swallows Exceptions itself; an Error reaches Runtime.boot's own catch.
+        val policyFile = tempDir.resolve("error-startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.placeholder()))
+
+        val node = Runtime.boot(
+            Manifest(mapOf("budgeted" to NodeSpec(budget = policyFile.toString()))),
+            "budgeted",
+            GraphSpec(emptyList()),
+            startupSink = { throw LinkageError("startup sink unavailable") },
+        )
+        try {
+            assertEquals(EconomicPolicy.placeholder().applied().startupRecord(), node.budgetStartupRecord)
+            assertTrue(node.hosts.values.all { !it.isDrained })
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `an unbudgeted boot emits no startup record or warning`() {
+        val captured = mutableListOf<String>()
+
+        val node = Runtime.boot(
+            Manifest(mapOf("plain" to NodeSpec())),
+            "plain",
+            GraphSpec(emptyList()),
+            startupSink = captured::add,
+        )
+        try {
+            assertNull(node.budgetStartupRecord)
+            assertTrue(captured.isEmpty())
+        } finally {
+            node.close()
+        }
+    }
+
+    @Test
+    fun `an invalid budget policy emits nothing before validation fails`() {
+        val policy = EconomicPolicy.placeholder().copy(
+            unvouchedBootstrap = mapOf(ClaimClass.Spawn to -1L),
+        )
+        val policyFile = tempDir.resolve("invalid-startup-policy.json")
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.serializer(), policy))
+        val captured = mutableListOf<String>()
+
+        assertThrows<InvalidEconomicPolicyException> {
+            Runtime.boot(
+                Manifest(mapOf("invalid" to NodeSpec(budget = policyFile.toString()))),
+                "invalid",
+                GraphSpec(emptyList()),
+                startupSink = captured::add,
+            )
+        }
+        assertTrue(captured.isEmpty())
+    }
+
+    @Test
+    @Timeout(60)
+    fun `a manifest budget refuses a remote peer's surplus Attention without faulting or closing the peering`() {
+        val policyFile = tempDir.resolve("policy.json")
+        // A budgeted node charges b for the replication link too ([ECO1-CHG-07]): Interest
+        // when node a's `items` replica links to b's, and a Retention hold for as long as
+        // the link is held. A class with no bootstrap is refused BUDGET_NOT_GRANTED, so a
+        // policy that granted Attention alone would leave node a with no gossip link to b.
+        val charged = listOf(ClaimClass.Attention, ClaimClass.Interest, ClaimClass.Retention)
+        val policy = EconomicPolicy.placeholder().copy(
+            prices = charged.associateWith { 1L },
+            capacities = charged.associateWith { 10L },
+            refill = charged.associateWith {
+                EconomicPolicy.Refill(
+                    tokensPerInterval = 1L,
+                    intervalNanos = 3_600_000_000_000L,
+                )
+            },
+            unvouchedBootstrap = mapOf(
+                ClaimClass.Attention to 3L,
+                ClaimClass.Interest to 2L,
+                ClaimClass.Retention to 2L,
+            ),
+        )
+        Files.writeString(policyFile, Json.encodeToString(EconomicPolicy.serializer(), policy))
+
+        val run = bootPair(policyFile)
+        try {
+            repeat(4) { offset ->
+                run.b.registry.deliver(attention(run.aMembrane.ref, version = offset + 1L))
+            }
+
+            awaitUntil("node a settles all four Attention assertions", CONVERGENCE_MS) {
+                run.observed.size + run.deadLetters.size == 4
+            }
+
+            // This assertion is deliberately first: the Runtime crossing must carry b's
+            // transport-vouched stamp. Without it there is no principal whose bootstrap
+            // the node ledger could charge, and adding identity wiring here would hide that.
+            val denial = run.deadLetters.singleOrNull()?.denial
+            val snapshot = (run.a.budget as TokenBucketLedger).snapshot()
+            assertAll(
+                "the Runtime crossing charges b's three-token Attention bootstrap",
+                { assertEquals(PeerId("b"), denial?.principal, "the Runtime peering carried no principal to charge") },
+                {
+                    assertEquals(
+                        listOf(1L, 2L, 3L),
+                        run.observed.map(Attention::version),
+                        "the fourth assertion was admitted after b's bootstrap was exhausted",
+                    )
+                },
+                {
+                    assertEquals(
+                        1L,
+                        run.aMembrane.boundaryDenials["attention"]!!.denialCount,
+                        "the membrane did not account the surplus assertion",
+                    )
+                },
+                { assertEquals(DenialReason.BUDGET_EXHAUSTED, denial?.reason) },
+                { assertEquals(BoundarySeam.PROTOCOL_AUTHORITY, denial?.seam) },
+                { assertEquals(Protocols.Attention.name, denial?.subject) },
+                { assertEquals(3L, snapshot.admitted[ClaimClass.Attention]) },
+                { assertEquals(0L, snapshot.bucket(PeerId("b"), ClaimClass.Attention)?.balance) },
+                {
+                    assertEquals(
+                        1L,
+                        snapshot.denied[ClaimClass.Attention]?.get(DenialReason.BUDGET_EXHAUSTED),
+                    )
+                },
+                { assertEquals(0L, run.a.mainHost.supervisionAccounting().restarts) },
+            )
+
+            setOps(run.a).add("apple")
+            awaitUntil("node b observes apple after node a refused the surplus Attention", CONVERGENCE_MS) {
+                "apple" in run.bItems.membership()
+            }
+
+            // The link that carried apple is the one node a charged b for: one Interest
+            // debit and one Retention hold out of b's bootstrap of two each, no denial.
+            val replication = (run.a.budget as TokenBucketLedger).snapshot()
+            assertAll(
+                "node a charged b for the one replication link it holds",
+                { assertEquals(1L, replication.bucket(PeerId("b"), ClaimClass.Interest)?.balance) },
+                { assertEquals(1L, replication.bucket(PeerId("b"), ClaimClass.Retention)?.balance) },
+                { assertEquals(1L, replication.bucket(PeerId("b"), ClaimClass.Retention)?.held) },
+                { assertTrue(replication.denied[ClaimClass.Interest].isNullOrEmpty(), "an Interest claim was denied") },
+                { assertTrue(replication.denied[ClaimClass.Retention].isNullOrEmpty(), "a Retention claim was denied") },
+                { assertEquals(1, run.deadLetters.size, "the replication link produced a boundary denial") },
+            )
+        } finally {
+            run.close()
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    fun `a node with no manifest budget admits every remote Attention assertion`() {
+        val run = bootPair(policyFile = null)
+        try {
+            assertSame(BudgetLedger.Unlimited, run.a.budget)
+
+            repeat(4) { offset ->
+                run.b.registry.deliver(attention(run.aMembrane.ref, version = offset + 1L))
+            }
+
+            awaitUntil("node a delivers all four Attention assertions without a budget", CONVERGENCE_MS) {
+                run.observed.size == 4
+            }
+            assertEquals(listOf(1L, 2L, 3L, 4L), run.observed.map(Attention::version))
+            assertTrue(run.deadLetters.isEmpty(), "an Unlimited node reported a budget denial")
+            assertEquals(0L, run.aMembrane.boundaryDenials["attention"]!!.denialCount)
+        } finally {
+            run.close()
+        }
+    }
+
+    private fun bootPair(policyFile: Path?): Run {
+        val captured = CapturedSpec()
+        val manifest = Manifest(
+            mapOf(
+                "a" to NodeSpec(
+                    transport = "ws",
+                    listen = "ws://127.0.0.1:0",
+                    replica = 0,
+                    peerName = "a",
+                    budget = policyFile?.toAbsolutePath()?.toString(),
+                ),
+                "b" to NodeSpec(
+                    transport = "ws",
+                    dial = listOf("a"),
+                    replica = 1,
+                    peerName = "b",
+                ),
+            ),
+        )
+        val a = Runtime.boot(manifest, "a", captured.spec)
+        var b: Runtime.Node? = null
+
+        try {
+            val aMembrane = captured.membranes.single()
+            val aItems = captured.items.single()
+            val deadLetters = CopyOnWriteArrayList<DeadLetter>()
+            val observed = CopyOnWriteArrayList<Attention>()
+            a.mainHost.deadLetterOutlet.subscribe(
+                Use.fixed(
+                    object : Propagate<DeadLetter> {
+                        override fun propagate(value: DeadLetter) {
+                            deadLetters += value
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+            ProtocolSupport.of(aMembrane.exposure).handle(Protocols.Attention) { _, message ->
+                observed += message as Attention
+            }
+
+            a.open()
+            val address = requireNotNull(a.boundAddress) { "node a did not expose its granted address" }
+            val bNode = Runtime.boot(manifest, "b", captured.spec, overrides = mapOf("a" to address.text))
+            b = bNode
+            val bItems = captured.items.last()
+            assertTrue(aItems.ref.sameLogical(bItems.ref), "the shared spec did not mint one logical set")
+            assertNotEquals(aItems.ref, bItems.ref, "the replicated set reused one instance id")
+            bNode.open()
+
+            awaitUntil("node b mirrors node a's Attention membrane", CONVERGENCE_MS) {
+                bNode.registry.location(aMembrane.ref) is LocationRegistry.Remote
+            }
+            return Run(a, bNode, aMembrane, bItems, deadLetters, observed)
+        } catch (failure: Throwable) {
+            b?.close()
+            a.close()
+            throw failure
+        }
+    }
+
+    private fun setOps(node: Runtime.Node): civictech.cell.data.SetOps<String> =
+        node.mainHost.lookup<SetApi<String>>(node.refs.getValue("items"))!!.inlet.call
+
+    private class CapturedSpec {
+        val membranes = mutableListOf<RuntimeBudgetMembrane>()
+        val items = mutableListOf<SetCell<String>>()
+        private val membraneLogicalId = UUID.randomUUID()
+        private val itemsLogicalId = UUID.randomUUID()
+        val spec = GraphSpec(
+            listOf(
+                SpawnStep(
+                    handle = "attention",
+                    factory = CellFactory { ref -> RuntimeBudgetMembrane(ref).also(membranes::add) },
+                    identity = IdentityBinding.NewInstanceOf(membraneLogicalId),
+                ),
+                SpawnStep(
+                    handle = "items",
+                    factory = CellFactory { ref -> SetCell<String>(ref).also(items::add) },
+                    identity = IdentityBinding.NewInstanceOf(itemsLogicalId),
+                    replicated = true,
+                ),
+            ),
+        )
+    }
+
+    private data class Run(
+        val a: Runtime.Node,
+        val b: Runtime.Node,
+        val aMembrane: RuntimeBudgetMembrane,
+        val bItems: SetCell<String>,
+        val deadLetters: CopyOnWriteArrayList<DeadLetter>,
+        val observed: CopyOnWriteArrayList<Attention>,
+    ) : AutoCloseable {
+        override fun close() {
+            b.close()
+            a.close()
+        }
+    }
+
+    private fun attention(target: CellRef, version: Long) = HostedPortInvocation(
+        cellRef = target,
+        portName = "attention",
+        type = HostedPortInvocation.Type.PORT_PROTOCOL,
+        invocation = Invocation("", emptyList(), emptyList()),
+        protocolId = Protocols.Attention,
+        protocolLink = WireEdgeLink(
+            id = UUID.randomUUID(),
+            from = PortRef.generate(),
+            to = PortRef.generate(target),
+            fromAddr = PortAddress(CellRef(UUID.randomUUID()), "inlet"),
+            toAddr = PortAddress(target, "attention"),
+        ),
+        protocolMessage = Attention(AttentionBand.HIGH.level, version),
+    )
+}

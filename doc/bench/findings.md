@@ -6485,3 +6485,170 @@ Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corr
 Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
 Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `OperatorThroughputBenchmark.sim` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.05106599919551368, so a later row above 0.103 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.05106599919551368 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
 
+## 2026-10-14 — macro sweep — structural counts per point over the OFAT plan (mkyb1-D1/D16): shape × cardinality × batch × host count × fan-out with replication and durability switches, FULL_MESH loopback, SIM drive, determinism check on every point
+Harness: 6940663d · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=SIM structural sweep (JUnit @Tag("bench"), one deterministic SimulationController per point; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both attempts) forks=1 warmup=1 iters=2 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 26583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=off wireBytes | 1.3605747E7 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=off simSteps | 63166.0 ± 0.0 simSteps/point | |
+| CHAIN n=10000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 3250.0 ± 0.0 crossHostFrames/point | |
+| CHAIN n=10000 b=10 h=3 f=4 repl=off dur=off wireBytes | 1647000.0 ± 0.0 wireBytes/point | |
+| CHAIN n=10000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| CHAIN n=10000 b=10 h=3 f=4 repl=off dur=off simSteps | 16500.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 30000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=4 repl=off dur=off wireBytes | 1.5410034E7 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=4 repl=off dur=off simSteps | 70000.0 ± 0.0 simSteps/point | |
+| FAN_IN_LATTICE n=10000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 7500.0 ± 0.0 crossHostFrames/point | |
+| FAN_IN_LATTICE n=10000 b=10 h=3 f=4 repl=off dur=off wireBytes | 3735025.0 ± 0.0 wireBytes/point | |
+| FAN_IN_LATTICE n=10000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_IN_LATTICE n=10000 b=10 h=3 f=4 repl=off dur=off simSteps | 25000.0 ± 0.0 simSteps/point | |
+| RANDOM_DAG n=10000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 55000.0 ± 0.0 crossHostFrames/point | |
+| RANDOM_DAG n=10000 b=10 h=3 f=4 repl=off dur=off wireBytes | 2.7781717E7 ± 0.0 wireBytes/point | |
+| RANDOM_DAG n=10000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| RANDOM_DAG n=10000 b=10 h=3 f=4 repl=off dur=off simSteps | 120000.0 ± 0.0 simSteps/point | |
+| DIAMOND n=1000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 2583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=1000 b=10 h=3 f=4 repl=off dur=off wireBytes | 1314743.0 ± 0.0 wireBytes/point | |
+| DIAMOND n=1000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=1000 b=10 h=3 f=4 repl=off dur=off simSteps | 6166.0 ± 0.0 simSteps/point | |
+| DIAMOND n=100000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 266583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=100000 b=10 h=3 f=4 repl=off dur=off wireBytes | 1.37235751E8 ± 0.0 wireBytes/point | |
+| DIAMOND n=100000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=100000 b=10 h=3 f=4 repl=off dur=off simSteps | 633166.0 ± 0.0 simSteps/point | |
+| DIAMOND n=1000000 b=10 h=3 f=4 repl=off dur=off crossHostFrames | 2666583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=1000000 b=10 h=3 f=4 repl=off dur=off wireBytes | 1.380735755E9 ± 0.0 wireBytes/point | |
+| DIAMOND n=1000000 b=10 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=1000000 b=10 h=3 f=4 repl=off dur=off simSteps | 6333166.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=1 h=3 f=4 repl=off dur=off crossHostFrames | 26583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=1 h=3 f=4 repl=off dur=off wireBytes | 1.3605747E7 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=1 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=1 h=3 f=4 repl=off dur=off simSteps | 63166.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=100 h=3 f=4 repl=off dur=off crossHostFrames | 26583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=100 h=3 f=4 repl=off dur=off wireBytes | 1.3605747E7 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=100 h=3 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=100 h=3 f=4 repl=off dur=off simSteps | 63166.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=10 h=1 f=4 repl=off dur=off crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=1 f=4 repl=off dur=off wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=1 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=1 f=4 repl=off dur=off simSteps | 10000.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=10 h=2 f=4 repl=off dur=off crossHostFrames | 21458.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=2 f=4 repl=off dur=off wireBytes | 1.0789569E7 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=2 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=2 f=4 repl=off dur=off simSteps | 52916.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=10 h=5 f=4 repl=off dur=off crossHostFrames | 28125.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=5 f=4 repl=off dur=off wireBytes | 1.4592723E7 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=5 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=5 f=4 repl=off dur=off simSteps | 66250.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=10 h=8 f=4 repl=off dur=off crossHostFrames | 44791.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=8 f=4 repl=off dur=off wireBytes | 2.2978506E7 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=8 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=8 f=4 repl=off dur=off simSteps | 99582.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=1 repl=off dur=off crossHostFrames | 0.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=1 repl=off dur=off wireBytes | 0.0 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=1 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=1 repl=off dur=off simSteps | 10000.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=16 repl=off dur=off crossHostFrames | 80000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=16 repl=off dur=off wireBytes | 4.0493424E7 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=16 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=16 repl=off dur=off simSteps | 170000.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off crossHostFrames | 420000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off wireBytes | 2.12440476E8 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=64 repl=off dur=off simSteps | 850000.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off crossHostFrames | 1660000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off wireBytes | 8.27788548E8 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=3 f=256 repl=off dur=off simSteps | 3330000.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off crossHostFrames | 426583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off wireBytes | 2.17981655E8 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=on dur=off simSteps | 863166.0 ± 0.0 simSteps/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=on crossHostFrames | 26583.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=on wireBytes | 1.3605747E7 ± 0.0 wireBytes/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=on journalRecords | 36583.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=10000 b=10 h=3 f=4 repl=off dur=on simSteps | 63166.0 ± 0.0 simSteps/point | |
+| DIAMOND n=1000000 b=10 h=8 f=4 repl=off dur=off crossHostFrames | 4499791.0 ± 0.0 crossHostFrames/point | |
+| DIAMOND n=1000000 b=10 h=8 f=4 repl=off dur=off wireBytes | 2.335558514E9 ± 0.0 wireBytes/point | |
+| DIAMOND n=1000000 b=10 h=8 f=4 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| DIAMOND n=1000000 b=10 h=8 f=4 repl=off dur=off simSteps | 9999582.0 ± 0.0 simSteps/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off crossHostFrames | 2270000.0 ± 0.0 crossHostFrames/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off wireBytes | 1.161075906E9 ± 0.0 wireBytes/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off journalRecords | 0.0 ± 0.0 journalRecords/point | |
+| FAN_OUT_TREE n=10000 b=10 h=8 f=256 repl=off dur=off simSteps | 4550000.0 ± 0.0 simSteps/point | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+### Sweep plan
+
+- Baseline: point #1 — Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=3, fanOut=4, replication=false, durability=false, drive=SIM)
+- Shapes: CHAIN [#2], FAN_OUT_TREE [#3, #15, #16, #17, #18, #22], FAN_IN_LATTICE [#4], DIAMOND [#1, #6, #7, #8, #9, #10, #11, #12, #13, #14, #19, #20, #21], RANDOM_DAG [#5]
+- Cardinalities: 1000 [#6], 10000 [#1, #2, #3, #4, #5, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #22], 100000 [#7], 1000000 [#8, #21]
+- Batch sizes: 1 [#9], 10 [#1, #2, #3, #4, #5, #6, #7, #8, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21, #22], 100 [#10]
+- Host counts: 1 [#11], 2 [#12], 3 [#1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #15, #16, #17, #18, #19, #20], 5 [#13], 8 [#14, #21, #22]
+- Fan-outs: 1 [#15], 4 [#1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #19, #20, #21], 16 [#16], 64 [#17], 256 [#18, #22]
+- Replication: false [#1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #20, #21, #22], true [#19]
+- Durability: false [#1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #21, #22], true [#20]
+- Corners: point #21 — Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=1000000, batchSize=10, hostCount=8, fanOut=4, replication=false, durability=false, drive=SIM); point #22 — Coordinate(shape=FAN_OUT_TREE, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=8, fanOut=256, replication=false, durability=false, drive=SIM)
+- Topology: FULL_MESH
+- Determinism check: true for every SIM point
+- Budget: 60000 + 28 * cardinality * message-volume scale (FAN_OUT_TREE ceil(fan-out / 4); replication routes = host count * (host count - 1); otherwise 1), clamped to 2147483647 steps
+- Shape seed: 1
+
+### Omissions
+
+- 5978 declared cross-product cells not in the plan — reason: OFAT design (mkyb1-D1)
+- 2 :wire host counts 2 and 3 — reason: sibling feature, the real-transport cross-check
+- 1 STAR — reason: mkyb1-D8: not in the declared space
+- 22 REAL drive at each plan coordinate — reason: structural counts are SIM-derived ([BEN2-33]); calibration is the JMH benchmark
+
+### Outcome tally
+
+admitted=22 NonConvergent=0 NonDeterministic=0 Unschedulable=0 Failed=0 Unreportable=0
+
+### Cost-query consequences
+
+This structural export has an empty calibration list. `CostQuery.coLocatedEdge` and `CostQuery.crossHostEdge` answer `NotMeasured` at every point until a per-host dispatch counter exists; `CostQuery.cellResidency` becomes answerable when task 4 merges `retainedBytesPerElement`.
+
+### Candidate G-item
+
+local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.
+
+## 2026-10-14 — macro REAL per-unit time calibration
+Harness: c4366b8a · JVM Amazon.com Inc. (Corretto-21.0.5.11.1)/21.0.5 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=Average time forks=3 warmup=5 iters=5 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| localDispatchNanos | 10857.310979 ± 1621.90272 ns/op | |
+| crossHostFrameNanos | 1821.36234 ± 33.09845 ns/op | |
+| wireByteNanos | 6.025744396201454 ± 0.10521673813602318 ns/byte | |
+| journalFsyncNanos | 24178.104886 ± 2434.713831 ns/op | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- localDispatchNanos (drive=REAL): 10857.310979 ± 1621.90272 ns/op, relative dispersion 0.1493834636529296 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- crossHostFrameNanos (drive=REAL): 1821.36234 ± 33.09845 ns/op, relative dispersion 0.0181723588289412 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- wireByteNanos (drive=REAL): 6.025744396201454 ± 0.10521673813602318 ns/byte, relative dispersion 0.017461201673663815 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- journalFsyncNanos (drive=REAL): 24178.104886 ± 2434.713831 ns/op, relative dispersion 0.10069911775466685 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+
+## 2026-10-14 — SetCell retained bytes per element
+Harness: c4366b8a · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=retained-heap-delta (in-process JUnit probe; not JMH) forks=1 warmup=1 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| retainedBytesPerElement | 269.158792 ± 0.015137969131824842 bytes/element | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- retainedBytesPerElement (drive=REAL): 269.158792 ± 0.015137969131824842 bytes/element, relative dispersion 5.624177839163746E-5
+
+Calibration provenance:
+JMH command: <toolchain-21>/bin/java -jar bench/build/libs/bench-jmh.jar 'MacroCalibrationBenchmark' -rf csv -rff /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/a5b5b783-5fe8-42b9-b967-75dac3552119/scratchpad/work.lkUUMv/computenet-mkyb1.4-implement.7ws4Ll/macro-calibration-real.csv 2>&1 | tee /private/tmp/claude-503/-Users-merlijn-Documents-local-projects-computenet/a5b5b783-5fe8-42b9-b967-75dac3552119/scratchpad/work.lkUUMv/computenet-mkyb1.4-implement.7ws4Ll/macro-calibration-real.log
+largeFrameBytes=366614
+smallFrameBytes=275
+retained footprint elements=100000 replicates=10
+
+With this export, `CostQuery.cellResidency` answers `Priced` at admitted structural points; `CostQuery.coLocatedEdge`, `CostQuery.crossHostEdge`, and `CostQuery.reBaseline` remain `NotMeasured` because local messages and REBASELINE structural evidence are unmeasured.
+
+**Host was NOT quiesced for this calibration run**, and this is disclosed rather than hidden. On this 16-core machine, retained `uptime` records show load averages (1/5/15 min) of 5.43/8.64/8.29 immediately before the JMH run (2026-10-14T16:32:40Z) and 7.56/8.26/8.17 immediately after it (16:34:47Z). No separate load reading was retained for the in-process retained-bytes probe that followed. The dispersions above are what that host produced. `localDispatchNanos` in particular separates by fork in the run log (fork 1 measurement iterations 8652–9029 ns/op, forks 2–3 11429–12319 ns/op), so its ± spans a between-fork shift, not only within-fork noise.

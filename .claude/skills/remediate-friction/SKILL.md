@@ -138,7 +138,7 @@ to `validate-skills.rb`. Removing a trap means removing its
 ## 6. Finalize
 
 File the retro record (/work's `references/retro.md`; `file-retro.sh --skill
-remediate-friction`), then run `publish-beads.sh` with a timeout of at least 300s. Then report:
+remediate-friction`), then run `publish-beads.sh` with a Bash timeout ≥ 300000 ms. Then report:
 
 - verdict counts per triage row, with PRs for fix-now items;
 - the revision PR, if any;

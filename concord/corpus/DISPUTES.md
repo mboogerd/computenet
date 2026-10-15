@@ -41,11 +41,12 @@ the scalar half in B2/D-CONCORD once `CoalescingCombineCell` landed (D-COMBINE).
 
 ## Resolved by R1 (dispute-resolution wave)
 
-Five entries below were closed in dispute-resolution wave R1 (two parallel
-tickets, file-merged onto `main`). Each gap named a *real* kernel/oracle
-mechanism that had no scenario surface; R1 built the missing surface (a catalog
-cell, a schema descriptor, or a harness fold) without weakening any check. Their
-full by-scenario entries below are now marked **RESOLVED (R1)**.
+Five entries below were first addressed in dispute-resolution wave R1 (two
+parallel tickets, file-merged onto `main`). Each gap named a *real*
+kernel/oracle mechanism that had no scenario surface; R1 built the missing
+surface (a catalog cell, a schema descriptor, or a harness fold) without
+weakening any check. The remaining `23-SPSC-01` driver binding closed in a
+follow-up; each full by-scenario entry below names the wave that resolved it.
 
 - `42-INTEREST-01` — **RESOLVED** (`schema-gap`). New `interest:` descriptor
   (`InterestSpec` on `CellSpec`, `Scenario.kt`); `CorpusRunner` lowers it to a
@@ -57,13 +58,15 @@ full by-scenario entries below are now marked **RESOLVED (R1)**.
   (`MergeClass.IDEMPOTENT`) via the public `ContractRegistry` seam, so a plain
   default-nature source's `connect` is refused by the kernel's own
   `NatureNegotiation` reconciler (CP-F3) — no schema field, no driver-side fake.
-- `23-SPSC-01` — **RESOLVED, REJECT HALF ONLY** (`schema-gap`). New
-  `exclusive-source`/`exclusive-sink` catalog cells
-  (`KernelAdapters.ExclusiveSourceCell`/`ExclusiveSinkCell`) emit a genuine
-  `Owned` payload, so a second `Consume` link is refused by the kernel's own
-  `FanOutlet` exclusivity check (M5.6). **The observe/tap ADMIT half remains
-  deferred to G-47** (the driver still does not differentiate `role: observe`
-  from a Consume link — see `13-TAP-01`).
+- `23-SPSC-01` — **RESOLVED** (`schema-gap` + `driver-binding-gap`). New
+  `exclusive-source`/`exclusive-sink`/`exclusive-observer` catalog cells
+  (`KernelAdapters.ExclusiveSourceCell`/`ExclusiveSinkCell`/`ExclusiveObserverCell`)
+  emit, consume, and borrow a genuine `Owned` payload. A second `Consume` link
+  is refused by the kernel's own `FanOutlet` exclusivity check (M5.6). The core
+  driver lowers `role: observe` to `LinkOptions(role = Observe)`, so host admission
+  installs the kernel's `FanOutlet.tap` path and admits that link without consuming
+  the exclusive slot; a post-attachment delivery reaches both the borrowing
+  observer and the sole consumer without dead letters.
 - `42-REPL-DEPART-01` — **RESOLVED** (`check-vocabulary-gap`).
   `Checks.replicasConverge` now scopes to *live* replicas — it drops any declared
   replica whose `readView` no longer resolves (the departed-cell signal `despawn`
@@ -122,8 +125,9 @@ glitch-freedom positively. See the "By scenario id" entry.)*
 group-by over `Windows`); `22-WAVE-FANIN-01` — resolved in R2 (set-shaped
 `observations-whole-waves` predicate landed). See the "Resolved by R2" section.)*
 
-*(`12-NEGOTIATE-01`, `23-SPSC-01` (reject half), `24-OP-PRESENCE-01` — resolved
-in R1, see the "Resolved by R1" section above.)*
+*(`12-NEGOTIATE-01`, `24-OP-PRESENCE-01` — resolved in R1;
+`23-SPSC-01` — R1 catalog surface plus the in-host Observe driver-binding
+follow-up. See the "Resolved by R1" section above.)*
 
 **`kernel-gap` / `spec-gap` — capability absent from the kernel, or the decided
 design is unimplemented; deep, implementation-ticket work:**
@@ -297,7 +301,7 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   `12-NEGOTIATE-01.yaml` authored (`connect … expect: rejected` + `final-view` on
   the undisturbed existing view + `no-dead-letters`); passes the sweep.
 
-### `23-SPSC-01` — **RESOLVED (R1, `schema-gap`) — reject half only; ADMIT half still deferred to G-47**
+### `23-SPSC-01` — **RESOLVED (R1 + follow-up, `schema-gap` + `driver-binding-gap`)**
 
 - **Requirement**: `12-EXCL-01` (fan-out MUST be rejected at link time when the
   contract's payload carries exclusive ownership — `Owned`/`Leased`).
@@ -310,14 +314,21 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   `Owned`-parameter contract via the same public `ContractRegistry` seam, so the
   `exclusive` flag `FanOutlet` reads at construction is set), and a second
   `Consume` link is refused by the kernel's own `FanOutlet.linkTo` exclusivity
-  check — not a driver-side fake. Scenario `23-SPSC-01.yaml` authored (`connect …
-  expect: rejected` + first consumer `final-view` + `no-dead-letters`); passes
-  the sweep.
-- **Still deferred (ADMIT half) — G-47**: the observe/tap ADMIT half (a
-  `role: observe`-differentiated tap admitted onto the same exclusive outlet)
-  remains unbuilt: the driver still does not distinguish `role: observe` from a
-  `Consume` link at connect time (see `13-TAP-01`). Only the reject half is
-  covered.
+  check — not a driver-side fake.
+- **How resolved (ADMIT half)**: the core driver's in-host connect path lowers
+  `role: observe` to the host's typed `LinkOptions(role = LinkRole.Observe)`
+  overload. `LinkAdmission` therefore invokes `FanOutlet.tap`, the kernel's
+  genuine uncounted Observe funnel, rather than `FanOutlet.linkTo`; no
+  driver-side admission exception is involved. The `exclusive-observer` catalog
+  cell handles that tap by calling `Owned.borrow()` and counting the delivery,
+  never `take()`ing it. Scenario `23-SPSC-01.yaml` asserts that connect as
+  `connected`, then asserts a second ordinary Consume connect as `rejected`,
+  pushes again after the tap attaches, and pins both the observer's count and the
+  sole consumer's count with no dead letters. `13-TAP-01` continues to pass with
+  its declared Observe link now bound honestly.
+- **Remaining G-47 work is outside this scenario gap**: KSP-derived Borrowed
+  contract projection and validation, attach-forward-only catch-up semantics,
+  and copy-fork/cloneability remain open as recorded in 10/12 and 20/23.
 
 ### `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — **RESOLVED (R2, `schema-gap` + `driver-binding-gap`)**
 
@@ -3802,50 +3813,64 @@ Filed 2026-09-27 by `computenet-t4od7.9` (feature `computenet-t4od7` = KE4.7,
 epic `computenet-lxo` = KE4), over `feature/computenet-t4od7` at `15fd3e46`.
 Every other `[24-WL-nn]` id reads `covered` in `doc/spec/CONCORDANCE.md`
 (the `24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
-`[24-WL-11]`). The four ids below stay `gap` rows, and the fifth entry
+`[24-WL-11]`). `24-WL-04` now reads covered (only its structural residual stays disputed below), and so does `24-WL-09` (covered by the narrower implemented rule; its general `[KE4-30]` residual is disputed below); the other ids below stay `gap` rows, and the last entry
 records a scenario that was designed and deliberately not authored. Kernel
 test names below were checked with `git grep -n` at that commit.
 
-## `24-WL-04` — the floor is a value, not a wave: only its settlement consequence is observable, and that half is checkable but not yet authored (`check-vocabulary-gap`)
+## `24-WL-04` (residual) — the floor is not a wave position and is in no completeness set: no neutral observable (`check-vocabulary-gap`)
 
 - **Requirement**: `[24-WL-04]` (`20-dataflow-semantics/24-data-cells.md`
   §Lateness and waterlines; stated in `22-consistency.md` §Interaction with
   other parts): the floor SHALL NOT be a wave position and SHALL NOT be a
-  member of any completeness set or glitch-free frontier. 22 names the
-  observable consequence: a wave that reaches the waterline without moving the
-  floor emits nothing and is absorb-acked (CP-A3), so a glitch-free consumer
-  downstream of both the data and the waterline settles that wave normally.
-- **Corrected premise.** The breakdown (t4od7-D10) disputed the whole id on
-  the grounds that no catalog cell accepts a waterline arm into a wave-aligned
-  fan-in. That is false. `aligned-view` accepts a `value-view` member
-  (`KernelCatalog.alignedView`, `"value-view" -> scalarView()`), and
-  `scalarView()` (`KernelAdapters.kt`) folds `WaterlineDelta`. A probe was
-  run and not committed: `a -> c.d`, `a -> wl (lateness 5)`, `wl -> c.f`,
-  adds `[10,x]`, `[3,y]`, `[8,z]`, each followed by a `quiesce`, the last two
-  leaving the floor at 5. It passed `final-view c == {d: [[3,y],[8,z],[10,x]],
-  f: 5}` and `composite-whole-waves` on `d` on all 20 schedule runs
-  (`CorpusRunner`, core profile, Darwin arm64). **The settlement consequence
-  is checkable with no schema change.** Nobody has yet shown that the probe
-  DISCRIMINATES: that needs a kernel mutation that stops the no-rise
-  absorb-ack, and the close-out's claim held no kernel file.
-- **Missing capability (for the half that stays disputed)**: the literal
+  member of any completeness set or glitch-free frontier.
+- **Covered half.** The settlement consequence (a wave that reaches the
+  waterline without moving the floor emits nothing and is absorb-acked, so a
+  wave-aligned consumer of data and waterline settles it) is authored as
+  `24-WL-SETTLE-01` (`computenet-tcovt`), through an `aligned-view` with a
+  `set-view` data member and a `value-view` waterline member. It discriminates:
+  with `WaterlineCell` no longer absorb-acking a no-rise wave
+  (`kernel/.../data/Waterline.kt`, the `outlet.absorbAck()` after a failed
+  `raiseTo`), it fails on 20 of 20 runs with `final-view(c): expected
+  {d=[[3,y],[8,z],[10,x]],f=5} but read {d=[[10,x]],f=5}`.
+- **Missing capability (the half that stays disputed)**: the literal
   statement, that the floor is not a wave position and is in no completeness
   set, has no neutral observable. No check reads a cell's completeness set or
-  a frontier's members. The only observable consequence is the settlement
-  above. A broken implementation that made the floor a frontier member but
-  still acked every no-rise wave would pass every check this vocabulary can
-  state.
-- **What was NOT done instead**: the close-out authored no scenario (its
-  non-goal), so the probe is not in the corpus. No scenario covers
-  `[24-WL-04]` with a stand-in, such as an `observations-monotone` on the
-  floor, which is `[24-WL-03]`'s property and not this one.
-- **Check to restore**: the settlement scenario above, with the discriminating
-  kernel mutation, filed as `computenet-tcovt` (under `computenet-lxo`). When
-  it lands, shrink this entry to the "not a wave position" half.
+  a frontier's members. A broken implementation that made the floor a
+  frontier member but still acked every no-rise wave would pass every check
+  this vocabulary can state, including `24-WL-SETTLE-01`.
 - **Kernel pin**: `WaterlineCellTest` `a wave that does not move the floor is
   absorb-acked so a downstream glitch-free join settles it`.
-- **Revisit trigger**: `computenet-tcovt` landing. For the structural half, a
-  check that can read frontier membership.
+- **Revisit trigger**: a check that can read frontier or completeness-set
+  membership.
+
+## `24-WL-09` (residual) — `[KE4-30]`'s general safety condition has no clean formulation; the implemented rule is narrower (`proof-gap`)
+
+- **Requirement**: `[24-WL-09]` (`20-dataflow-semantics/24-data-cells.md`
+  §Lateness and waterlines): IF evicting a piece of state would leave a
+  subsequently admissible del unable to retract it, THEN the cell SHALL NOT
+  evict that state; the eviction units of `[24-WL-06]` together with the
+  liveness del guard `[24-WL-08]` SHALL be the implemented form of this
+  condition. The general condition it narrows is `[KE4-30]` of epic
+  `computenet-lxo`: evict only what no admissible del can reference. The
+  epic's acceptance allows closing with a narrower implemented rule only
+  alongside this entry.
+- **Covered half.** The implemented rule: `24-WL-DEL-01` (group-by: a del for an
+  evicted window's element is a no-op) and `24-WL-JOIN-01` (join family: a del
+  for an evicted row is a no-op and no pair exits twice), both `covered` for
+  `24-WL-09` in `doc/spec/CONCORDANCE.md`. Kernel pins: `GroupByEvictionTest`
+  `B4 - a del in flight for an evicted element is a no-op, never a negative
+  count`, and the `B5 - ...` tests of `JoinFamilyEvictionTest`,
+  `SemiJoinEvictionTest` and `IntersectEvictionTest`.
+- **Missing capability (the half that stays disputed)**: the general condition,
+  that no admissible del can reference any evicted state, has no clean
+  formulation for arbitrary state — the join family's minted pairs in
+  particular, which `[24-WL-09]` itself says are never an eviction unit.
+  No scenario or check can state "for every state shape" the way it can for the
+  two eviction units, so the property is checked per unit, not in general. Any
+  state shape outside the `[24-WL-06]` eviction units is not evicted rather
+  than evicted under a broadened rule.
+- **Revisit trigger**: a new state shape that wants eviction and does not fit
+  the `[24-WL-06]` units.
 
 ## `24-WL-15` — `retire(sourceId)` is a management verb with no script step (`schema-gap`)
 
@@ -3910,9 +3935,8 @@ test names below were checked with `git grep -n` at that commit.
   the evicting cell's refused units, for example
   `{type: eviction-refusals, cell: w, exactly: [<window keys>]}`, gated as a
   schema change.
-- **Revisit trigger**: a catalog change that adds an `Owned` set stream, or
-  G-47 (the observe/tap ADMIT half of `exclusive-sink`) reopening the
-  nature/ownership catalog.
+- **Revisit trigger**: a catalog change that adds an `Owned` set stream, or a
+  check-vocabulary change that exposes eviction-refusal diagnostics.
 
 ## `24-WL-18` — a `Replicable` cell evicts nothing, and the dist driver places no replicated evicting cell (`driver-binding-gap`)
 
@@ -3985,3 +4009,121 @@ test names below were checked with `git grep -n` at that commit.
   exposed by the catalog. Both are schema changes.
 - **Revisit trigger**: a catalog form for per-inlet frontier gating, or a
   check vocabulary change that adds prefix folds over map views.
+
+## 22-OBS-BRIDGED — bridged aligned observation ([KE2-28]..[KE2-30], BS-16): kernel-test-covered, no in-corpus driver binding
+
+### 22-OBS-BRIDGED-01 (a remote aligned arm settles the local sink) — **`driver-binding-gap`**
+
+- **Category**: `driver-binding-gap`.
+- **Requirement**: `[22-OBS-01]`, with the bridged frontier condition in
+  `[22-GF-03]` and the `[KE2-28]`/`[KE2-29]`/`[KE2-24]` feature clauses.
+- **Missing capability**: **cross-host aligned observation, no in-corpus driver binding**.
+  `KernelDriverDist.connectCrossHost` binds only
+  primary-`inlet` targets through `FanOutlet.streamTo` (with no `EdgeOpen`).
+  An `aligned-view` exposes one inlet per named member view and no primary
+  `inlet`, so the `dist` driver rejects this target; even a widened
+  `streamTo` binding would bypass the aligned frontier's edge-open handshake
+  and leave the arm's deltas unmatched. The missing runtime/corpus capability
+  is a named-inlet `bridgeTo`/`bridgeFrom` cross-host binding, plus a
+  `[22-GF-03]`-shaped corpus check for it.
+- **Behaviour it would carry**: Given an `aligned-view` with one member on a
+  second host, when a source wave reaches a local member and a remote member
+  over the bridge, every composite is the same per-source prefix as the
+  all-local case; a remote filter that absorbs the final wave settles by its
+  bridged `Progress` ack, and registering visibility handles adds no frame or
+  protocol lane.
+- **Scenario it would have been**: `22-OBS-BRIDGED-01.yaml`, `profile: dist`,
+  `covers: [22-OBS-01]`, with an `aligned-view` whose one member is hosted on
+  a second host.
+- **Why it cannot be checked honestly today**: the `dist` driver has no
+  binding for an `aligned-view` member inlet. Authoring the scenario over a
+  same-host stand-in would not exercise the bridge, while authoring it over
+  the available cross-host `streamTo` path would not install the frontier
+  edge it claims to test. That would make the scenario appear to cover
+  `[22-OBS-01]` without checking bridged completeness.
+- **What was NOT done instead**: no same-host stand-in was dressed as a
+  bridge, and no weakened scenario was authored. No scenario YAML or
+  `CONCORDANCE.md` row claims this corpus coverage.
+- **What is not lost**: the kernel proof is pinned by
+  `AlignedObserveBridgedTest`, over the in-process full-duplex frame bridge
+  and its Near/C/Far managed-host topology:
+  - `KE2-28 - an identity remote arm publishes exactly the local prefix for every wave`;
+  - `KE2-28 - an even-filtering remote arm publishes exactly the filtered local prefix`;
+  - `control - the same bridged topology tears under point-consistent observation`;
+  - `KE2-29 - a final wave swallowed remotely settles through bridged Progress`;
+  - `control - without negotiated Progress the final remote wave remains buffered`;
+  - `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`;
+  - `bridged Stall then Resume on one link are handled in wire order` (on a
+    single `ManagedHost` and a `WireEdgeLink`, not the frame bridge: it pins
+    the host-side fix this feature landed, which stages wire-arrived frontier
+    markers through the target's data FIFO so a bridged `Progress` cannot
+    overtake the data it orders).
+  The companion `GlitchFreeBridgedDiamondTest` also pins bridged frontier
+  ordering, absorb-ack settlement, and protocol-frame duplication controls.
+- **[KE2-30] clause status**: `[KE2-28]` identity and filtered cases are
+  shown by the two `KE2-28` methods above; its point-consistent control is
+  shown by `control - the same bridged topology tears under point-consistent observation`;
+  `[KE2-29]` is shown by `KE2-29 - a final wave swallowed remotely settles through bridged Progress`
+  with its no-`Progress` control; duplicated protocol frames are exercised,
+  not discriminated: the two `KE2-28` methods run under the seeded
+  `PROTOCOL_ONLY` duplicator on the Near→Far leg, but neutralising it can
+  leave them green, so a green seed is not evidence a duplicate occurred
+  (the test's class KDoc). The discriminating control for the duplicator
+  primitive is `BS-6` in `testkit`'s `DuplicateFaultTest`, and arm 3 of
+  `BS-16 CHA1-61 - the per-seed outcome vector survives the retrofit, is blind to a dead duplicator, and ungating it diverges`
+  in `GlitchFreeBridgedDiamondTest` shows the same duplicator, ungated,
+  firing in the harness this test's `Net` copies; `[KE2-24]` is shown by
+  `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`.
+- **Resolves**: a named-inlet cross-host link binding in `KernelDriverDist`,
+  together with the `[22-GF-03]`-shaped corpus check that exercises its
+  `EdgeOpen`/`EdgeClose`/`Progress` ordering and aligned-view completeness.
+
+---
+
+## 43-security authority coverage boundaries (computenet-ermvz.5)
+
+### `[43-ADMIT-01]` — deny-by-default peer admission is not reachable in the dist driver (`driver-binding-gap`)
+
+- **Requirement**: `[43-ADMIT-01]` says deny-by-default is a boundary control at
+  peer admission (`Peering.Side.allow` / transport hello refusal).
+- **Why it stays `gap`**: the Concord dist binding models N managed hosts over
+  one `LocationRegistry` by default. It constructs replication links, but no
+  scenario declares a `Peering.Side`, a hello, an allowlist or an admitted peer
+  identity. Its optional real-transport mode builds an open full mesh chosen by
+  a test property, not scenario vocabulary; it still exposes no hello policy or
+  admission result to a check. A replica write denial is a flow-time data
+  admission and cannot stand in for peer admission.
+- **What was not done instead**: neither `authority:` nor `write-denials` is
+  claimed as coverage of this id. They exercise `[43-FLOW-04]` after a replica
+  already exists and say nothing about whether an unlisted peer could join.
+- **Existing evidence**: kernel `TrustBoundaryTest` pins the deny-by-default
+  allowlist and open-mode control. It is implementation-level evidence, not a
+  cross-implementation Concord obligation.
+- **Resolves**: scenario-declarable peers and allowlists, a hello/admission step,
+  and a check reading the typed admission refusal from a transport-capable
+  driver. Until all three exist, `[43-ADMIT-01]` remains a concordance gap.
+
+### `[43-PRIN-01]` — a signed write's author is not the crossing `Principal` (`requirement-mismatch` + `driver-binding-gap`)
+
+- **Requirement**: `[43-PRIN-01]` requires *every crossing* to carry
+  `Principal.LocalTrusted` or `Principal.Peer(id, auth)`. The identity belongs
+  to the crossing and includes authentication strength.
+- **Why it stays `gap`**: the new authority scenarios observe the author inside
+  a `SignedWrite` and the author copied into `BoundaryDenial.principal`. That is
+  deliberately relay-independent data attribution: a write authored by Bob may
+  cross a link carried by Alice's host. Treating Bob as the crossing principal
+  would conflate the two identities and weaken the requirement. The dist driver
+  also has no check that reads `currentPrincipal()` at a crossing or its
+  `AuthLevel`.
+- **What was not done instead**: no three-replica scenario claims that an author
+  name surviving relay proves the relay crossing carried a `Principal`. Such a
+  scenario could pass while every crossing was unstamped, exactly the defect
+  `[43-PRIN-01]` forbids.
+- **What is covered nearby**: `43-FLOW-AUTH-01` and `43-FLOW-AUTH-02` cover
+  `[43-FLOW-04]`: signed-author admission, attributable refusal,
+  drop-and-reconverge, and ownership transfer. They make no crossing-principal
+  claim.
+- **Resolves**: a transport/peering scenario surface plus an observation made by
+  a boundary predicate at the crossing, reporting the full neutral principal
+  classification including authentication strength. Until then,
+  `[43-PRIN-01]` remains a concordance gap.

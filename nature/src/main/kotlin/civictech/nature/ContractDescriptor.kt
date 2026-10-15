@@ -19,6 +19,13 @@ data class MethodDescriptor(
     val idempotentMerge: Boolean = false,
     /** Index of the @Key argument, or -1 for an unkeyed/broadcast invocation. */
     val keyIndex: Int = -1,
+    /**
+     * Indexes of the parameters whose DECLARED type reaches an `Owned`/`Leased`. Invariant:
+     * `exclusive == exclusiveParameters.isNotEmpty()` (the generator emits both; [exclusive] is
+     * kept for its existing readers). The runtime discharge walk is bounded to these
+     * positions, so a supertype-declared parameter the scan did not mark is never opened.
+     */
+    val exclusiveParameters: List<Int> = emptyList(),
 )
 
 /** Wire identity of a contract: `contractId = StableHash.of(fqn)`. */

@@ -202,18 +202,17 @@ import java.io.Serializable
  *   Windowing-as-key-derivation without lateness remains fully expressible with the registered
  *   `flatMapSet`/`groupBy*` entries and is unaffected by this bullet.
  *   *DISPUTES audit: no filing for this exclusion.* The `[24-WL-*]` requirement family is `covered` in
- *   `doc/spec/CONCORDANCE.md` except four ids the KE4.7 close-out ("KE4.7 close-out — the
- *   `[24-WL-*]` ids and the B16 scenario the corpus does not carry", `concord/corpus/
- *   DISPUTES.md`) leaves as open `gap` rows for reasons unrelated to this exclusion —
- *   `[24-WL-04]` (a settlement consequence checked but not yet proven discriminating),
- *   `[24-WL-15]` (a schema gap: no script verb reaches `retire(sourceId)`), `[24-WL-17]` and
- *   `[24-WL-18]` (driver-binding gaps: no catalog id emits an `Owned`/`Replicable` set stream
- *   into an evicting cell) — plus a fifth, undropped, B16 entry recording a glitch-free-wrap
- *   scenario that was designed and deliberately not authored. None of the five concludes
- *   eviction itself goes unchecked; each names the kernel test that checks it directly instead
- *   (for example `[24-WL-04]`'s `WaterlineCellTest` pin, `[24-WL-15]`'s `WaterlineChurnTest`
- *   pins). `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part
- *   that does not touch lateness.
+ *   `doc/spec/CONCORDANCE.md`; `[24-WL-04]`'s structural half (the floor is not a wave position
+ *   or completeness-set member) remains disputed, while `[24-WL-15]` (a schema gap: no script
+ *   verb reaches `retire(sourceId)`), `[24-WL-17]` and `[24-WL-18]` (driver-binding gaps: no
+ *   catalog id emits an `Owned`/`Replicable` set stream into an evicting cell) remain open `gap`
+ *   rows for reasons unrelated to this exclusion — plus a fifth, undropped, B16 entry recording
+ *   a glitch-free-wrap scenario that was designed and deliberately not authored. None of the
+ *   five concludes eviction itself goes unchecked; each names the kernel test that checks it
+ *   directly instead (for example `[24-WL-04]`'s `WaterlineCellTest` pin, `[24-WL-15]`'s
+ *   `WaterlineChurnTest` pins).
+ *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
+ *   not touch lateness.
  *
  * - **`CoalescingCombineCell`.** Named in epic §3.1's inventory but not in `ORA1 §MODEL-02`'s
  *   minimum list; **excluded**, per the bead's default direction. Verified against its own
@@ -288,14 +287,13 @@ import java.io.Serializable
  *   delivery's wave context directly — the absence here is of a batch check, not of the
  *   requirements' coverage. `[24-WL-15]` (`retire(sourceId)`) is pinned by
  *   `kernel/src/test/kotlin/civictech/cell/data/WaterlineChurnTest.kt` rather than
- *   `WaterlineCellTest`. `[24-WL-04]` and `[24-WL-15]` are also two of the four `[24-WL-*]`
+ *   `WaterlineCellTest`. `[24-WL-15]`, `[24-WL-17]` and `[24-WL-18]` are the three `[24-WL-*]`
  *   ids the KE4.7 close-out ("KE4.7 close-out — the `[24-WL-*]` ids and the B16 scenario the
  *   corpus does not carry", `concord/corpus/DISPUTES.md`) leaves open as `gap` rows in
- *   `doc/spec/CONCORDANCE.md` — `[24-WL-04]` because the settlement consequence is checked
- *   but not yet proven discriminating, `[24-WL-15]` because the closed script-step vocabulary
- *   has no verb reaching a cell's management surface — alongside `[24-WL-17]`/`[24-WL-18]`
+ *   `doc/spec/CONCORDANCE.md`: `[24-WL-15]` because the closed script-step vocabulary has no
+ *   verb reaching a cell's management surface, alongside `[24-WL-17]`/`[24-WL-18]`
  *   (driver-binding gaps, `Owned`/`Replicable` set streams into an evicting cell). None of the
- *   four is a case of a requirement going unchecked: each entry names its kernel pin (this
+ *   three is a case of a requirement going unchecked: each entry names its kernel pin (this
  *   bullet's `WaterlineCellTest`/`WaterlineChurnTest` among them), so "no filing" still holds
  *   for what this ledger tracks — no `[24-WL-*]` requirement is uncheckable *anywhere*, only
  *   uncheckable by this batch reference.

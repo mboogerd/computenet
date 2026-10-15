@@ -14,6 +14,7 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.control.absorbAck
+import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 
 @CellBase
@@ -50,6 +51,10 @@ class FlatMapSetCell<A, B>(
     }
 
     init {
+        // An upstream Progress carries no delta to remap. Forward the exact
+        // source/counter only while this hop has one input edge; a fan-in
+        // FlatMapSetCell cannot settle the whole hop from one edge's ack.
+        inlet.relayAbsorbAcks()
         // late-join catch-up (G-22): output state is derived, so recompute it
         // from input state rather than keeping a second copy
         outlet.catchUpOnLinked { if (op.state.size > 0) SetDelta(adds = remap(op.state.asDelta().adds)) else null }

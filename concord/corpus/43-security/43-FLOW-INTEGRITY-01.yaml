@@ -1,0 +1,33 @@
+# Concord corpus scenario (computenet-8m179, profile: dist). Canonical schema — see concord/schema/scenario.md.
+# Deliberate schema extension: expected integrity denials are reported as dead letters, so this scenario intentionally omits no-dead-letters.
+id: 43-FLOW-INTEGRITY-01
+title: Forged and replayed signed writes are denied before replica delivery
+covers: [43-FLOW-04]
+profile: dist
+kind: example
+narrative:
+  given: two replicas of one alice-owned set slice after alice's valid write has converged
+  when: a forged alice signature and the exact retained valid envelope are driven again at the first replica
+  then: neither attempted write changes either view and the receiving boundary records both attributable denials
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: slice, authority: {principal: alice}}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: slice, authority: {principal: alice}}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: signed-apply, on: r1, actor: alice, op: add, value: x}
+  - {type: quiesce}
+  - {type: forge-signed-apply, on: r1, actor: alice, op: add, value: forged}
+  - {type: replay-signed-apply, on: r1, actor: alice, op: add, value: x}
+checks:
+  - {type: replicas-converge, logical: slice}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: final-view, view: v1, equals: [x]}
+  - {type: final-view, view: v2, equals: [x]}
+  - {type: write-denials, cell: r1, exactly: 2, principal: alice}
+  - {type: write-denials, cell: r2, exactly: 0}

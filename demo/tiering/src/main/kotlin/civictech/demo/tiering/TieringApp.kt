@@ -17,10 +17,8 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.link
-import civictech.cell.observe.AlignedCompositeCell
-import civictech.cell.observe.View
-import civictech.cell.observe.observe
-import civictech.cell.observe.observeAligned
+import civictech.cell.observe.Observation
+import civictech.cell.observe.observation
 import civictech.cell.replication.Replication
 import civictech.cell.wire.PeerConnection
 import civictech.cell.wire.PeerListener
@@ -380,38 +378,43 @@ class TieringApp(
     private var wsConnection: PeerConnection? = null
 
     private val state = Object()
-    // Read model: each outlet is materialized by either a point-consistent sink
-    // or a same-root aligned sink, then read via current() in stateJson.
+    // Read model: each outlet is materialized in one canonical observation,
+    // then read from its point-consistent assembled frame in stateJson.
     // Constructed without listeners so no broadcast fires before all eight
     // named views exist; listeners are registered in init afterwards.
-    private val itemsView = host.observe(refs.items.ref, View.set<String>())
-    private val valuationAligned: AlignedCompositeCell = host.observeAligned {
+    private val observation: Observation = host.observation {
+        set("items", refs.items.ref)
         set("valuations", refs.vals.ref)
         map("tierAvg", refs.tierAvg.ref)
-    }
-    private val preferenceAligned: AlignedCompositeCell = host.observeAligned {
         set("prefs", refs.prefs.ref)
         map("prefAvg", refs.prefAvg.ref)
+        // These are existing point-consistent one-view reads over ungated
+        // CombineLatestCell operators, which [KE2-09] admission rejects. They
+        // are not gated with emitOnFrontier: each combines independent roots
+        // (fused: vals x prefs; board: fused x the manual OR-map), and
+        // CombineLatestCell's WaveGate suits only a shared-source diamond —
+        // gated, both stop publishing (seven tiering tests red, computenet-axcyk.3).
+        // A single view has no mixed-view alignment risk.
+        unchecked("fused")
+        map("fused", refs.fused.ref)
+        map("manual", refs.manualEffective.ref)
+        unchecked("board")
+        map("board", refs.board.ref)
     }
-    private val fusedView = host.observe(refs.fused.ref, View.map<String, Tiered>())
-
-    /** The converged manual map, read off the [UntagCell] rather than the OR-map. */
-    private val manualView = host.observe(refs.manualEffective.ref, View.map<String, String>())
-
-    /** What the UI board and `/state`'s `"board"` render: fused, manual-overridden. */
-    private val boardView = host.observe(refs.board.ref, View.map<String, Tiered>())
 
     /** Same-root observation groups must drain completely once the host is idle. */
-    internal val alignedBufferedWaves: Int
-        get() = valuationAligned.bufferedWaves + preferenceAligned.bufferedWaves
+    internal val alignedBufferedWaves: Int get() = observation.bufferedWaves
+
+    internal val observationGroups: Map<String, String>
+        get() = observation.current().groupOf
 
     // Expose the published snapshots to frame-contract tests: reading current()
     // from an asynchronous callback can hide intermediate publications.
     internal fun onValuationSnapshot(listener: (Map<String, Any?>) -> Unit) =
-        valuationAligned.onChange(listener)
+        observation.group("valuations+tierAvg").onChange(listener)
 
     internal fun onPreferenceSnapshot(listener: (Map<String, Any?>) -> Unit) =
-        preferenceAligned.onChange(listener)
+        observation.group("prefs+prefAvg").onChange(listener)
 
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
     // keeps a Valuation-valued shadow index. This lightweight KEY set exists only
@@ -454,14 +457,9 @@ class TieringApp(
     val manualInstanceId: Long get() = manualCell.ref.instanceId
 
     init {
-        // Register one broadcast per sink now that all eight views exist; registering
+        // Register one broadcast for the assembled observation; registering
         // fires an immediate catch-up (harmless — clients is still empty).
-        itemsView.onChange { broadcast() }
-        valuationAligned.onChange { broadcast() }
-        preferenceAligned.onChange { broadcast() }
-        fusedView.onChange { broadcast() }
-        manualView.onChange { broadcast() }
-        boardView.onChange { broadcast() }
+        observation.onChange { broadcast() }
 
         if (wire != null) {
             val side = Peering.Side(registry, bridgeHost!!)
@@ -572,9 +570,17 @@ class TieringApp(
     private fun stateJson(): String {
         fun num(d: Double) = "%.4f".format(Locale.ROOT, d)
 
-        val items = itemsView.current()
-        val valuationSnapshot = valuationAligned.current()
-        val preferenceSnapshot = preferenceAligned.current()
+        val snapshot = observation.current().views
+        @Suppress("UNCHECKED_CAST")
+        val items = snapshot["items"] as Set<String>
+        val valuationSnapshot = mapOf(
+            "valuations" to snapshot.getValue("valuations"),
+            "tierAvg" to snapshot.getValue("tierAvg"),
+        )
+        val preferenceSnapshot = mapOf(
+            "prefs" to snapshot.getValue("prefs"),
+            "prefAvg" to snapshot.getValue("prefAvg"),
+        )
         @Suppress("UNCHECKED_CAST")
         val valuations = valuationSnapshot["valuations"] as Set<Valuation>
         @Suppress("UNCHECKED_CAST")
@@ -583,13 +589,16 @@ class TieringApp(
         val prefs = preferenceSnapshot["prefs"] as Set<Pref>
         @Suppress("UNCHECKED_CAST")
         val prefAvg = preferenceSnapshot["prefAvg"] as Map<String, Double>
-        val fused = fusedView.current()
+        @Suppress("UNCHECKED_CAST")
+        val fused = snapshot["fused"] as Map<String, Tiered>
         // The board renders the OVERRIDE cell — fused with the converged
         // manual pins applied. The signals table below still reads `fused`
         // and the two GroupBy averages, unchanged: it is the *computed*
         // pipeline's read-out, and a pin is not a computation.
-        val tiered = boardView.current()
-        val manual = manualView.current()
+        @Suppress("UNCHECKED_CAST")
+        val tiered = snapshot["board"] as Map<String, Tiered>
+        @Suppress("UNCHECKED_CAST")
+        val manual = snapshot["manual"] as Map<String, String>
 
         val board = Tiering.TIERS.joinToString(",") { tier ->
             val entries = tiered.filterValues { it.tier == tier }.entries

@@ -100,7 +100,7 @@ class InspectorFlowTest {
 
         drive(busy, 7)
         awaitUntil("the driven deltas reached the sink") {
-            host.lookup<SetApi<String>>(busySink.ref) != null && sampleReady(busy, 7)
+            host.lookup<SetApi<String>>(busySink.ref) != null && flowSampleReady(busy, 7)
         }
 
         val batch = sample()
@@ -121,7 +121,7 @@ class InspectorFlowTest {
         bindAll()
 
         drive(source, 3)
-        awaitUntil("deltas observed") { sampleReady(source, 3) }
+        awaitUntil("deltas observed by the flow tap") { flowSampleReady(source, 3) }
         sample().edges.single().rate shouldBe 3.0
 
         // counters reset with the window: a quiet second is an empty batch,
@@ -142,7 +142,7 @@ class InspectorFlowTest {
         flow.tappedOutlets.size shouldBe 1
 
         drive(source, 4)
-        awaitUntil("deltas observed") { sampleReady(source, 4) }
+        awaitUntil("deltas observed by the flow tap") { flowSampleReady(source, 4) }
 
         val rates = sample().edges.associate { it.id to it.rate }
         rates shouldBe mapOf(toLeft.id.toString() to 4.0, toRight.id.toString() to 4.0)
@@ -237,7 +237,7 @@ class InspectorFlowTest {
         bindAll()
         flow.tappedOutlets shouldBe setOf(source.outlet.ref)
         drive(source, 2, prefix = "before")
-        awaitUntil("deltas observed") { sampleReady(source, 2) }
+        awaitUntil("deltas observed by the flow tap") { flowSampleReady(source, 2) }
         sample().edges.single().rate shouldBe 2.0
 
         link.unlink()
@@ -318,6 +318,18 @@ class InspectorFlowTest {
      */
     private fun sampleReady(cell: SetCell<String>, n: Int): Boolean =
         cell.outlet.waveState().highWater >= n
+
+    /**
+     * Has the collector's tap observed at least [n] waves from [cell]'s current
+     * outlet epoch? Unlike [sampleReady], this is a barrier on the counter that
+     * [FlowCollector.sample] drains: the outlet advances its high water before
+     * fan-out reaches the tap, so high water alone can race the sample.
+     */
+    private fun flowSampleReady(cell: SetCell<String>, n: Int): Boolean {
+        val wave = cell.outlet.waveState()
+        val observed = flow.observedWaveOf(cell.outlet.ref)
+        return observed != null && observed.sourceId == wave.sourceId && observed.counter >= n
+    }
 
     /** A spontaneous producer — its emissions mint fresh waves at hop 0. */
     private class Emitter(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {

@@ -126,8 +126,12 @@ internal interface ProtocolAnchored {
  * protocol metadata (attention state is thread-safe by construction) and for
  * the single-threaded simulation; queue-hop delivery through the owning host
  * is the upgrade path if a handler ever needs to touch cell state from a
- * threaded production host. Endpoint objects are in-process only — generic
- * protocols do not cross the wire yet (bridged links have null endpoints).
+ * threaded production host. Endpoint objects are in-process only — bridged
+ * links have null endpoint objects, but a protocol negotiated into
+ * `Link.protocolCapabilities` crosses through `Link.protocolBridge` via
+ * `Protocols.sendUpstream` / `Protocols.sendDownstream` (`TopologyOrder` always),
+ * as proven for bridged frontier traffic by `GlitchFreeBridgedDiamondTest` and
+ * `AlignedObserveBridgedTest`.
  */
 // PN-9 (leak fix): no `port` field is stored, and [ownerRef] is weak. A stored
 // `port`, or a strong `owner` ref (owner → its ports), would pin every port's

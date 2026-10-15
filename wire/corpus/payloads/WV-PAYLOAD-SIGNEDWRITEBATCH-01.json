@@ -1,0 +1,71 @@
+{
+  "id": "WV-PAYLOAD-SIGNEDWRITEBATCH-01",
+  "title": "SignedWriteBatch carrying two authors' envelopes",
+  "category": "payloads",
+  "kind": "frame",
+  "covers": [
+    "WIR1-C05",
+    "WIR1-I01",
+    "WIR1-I02",
+    "WIR1-I03"
+  ],
+  "codecVersion": 2,
+  "messageKind": "binary",
+  "decoded": {
+    "type": "frame",
+    "fields": {
+      "contractId": -996426215734216040,
+      "methodId": -134175827537617903,
+      "cellRef": {
+        "id": "00000000-0000-0000-0000-000000000042"
+      },
+      "portName": "inlet",
+      "type": "PORT_API",
+      "args": [
+        {
+          "type": "SignedWriteBatch",
+          "fields": {
+            "writes": [
+              {
+                "logicalId": "00000000-0000-0000-0000-000000000042",
+                "author": {
+                  "name": "alice"
+                },
+                "counter": 1048577,
+                "payload": [
+                  1,
+                  2,
+                  3
+                ],
+                "signature": [
+                  -4,
+                  5,
+                  6
+                ]
+              },
+              {
+                "logicalId": "00000000-0000-0000-0000-000000000042",
+                "author": {
+                  "name": "bob"
+                },
+                "counter": 2,
+                "payload": [
+                  7
+                ],
+                "signature": [
+                  8,
+                  -9
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "encoded": {
+    "utf8": "{\"contractId\":-996426215734216040,\"methodId\":-134175827537617903,\"cellRef\":{\"id\":\"00000000-0000-0000-0000-000000000042\"},\"portName\":\"inlet\",\"type\":\"PORT_API\",\"args\":[[\"SignedWriteBatch\",{\"writes\":[{\"logicalId\":\"00000000-0000-0000-0000-000000000042\",\"author\":{\"name\":\"alice\"},\"counter\":1048577,\"payload\":[1,2,3],\"signature\":[-4,5,6]},{\"logicalId\":\"00000000-0000-0000-0000-000000000042\",\"author\":{\"name\":\"bob\"},\"counter\":2,\"payload\":[7],\"signature\":[8,-9]}]}]]}",
+    "base64": "eyJjb250cmFjdElkIjotOTk2NDI2MjE1NzM0MjE2MDQwLCJtZXRob2RJZCI6LTEzNDE3NTgyNzUzNzYxNzkwMywiY2VsbFJlZiI6eyJpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiJ9LCJwb3J0TmFtZSI6ImlubGV0IiwidHlwZSI6IlBPUlRfQVBJIiwiYXJncyI6W1siU2lnbmVkV3JpdGVCYXRjaCIseyJ3cml0ZXMiOlt7ImxvZ2ljYWxJZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDA0MiIsImF1dGhvciI6eyJuYW1lIjoiYWxpY2UifSwiY291bnRlciI6MTA0ODU3NywicGF5bG9hZCI6WzEsMiwzXSwic2lnbmF0dXJlIjpbLTQsNSw2XX0seyJsb2dpY2FsSWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwNDIiLCJhdXRob3IiOnsibmFtZSI6ImJvYiJ9LCJjb3VudGVyIjoyLCJwYXlsb2FkIjpbN10sInNpZ25hdHVyZSI6WzgsLTldfV19XV19"
+  },
+  "notes": "Generated, not transcribed, by ./gradlew :wire:wireVectors -Pwire.vectors.write=true from `decoded`. The SignedWriteBatch registration's own vector (computenet-ermvz, ermvz-D9 catch-up batch): two elements from different authors so element order is pinned; elements are non-polymorphic SignedWrite objects inside the list. covers [WIR1-C05], [WIR1-I01]-[WIR1-I03]."
+}

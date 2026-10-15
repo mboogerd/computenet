@@ -44,6 +44,8 @@
 # reads the real edges, and each it reports READY is appended with a fifth
 # column `stale-blocked` (bare id under --ids-only). A verify-ready.sh failure
 # leaves the primary rows standing and says on stderr the check did not run.
+# PARKED ROWS (computenet-2ubdj). An item that is `status=blocked`, deferred or
+# labelled `human` waits on a person and is never a row here, from either pass.
 # EMPTY OUTPUT WITH EXIT 0 IS A REAL ANSWER: nothing ready here.
 # Exit 3 = the query itself failed and NOTHING was checked — never read that as
 # an empty epic, because deferring on it hides the epic from both machines.
@@ -100,9 +102,12 @@ ready = unwrap(open(os.environ["READYF"]).read())
 
 parent = {}
 kind = {}
+parked = set()
 for r in allrows:
     parent[r["id"]] = r.get("parent") or None
     kind[r["id"]] = r.get("issue_type") or r.get("type") or ""
+    if r.get("status") in ("blocked", "deferred") or "human" in (r.get("labels") or []):
+        parked.add(r["id"])
 
 def epic_of(bid):
     """The epic-of.sh rule: explicit .parent when set, else the dotted-id
@@ -143,8 +148,8 @@ def epic_of(bid):
 
 for r in ready:
     bid = r["id"]
-    if bid == epic:
-        continue        # the epic is not ready work *beneath* itself
+    if bid == epic or bid in parked:
+        continue        # the epic is not ready work *beneath* itself; a park is not ready
     owner = epic_of(bid)
     if owner is None:
         print("ready-in-epic: could not resolve the epic of %s — check it by hand" % bid, file=sys.stderr)
@@ -168,7 +173,7 @@ with open(os.environ["CANDF"], "w") as out:
         print("ready-in-epic: bd blocked unparseable; the stale-blocked check did NOT run", file=sys.stderr)
     for r in blocked:
         bid = r["id"]
-        if bid == epic or bid in ready_ids or epic_of(bid) != epic:
+        if bid == epic or bid in ready_ids or bid in parked or epic_of(bid) != epic:
             continue
         if status.get(bid, r.get("status", "")) in ("closed", "deferred", "in_progress", "pinned"):
             continue
