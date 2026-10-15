@@ -89,6 +89,34 @@ class WriteAuthorityGossipTest {
     }
 
     @Test
+    fun `anti-entropy catch-up silently deduplicates an already retained signed pair`() {
+        val controller = SimulationController()
+        val signing = StubWriteSigning(pA, pB)
+        val a = AuthorityTestPeer(controller, pA, signing)
+        val b = AuthorityTestPeer(controller, pB, signing)
+        Peering.loopback(a.side, b.side)
+        val logicalId = UUID.randomUUID()
+        val onA = a.replica(logicalId, 0, WriteAuthority.Principal(pA))
+        val onB = b.replica(logicalId, 1, WriteAuthority.Principal(pA))
+        controller.runToIdle()
+
+        val signed = signing.signed(logicalId, pA, 101, add("retained", 101))
+        a.delta(onA.ref).propagate(signed)
+        controller.runToIdle()
+        listOf(onA.membership(), onB.membership()) shouldBe List(2) { setOf("retained") }
+        listOf(a, b).flatMap { it.denialReasons() }.shouldBeEmpty()
+
+        val relay = b.replication.authorityOf(onB.ref)!!
+        relay.outlet.linking.fireLinked(relay.outlet.linking.links.single())
+        controller.runToIdle()
+
+        listOf(onA.membership(), onB.membership()) shouldBe List(2) { setOf("retained") }
+        a.deadLetters.mapNotNull { letter ->
+            letter.denial?.let { denial -> denial.reason to denial.detail }
+        } shouldBe emptyList()
+    }
+
+    @Test
     fun `forgery replay unsigned input and unauthorized batch member are independently refused`() {
         val mesh = threePeerMesh(WriteAuthority.Principal(pA))
         val logicalId = mesh.onC.ref.id
