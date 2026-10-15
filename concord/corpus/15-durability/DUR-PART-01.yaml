@@ -8,11 +8,13 @@
 # under its recorded ref. If PartitionedCell later becomes Stateful, checkpoint
 # recovery remains a separate scenario rather than changing this one.
 #
-# Recovery can deliver the pre-crash partition input by two routes: replaying
-# the journaled source re-emits its set delta through the rebuilt link, and the
-# partition's own journaled inlet frames replay directly. The organelles' tag
-# algebra makes the overlap idempotent; equality with the uninterrupted twin
-# proves that the replay neither loses nor double-counts the scalar keys.
+# The source and partition intentionally use separate named journals, and the
+# crash controller recovers only the partition's journal. The source is still
+# journaled, but it rebuilds empty in this recovery step; only replay of the
+# partition's own inlet frames can refill the volatile durable-side view. This
+# isolates the composite's recovery instead of letting upstream replay mask a
+# missing partition journal. Equality with the uninterrupted twin proves that
+# the tail replay neither loses nor double-counts the scalar keys.
 id: DUR-PART-01
 title: A journaled partition recovers by tail replay to the uninterrupted batch board
 covers: [24-DUR-02, 24-PART-03]
@@ -21,21 +23,21 @@ kind: example
 narrative:
   given: >
     a journaled set source feeding a journaled partition and volatile count
-    view on the durable host, plus an uninterrupted partitioned twin driven by
-    the identical scalar-element history
+    view on the durable host, with each durable cell on its own named journal,
+    plus an uninterrupted partitioned twin driven by the identical scalar history
   when: >
-    five elements reach both graphs, the durable host crashes and rebuilds the
-    partition under its recorded ref by whole-tail replay, then both graphs
-    accept one more element
+    five elements reach both graphs, the durable host crashes and rebuilds all
+    cells but recovers only the partition's journal by whole-tail replay, then
+    both graphs accept one more element
   then: >
     the recovered volatile board equals the uninterrupted twin, the twin equals
     the independent batch oracle, and no replay route produces a dead letter
 graph:
   cells:
-    - {id: ds, type: journal-set-source, host: dur}
-    - {id: dp, type: partition, fn: key-of, journal: default, host: dur}
+    - {id: ds, type: journal-set-source, journal: source, host: dur}
+    - {id: dp, type: partition, fn: key-of, journal: partition, host: dur}
     - {id: dv, type: count-view, host: dur}
-    - {id: ctl, type: journal, host: dur}
+    - {id: ctl, type: journal, journal: partition, host: dur}
     - {id: ts, type: set-source, host: twin}
     - {id: tp, type: partition, fn: key-of, host: twin}
     - {id: tv, type: count-view, host: twin}
