@@ -808,6 +808,7 @@ class CorpusRunner {
         cell.k?.let { put("k", Value.IntVal(it.toLong())) }
         cell.glitchFree?.let { put("glitch-free", Value.BoolVal(it)) }
         cell.inletMode?.let { put("inlet-mode", Value.StrVal(it)) }
+        cell.journal?.let { put("journal", Value.StrVal(it)) }
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }
         cell.authority?.let {
             require(cell.replicaOf != null) {
