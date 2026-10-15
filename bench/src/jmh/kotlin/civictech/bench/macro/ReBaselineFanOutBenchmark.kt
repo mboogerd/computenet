@@ -51,6 +51,14 @@ private interface ReBaselineBenchmarkSourceProxy {
  * default heap; an OOM kills that fork, leaving an absent CSV row that the render step
  * reports with the run log as its evidence rather than inventing an `Unschedulable`
  * outcome (the latter is a SIM-only cost-model classification).
+ *
+ * Heap (computenet-p2h90): the taps are built with `mirrorMembership = false`. Each
+ * [ReBaselineTapCell] otherwise keeps a SECOND cardinality-sized element-to-tag map beside
+ * the kernel `UnionSetCell`'s own; at (1e5, 256) that mirror was about half of a ~13.4 GB
+ * live set and, with the default 12 GiB cap, OOM'd every fork. The mirror is touched only by
+ * deltas the union emits, which an idempotent re-baseline does not, so dropping it does not
+ * change the timed work. The rig checks seeding with `netElements()` instead. Rows measured
+ * before this change (computenet-j27rc.5) used the mirror; their timed region is unaffected.
  */
 @Fork(ReBaselineFanOutBenchmark.FORKS)
 @Warmup(iterations = ReBaselineFanOutBenchmark.WARMUP)
@@ -88,7 +96,7 @@ open class ReBaselineFanOutBenchmark {
                     ref = CellRef(UUID.randomUUID()),
                     preload = cardinality,
                 )
-                val openedTaps = List(fanOut) { ReBaselineTapCell() }
+                val openedTaps = List(fanOut) { ReBaselineTapCell(mirrorMembership = false) }
 
                 host.managementInlet.call.spawn(source)
                 openedTaps.forEach { host.managementInlet.call.spawn(it) }
@@ -116,8 +124,8 @@ open class ReBaselineFanOutBenchmark {
                 sourceOps.emitAll()
                 openedScheduler.awaitDrained("re-baseline rig seed", DRAIN_TIMEOUT_MS)
                 taps.forEachIndexed { index, tap ->
-                    check(tap.membership().size.toLong() == cardinality) {
-                        "re-baseline tap $index seeded ${tap.membership().size} of " +
+                    check(tap.netElements() == cardinality) {
+                        "re-baseline tap $index seeded ${tap.netElements()} of " +
                             "$cardinality elements"
                     }
                 }

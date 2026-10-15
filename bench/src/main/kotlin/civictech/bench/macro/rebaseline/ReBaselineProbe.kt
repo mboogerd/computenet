@@ -131,6 +131,7 @@ data class TapDelivery(
  */
 class ReBaselineTapCell(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
+    private val mirrorMembership: Boolean = true,
 ) : Cell {
     @Suppress("UNCHECKED_CAST")
     val inlet = registerPort(
@@ -141,12 +142,15 @@ class ReBaselineTapCell(
     private val union = UnionSetCell<Long>()
     private val recorded = mutableListOf<TapDelivery>()
     private val live = mutableMapOf<Long, MutableSet<Timestamp>>()
+    private var netElements = 0L
 
     init {
         union.outlet.subscribe(
             Use.fixed(
                 object : Propagate<SetDelta<Long>> {
                     override fun propagate(value: SetDelta<Long>) {
+                        netElements += value.adds.size - value.dels.size
+                        if (!mirrorMembership) return
                         value.adds.forEach { (element, tags) ->
                             live.getOrPut(element) { mutableSetOf() } += tags
                         }
@@ -181,7 +185,20 @@ class ReBaselineTapCell(
     val noticeDeliveries: List<TapDelivery> get() = recorded.filter { it.notice != null }
 
     /** Reconstructs the live membership forwarded by the wrapped kernel union. */
-    fun membership(): Set<Long> = live.keys.toSet()
+    fun membership(): Set<Long> {
+        check(mirrorMembership) { "membership() needs mirrorMembership = true; use netElements()" }
+        return live.keys.toSet()
+    }
+
+    /**
+     * Elements the kernel union has emitted, net of removals: adds minus dels, counted per
+     * delta entry, with no per-element state kept. Equals `membership().size` for an add-only
+     * stream such as the pre-load (one delta, distinct elements), which is all the REAL rig
+     * uses it for. It exists so the 1e5 x 256 REAL corner does not hold a SECOND C-sized
+     * element-to-tag map per tap beside the union's own (computenet-p2h90: that mirror was
+     * about half the retained heap and sits outside the timed window).
+     */
+    fun netElements(): Long = netElements
 }
 
 /**
