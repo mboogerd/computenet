@@ -6653,6 +6653,30 @@ With this export, `CostQuery.cellResidency` answers `Priced` at admitted structu
 
 **Host was NOT quiesced for this calibration run**, and this is disclosed rather than hidden. On this 16-core machine, retained `uptime` records show load averages (1/5/15 min) of 5.43/8.64/8.29 immediately before the JMH run (2026-10-14T16:32:40Z) and 7.56/8.26/8.17 immediately after it (16:34:47Z). No separate load reading was retained for the in-process retained-bytes probe that followed. The dispersions above are what that host produced. `localDispatchNanos` in particular separates by fork in the run log (fork 1 measurement iterations 8652–9029 ns/op, forks 2–3 11429–12319 ns/op), so its ± spans a between-fork shift, not only within-fork noise.
 
+## 2026-10-14 — BB-GRA — LDBC Graphalytics coverage after the KE5-independent slice (LCC validated; PR, CDLP, BFS, SSSP, WCC blocked on E5.2/E5.3[/E5.4])
+Harness: dadaba932b29e2011888a7376a3af77c9b27151b · JVM Amazon.com Inc. (Corretto-21.0.5.11.1)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=Graphalytics LCC SIM work steps (JUnit @Tag(bench) probe) forks=1 warmup=1 iters=5 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| example-directed load | 18.0 ± 0.0 steps | |
+| example-directed compute | 22.0 ± 0.0 steps | |
+| example-undirected load | 25.0 ± 0.0 steps | |
+| example-undirected compute | 22.0 ± 0.0 steps | |
+Trigger: G-41 — INCONCLUSIVE for cycle regions: five algorithms remain blocked on KE5 constructs; LCC validates.
+
+Specification: LDBC Graphalytics Benchmark specification v1.0.6-draft
+Dataset source commit: 7b8bde76cf7aab5e90b25ecd4b38829e2f98b292
+Load mode: volatile/per-message
+
+| Algorithm | Status | Cause |
+| --- | --- | --- |
+| BFS | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). It also needs E5.4 iteration-cut detection. |
+| CDLP | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). |
+| LCC | validated |  |
+| PR | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). |
+| SSSP | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). It also needs E5.4 iteration-cut detection. |
+| WCC | blocked | blocked — [BB-GRA-16]: needs E5.2 LoopContext (iteration identity on MessageContext) and E5.3 cycle-region ingress/egress; the pre-E5 CycleHead/FeedbackInlet offers bounded-lap termination but no iteration identity, so a fixed-iteration run cannot be expressed in bench/. [BB-GRA-30] gate not landed (computenet-dud DEFERRED). It also needs E5.4 iteration-cut detection. |
+
 ## 2026-10-15 — RESTART re-baseline structural counts per (cardinality, fan-out, host count), SIM drive — G-43 study, SIM half
 Harness: 6bc0caf4 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
 JMH: mode=SIM RESTART re-baseline probe (JUnit @Tag("bench"), one deterministic BenchMesh per attempt; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both) forks=1 warmup=1 iters=2 · drive=SIM

@@ -333,6 +333,11 @@ data class RowLabel(
             // labels for six rows.
             "BoundedReadBenchmark" to RowLabel(params = listOf("scale"), includeMethod = true),
             "FanOutScalingBenchmark" to RowLabel(params = listOf("degree")),
+            // Two phase methods over the same dataset and load-mode sweep.
+            "LccBenchmark" to RowLabel(
+                params = listOf("dataset", "loadMode"),
+                includeMethod = true,
+            ),
             // Both numeric axes stay explicit in the G-43 findings table.
             "ReBaselineFanOutBenchmark" to RowLabel(
                 params = listOf("cardinality", "fanOut"),
