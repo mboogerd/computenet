@@ -6,18 +6,19 @@
 #
 # Usage:
 #   file-retro.sh --skill <work|remediate-friction|...> --file <retro.md> \
-#     [--skill-version <sha>] [--started <iso8601>] [--model <id>]
+#     [--skill-version <sha>] [--started <iso8601>] [--model <id>] [--recurs-of <id>[,<id>]]
+# --recurs-of: landed friction fix(es) this session hit again; recurrence-audit.py reads it.
 #
 # Unparented on purpose: a hash id cannot collide across machines (AGENTS.md,
 # "Creating tickets under a shared epic"), and no epic's ready-listing should
 # see a retro. It does not push — the caller's publish step does.
 # Prints the new bead id. Exit 1 on a failed step, 2 on bad usage/template.
 set -uo pipefail
-skill= file= ver= started= model=${CLAUDE_MODEL:-}
+skill= file= ver= started= recurs= model=${CLAUDE_MODEL:-}
 while [ $# -gt 0 ]; do case $1 in
   --skill) skill=$2; shift 2 ;; --file) file=$2; shift 2 ;;
   --skill-version) ver=$2; shift 2 ;; --started) started=$2; shift 2 ;;
-  --model) model=$2; shift 2 ;;
+  --model) model=$2; shift 2 ;; --recurs-of) recurs=$2; shift 2 ;;
   *) echo "file-retro: unknown argument $1" >&2; exit 2 ;; esac; done
 [ -n "$skill" ] && [ -r "$file" ] || { echo "usage: file-retro.sh --skill S --file F [--skill-version V] [--started T] [--model M]" >&2; exit 2; }
 
@@ -40,8 +41,8 @@ esac
 
 machine=${BEADS_ACTOR:-$(hostname -s)}
 now=$(date -u +%FT%TZ)
-meta=$(jq -nc --arg s "$skill" --arg m "$machine" --arg v "$ver" --arg st "$started" --arg e "$now" --arg mo "$model" \
-  '{retro_skill:$s, retro_machine:$m, skill_version:$v, started:$st, ended:$e, model:$mo} | with_entries(select(.value != ""))')
+meta=$(jq -nc --arg s "$skill" --arg m "$machine" --arg v "$ver" --arg st "$started" --arg e "$now" --arg mo "$model" --arg r "$recurs" \
+  '{retro_skill:$s, retro_machine:$m, skill_version:$v, started:$st, ended:$e, model:$mo, recurs_of:$r} | with_entries(select(.value != ""))')
 # stderr stays out of the id: a warning printed after a successful create
 # would otherwise read as failure, and a retry would file the record twice.
 err=$(mktemp "${TMPDIR:-/tmp}/file-retro.XXXXXX")

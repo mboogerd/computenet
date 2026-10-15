@@ -56,4 +56,4 @@ retrospective will look at promoting that word to a tag.
 Record small issues too. A one-off hiccup that is not worth a friction item
 (work step 7) is exactly what goes here: the retrospective finds the
 recurrences no single session can see. An issue that meets the friction bar
-goes in both places.
+goes in both places. Hit a landed friction fix again? Pass `--recurs-of <id>`.

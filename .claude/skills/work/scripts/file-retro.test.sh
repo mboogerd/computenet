@@ -25,6 +25,7 @@ out=$("$SCRIPT" --skill work --file "$ROOT/r.md" --skill-version abc 2>&1); st=$
 [ $st -eq 0 ] && [ "$out" = computenet-r3tro ] && ok "valid record files and prints the id" || bad "valid record: $st $out"
 grep -q -- '--type=retro' "$BD_LOG" && ok "created as type retro" || bad "type"
 grep -q '"skill_version":"abc"' "$BD_LOG" && ok "metadata carries skill_version" || bad "metadata"
+grep -q recurs_of "$BD_LOG" && bad "empty recurs_of written" || ok "no recurs_of without the flag"
 [ "$(cat "$ROOT/types")" = retro ] && ok "registers the retro type when missing" || bad "type registration"
 
 : > "$BD_LOG"; echo "bug,retro" > "$ROOT/types"
@@ -33,6 +34,9 @@ grep -q 'config set' "$BD_LOG" && bad "re-registered an existing type" || ok "le
 
 out=$(BD_WARN=1 "$SCRIPT" --skill work --file "$ROOT/r.md" 2>/dev/null); st=$?
 [ $st -eq 0 ] && [ "$out" = computenet-r3tro ] && ok "a stderr warning after create is not a failure" || bad "warning after create: $st $out"
+
+: > "$BD_LOG"; "$SCRIPT" --skill work --file "$ROOT/r.md" --recurs-of computenet-cz5c1 >/dev/null 2>&1
+grep -q '"recurs_of":"computenet-cz5c1"' "$BD_LOG" && ok "--recurs-of reaches metadata" || bad "recurs-of"
 
 good '- [other:dns] resolver down'
 "$SCRIPT" --skill work --file "$ROOT/r.md" >/dev/null 2>&1 && ok "other:<word> accepted" || bad "other tag"

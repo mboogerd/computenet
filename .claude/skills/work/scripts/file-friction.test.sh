@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for file-friction.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "11 passed, 0 failed".
+# Expect "13 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/file-friction.sh"}
@@ -104,6 +104,14 @@ out=$("$SCRIPT" --type bug --title "work skill: " --desc d --accept a 2>&1); st=
 printf 'has `ticks` and $(echo NO)\n' > "$ROOT/body.txt"
 out=$("$SCRIPT" --type bug --title t --desc-file "$ROOT/body.txt" --accept a --skill-version abc 2>&1); st=$?
 [ "$st" = 0 ] && ok "--desc-file accepted" || bad "desc-file: exit=$st out=$out"
+
+# nbd5h: --recurs-of lands in metadata as the structured recurrence link;
+# omitted, no empty recurs_of key is written (case 1's log).
+fixture
+"$SCRIPT" --type bug --title t --desc d --accept a --skill-version abc --recurs-of computenet-2jx46 >/dev/null 2>&1
+grep -q '"recurs_of":"computenet-2jx46"' "$BD_LOG" && ok "--recurs-of reaches metadata" || bad "recurs-of: $(cat "$BD_LOG")"
+fixture; run >/dev/null
+grep -q recurs_of "$BD_LOG" && bad "empty recurs_of written" || ok "no recurs_of without the flag"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

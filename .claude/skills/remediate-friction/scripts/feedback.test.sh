@@ -23,6 +23,26 @@ if $S/recurrence-audit.py 2>/dev/null | grep -q 'FAILED-FIX.*computenet-l5rc.*co
 $S/recurrence-audit.py --jsonl /nonexistent.jsonl >/dev/null 2>&1 && rc=0 || rc=$?
 [ "${rc:-0}" = 3 ] && ok "exit 3 on a missing export (NOTHING checked)" \
                    || bad "missing export gave exit ${rc:-0}, expected 3"
+# nbd5h fixtures: a repeat that never cites the fix in prose (2jx46 -> q8ksa)
+# and a retro-only repeat (cz5c1) are found only through metadata.recurs_of.
+F=$(mktemp "${TMPDIR:-/tmp}/recur.XXXXXX"); E='"dependencies":[{"depends_on_id":"computenet-wpvy","type":"parent-child"}]'
+cat > "$F" <<EOF
+{"id":"fix-a","status":"closed","close_reason":"fixed in #1","closed_at":"2026-10-06T19:25:00Z","created_at":"2026-10-01T00:00:00Z",$E}
+{"id":"fix-b","status":"closed","close_reason":"fixed in #2","closed_at":"2026-10-06T19:25:00Z","created_at":"2026-10-01T00:00:00Z",$E}
+{"id":"rep-a","status":"open","title":"same symptom, new words","created_at":"2026-10-07T12:02:00Z","metadata":{"recurs_of":"fix-a"},$E}
+{"id":"retro-b","status":"open","issue_type":"retro","title":"retro","created_at":"2026-10-08T00:00:00Z","metadata":{"recurs_of":["fix-b"]}}
+{"id":"old","status":"open","title":"fix-a recurred","created_at":"2026-09-01T00:00:00Z","metadata":{"recurs_of":"fix-b"},$E}
+EOF
+out=$($S/recurrence-audit.py --jsonl "$F" --since 2026-10-07 2>&1) || true
+grep -q 'FAILED-FIX  fix-a .*->  rep-a  linked' <<<"$out" && ok "linked repeat without a prose citation is reported" || bad "missed linked 2jx46-shaped repeat"
+grep -q 'FAILED-FIX  fix-b .*->  retro-b  linked' <<<"$out" && ok "retro-only repeat is reported" || bad "missed cz5c1-shaped retro repeat"
+grep -q -- '-> *old' <<<"$out" && bad "--since listed a report from before the window" || ok "--since hides older reports"
+grep -q '^1 reports created before 2026-10-07 not listed' <<<"$out" && ok "--since collapses history to one count line" || bad "no history count line"
+grep -q 'carries metadata.recurs_of' <<<"$out" && bad "caveat printed although links exist" || ok "no caveat when links exist"
+grep -v recurs_of "$F" > "$F.nolink"
+{ $S/recurrence-audit.py --jsonl "$F.nolink" 2>&1 || true; } | grep -q "means none was linked or cited, not none happened" \
+  && ok "says detection depends on links when none exist" || bad "bare 0 recurred with no links in scope"
+rm -f "$F" "$F.nolink"
 
 echo "reachability.py"
 if $S/reachability.py --for orchestrator .claude/skills/work/SKILL.md >/dev/null 2>&1

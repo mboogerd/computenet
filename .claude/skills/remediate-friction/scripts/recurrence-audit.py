@@ -17,8 +17,10 @@ its own instruction text had failed to fix, with nothing measuring either pass.
 This script is the missing measurement, and it needs no new process: every
 signal it reads is already in the export.
 
-WHAT A RECURRENCE IS. A bead FILED AFTER a fix closed, whose text names that
-fix's id. The strong form says so outright ("RECURRENCE of computenet-84z6",
+WHAT A RECURRENCE IS. Any bead -- friction item or retro record -- whose
+metadata.recurs_of names a landed fix (the structured link; file-friction.sh
+and file-retro.sh take --recurs-of), or, as the textual fallback, a bead FILED
+AFTER a fix closed whose text names that fix's id. The strong form says so outright ("RECURRENCE of computenet-84z6",
 "hit again", "Third recurrence"); the weak form merely cites it, which is
 usually an author distinguishing their report FROM the earlier one -- valuable
 context, not evidence of failure. Both are printed, separately, because the
@@ -36,9 +38,13 @@ finding arriving from the other direction, and it is why `--epic` defaults
 here rather than scanning everything.
 
 Usage: recurrence-audit.py [--epic computenet-wpvy] [--jsonl .beads/issues.jsonl]
-Prints FAILED-FIX lines (strong), CITED lines (weak), then a summary that
+                           [--since YYYY-MM-DD]
+Prints FAILED-FIX lines (linked or strong), CITED lines (weak), then a summary that
 breaks the rate down by metadata.friction_class (the error class triage
-records, references/error-classes.md).
+records, references/error-classes.md). --since lists only reports created on
+or after that date and collapses the rest to one count line, so a nightly run
+shows what is new. Detection rests on links and citations; when no record in
+scope carries recurs_of the output says so instead of letting 0 read as clean.
 Exit: 0 = audit ran (read the numbers); 2 = bad usage; 3 = the export is
       missing or unreadable -- NOTHING was checked, do not read silence as a
       clean bill of health.
@@ -115,6 +121,14 @@ def children_of(records, epic):
     return kids
 
 
+def links_of(r):
+    """metadata.recurs_of as a set of ids: a list, or a comma/space string."""
+    v = (r.get("metadata") or {}).get("recurs_of") or []
+    if isinstance(v, str):
+        v = re.split(r"[,\s]+", v)
+    return {x for x in v if x}
+
+
 def text_of(r):
     return " ".join(str(r.get(k) or "") for k in
                     ("title", "description", "acceptance_criteria"))
@@ -124,6 +138,7 @@ def main(argv):
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--epic", default="computenet-wpvy")
     ap.add_argument("--jsonl", default=".beads/issues.jsonl")
+    ap.add_argument("--since", default="")
     try:
         a = ap.parse_args(argv[1:])
     except SystemExit:
@@ -152,12 +167,19 @@ def main(argv):
 
     # id -> the fix record, for the citation scan below.
     by_id = {r["id"]: r for r in fixes}
-    strong, weak = [], []
+    strong, weak, linked = [], [], set()
+    # The structured link first, over EVERY record: a retro record is not a
+    # child of the epic, and a linked repeat need not cite the fix in prose.
+    for later in records:
+        for fid in links_of(later) & by_id.keys():
+            if fid != later["id"]:
+                linked.add((fid, later["id"]))
     for later in kids:
         created = later.get("created_at") or ""
         body = text_of(later)
         for fid, fix in by_id.items():
-            if fid == later["id"] or fid not in body:
+            if (fid == later["id"] or fid not in body
+                    or (fid, later["id"]) in linked):
                 continue
             # Filed AFTER the fix closed — otherwise it is a sibling report,
             # not a recurrence of something already believed fixed.
@@ -171,10 +193,24 @@ def main(argv):
     def cls(f):
         return (f.get("metadata") or {}).get("friction_class") or "?"
 
-    for fid, lid in sorted(strong):
-        print(f"FAILED-FIX  {fid} [{cls(by_id[fid])}]  ->  {lid}")
+    created = {r["id"]: r.get("created_at") or "" for r in records}
+    older = 0
+    if a.since:
+        def recent(pairs):
+            return [p for p in pairs if created.get(p[1], "") >= a.since]
+        everything = len(linked) + len(strong) + len(weak)
+        linked, strong, weak = set(recent(linked)), recent(strong), recent(weak)
+        older = everything - len(linked) - len(strong) - len(weak)
+    strong = sorted(set(strong) | linked)
+
+    for fid, lid in strong:
+        tag = "  linked" if (fid, lid) in linked else ""
+        print(f"FAILED-FIX  {fid} [{cls(by_id[fid])}]  ->  {lid}{tag}")
     for fid, lid in sorted(weak):
         print(f"CITED       {fid}  ->  {lid}")
+    if a.since:
+        print(f"{older} reports created before {a.since} not listed "
+              "(run without --since for the history)")
 
     failed = {f for f, _ in strong}
     print()
@@ -189,6 +225,11 @@ def main(argv):
         print(f"  {kind:<5} {len(pool):>4} fixes, {bad} recurred "
               f"({100.0 * bad / len(pool):.1f}%)")
     print("  ('?' = closed before friction_class was recorded)")
+    if not any(links_of(r) for r in records
+               if not a.since or (r.get("created_at") or "") >= a.since):
+        print("  no record in scope carries metadata.recurs_of: a fix can recur "
+              "unseen, so '0 recurred' means none was linked or cited, not none "
+              "happened")
     return 0
 
 
