@@ -142,6 +142,14 @@ data class CellSpec(
     @SerialName("inlet-mode") val inletMode: String? = null,
     /** Host placement (dist profile). */
     val host: String? = null,
+    /**
+     * Named per-cell journal on `host: dur` (spec 24 `[24-DUR-01]`/`[24-DUR-03]`).
+     * Optional and additive (computenet-u7mox.1): the durable catalog types and
+     * `journal` controller default to `default`; volatile-capable durable-host
+     * cells remain volatile when absent. Typed so the lenient parser cannot
+     * silently discard the durability selection before the runner lowers it.
+     */
+    val journal: String? = null,
     /** Logical replica group this cell is a member of (dist profile). */
     @SerialName("replica-of") val replicaOf: String? = null,
     /**

@@ -8,7 +8,7 @@
 # inventory — see civictech.oracle.bind.OperatorInventoryTest.isKotlinFileFacade's KDoc). What
 # remains below is hand-written source cells, their *Api/*Ops companion interfaces, KSP-generated
 # *Base/*Ports classes, and non-cell helper types this package also happens to hold (the merge-
-# function vocabulary in Aggregator.kt, the replication marker interface Replicable, window
+# function vocabulary in Aggregator.kt, the replication interfaces Gossiping/Replicable, window
 # helpers in Windows.kt, and BoundedWalk.kt's internal KeyWalk/EntryOrder/PageBudget) — the same
 # mix of "cell" and "not a cell but genuinely on this classpath" the operator inventory already
 # has (FrontierBuilder, GatedFold, OperatorEntry, and friends there are not operators either).
@@ -34,7 +34,7 @@
 # contribution is keyed on the arriving wave's sourceId, which no batch script can express — see
 # its HONEST-02 ledger entry.
 #
-# 42 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
+# 43 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
 # isKotlinFileFacade, from a :kernel:compileKotlin build against commit 7b917c3b
 # (computenet-4ru.19, #364).
 #
@@ -56,6 +56,7 @@ CounterCellBase
 CounterCellPorts
 CounterOps
 EntryOrder
+Gossiping
 KeyWalk
 KeyedSetApi
 KeyedSetCell

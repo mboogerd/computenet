@@ -242,6 +242,39 @@ class ScenarioParseTest {
     }
 
     @org.junit.jupiter.api.Test
+    fun `a journal cell carries its typed param, round-trips, and reaches the driver params`() {
+        // computenet-u7mox.1: the parser is lenient, so `journal:` must be typed
+        // or a named durable cell silently falls back to the default/volatile arm.
+        val yaml = """
+            id: FX-JOURNAL-01
+            title: named journal fixture
+            covers: [24-DUR-03]
+            profile: dur
+            kind: example
+            graph:
+              cells:
+                - {id: a, type: journal-set-source, host: dur, journal: alpha}
+                - {id: v, type: set-view, host: dur}
+                - {id: ctl, type: journal, host: dur, journal: alpha}
+              links:
+                - {from: a, to: v}
+        """.trimIndent()
+        val decoded = ConcordYaml.instance.decodeFromString(Scenario.serializer(), yaml)
+        val cells = decoded.graph!!.cells.associateBy { it.id }
+        cells.getValue("a").journal shouldBe "alpha"
+        cells.getValue("ctl").journal shouldBe "alpha"
+        cells.getValue("v").journal shouldBe null
+
+        val reencoded = ConcordYaml.instance.encodeToString(Scenario.serializer(), decoded)
+        ConcordYaml.instance.decodeFromString(Scenario.serializer(), reencoded) shouldBe decoded
+
+        val runner = civictech.concord.runner.CorpusRunner()
+        runner.params(cells.getValue("a"))["journal"] shouldBe Value.StrVal("alpha")
+        runner.params(cells.getValue("ctl"))["journal"] shouldBe Value.StrVal("alpha")
+        runner.params(cells.getValue("v")).containsKey("journal") shouldBe false
+    }
+
+    @org.junit.jupiter.api.Test
     fun `a window file without lateness parses unchanged`() {
         // [24-WL-11]: the param is additive — an existing window scenario carries
         // none, and its lowered params carry no `lateness` key at all.

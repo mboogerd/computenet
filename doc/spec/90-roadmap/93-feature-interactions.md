@@ -3042,6 +3042,13 @@ fresh `[24-DUR-07]` firing at an already-acted `Effectful` sink remains open und
 - **RESTART within a replicated logical cell** (carried from I-2) — whether a durable replica
   should prefer local journal restore or mesh re-catch-up when its journal lags the mesh.
 
+> Stacked decision (2026-10-15, `DUR-REPL-01`, `computenet-u7mox`): a crashed
+> durable replica of a mergeable cell is recovered by **both** routes — its own
+> journal replay and the mesh's M10 re-announce catch-up — and converges because
+> both are idempotent by tag union. The “prefer” question therefore has no
+> observable answer for the mergeable class and remains open only for
+> leader+follower replication (I-25).
+
 #### 9. Confidence & open questions
 
 **Confidence: medium-high.** The amended mechanism describes the tested recovery path:
@@ -3642,6 +3649,14 @@ tables are hard to keep coherent behind a proxy — the proxy wins on the fast p
 but pushes table-coherence work onto the composite; (2) the exact `@Key` surface
 for composite/derived keys; (3) whether key-less broadcast should be permitted at
 all for large N, or replaced by a scatter-gather read protocol.
+
+> Stacked decision (2026-10-15, `DUR-PART-01`, `computenet-u7mox`): a
+> journaled `PartitionedCell` recovers its pre-crash board by whole-tail replay
+> into a rebuilt composite under its recorded ref (no checkpoint: the current
+> composite is not `Stateful`). With the journaled upstream source deliberately
+> isolated on a different, unrecovered journal, the recovered board equals both
+> an uninterrupted partitioned twin and the batch oracle; organelle merging on
+> replay neither loses nor double-counts the disjoint scalar keys.
 
 ### I-9 — Attention as the resource lever: suspension triggers, priority mapping, fairness, and edge cases (G-6)
 

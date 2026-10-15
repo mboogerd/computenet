@@ -935,7 +935,7 @@ class ContractProcessor(
         val tags = mutableListOf<String>()
         if (isSubtype(type, KernelFqn.GLITCH_FREE_MARKER)) tags += "GLITCH_FREE"
         if (isSubtype(type, KernelFqn.STATEFUL_MARKER)) tags += "DURABLE"
-        if (isSubtype(type, KernelFqn.REPLICABLE_MARKER) || isSubtype(type, KernelFqn.REBASELINE_MARKER)) tags += "REPLICATED"
+        if (isSubtype(type, KernelFqn.GOSSIPING_MARKER) || isSubtype(type, KernelFqn.REBASELINE_MARKER)) tags += "REPLICATED"
         if (isSubtype(type, KernelFqn.PARTITIONED_MARKER)) tags += "PARTITIONED"
         return tags
     }
@@ -996,6 +996,7 @@ class ContractProcessor(
             val REGISTER_PORT = MemberName("civictech.cell.port", "registerPort")
             val ON_EACH = MemberName("civictech.cell", "onEach")
             const val MAGNITUDE_MARKER = "civictech.cell.control.Magnitude"
+            const val GOSSIPING_MARKER = "civictech.cell.data.Gossiping"
             const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
             const val BLOCKING_MARKER = "civictech.cell.BlockingCell"
             const val SUSPENDING_MARKER = "civictech.cell.SuspendingCell"

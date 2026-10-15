@@ -11,16 +11,16 @@ import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.ReplayProvenance
 import civictech.cell.Stateful
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
+import civictech.cell.data.Gossiping
 import civictech.cell.data.LocalWriteGate
 import civictech.cell.data.OrMapCell
-import civictech.cell.data.Replicable
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
-import civictech.cell.link.catchUpOnLinked
 import civictech.cell.membrane.SignatureVerifier
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -44,11 +44,11 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Replay means exact `(author, counter)` membership in [state], never a
  * strictly-increasing high-water check. A multi-path mesh may legitimately
- * deliver counter 7 before counter 6. A repeated pair on the same crossing is
- * reported as `REPLAY`; an already-retained copy arriving over a different
- * relay is expected convergence traffic and is silently deduplicated. Every
- * admitted envelope is retained so a relay's catch-up preserves the original
- * author's signature.
+ * deliver counter 7 before counter 6. A repeated pair on the same live
+ * crossing is reported as `REPLAY`; an already-retained copy arriving over a
+ * different relay or in a marked anti-entropy baseline is expected convergence
+ * traffic and is silently deduplicated. Every admitted envelope is retained so
+ * a relay's catch-up preserves the original author's signature.
  *
  * Only an author folds its own current counter lane, by signing an
  * [AuthorCheckpoint] through the ordinary write-ahead path. Once that envelope
@@ -94,7 +94,7 @@ import java.util.concurrent.ConcurrentHashMap
  * acknowledgement or ordering protocol.
  */
 class AuthorityGossip internal constructor(
-    private val cell: Replicable<*>,
+    private val cell: Gossiping<*>,
     authority: WriteAuthority,
     private val signer: CountingWriteSigner,
     private val verifier: SignatureVerifier,
@@ -123,7 +123,7 @@ class AuthorityGossip internal constructor(
     private val state = AuthorityState(authority)
     private val inbound = ThreadLocal<InboundDelivery?>()
     private val firstCrossing = ConcurrentHashMap<WriteKey, FirstCrossing>()
-    private val localWriteAheadPort = cell.outlet.ref
+    private val localWriteAheadPort = cell.gossipOutlet.ref
     private val replayBatches = java.util.IdentityHashMap<Any, ReplayBatch>()
 
     @Volatile
@@ -139,13 +139,21 @@ class AuthorityGossip internal constructor(
         installLocalGate()
         interposeDeltaInlet()
         @Suppress("UNCHECKED_CAST")
-        (cell.outlet as civictech.cell.port.Subscribe<Propagate<Any?>>).subscribe(
+        (cell.gossipOutlet as civictech.cell.port.Subscribe<Propagate<Any?>>).subscribe(
             Use.fixed(Propagate(::onCellEmission), PortRef.of(ref, "source")),
         )
 
         @Suppress("UNCHECKED_CAST")
-        (outlet as FanOutlet<Propagate<Any>>).catchUpOnLinked {
-            state.retained().takeIf { it.isNotEmpty() }?.let(::SignedWriteBatch)
+        (outlet as FanOutlet<Propagate<Any>>).linking.onLinkedListeners += { link ->
+            state.retained().takeIf { it.isNotEmpty() }?.let { retained ->
+                // Authority counters are not merge-tag frontiers, so this full
+                // retained-log baseline has no incremental TagFrontier to
+                // advertise. The non-null marker is still load-bearing: a
+                // re-announcement is recovery traffic, not an attempted replay.
+                outlet.baselineTo(link.to, TagFrontier(emptyMap())) {
+                    propagate(SignedWriteBatch(retained))
+                }
+            }
         }
     }
 
@@ -289,15 +297,19 @@ class AuthorityGossip internal constructor(
         // PeerStamp is intentionally ambient only at the host boundary and may
         // be gone after an inlet policy hop. The rewritten source port is the
         // durable per-hop identity that MessageContext carries through it.
-        val crossing = if (CurrentContext.get()?.sourcePort == localWriteAheadPort) {
+        val context = CurrentContext.get()
+        val crossing = if (context?.sourcePort == localWriteAheadPort) {
             FirstCrossing.Local
         } else {
-            FirstCrossing.Inbound(CurrentContext.get()?.sourcePort)
+            FirstCrossing.Inbound(context?.sourcePort)
         }
         when (val admission = state.admit(write, verifier)) {
             is Admission.Denied -> {
                 if (admission.reason == DenialReason.REPLAY && crossing == FirstCrossing.Local) {
                     completePendingReplay(write)
+                    return
+                }
+                if (admission.reason == DenialReason.REPLAY && context?.baseline != null) {
                     return
                 }
                 if (admission.reason == DenialReason.REPLAY && state.isCompactedPair(write.author, write.counter)) {

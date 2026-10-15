@@ -170,7 +170,15 @@ class KernelDriver private constructor(
      * target cell lives there. For a non-`dur` scenario nothing is spawned onto
      * the durable host, so it stays inert.
      */
-    private val dur = KernelDriverDur(::newScheduler, ::registryFor, ::drainDurController) { deadLetters += it }
+    private val dur = KernelDriverDur(
+        scheduler = ::newScheduler,
+        registryOf = ::registryFor,
+        drainController = ::drainDurController,
+        // Keep `dist` lazy for core/dur scenarios with no replicas: the property
+        // is resolved only when a durable `replica-of` binding asks for a ref.
+        replicaRefOf = { logical -> dist.allocateReplicaRef(logical) },
+        onDeadLetter = { deadLetters += it },
+    )
 
     /** Cell ids delegated to [dur] (durable-host members + `journal` controllers). */
     private val durCells = mutableSetOf<CellId>()
@@ -343,6 +351,12 @@ class KernelDriver private constructor(
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
+        if ("journal" in params && hostId != KernelDriverDur.DUR_HOST) {
+            throw UnsupportedCatalogBinding(
+                "cell '$cellId' ($type) carries `journal` but is not placed on host: dur; named journals are " +
+                    "a durable-host capability and are never ignored",
+            )
+        }
         params["family"]?.let { descriptor ->
             if (hostId == KernelDriverDur.DUR_HOST) {
                 throw UnsupportedCatalogBinding("family '$cellId' cannot be placed on the reserved durable host")
@@ -352,7 +366,8 @@ class KernelDriver private constructor(
         }
         // dur hook (W4-B): a cell on the reserved durable host (or a `journal`
         // controller) is the dur capability's; short-circuit before any core or
-        // dist placement. A durable cell is never also a dist replica.
+        // dist placement. KernelDriverDur recognizes the admitted mergeable
+        // `replica-of` shapes and joins them to dist's logical-id namespace.
         if (hostId == KernelDriverDur.DUR_HOST || type == "journal") {
             durCells += cellId
             dur.spawn(cellId, type, params)
