@@ -27,7 +27,8 @@
 #   file-friction.sh --type bug|feature --title "<one line, NO 'work skill:' prefix>" \
 #     (--desc "<what the skill says / what happened / what it cost>" | --desc-file F) \
 #     (--accept "<what must change in the skill for this not to recur>" | --accept-file F) \
-#     [--parent computenet-wpvy] [--priority 2] [--skill-version <sha>]
+#     [--parent computenet-wpvy] [--priority 2] [--skill-version <sha>] [--recurs-of <id>[,<id>]]
+#   --recurs-of: the landed fix(es) this repeats; recurrence-audit.py reads it.
 #   --desc-file/--accept-file are PREFERRED: a body passed as --desc "$(cat f)"
 #   goes through a shell word, so backticks and $(...) in it are executed
 #   (computenet-s5dh).
@@ -39,7 +40,7 @@
 #   bd update <id> --parent=computenet-wpvy
 set -uo pipefail
 
-TYPE= TITLE= DESC= ACCEPT= PARENT=computenet-wpvy PRIO=2 SKILL_V=
+TYPE= TITLE= DESC= ACCEPT= PARENT=computenet-wpvy PRIO=2 SKILL_V= RECURS=
 while [ $# -gt 0 ]; do
   case "$1" in
     --type)          TYPE=$2; shift 2 ;;
@@ -51,6 +52,7 @@ while [ $# -gt 0 ]; do
     --parent)        PARENT=$2; shift 2 ;;
     --priority)      PRIO=$2; shift 2 ;;
     --skill-version) SKILL_V=$2; shift 2 ;;
+    --recurs-of)     RECURS=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -78,4 +80,5 @@ done
 exec "$SCRIPT_DIR/create-ticket.sh" \
   --type "$TYPE" --title "work skill: $TITLE" --parent "$PARENT" \
   --desc-file <(printf '%s' "$DESC") --accept-file <(printf '%s' "$ACCEPT") --priority "$PRIO" \
-  --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}"
+  --label skill-friction --metadata "$(jq -nc --arg v "$SKILL_V" --arg r "$RECURS" \
+      '{skill_version:$v, recurs_of:$r} | with_entries(select(.value != ""))')"
