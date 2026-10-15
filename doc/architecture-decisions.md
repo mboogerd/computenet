@@ -173,6 +173,14 @@ say which part changed.
   B2 trigger), and drop `membrane` only if the replicas-lowering test moves to
   a different journal-free cell that lives under an already-allowed prefix.
   Recorded in the test's class KDoc.
+- **G1 amended: demo kernel-package allowlist retired** (2026-10-14,
+  maintainer answer on computenet-7afo4.5). Demo `src/main` sources may import
+  any `civictech.cell.*` package; the kernel-package allowlist now remains
+  only for `:inspect`, whose row and rationale above are unchanged. This lets
+  `:demo:exchange` use the `PartitionedCell` and replication APIs that its
+  composition-probe design requires. The separate guardrail for preventing
+  demo-to-demo imports is tracked in computenet-yvzfh and is not encoded by
+  this amendment.
 
 ### Remediation closed — 2026-07-28
 
