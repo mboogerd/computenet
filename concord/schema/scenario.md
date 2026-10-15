@@ -136,11 +136,11 @@ typed field remains a schema-change ticket.
 
 #### `journal` (`computenet-elc`, feature `computenet-u7mox`)
 
-**Status.** Granted by the maintainer on 2026-10-14, with the durable
-`interest:` and `effect-count` amendments below. This is the single-writer
-schema review in `computenet-elc`, under feature `computenet-u7mox`; the
-separate driver task adds the typed `CellSpec.journal` field and named-journal
-binding under `concord/src/`, then rewrites this status to Landed.
+**Status.** Landed in `computenet-u7mox.1` after the maintainer's 2026-10-14
+grant, with the durable `interest:` and `effect-count` amendments below. The
+single-writer schema review is `computenet-elc`, under feature
+`computenet-u7mox`; the typed `CellSpec.journal` field and named-journal driver
+binding now live under `concord/src/`.
 
 `journal` is an optional string whose value, when present, MUST be non-empty.
 It selects durability by placement and catalog type:

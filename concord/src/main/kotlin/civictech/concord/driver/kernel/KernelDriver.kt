@@ -343,6 +343,12 @@ class KernelDriver private constructor(
     }
 
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {
+        if ("journal" in params && hostId != KernelDriverDur.DUR_HOST) {
+            throw UnsupportedCatalogBinding(
+                "cell '$cellId' ($type) carries `journal` but is not placed on host: dur; named journals are " +
+                    "a durable-host capability and are never ignored",
+            )
+        }
         params["family"]?.let { descriptor ->
             if (hostId == KernelDriverDur.DUR_HOST) {
                 throw UnsupportedCatalogBinding("family '$cellId' cannot be placed on the reserved durable host")

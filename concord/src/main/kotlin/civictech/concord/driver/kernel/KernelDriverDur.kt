@@ -31,6 +31,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
+import civictech.cell.partition.PartitionedCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
@@ -118,17 +119,17 @@ import java.util.UUID
  * `journal`-typed **controller** pseudo-cell is the crash handle —
  * `despawn`-ing it crashes and recovers the whole durable host in one step
  * (discard every live instance, rebuild the graph with the same [CellRef]s,
- * `recoverFrom` the surviving journal). Catalog types:
+ * `recoverFrom` only the controller's named journal). Catalog types:
  *
  *  - `journal-set-source` — a journaled [SetCell] (its accepted ops tee to the WAL).
  *  - `journal-set-view`   — a journaled [ObserveCell] set fold (recovers checkpoint+tail).
  *  - `effect-sink`        — a journaled [Effectful] sink; each added element fires an
  *                           [Effect] into [effectLog] (the `effect-count` surface).
- *  - `set-source` / `set-view` on `host: dur` — **volatile** members of the durable
- *                           host: rebuilt fresh on crash, never journaled/replayed
- *                           (per-cell durability, `24-DUR-01`/`24-DUR-03`).
- *  - `quorum-set`         — the volatile lane-counting SET fan-in a journaled arm
- *                           replays into (`24-REPLAY-01`); the catalog id and its
+ *  - `set-source` / `set-view` on `host: dur` — volatile when `journal:` is absent;
+ *                           a name opts them into that journal (`24-DUR-01`/`24-DUR-03`).
+ *  - `quorum-set`         — the lane-counting SET fan-in a journaled arm replays
+ *                           into (`24-REPLAY-01`); volatile unless `journal:` is set;
+ *                           the catalog id and its
  *                           `k` are the core profile's, only the dur binding is new.
  *                           With `glitch-free: true` it additionally carries the
  *                           core profile's wave-alignment wrapper (`DUR-GF-01`,
@@ -140,9 +141,14 @@ import java.util.UUID
  *                           evicted window nor re-admits a below-floor add (`[22-REC-01]`,
  *                           `[24-WL-05]`/`[24-WL-07]`, `24-WL-REC-01`). `sliding` is refused.
  *  - `journal-count-view` — the count twin of `journal-set-view` (recovers checkpoint+tail).
- *  - `waterline`          — the core profile's floor cell, **volatile** on `dur`: rebuilt
- *                           empty on crash, recomputing from live traffic (a replayed
- *                           baseline contributes nothing to it). Params as core.
+ *  - `waterline`          — the core profile's floor cell, volatile on `dur` unless
+ *                           `journal:` is set: rebuilt empty in the volatile case,
+ *                           recomputing from live traffic (a replayed baseline
+ *                           contributes nothing to it). Params as core.
+ *  - `partition`          — the core partitioned aggregate under its recorded ref;
+ *                           volatile without `journal:`, journaled with it.
+ *  - `count-view`         — the volatile-capable twin of `journal-count-view`;
+ *                           volatile without `journal:`, journaled with it.
  *  - `journal`            — the crash/recover controller (no kernel cell).
  *
  * Links honour the scenario's `inlet:`/`outlet:` names (t4od7-D8): e.g.
@@ -152,6 +158,8 @@ import java.util.UUID
  * A `snapshot` of a journaled cell lowers to `host.checkpoint(journal)` (state +
  * frontier compaction); a `snapshot`/`restore` of a volatile durable cell is the
  * ordinary raw [Stateful] round-trip (the checkpoint half of a view's recovery).
+ * The whole host crashes for every controller, but recovery is per-journal: cells
+ * on other journals are rebuilt fresh and wait for their own controller.
  */
 internal class KernelDriverDur(
     private val scheduler: () -> HostScheduler,
@@ -168,6 +176,13 @@ internal class KernelDriverDur(
             "journal-set-source", "journal-set-view", "effect-sink", "journal-window", "journal-count-view",
         )
 
+        /** Durable-host types that stay volatile unless their descriptor names a journal. */
+        private val OPTIONALLY_JOURNALED_TYPES = setOf(
+            "set-source", "set-view", "quorum-set", "waterline", "partition", "count-view",
+        )
+
+        private const val DEFAULT_JOURNAL = "default"
+
         /** The lane-counting SET fan-in: its edges are real links, not intake subscriptions (see `linkEdge`). */
         private const val LANE_FAN_IN = "quorum-set"
 
@@ -183,15 +198,18 @@ internal class KernelDriverDur(
         /** The journaled evicting tumbling window (t4od7-D8); its `outlet` carries a `MapDelta`. */
         private const val JOURNAL_WINDOW = "journal-window"
 
+        /** The durable-host partitioned aggregate; its `outlet` also carries a `MapDelta`. */
+        private const val PARTITION = "partition"
+
         /** An evicting operator's floor inlet (`[24-WL-06]`), reached through the intake by [WaterlineSink]. */
         private const val WATERLINE_INLET = "waterline"
     }
 
-    /** One surviving write-ahead journal, shared across crashes (it *is* "the disk"). */
-    private val journal: Journal = InMemoryJournal()
+    /** Named write-ahead journals, surviving every whole-host crash (they are "the disks"). */
+    private val journals = LinkedHashMap<String, Journal>()
 
-    /** The refs whose accepted invocations tee to [journal] (per-cell selector, `24-DUR-01`). */
-    private val journaledRefs = HashSet<CellRef>()
+    /** Per-cell journal selection; absence makes the cell volatile (`24-DUR-01`/`24-DUR-03`). */
+    private val journalByRef = HashMap<CellRef, Journal>()
 
     /** Spec of every durable-host cell, replayed verbatim to rebuild the graph after a crash. */
     private data class Spec(val cellId: CellId, val ref: CellRef, val type: String, val params: Map<String, Value>)
@@ -203,8 +221,8 @@ internal class KernelDriverDur(
 
     private val linkRecs = mutableListOf<LinkRec>()
 
-    /** Controller (`journal`) pseudo-cells — the crash handles; not real kernel cells. */
-    private val controllers = mutableSetOf<CellId>()
+    /** Controller (`journal`) pseudo-cells and the one journal each recovers. */
+    private val controllerJournal = LinkedHashMap<CellId, Journal>()
 
     private data class Bound(
         val ref: CellRef,
@@ -282,7 +300,7 @@ internal class KernelDriverDur(
         ManagedHost(
             scheduler = scheduler(),
             registry = registryOf(DUR_HOST),
-            journalFor = { ref -> if (ref in journaledRefs) journal else null },
+            journalFor = { ref -> journalByRef[ref] },
         ).also { h ->
             h.deadLetterOutlet.subscribe(
                 Use.fixed(
@@ -299,17 +317,40 @@ internal class KernelDriverDur(
         }
 
     /** True iff [cellId] is a durability-managed cell (routed here by [KernelDriver]). */
-    fun owns(cellId: CellId): Boolean = cellId in specs || cellId in controllers
+    fun owns(cellId: CellId): Boolean = cellId in specs || cellId in controllerJournal
 
     fun spawn(cellId: CellId, type: String, params: Map<String, Value>) {
         if (type == "journal") {
-            controllers += cellId
+            controllerJournal[cellId] = journalOf(journalName(type, params) ?: DEFAULT_JOURNAL)
             return
         }
         val ref = specs[cellId]?.ref ?: CellRef(UUID.randomUUID())
         specs[cellId] = Spec(cellId, ref, type, params)
-        if (type in JOURNALED_TYPES) journaledRefs += ref
+        journalByRef.remove(ref)
+        selectedJournal(type, params)?.let { journalByRef[ref] = it }
         instantiate(specs.getValue(cellId))
+    }
+
+    private fun journalOf(name: String): Journal = journals.getOrPut(name) { InMemoryJournal() }
+
+    /** Validate the optional descriptor once, before deciding whether absence means volatile or `default`. */
+    private fun journalName(type: String, params: Map<String, Value>): String? {
+        val raw = params["journal"] ?: return null
+        val name = (raw as? Value.StrVal)?.value
+            ?: throw UnsupportedCatalogBinding("`journal` on '$type' must be a non-empty string; got $raw")
+        if (name.isEmpty()) {
+            throw UnsupportedCatalogBinding("`journal` on '$type' must be a non-empty string")
+        }
+        return name
+    }
+
+    private fun selectedJournal(type: String, params: Map<String, Value>): Journal? {
+        val name = journalName(type, params)
+        return when (type) {
+            in JOURNALED_TYPES -> journalOf(name ?: DEFAULT_JOURNAL)
+            in OPTIONALLY_JOURNALED_TYPES -> name?.let(::journalOf)
+            else -> null
+        }
     }
 
     /** Build + spawn one durable cell on the current [host] and register its bookkeeping. */
@@ -337,7 +378,7 @@ internal class KernelDriverDur(
      * ([glitchFreeRefs]) rather than a fresh random one, because the durable host is
      * torn down and rebuilt on every crash and every cell — wrapper included — must
      * come back under the ref the pre-crash graph used (PN-1 derived port identity).
-     * And the wrapper is **volatile**: it is never added to [journaledRefs], so a
+     * And the wrapper is **volatile**: it is never added to [journalByRef], so a
      * crash re-mints it with an empty frontier. What makes an empty frontier
      * survivable is PN-2, not `[24-DUR-04]`: `recoverFrom` stamps the replayed
      * re-emission `MessageContext.baseline`, and `WaveFrontier.offer` takes its
@@ -386,11 +427,10 @@ internal class KernelDriverDur(
             Bound(spec.ref, spec.type, cell, null, KernelCatalog.ViewKind.NONE)
         }
 
-        // `quorum-set` (`24-REPLAY-01`): the lane-counting SET fan-in, always a
-        // **volatile** durable-host member — it is the *consumer* of a journaled
-        // arm's replayed baseline, never journaled itself (mirroring
-        // `DurableQuorumReplayTest`, where only the durable arm tees to the WAL and
-        // the quorum is re-minted empty on every rebuild). Constructed here rather
+        // `quorum-set` (`24-REPLAY-01`): the lane-counting SET fan-in. Existing
+        // scenarios omit `journal:` and therefore keep the volatile construction
+        // in `DurableQuorumReplayTest`; a named journal opts the same cell into the
+        // WAL through [journalByRef]. Constructed here rather
         // than through [KernelCatalog.build] for one reason: the dur driver rebuilds
         // every cell under its **recorded** [CellRef] after a crash (PN-1's derived
         // port identity), and `KernelCatalog.build` mints a fresh random ref. The
@@ -402,9 +442,9 @@ internal class KernelDriverDur(
         }
 
         // `waterline` (t4od7-D8): the core binding's WaterlineCell, but built under the
-        // RECORDED ref so a rebuild re-mints it at the same identity. VOLATILE — never
-        // journaled: a crash re-mints it empty, and it recomputes its floor from the
-        // live traffic that reaches it afterwards. A replayed re-emission reaches it
+        // RECORDED ref so a rebuild re-mints it at the same identity. It is volatile
+        // when `journal:` is absent — a crash then re-mints it empty, and it recomputes
+        // its floor from the live traffic that reaches it afterwards. A replayed re-emission reaches it
         // stamped as a baseline and contributes nothing (`WaterlineCell`, sjqat-D1),
         // so it is the evicting cell's own restored floor, not this one, that keeps
         // late-dropping across the crash (`[24-WL-07]`, nt17o-D4).
@@ -416,6 +456,17 @@ internal class KernelDriverDur(
             val cell = WaterlineCell<Any?>(spec.ref, Windows.Lateness(EventTimeOfPair, l))
             Bound(spec.ref, spec.type, cell, null, KernelCatalog.ViewKind.NONE)
         }
+
+        PARTITION -> Bound(
+            spec.ref,
+            spec.type,
+            partitioned(
+                spec,
+                KernelFunctions.aggregator((spec.params["agg"] as? Value.StrVal)?.value ?: "count"),
+            ),
+            null,
+            KernelCatalog.ViewKind.NONE,
+        )
 
         // `journal-window` (t4od7-D8): the JOURNALED twin of the core `window` binding
         // with `kind: tumbling` — the same `GroupByCell`, `Windows.Lateness(EventTimeOfPair,
@@ -436,7 +487,7 @@ internal class KernelDriverDur(
         // `journal-count-view` (t4od7-D8): the count twin of `journal-set-view` — a
         // journaled ObserveCell count fold, so a recovered view's fold is READ from its
         // checkpoint plus the journal tail rather than reconstructed by re-emission.
-        "journal-count-view" -> {
+        "count-view", "journal-count-view" -> {
             val log = logs.getOrPut(spec.cellId) { mutableListOf() }
             val cell = ObserveCell(RecordedView(View.count<Any?>(), KernelCatalog.ViewKind.COUNT, log), spec.ref)
             Bound(spec.ref, spec.type, cell, cell, KernelCatalog.ViewKind.COUNT)
@@ -456,6 +507,17 @@ internal class KernelDriverDur(
         if (l < 0) throw UnsupportedCatalogBinding("`lateness` on '${spec.type}' must be non-negative; got $l")
         return l
     }
+
+    /** Core `partition` construction under the recorded durable-host ref. */
+    private fun <ACC : Serializable> partitioned(
+        spec: Spec,
+        aggregator: Aggregator<Any?, Long, ACC>,
+    ): Cell = PartitionedCell(
+        ref = spec.ref,
+        initialShardCount = 4,
+        keyFn = { KernelFunctions.keyOf(it) },
+        aggregator = aggregator,
+    )
 
     /**
      * Binds `journal-window`: `window: {kind: tumbling, size}`, `agg`, optional
@@ -560,7 +622,7 @@ internal class KernelDriverDur(
                 "durable link into '${dst.type}' names inlet '$inletName'; the intake binds only " +
                     "'$DEFAULT_INLET' and '$WATERLINE_INLET'",
             )
-            src.type == JOURNAL_WINDOW && outletName == "outlet" ->
+            (src.type == JOURNAL_WINDOW || src.type == PARTITION) && outletName == "outlet" ->
                 (HostedCellProxy.create(dst.ref, host, MapDeltaSink::class.java) as MapDeltaSink).inlet.call
             else -> (HostedCellProxy.create(dst.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
         } as Propagate<Any?>
@@ -969,9 +1031,15 @@ internal class KernelDriverDur(
      * checkpoint's tag is a sentinel (recovery reads the journal, not the blob).
      */
     fun snapshot(cellId: CellId): ByteArray {
-        if (cellId in controllers) return byteArrayOf(CTRL_MARKER)
+        if (cellId in controllerJournal) return byteArrayOf(CTRL_MARKER)
         val bound = cells.getValue(cellId)
-        if (bound.ref in journaledRefs) {
+        val journal = journalByRef[bound.ref]
+        if (journal != null) {
+            if (bound.type == PARTITION) {
+                throw UnsupportedCatalogBinding(
+                    "journaled partition '$cellId' is not Stateful; snapshot is unavailable and recovery uses its journal tail",
+                )
+            }
             host.checkpoint(journal)
             drain()
             return byteArrayOf(CHECKPOINT_MARKER)
@@ -984,7 +1052,7 @@ internal class KernelDriverDur(
     fun restore(cellId: CellId, blob: ByteArray) {
         // A journaled cell recovers through the crash-controller's `recoverFrom`, and
         // the controller's own restore is a no-op (the despawn already recovered it).
-        if (cellId in controllers) return
+        if (cellId in controllerJournal) return
         if (blob.size == 1 && (blob[0] == CHECKPOINT_MARKER || blob[0] == CTRL_MARKER)) return
         val cell = cells.getValue(cellId).cell as? Stateful
             ?: error("durable cell '$cellId' is not Stateful; cannot restore")
@@ -995,28 +1063,29 @@ internal class KernelDriverDur(
      * `despawn` of the `journal` controller is the crash+restart verb (`24-DUR-02`,
      * `EffectfulRecoveryTest` structure): discard the whole durable host and every
      * live instance, rebuild the graph with the **same** [CellRef]s, re-establish
-     * the links, then `recoverFrom` the surviving journal. A journaled cell
-     * restores its checkpoint and replays the frame tail; a volatile cell comes
+     * the links, then `recoverFrom` the controller's named journal. A cell on
+     * that journal restores its checkpoint and replays the frame tail; a volatile cell comes
      * back empty (re-delivered nothing, `24-DUR-03`); an effectful sink's restored
      * frontier suppresses every already-applied frame (`24-DUR-05`).
      */
     fun despawn(cellId: CellId) {
-        if (cellId in controllers) {
-            crashAndRecover()
+        controllerJournal[cellId]?.let { journal ->
+            crashAndRecover(journal)
             return
         }
         cells.remove(cellId)?.let { bound ->
             host.managementInlet.call.despawn(bound.ref)
             bound.outletDelegate?.let { host.managementInlet.call.despawn(it) }
+            journalByRef.remove(bound.ref)
         }
         glitchFreeRefs.remove(cellId)
         specs.remove(cellId)
         linkRecs.removeAll { it.from == cellId || it.to == cellId }
     }
 
-    private fun crashAndRecover() {
+    private fun crashAndRecover(journal: Journal) {
         // CRASH: the old host, registry entries, and every live instance vanish; only
-        // the journal survives. A fresh host re-derives the same per-cell selector.
+        // the named journals survive. A fresh host reuses the same per-cell selector.
         host = newHost()
         cells.clear()
         // Rebuild the graph (spawn the same cells with the same refs), then re-link —
