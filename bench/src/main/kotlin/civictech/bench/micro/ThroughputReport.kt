@@ -210,11 +210,15 @@ sealed interface Metric {
  *   names six rows with three names. (Those two were called `direct` and
  *   `hostedSnapshotOf` until computenet-7w4e, which is the name the already-published E1
  *   entries in `doc/bench/findings.md` carry.)
+ * @param includeParamNames whether each value renders as `name=value`. This is useful when
+ *   a report discusses the axes by name outside its results table; the default preserves
+ *   every existing findings label.
  */
 data class RowLabel(
     val params: List<String>,
     val lowercased: Set<String> = emptySet(),
     val includeMethod: Boolean = false,
+    val includeParamNames: Boolean = false,
 ) {
 
     init {
@@ -329,6 +333,11 @@ data class RowLabel(
             // labels for six rows.
             "BoundedReadBenchmark" to RowLabel(params = listOf("scale"), includeMethod = true),
             "FanOutScalingBenchmark" to RowLabel(params = listOf("degree")),
+            // Both numeric axes stay explicit in the G-43 findings table.
+            "ReBaselineFanOutBenchmark" to RowLabel(
+                params = listOf("cardinality", "fanOut"),
+                includeParamNames = true,
+            ),
         )
 
         /**
@@ -811,7 +820,8 @@ object ThroughputReport {
                         "cannot say what it measured cannot be labelled [BEN1-30]"
                 )
             }
-            if (name in label.lowercased) value.lowercase() else value
+            val rendered = if (name in label.lowercased) value.lowercase() else value
+            if (label.includeParamNames) "$name=$rendered" else rendered
         }
         val parts = if (label.includeMethod) listOf(row.method) + values else values
         return parts.joinToString(separator = " ")
