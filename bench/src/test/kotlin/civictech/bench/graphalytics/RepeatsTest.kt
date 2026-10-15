@@ -104,7 +104,10 @@ class RepeatsTest {
     fun `an unreportable findings row records variance instead of a mean or validation claim`() {
         val rows = graFindingsRows(
             listOf(
-                Datasets.EXAMPLE_DIRECTED to listOf(validated(100, 200), validated(120, 200)),
+                Datasets.EXAMPLE_DIRECTED to listOf(
+                    validatedWork(100, 200),
+                    validatedWork(120, 200),
+                ),
             ),
         )
 
@@ -121,6 +124,16 @@ class RepeatsTest {
         header = header(),
         load = Figure.Duration(loadNanos),
         compute = Figure.Duration(computeNanos),
+        validation = Validation.Passed(ComparisonRule.Epsilon, EPSILON),
+    )
+
+    private fun validatedWork(loadSteps: Long, computeSteps: Long) = GraRecord.Validated(
+        header = header().copy(
+            drive = Drive.SIM,
+            scheduler = "SimulationController",
+        ),
+        load = Figure.Work(loadSteps),
+        compute = Figure.Work(computeSteps),
         validation = Validation.Passed(ComparisonRule.Epsilon, EPSILON),
     )
 
