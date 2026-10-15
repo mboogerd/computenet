@@ -67,6 +67,7 @@ class GraFindingsRenderTest {
             results = FindingsTable(
                 results = findingsRows.results,
                 labels = findingsRows.labels,
+                dispersionObserved = findingsRows.dispersionObserved,
             ),
             trigger = TriggerClaim.Cited(
                 gapId = "G-41",
@@ -119,6 +120,7 @@ internal data class GraFindingsRows(
     val summaries: List<GraRecord>,
     val results: List<BenchResult>,
     val labels: List<String>,
+    val dispersionObserved: List<Boolean>,
     val lccOutcome: String,
 )
 
@@ -151,6 +153,7 @@ internal fun graFindingsRows(
                         drive = summary.header.drive,
                         env = summary.header.env,
                     ),
+                    dispersionObserved = false,
                 ),
             )
             else -> error("validated repeats produced unexpected summary $summary")
@@ -167,11 +170,16 @@ internal fun graFindingsRows(
         summaries = summaries,
         results = rows.map { it.result },
         labels = rows.map { it.label },
+        dispersionObserved = rows.map { it.dispersionObserved },
         lccOutcome = lccOutcome,
     )
 }
 
-private data class LabelledResult(val label: String, val result: BenchResult)
+private data class LabelledResult(
+    val label: String,
+    val result: BenchResult,
+    val dispersionObserved: Boolean = true,
+)
 
 private fun labelledResult(
     dataset: DatasetRef,
@@ -190,5 +198,6 @@ private fun labelledResult(
             drive = Drive.SIM,
             env = env,
         ),
+        dispersionObserved = true,
     )
 }
