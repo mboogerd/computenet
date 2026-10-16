@@ -46,8 +46,8 @@ data class JournalMeasurement(
     /** Whether the probe completed replay and the recovery fold check. */
     val replayCompleted: Boolean,
     val recoverCompleted: Boolean,
-    /** True only for an a-priori JournalPlan omission, not an observed outcome. */
-    val declaredOmission: Boolean = false,
+    /** True when the 2 GiB executor defers this coordinate to recorded fork evidence. */
+    val inProcessDeferral: Boolean = false,
     val fileBytes: Long?,
     val secondAttemptFileBytes: Long?,
     val records: Long?,
@@ -61,8 +61,8 @@ data class JournalMeasurement(
     init {
         require(maxHeapBytes > 0) { "maxHeapBytes must be positive" }
         require(stage.isNotBlank()) { "stage must not be blank" }
-        require(!declaredOmission || stage == "omission") {
-            "declared omissions must use the omission stage"
+        require(!inProcessDeferral || stage == "forked-evidence") {
+            "in-process deferrals must use the forked-evidence stage"
         }
         val requiredForOk = listOf(
             fileBytes,
@@ -113,6 +113,28 @@ object JournalProbe {
     )
 
     /**
+     * Executes a point that the in-process plan omits, in a bounded fork whose heap
+     * is isolated from the Gradle test executor. The caller owns that process bound;
+     * [stageObserver] exposes the probe's current stage so a killed fork is not
+     * diagnosed from an exception-message prefix.
+     */
+    internal fun runForked(
+        at: Coordinate,
+        journalDir: File,
+        budget: PointBudget = JournalPlan.budgetFor(at),
+        determinismCheck: Boolean = JournalPlan.DETERMINISM_CHECK,
+        stageObserver: (String) -> Unit = {},
+    ): JournalMeasurement = run(
+        at = at,
+        journalDir = journalDir,
+        budget = budget,
+        determinismCheck = determinismCheck,
+        recoveryJournal = ::FileJournal,
+        honorDeclaredOmission = false,
+        stageObserver = stageObserver,
+    )
+
+    /**
      * Test seams for proving recovery classification and that both recovery drains receive
      * the point-specific SIM budget rather than [SimulationController.DEFAULT_BUDGET].
      */
@@ -123,19 +145,24 @@ object JournalProbe {
         determinismCheck: Boolean = JournalPlan.DETERMINISM_CHECK,
         recoveryJournal: (File) -> Journal,
         recoveryDrain: (BenchMesh, Int) -> Unit = { mesh, simSteps -> mesh.runToIdle(simSteps) },
+        honorDeclaredOmission: Boolean = true,
+        stageObserver: (String) -> Unit = {},
     ): JournalMeasurement {
         require(at.durability) { "journal probe requires durability=true" }
         require(at.hostCount == 1) { "journal probe requires hostCount=1" }
         require(at.drive == Drive.SIM) { "journal probe requires SIM drive" }
 
         val maxHeapBytes = Runtime.getRuntime().maxMemory()
-        JournalPlan.omissionFor(at)?.let { omission ->
-            return omitted(at, omission, maxHeapBytes)
+        if (honorDeclaredOmission) {
+            JournalPlan.inProcessDeferralFor(at)?.let { omission ->
+                return deferredToFork(at, omission, maxHeapBytes)
+            }
         }
         val generated = generatedShape(at)
         val meshes = mutableMapOf<Int, BenchMesh>()
         val journals = mutableMapOf<Int, MutableMap<Int, CountingJournal>>()
         var buildAttempt = 0
+        var sweepStage = "setup"
 
         val runner = SweepRunner(
             budget = budget,
@@ -143,11 +170,15 @@ object JournalProbe {
             journalDir = journalDir,
             determinismCheck = determinismCheck,
             hook = PointHook { context, attempt ->
+                sweepStage = "drive"
+                stageObserver(sweepStage)
                 val mesh = (context as? PointContext.Sim)?.mesh
                     ?: error("journal probe requires SweepRunner's SIM context")
                 meshes[attempt] = mesh
             },
             meshBuilder = { hostCount, seed, topology, journalFor, replication ->
+                sweepStage = "setup"
+                stageObserver(sweepStage)
                 val attempt = ++buildAttempt
                 BenchMesh.build(
                     hostCount = hostCount,
@@ -174,15 +205,16 @@ object JournalProbe {
             // in the export as an honest SIM exclusion instead of letting the JUnit executor
             // die and losing the rest of the grid.
             return excluded(
-                unschedulable(at, "sweep", error, maxHeapBytes),
+                unschedulable(at, sweepStage, error, maxHeapBytes),
                 maxHeapBytes,
-                stage = "sweep",
+                stage = sweepStage,
             )
         }
         if (outcome !is PointOutcome.Ok) {
-            return excluded(outcome, maxHeapBytes, stage = "sweep")
+            return excluded(outcome, maxHeapBytes, stage = sweepStage)
         }
 
+        stageObserver("replay")
         val file = File(journalDir, "attempt1/peer0/host.journal")
         val secondFile = File(journalDir, "attempt2/peer0/host.journal")
         val firstMesh: BenchMesh
@@ -228,6 +260,7 @@ object JournalProbe {
         meshes.remove(2)
         journals.remove(2)
 
+        stageObserver("retained")
         val retainedBytes = try {
             HeapProbe.requireCollectableHeap()
             HeapProbe.retainedBytes { FileJournal(file).replay() }
@@ -249,6 +282,7 @@ object JournalProbe {
 
         var recoveredMesh: BenchMesh? = null
         var recoverCompleted = false
+        stageObserver("recover")
         try {
             val originalFold = sinkFold(firstMesh, generated.sinks)
             lateinit var installedRecoveryJournal: Journal
@@ -343,6 +377,7 @@ object JournalProbe {
 
         val checkpointBytes: Long
         val recordsAfterCheckpoint: Long
+        stageObserver("checkpoint")
         try {
             firstMesh.peers[0].host.checkpoint(firstJournal)
             checkpointBytes = file.length()
@@ -365,6 +400,7 @@ object JournalProbe {
             )
         }
 
+        stageObserver("complete")
         return JournalMeasurement(
             outcome = outcome,
             stage = "complete",
@@ -598,7 +634,7 @@ private fun excluded(
         recordsAfterCheckpoint = null,
     )
 
-private fun omitted(
+private fun deferredToFork(
     at: Coordinate,
     omission: JournalPlan.Omission,
     maxHeapBytes: Long,
@@ -609,10 +645,10 @@ private fun omitted(
         reason = omission.reason,
         observedLimit = "",
     ),
-    stage = "omission",
+    stage = "forked-evidence",
     replayCompleted = false,
     recoverCompleted = false,
-    declaredOmission = true,
+    inProcessDeferral = true,
     fileBytes = null,
     secondAttemptFileBytes = null,
     records = null,

@@ -188,23 +188,30 @@ class JournalProbeTest {
             JournalPlan.BATCH_SIZES.map { batchSize -> cardinality to batchSize }
         }
         points.all { it.hostCount == 1 && it.durability && it.drive == Drive.SIM } shouldBe true
-        JournalPlan.omissions().size shouldBe 4
+        JournalPlan.omissions().size shouldBe 3
         JournalPlan.describe() shouldContain "D13 FIRES iff"
         JournalPlan.describe() shouldContain "D13 RETIRES iff"
         JournalPlan.describe() shouldContain "D13 is INCONCLUSIVE otherwise"
     }
 
     @Test
-    fun `journal plan distinguishes declared SIM combinations from executed omissions`() {
-        JournalPlan.executedPoints().size shouldBe 9
-        JournalPlan.executedPoints().none { it.cardinality == 1_000_000L } shouldBe true
+    fun `journal plan combines nine in-process points with three observed fork outcomes`() {
+        JournalPlan.executedPoints().size shouldBe 12
+        JournalPlan.inProcessPoints().size shouldBe 9
+        JournalPlan.inProcessPoints().none { it.cardinality == 1_000_000L } shouldBe true
+        JournalPlan.forkedObservations().map { it.batchSize } shouldBe JournalPlan.BATCH_SIZES
+        JournalPlan.forkedObservations().all {
+            it.kind == "Ok" && it.stage == "complete" && it.replayCompleted && it.recoverCompleted &&
+                it.retainedBytes == 216_486_328L && it.maxHeapBytes == 8_589_934_592L
+        } shouldBe true
         JournalPlan.describe() shouldContain "Declared SIM combinations: 4 × 3 = 12"
-        JournalPlan.describe() shouldContain "Executed SIM combinations: 3 × 3 = 9"
+        JournalPlan.describe() shouldContain "Executed SIM combinations: 4 × 3 = 12"
+        JournalPlan.describe() shouldContain "3 C=1e6 points in bounded -Xmx8g forks"
     }
 
     @Test
-    fun `a declared C=1e6 SIM point is omitted before a mesh is built`() {
-        val journalDir = temporaryRoot.resolve("declared-omission")
+    fun `ordinary probe defers C=1e6 to the recorded fork evidence before a mesh is built`() {
+        val journalDir = temporaryRoot.resolve("in-process-deferral")
 
         val measured = JournalProbe.run(
             at = JournalPlan.coordinate(1_000_000, 1),
@@ -212,10 +219,30 @@ class JournalProbeTest {
             determinismCheck = false,
         )
 
-        measured.declaredOmission shouldBe true
-        measured.stage shouldBe "omission"
-        measured.outcome.shouldBeInstanceOf<PointOutcome.Unschedulable>().reason shouldContain "9f7x5-D19"
+        measured.inProcessDeferral shouldBe true
+        measured.stage shouldBe "forked-evidence"
+        measured.outcome.shouldBeInstanceOf<PointOutcome.Unschedulable>().reason shouldContain "computenet-9f7x5.5"
         journalDir.exists() shouldBe false
+    }
+
+    @Test
+    fun `forked probe bypasses the in-process deferral and reports its own drive stage`() {
+        val journalDir = temporaryRoot.resolve("forked-stage")
+        val stages = mutableListOf<String>()
+
+        val measured = JournalProbe.runForked(
+            at = JournalPlan.coordinate(1_000_000, 1),
+            journalDir = journalDir,
+            budget = PointBudget(simSteps = 0),
+            determinismCheck = false,
+            stageObserver = stages::add,
+        )
+
+        measured.inProcessDeferral shouldBe false
+        measured.stage shouldBe "drive"
+        measured.outcome.shouldBeInstanceOf<PointOutcome.NonConvergent>()
+        stages shouldBe listOf("setup", "drive")
+        journalDir.exists() shouldBe true
     }
 
     @Test

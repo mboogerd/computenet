@@ -23,9 +23,11 @@ object JournalPlan {
     const val TIMEOUT_MINUTES: Long = 30L
     const val DETERMINISM_CHECK: Boolean = true
     const val RETAINED_FRACTION_FIRES: Double = 0.25
-    const val SIM_OMITTED_CARDINALITY: Long = 1_000_000L
-    const val SIM_OMISSION_REASON =
-        "9f7x5-D19: not attempted in-process: safety under the test executor's heap not established"
+    const val FORKED_CARDINALITY: Long = 1_000_000L
+    const val FORKED_XMX: String = "-Xmx8g"
+    const val IN_PROCESS_DEFERRAL_REASON =
+        "computenet-9f7x5.5: executed separately in a bounded fork at -Xmx8g; " +
+            "the 2 GiB Gradle executor does not repeat that measurement"
 
     /**
      * One declared omission or explicitly excluded edge of the `[BEN2-37]`,
@@ -35,6 +37,17 @@ object JournalPlan {
         val what: String,
         val count: Int,
         val reason: String,
+    )
+
+    /** The observed classification from the bounded C=1e6 forked run. */
+    data class ForkedObservation(
+        val batchSize: Int,
+        val kind: String,
+        val stage: String,
+        val replayCompleted: Boolean,
+        val recoverCompleted: Boolean,
+        val retainedBytes: Long,
+        val maxHeapBytes: Long,
     )
 
     /** The D6 coordinate: durable DIAMOND, SIM drive, and exactly one host. */
@@ -51,21 +64,40 @@ object JournalPlan {
         BATCH_SIZES.map { batchSize -> coordinate(cardinality, batchSize) }
     }
 
-    /** The declared SIM points that are actually attempted by [JournalProbe]. */
-    fun executedPoints(): List<Coordinate> = points().filterNot { omissionFor(it) != null }
+    /** Every declared SIM point, across the in-process and isolated-fork lanes. */
+    fun executedPoints(): List<Coordinate> = points()
+
+    /** The nine points safe to repeat inside the Gradle test executor. */
+    fun inProcessPoints(): List<Coordinate> = points().filterNot { inProcessDeferralFor(it) != null }
+
+    /** The three C=1e6 outcomes observed by computenet-9f7x5.5. */
+    fun forkedObservations(): List<ForkedObservation> = BATCH_SIZES.map { batchSize ->
+        ForkedObservation(
+            batchSize = batchSize,
+            kind = "Ok",
+            stage = "complete",
+            replayCompleted = true,
+            recoverCompleted = true,
+            retainedBytes = 216_486_328L,
+            maxHeapBytes = 8_589_934_592L,
+        )
+    }
 
     /** The macro runner's calibrated allowance for this coordinate. */
     fun budgetFor(at: Coordinate): PointBudget = SweepPlan.budgetFor(at)
 
-    /** The declared a-priori omission covering the three C=1e6 SIM points. */
-    fun omissionFor(at: Coordinate): Omission? =
-        omissions().firstOrNull {
-            it.what == "SIM C=1e6" &&
-                at.drive == Drive.SIM &&
-                at.cardinality == SIM_OMITTED_CARDINALITY
+    /**
+     * Keeps the isolated C=1e6 measurement out of the 2 GiB Gradle executor.
+     * This is an execution-lane deferral, not an omission from the study.
+     */
+    fun inProcessDeferralFor(at: Coordinate): Omission? =
+        if (at.drive == Drive.SIM && at.cardinality == FORKED_CARDINALITY) {
+            Omission("SIM C=1e6 in-process repeat", 1, IN_PROCESS_DEFERRAL_REASON)
+        } else {
+            null
         }
 
-    /** D14/D19's four declared omissions/exclusion cases, with reasons preserved. */
+    /** D14's remaining REAL and host-count omissions, with reasons preserved. */
     fun omissions(): List<Omission> = listOf(
         Omission(
             what = "REAL C=1e6",
@@ -82,27 +114,21 @@ object JournalPlan {
             count = 4,
             reason = "9f7x5-D6: G-25's unit is one file per host",
         ),
-        Omission(
-            what = "SIM C=1e6",
-            count = BATCH_SIZES.size,
-            reason = SIM_OMISSION_REASON,
-        ),
     )
 
     /** Markdown copied into the SIM findings entry by the owning macro suite. */
     fun describe(): String = buildString {
         val declaredPoints = points()
         val executedPoints = executedPoints()
-        val executedCardinalities = executedPoints.map { it.cardinality }.distinct()
-        val executedBatchSizes = executedPoints.map { it.batchSize }.distinct()
         appendLine("### Plan")
         appendLine()
         appendLine("- Cardinalities: ${CARDINALITIES.joinToString()}")
         appendLine("- Batch sizes: ${BATCH_SIZES.joinToString()}")
         appendLine("- Declared SIM combinations: ${CARDINALITIES.size} × ${BATCH_SIZES.size} = ${declaredPoints.size}")
         appendLine(
-            "- Executed SIM combinations: ${executedCardinalities.size} × ${executedBatchSizes.size} = " +
-                "${executedPoints.size} (${declaredPoints.size - executedPoints.size} D19 omissions)",
+            "- Executed SIM combinations: ${CARDINALITIES.size} × ${BATCH_SIZES.size} = " +
+                "${executedPoints.size} (9 in the 2 GiB test executor; 3 C=1e6 points in " +
+                "bounded $FORKED_XMX forks)",
         )
         appendLine("- Nesting: cardinality -> batch size")
         appendLine(
@@ -113,6 +139,11 @@ object JournalPlan {
         appendLine("- Topology: ${SweepPlan.TOPOLOGY}")
         appendLine("- Determinism check: $DETERMINISM_CHECK for every SIM point")
         appendLine("- Per-invocation timeout: $TIMEOUT_MINUTES minutes")
+        appendLine(
+            "- Forked C=1e6 outcomes: " + forkedObservations().joinToString { observation ->
+                "b=${observation.batchSize} ${observation.kind} stage=${observation.stage}"
+            },
+        )
         appendLine("- REAL cardinalities at batch 10: ${REAL_CARDINALITIES.joinToString()}")
         appendLine("- Calibration cardinality: $CALIBRATION_CARDINALITY")
         appendLine(
