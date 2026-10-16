@@ -20,6 +20,7 @@ object TpchGenerator {
     /** The deliberate generator deviation copied into later run records. */
     val deviations: List<String> = listOf(
         "comment columns: v-strings, not §4.2.2.14 pseudo text",
+        "supplier-key collisions: probe the next unused PARTSUPP/L_SUPPKEY key modulo the supplier scale when four keys fit",
     )
 
     private const val START_DATE = "1992-01-01"
@@ -378,6 +379,30 @@ object TpchGenerator {
     /** The §4.2.3 supplier mapping shared by PARTSUPP and LINEITEM. */
     private fun supplierFor(partKey: Long, supplierIndex: Int, supplierScale: Long): Long {
         require(supplierIndex in 0..3) { "supplier index must be in [0, 3]" }
+        return supplierKeysFor(partKey, supplierScale)[supplierIndex]
+    }
+
+    /**
+     * Applies the §4.2.3 mapping in supplier-index order, probing forward only
+     * when its candidate repeats an earlier key for this part. The smallest
+     * scale-factor floor can have fewer than four suppliers, so it retains the
+     * formula's duplicate once every supplier key is already occupied.
+     */
+    private fun supplierKeysFor(partKey: Long, supplierScale: Long): List<Long> {
+        require(supplierScale > 0L) { "supplier scale must be positive" }
+        val used = ArrayList<Long>(4)
+        return (0..3).map { supplierIndex ->
+            var candidate = formulaSupplierFor(partKey, supplierIndex, supplierScale)
+            while (candidate in used && used.size.toLong() < supplierScale) {
+                candidate = candidate % supplierScale + 1L
+            }
+            used += candidate
+            candidate
+        }
+    }
+
+    /** The unmodified §4.2.3 PS_SUPPKEY/L_SUPPKEY formula. */
+    private fun formulaSupplierFor(partKey: Long, supplierIndex: Int, supplierScale: Long): Long {
         val stride = supplierScale / 4L + (partKey - 1L) / supplierScale
         return (partKey + supplierIndex * stride) % supplierScale + 1L
     }
