@@ -20,9 +20,10 @@ object TpchFindings {
      * Render one BB-TPCH entry and its coverage/finding blocks.
      *
      * Verified records are folded by query and refresh kind. A row's value is the mean
-     * per-batch SIM work across the supplied records; its dispersion is the spread of
-     * those per-record means. With one seed the spread is retained as zero internally,
-     * but the rendered row is marked `± n/a` because no dispersion was observed.
+     * per-batch SIM collector-applied delta elements across the supplied records; its
+     * dispersion is the spread of those per-record means. With one seed the spread is
+     * retained as zero internally, but the rendered row is marked `± n/a` because no
+     * dispersion was observed.
      */
     fun render(
         records: List<TpchRecord>,
@@ -74,7 +75,7 @@ object TpchFindings {
             append(entry)
             appendLine()
             appendLine()
-            appendLine(SIM_WORK_CAVEAT)
+            appendLine(SIM_MAINTENANCE_WORK_CAVEAT)
             appendLine()
             appendLine("Specification: $SPEC_REVISION")
             appendLine("Framing: $FRAMING")
@@ -121,12 +122,12 @@ object TpchFindings {
                 RefreshKind.RF2 -> record.rf2
             }
             if (figures.isEmpty()) return@mapNotNull null
-            val steps = figures.map { figure ->
+            val appliedElements = figures.map { figure ->
                 val work = figure.figure as? Figure.Work
                     ?: error("${query.name} ${kind.name} findings require SIM work figures")
                 work.steps.toDouble()
             }
-            steps.average()
+            appliedElements.average()
         }
         if (perRun.isEmpty()) return null
         val spread = perRun.maxOrNull()!! - perRun.minOrNull()!!
@@ -134,7 +135,7 @@ object TpchFindings {
             label = "${query.name} ${kind.name}",
             result = BenchResult(
                 value = perRun.average(),
-                unit = "steps/batch",
+                unit = "applied delta elements/batch",
                 dispersion = spread,
                 drive = Drive.SIM,
                 env = records.first().header.env,
@@ -149,8 +150,13 @@ object TpchFindings {
         val dispersionObserved: Boolean,
     )
 
-    private const val SIM_WORK_CAVEAT =
-        "SIM work caveat (all RF1/RF2 rows above): `steps/batch` counts " +
-            "host-scheduler tasks for the refresh's hosted ORDERS/LINEITEM messages; " +
-            "it is query-independent and does not measure per-query operator maintenance."
+    private const val SIM_MAINTENANCE_WORK_CAVEAT =
+        "SIM maintenance-work caveat (all RF1/RF2 rows above): " +
+            "`applied delta elements/batch` sums adds+dels or puts+removals applied " +
+            "by every materialized query-outlet collector between quiescence points; " +
+            "the same logical change counts once at each observed outlet it reaches. " +
+            "It is query-specific propagation volume, not elapsed time, internal " +
+            "operator operations, or deliveries on unmaterialized edges. RF1/RF2 " +
+            "host-scheduler task counts are query-independent ingress instrumentation " +
+            "and are not retained in these rows."
 }
