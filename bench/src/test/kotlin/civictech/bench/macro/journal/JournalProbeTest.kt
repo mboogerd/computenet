@@ -219,6 +219,26 @@ class JournalProbeTest {
     }
 
     @Test
+    fun `forked probe bypasses the declared omission and reports its own drive stage`() {
+        val journalDir = temporaryRoot.resolve("forked-stage")
+        val stages = mutableListOf<String>()
+
+        val measured = JournalProbe.runForked(
+            at = JournalPlan.coordinate(1_000_000, 1),
+            journalDir = journalDir,
+            budget = PointBudget(simSteps = 0),
+            determinismCheck = false,
+            stageObserver = stages::add,
+        )
+
+        measured.declaredOmission shouldBe false
+        measured.stage shouldBe "drive"
+        measured.outcome.shouldBeInstanceOf<PointOutcome.NonConvergent>()
+        stages shouldBe listOf("setup", "drive")
+        journalDir.exists() shouldBe true
+    }
+
+    @Test
     fun `recovery drains use the point budget rather than the simulation default`() {
         val at = JournalPlan.coordinate(100, 10)
         val recoveryBudget = SimulationController.DEFAULT_BUDGET + 7

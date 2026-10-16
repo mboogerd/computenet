@@ -17,6 +17,7 @@ import civictech.bench.cost.GrowthForm
 import civictech.bench.cost.PointOutcome
 import civictech.bench.cost.SubjectMerge
 import civictech.bench.micro.FootprintReport
+import civictech.testkit.JvmPeer
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -33,14 +34,17 @@ import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.MethodSource
 import java.io.File
+import java.lang.management.ManagementFactory
 import java.lang.reflect.Method
 import java.nio.file.Files
 import java.time.LocalDate
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeUnit.MINUTES
 import java.util.concurrent.TimeoutException
 import kotlin.math.round
+import kotlin.system.exitProcess
 
 /** Runs, merges, and renders the G-25 durable journal SIM grid (9f7x5-D6..D10/D13..D15). */
 @Tag("bench")
@@ -607,3 +611,156 @@ class MacroJournalTest {
                 "per (cardinality, batch size), SIM drive"
     }
 }
+
+/**
+ * Runs the three D19 C=1e6 points in isolated JVMs with a stated heap. The
+ * [JvmPeer] child is only a launcher: the measured grandchild receives the
+ * explicit [FORKED_XMX] option, and the launcher's shutdown hook reaps it if
+ * the per-point wait expires.
+ */
+@Tag("bench")
+@Tag("multi-jvm")
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class ForkedMillionJournalTest {
+
+    @JvmField
+    @TempDir
+    var temporaryRoot: File? = null
+
+    fun batches(): List<Int> = JournalPlan.BATCH_SIZES
+
+    @ParameterizedTest(name = "C=1e6 batch={0}")
+    @MethodSource("batches")
+    @Timeout(value = FORK_TIMEOUT_MINUTES + 2, unit = MINUTES)
+    fun `records the probe-owned stage from an explicitly sized fork`(batchSize: Int) {
+        val peer = JvmPeer.launch(
+            LAUNCHER_MAIN,
+            FORKED_XMX,
+            batchSize.toString(),
+            File(requireNotNull(temporaryRoot), "batch-$batchSize").absolutePath,
+        )
+        try {
+            JvmPeer.await(
+                what = "C=1e6 batch=$batchSize forked journal outcome",
+                peers = listOf(peer),
+                timeoutMs = TimeUnit.MINUTES.toMillis(FORK_TIMEOUT_MINUTES),
+            ) {
+                !peer.process.isAlive || peer.output().lineSequence().any { it.startsWith(RESULT_PREFIX) }
+            }
+            check(peer.process.waitFor(10, TimeUnit.SECONDS)) {
+                "fork reported an outcome but did not exit\n${peer.report()}"
+            }
+            val result = peer.output().lineSequence().filter { it.startsWith(RESULT_PREFIX) }.toList()
+            assertEquals(1, result.size, peer.report())
+            assertEquals(0, peer.process.exitValue(), peer.report())
+            assertTrue(result.single().contains("batch=$batchSize|"), result.single())
+            println(peer.output())
+        } finally {
+            JvmPeer.destroy(peer)
+        }
+    }
+
+    private companion object {
+        const val FORKED_XMX = "-Xmx8g"
+        const val FORK_TIMEOUT_MINUTES = 30L
+        const val LAUNCHER_MAIN =
+            "civictech.bench.macro.journal.JournalMillionForkLauncherMain"
+    }
+}
+
+/** JvmPeer-compatible launcher that gives the measured JVM its own explicit heap. */
+object JournalMillionForkLauncherMain {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        require(args.size == 3) { "expected: <xmx> <batchSize> <journalDir>" }
+        val java = File(System.getProperty("java.home"), "bin/java").absolutePath
+        val process = ProcessBuilder(
+            java,
+            args[0],
+            "-cp",
+            System.getProperty("java.class.path"),
+            JournalMillionForkMain::class.java.name,
+            args[1],
+            args[2],
+        ).redirectErrorStream(true).start()
+        val reap = Thread { if (process.isAlive) process.destroyForcibly() }
+        Runtime.getRuntime().addShutdownHook(reap)
+        try {
+            process.inputStream.copyTo(System.out)
+            System.out.flush()
+            exitProcess(process.waitFor())
+        } finally {
+            runCatching { Runtime.getRuntime().removeShutdownHook(reap) }
+            if (process.isAlive) process.destroyForcibly()
+        }
+    }
+}
+
+/** The measured JVM. Its result line keeps classification and stage separate. */
+object JournalMillionForkMain {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        require(args.size == 2) { "expected: <batchSize> <journalDir>" }
+        val batchSize = args[0].toInt()
+        val at = JournalPlan.coordinate(JournalPlan.SIM_OMITTED_CARDINALITY, batchSize)
+        val inputArguments = ManagementFactory.getRuntimeMXBean().inputArguments.joinToString(" ")
+        println(
+            "$ENV_PREFIX os=${System.getProperty("os.name")}|arch=${System.getProperty("os.arch")}|" +
+                "jdk=${System.getProperty("java.vendor")} ${System.getProperty("java.version")}|" +
+                "vmArgs=${protocol(inputArguments)}|maxHeap=${Runtime.getRuntime().maxMemory()}",
+        )
+        System.out.flush()
+        try {
+            val measured = JournalProbe.runForked(
+                at = at,
+                journalDir = File(args[1]),
+                stageObserver = { stage ->
+                    println("$STAGE_PREFIX batch=$batchSize|stage=$stage")
+                    System.out.flush()
+                },
+            )
+            println(measured.resultLine(batchSize))
+            System.out.flush()
+        } catch (failure: Throwable) {
+            println(
+                "$RESULT_PREFIX batch=$batchSize|kind=Unclassified|stage=process|" +
+                    "reason=${protocol("${failure.javaClass.name}: ${failure.message}")}",
+            )
+            failure.printStackTrace(System.out)
+            System.out.flush()
+            exitProcess(1)
+        }
+    }
+}
+
+private const val ENV_PREFIX = "JOURNAL_FORK_ENV"
+private const val STAGE_PREFIX = "JOURNAL_FORK_STAGE"
+private const val RESULT_PREFIX = "JOURNAL_FORK_RESULT"
+
+private fun JournalMeasurement.resultLine(batchSize: Int): String =
+    "$RESULT_PREFIX batch=$batchSize|kind=${forkOutcomeKind(outcome)}|stage=$stage|" +
+        "replayCompleted=$replayCompleted|recoverCompleted=$recoverCompleted|" +
+        "fileBytes=${fileBytes ?: "n/a"}|records=${records ?: "n/a"}|" +
+        "retainedBytes=${retainedBytes ?: "n/a"}|maxHeap=$maxHeapBytes|" +
+        "checkpointBytes=${checkpointBytes ?: "n/a"}|reason=${protocol(forkReason(outcome))}"
+
+private fun forkOutcomeKind(outcome: PointOutcome): String = when (outcome) {
+    is PointOutcome.Ok -> "Ok"
+    is PointOutcome.NonConvergent -> "NonConvergent"
+    is PointOutcome.NonDeterministic -> "NonDeterministic"
+    is PointOutcome.Unschedulable -> "Unschedulable"
+    is PointOutcome.Failed -> "Failed"
+    is PointOutcome.Unreportable -> "Unreportable"
+}
+
+private fun forkReason(outcome: PointOutcome): String = when (outcome) {
+    is PointOutcome.Ok -> "admitted"
+    is PointOutcome.NonConvergent -> outcome.budget
+    is PointOutcome.NonDeterministic -> "structural counts differ"
+    is PointOutcome.Unschedulable -> "${outcome.reason}; observedLimit=${outcome.observedLimit}"
+    is PointOutcome.Failed -> "${outcome.cause}; deadLetters=${outcome.deadLetters.size}"
+    is PointOutcome.Unreportable -> "relativeDispersion=${outcome.result.relativeDispersion}"
+}
+
+private fun protocol(value: String?): String =
+    value.orEmpty().replace('|', '/').replace('\n', ' ').replace('\r', ' ')
