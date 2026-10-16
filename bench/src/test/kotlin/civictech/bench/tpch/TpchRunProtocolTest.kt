@@ -34,6 +34,10 @@ class TpchRunProtocolTest {
                 ),
             )
             val verified = assertInstanceOf(TpchRecord.Verified::class.java, record)
+            assertEquals(WorkUnit.SCHEDULER_TASKS, (verified.load as Figure.Work).unit)
+            assertTrue((verified.rf1 + verified.rf2).all {
+                (it.figure as Figure.Work).unit == WorkUnit.COLLECTOR_APPLIED_DELTA_ELEMENTS
+            })
             val emittedPerBatch = snapshots.chunked(2).map { (before, after) ->
                 after.keys.sumOf { outlet -> after.getValue(outlet) - before.getValue(outlet) }
             }

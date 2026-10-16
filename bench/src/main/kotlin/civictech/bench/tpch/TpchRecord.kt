@@ -71,11 +71,23 @@ data class RefreshPlan(
     }
 }
 
+/** Units used by deterministic SIM work figures. */
+enum class WorkUnit {
+    SCHEDULER_TASKS,
+    COLLECTOR_APPLIED_DELTA_ELEMENTS,
+}
+
 /** A phase cost is either deterministic SIM work or REAL elapsed time. */
 sealed interface Figure {
+    /**
+     * A count whose [unit] identifies what was counted. LOAD figures use
+     * [WorkUnit.SCHEDULER_TASKS]; RF1/RF2 figures use
+     * [WorkUnit.COLLECTOR_APPLIED_DELTA_ELEMENTS].
+     */
     data class Work(
         val steps: Long,
         val dispersionSteps: Long? = null,
+        val unit: WorkUnit = WorkUnit.SCHEDULER_TASKS,
     ) : Figure {
         init {
             require(steps >= 0) { "simulation work steps must be non-negative" }
@@ -427,10 +439,16 @@ private fun foldFigures(figures: List<Figure>): FoldedFigure {
     }
     val kinds = figures.map { it::class }.distinct()
     require(kinds.size == 1) { "cannot fold Work and Duration figures together" }
+    val workUnits = figures.filterIsInstance<Figure.Work>().map { it.unit }.distinct()
+    require(workUnits.size <= 1) { "cannot fold Work figures with different units" }
     val mean = values.average()
     val spread = values.max() - values.min()
     val folded = when (figures.first()) {
-        is Figure.Work -> Figure.Work(mean.roundToLong(), spread.roundToLong())
+        is Figure.Work -> Figure.Work(
+            steps = mean.roundToLong(),
+            dispersionSteps = spread.roundToLong(),
+            unit = workUnits.single(),
+        )
         is Figure.Duration -> Figure.Duration(mean.roundToLong(), spread.roundToLong())
     }
     return FoldedFigure(folded, if (mean == 0.0) 0.0 else spread / mean)
