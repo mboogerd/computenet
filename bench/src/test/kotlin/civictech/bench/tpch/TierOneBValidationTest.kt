@@ -17,12 +17,15 @@ class TierOneBValidationTest {
         query: TpchQuery,
         drive: Drive,
     ) {
+        val scenario = validationScenario(query)
+        val plan = scenario.plan()
+        assertReferenceAnswerChangesForBothRefreshKinds(query, plan)
         val comparisons = mutableListOf<Pair<Int, Comparison>>()
         val record = TpchRun.run(
             query = query,
-            seed = 7L,
+            seed = scenario.seed,
             sf = 0.001,
-            plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 20),
+            plan = plan,
             drive = drive,
             env = tpchTestEnvironment(),
             hooks = TpchRunHooks(
