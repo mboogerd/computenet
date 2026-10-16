@@ -27,6 +27,12 @@ object StateAccounting {
      * completed RF1/RF2 pair checkpoints distinguish a genuinely flat stream from one
      * whose outlet population merely shifts; the expected intra-pair rise and fall does
      * not make a paired stream non-flat.
+     *
+     * Caveat: under the default (not outlet-balanced) RF2, a monotone population shift of
+     * correctly maintained rows also meets the [GrowthNote.Growing] rule and pre-empts
+     * [GrowthNote.NotOutletBalanced] (Q3 SF 0.001 seed 7: `q03-order-lines` 32 -> 37), so a
+     * per-record `Growing` is G-42 evidence only from a paired stream. A non-balanced plan
+     * whose rows only shrink or shift reports [GrowthNote.Flat], meaning "no growth".
      */
     fun growthNote(
         series: List<RetainedState>,
