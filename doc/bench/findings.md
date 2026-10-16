@@ -7337,7 +7337,7 @@ Applied `transportValidated = true`: both host counts completed and every frame 
 A later `MacroSweepTest` whole-export rewrite or `SubjectMerge` replacement drops `transportValidated`; rerun this cross-check after either operation (0cnmw-D17).
 
 ## 2026-10-16 — durable DIAMOND point on ONE host: journal file size, bytes per record, records, retained bytes at replay, checkpoint size and the recovery check, per (cardinality, batch size), SIM drive
-Harness: 07dcacab · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+Harness: 0826c8e5 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
 JMH: mode=SIM durable journal growth probe (JUnit @Tag("bench"), one deterministic BenchMesh per attempt; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both forks=1 warmup=1 iters=2 · drive=SIM
 | subject | value | notes |
 | --- | --- | --- |
@@ -7345,44 +7345,65 @@ JMH: mode=SIM durable journal growth probe (JUnit @Tag("bench"), one determinist
 | n=1000 b=1 bytesPerRecord | 191.898 ± n/a bytes/record | |
 | n=1000 b=1 records | 1000.0 ± n/a records/point | |
 | n=1000 b=1 journalRecords | 1000.0 ± n/a journalRecords/point | |
-| n=1000 b=1 retainedBytes | 212976.0 ± n/a bytes/point | |
+| n=1000 b=1 retainedBytes (rounded to 4KiB) | 212992.0 ± n/a bytes/point (rounded to 4KiB) | |
 | n=1000 b=1 checkpointBytes | 154006.0 ± n/a bytes/point | |
 | n=1000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=1000 b=10 fileBytes | 191898.0 ± n/a bytes/point | |
 | n=1000 b=10 bytesPerRecord | 191.898 ± n/a bytes/record | |
 | n=1000 b=10 records | 1000.0 ± n/a records/point | |
 | n=1000 b=10 journalRecords | 1000.0 ± n/a journalRecords/point | |
-| n=1000 b=10 retainedBytes | 212976.0 ± n/a bytes/point | |
+| n=1000 b=10 retainedBytes (rounded to 4KiB) | 212992.0 ± n/a bytes/point (rounded to 4KiB) | |
 | n=1000 b=10 checkpointBytes | 154006.0 ± n/a bytes/point | |
 | n=1000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=1000 b=100 fileBytes | 191898.0 ± n/a bytes/point | |
 | n=1000 b=100 bytesPerRecord | 191.898 ± n/a bytes/record | |
 | n=1000 b=100 records | 1000.0 ± n/a records/point | |
 | n=1000 b=100 journalRecords | 1000.0 ± n/a journalRecords/point | |
-| n=1000 b=100 retainedBytes | 212976.0 ± n/a bytes/point | |
+| n=1000 b=100 retainedBytes (rounded to 4KiB) | 212992.0 ± n/a bytes/point (rounded to 4KiB) | |
 | n=1000 b=100 checkpointBytes | 154006.0 ± n/a bytes/point | |
 | n=1000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=10000 b=1 fileBytes | 1928898.0 ± n/a bytes/point | |
 | n=10000 b=1 bytesPerRecord | 192.8898 ± n/a bytes/record | |
 | n=10000 b=1 records | 10000.0 ± n/a records/point | |
 | n=10000 b=1 journalRecords | 10000.0 ± n/a journalRecords/point | |
-| n=10000 b=1 retainedBytes | 2176032.0 ± n/a bytes/point | |
+| n=10000 b=1 retainedBytes (rounded to 4KiB) | 2174976.0 ± n/a bytes/point (rounded to 4KiB) | |
 | n=10000 b=1 checkpointBytes | 1595506.0 ± n/a bytes/point | |
 | n=10000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=10000 b=10 fileBytes | 1928898.0 ± n/a bytes/point | |
 | n=10000 b=10 bytesPerRecord | 192.8898 ± n/a bytes/record | |
 | n=10000 b=10 records | 10000.0 ± n/a records/point | |
 | n=10000 b=10 journalRecords | 10000.0 ± n/a journalRecords/point | |
-| n=10000 b=10 retainedBytes | 2176008.0 ± n/a bytes/point | |
+| n=10000 b=10 retainedBytes (rounded to 4KiB) | 2174976.0 ± n/a bytes/point (rounded to 4KiB) | |
 | n=10000 b=10 checkpointBytes | 1595506.0 ± n/a bytes/point | |
 | n=10000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=10000 b=100 fileBytes | 1928898.0 ± n/a bytes/point | |
 | n=10000 b=100 bytesPerRecord | 192.8898 ± n/a bytes/record | |
 | n=10000 b=100 records | 10000.0 ± n/a records/point | |
 | n=10000 b=100 journalRecords | 10000.0 ± n/a journalRecords/point | |
-| n=10000 b=100 retainedBytes | 2176032.0 ± n/a bytes/point | |
+| n=10000 b=100 retainedBytes (rounded to 4KiB) | 2174976.0 ± n/a bytes/point (rounded to 4KiB) | |
 | n=10000 b=100 checkpointBytes | 1595506.0 ± n/a bytes/point | |
 | n=10000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=100000 b=1 fileBytes | 1.9388898E7 ± n/a bytes/point | |
+| n=100000 b=1 bytesPerRecord | 193.88898 ± n/a bytes/record | |
+| n=100000 b=1 records | 100000.0 ± n/a records/point | |
+| n=100000 b=1 journalRecords | 100000.0 ± n/a journalRecords/point | |
+| n=100000 b=1 retainedBytes (rounded to 4KiB) | 2.125824E7 ± n/a bytes/point (rounded to 4KiB) | |
+| n=100000 b=1 checkpointBytes | 1.6010506E7 ± n/a bytes/point | |
+| n=100000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=100000 b=10 fileBytes | 1.9388898E7 ± n/a bytes/point | |
+| n=100000 b=10 bytesPerRecord | 193.88898 ± n/a bytes/record | |
+| n=100000 b=10 records | 100000.0 ± n/a records/point | |
+| n=100000 b=10 journalRecords | 100000.0 ± n/a journalRecords/point | |
+| n=100000 b=10 retainedBytes (rounded to 4KiB) | 2.12992E7 ± n/a bytes/point (rounded to 4KiB) | |
+| n=100000 b=10 checkpointBytes | 1.6010506E7 ± n/a bytes/point | |
+| n=100000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=100000 b=100 fileBytes | 1.9388898E7 ± n/a bytes/point | |
+| n=100000 b=100 bytesPerRecord | 193.88898 ± n/a bytes/record | |
+| n=100000 b=100 records | 100000.0 ± n/a records/point | |
+| n=100000 b=100 journalRecords | 100000.0 ± n/a journalRecords/point | |
+| n=100000 b=100 retainedBytes (rounded to 4KiB) | 2.12992E7 ± n/a bytes/point (rounded to 4KiB) | |
+| n=100000 b=100 checkpointBytes | 1.6010506E7 ± n/a bytes/point | |
+| n=100000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 
 ### Plan
@@ -7409,28 +7430,22 @@ Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 - 1 REAL C=1e6 — reason: measured on Apple M3 Max (Darwin arm64, JDK 21.0.11): corrected C=1e5 file/memory invocations were 3.65 s/0.62 s; linear C=1e6 extrapolation is ~36 s/~6 s per invocation and at least ~32 min of drive/setup for the four-method setting
 - 2 REAL batch ∈ {1, 100} — reason: batch is a SIM-structural dimension here
 - 4 H ∈ {2, 3, 5, 8} — reason: 9f7x5-D6: G-25's unit is one file per host
-- 1 a 1e6 SIM point that ends Unschedulable — reason: listed as such with the stage and heap limit rather than replaced by a smaller point
-- n=100000 b=1: Failed — java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; 0 dead letters
-- n=100000 b=10: Failed — java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; 0 dead letters
-- n=100000 b=100: Failed — java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; 0 dead letters
-- n=1000000 b=1: Unschedulable — sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observed limit: maxHeap=2147483648
-- n=1000000 b=10: Unschedulable — sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observed limit: maxHeap=2147483648
-- n=1000000 b=100: Unschedulable — sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observed limit: maxHeap=2147483648
+- 3 SIM C=1e6 — reason: 9f7x5-D19: not attempted in-process: safety under the test executor's heap not established
+- n=1000000 b=1: Omitted — 9f7x5-D19: not attempted in-process: safety under the test executor's heap not established
+- n=1000000 b=10: Omitted — 9f7x5-D19: not attempted in-process: safety under the test executor's heap not established
+- n=1000000 b=100: Omitted — 9f7x5-D19: not attempted in-process: safety under the test executor's heap not established
 
 ### Growth laws
 
-- dimension=cardinality slice=[batch=10] metric=journalRecords Unfitted: a law requires at least 4 points, found 2; R²=1.0; fitted-over=2 points=Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=1000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM)
+- dimension=cardinality slice=[batch=10] metric=journalRecords Unfitted: a law requires at least 4 points, found 3; R²=1.0; fitted-over=3 points=Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=1000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=100000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM)
 - dimension=batchSize slice=[C=1e4] metric=journalRecords Unfitted: metric 'journalRecords' has no variance, so R² is undefined; R²=null; fitted-over=3 points=Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=1, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=100, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM)
 
 ### Outcome tally
 
-admitted=6 NonConvergent=0 NonDeterministic=0 Unschedulable=3 Failed=3 Unreportable=0
-- n=100000 b=1 kind=Failed stage=sweep maxHeap=2147483648 reason=java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; deadLetters=0
-- n=100000 b=10 kind=Failed stage=sweep maxHeap=2147483648 reason=java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; deadLetters=0
-- n=100000 b=100 kind=Failed stage=sweep maxHeap=2147483648 reason=java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; deadLetters=0
-- n=1000000 b=1 kind=Unschedulable stage=sweep maxHeap=2147483648 reason=sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observedLimit=maxHeap=2147483648
-- n=1000000 b=10 kind=Unschedulable stage=sweep maxHeap=2147483648 reason=sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observedLimit=maxHeap=2147483648
-- n=1000000 b=100 kind=Unschedulable stage=sweep maxHeap=2147483648 reason=sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observedLimit=maxHeap=2147483648
+admitted=9 NonConvergent=0 NonDeterministic=0 Unschedulable=0 Failed=0 Unreportable=0 Omitted=3
+- n=1000000 b=1 kind=Omitted stage=omission heap=n/a reason=9f7x5-D19: not attempted in-process: safety under the test executor's heap not established
+- n=1000000 b=10 kind=Omitted stage=omission heap=n/a reason=9f7x5-D19: not attempted in-process: safety under the test executor's heap not established
+- n=1000000 b=100 kind=Omitted stage=omission heap=n/a reason=9f7x5-D19: not attempted in-process: safety under the test executor's heap not established
 
 ### Determinism
 
@@ -7440,33 +7455,38 @@ admitted=6 NonConvergent=0 NonDeterministic=0 Unschedulable=3 Failed=3 Unreporta
 - n=10000 b=1 kind=Ok attempt1=1928898 attempt2=1928898 equal=true
 - n=10000 b=10 kind=Ok attempt1=1928898 attempt2=1928898 equal=true
 - n=10000 b=100 kind=Ok attempt1=1928898 attempt2=1928898 equal=true
-- n=100000 b=1 kind=Failed attempt1=n/a attempt2=n/a equal=false
-- n=100000 b=10 kind=Failed attempt1=n/a attempt2=n/a equal=false
-- n=100000 b=100 kind=Failed attempt1=n/a attempt2=n/a equal=false
-- n=1000000 b=1 kind=Unschedulable attempt1=n/a attempt2=n/a equal=false
-- n=1000000 b=10 kind=Unschedulable attempt1=n/a attempt2=n/a equal=false
-- n=1000000 b=100 kind=Unschedulable attempt1=n/a attempt2=n/a equal=false
+- n=100000 b=1 kind=Ok attempt1=19388898 attempt2=19388898 equal=true
+- n=100000 b=10 kind=Ok attempt1=19388898 attempt2=19388898 equal=true
+- n=100000 b=100 kind=Ok attempt1=19388898 attempt2=19388898 equal=true
+- n=1000000 b=1 kind=Omitted attempt1=n/a attempt2=n/a equal=false
+- n=1000000 b=10 kind=Omitted attempt1=n/a attempt2=n/a equal=false
+- n=1000000 b=100 kind=Omitted attempt1=n/a attempt2=n/a equal=false
 
 ### Retained-bytes fraction
 
-- n=1000 b=1 retainedBytes=212976 maxHeap=2147483648 fraction=0.000099
-- n=1000 b=10 retainedBytes=212976 maxHeap=2147483648 fraction=0.000099
-- n=1000 b=100 retainedBytes=212976 maxHeap=2147483648 fraction=0.000099
-- n=10000 b=1 retainedBytes=2176032 maxHeap=2147483648 fraction=0.001013
-- n=10000 b=10 retainedBytes=2176008 maxHeap=2147483648 fraction=0.001013
-- n=10000 b=100 retainedBytes=2176032 maxHeap=2147483648 fraction=0.001013
-- arm (ii) at n=10000 b=100: fraction=0.001013 against 0.25 — does not hold
+- n=1000 b=1 retainedBytes≈212992 maxHeap=2147483648 fraction=0.000099
+- n=1000 b=10 retainedBytes≈212992 maxHeap=2147483648 fraction=0.000099
+- n=1000 b=100 retainedBytes≈212992 maxHeap=2147483648 fraction=0.000099
+- n=10000 b=1 retainedBytes≈2174976 maxHeap=2147483648 fraction=0.001013
+- n=10000 b=10 retainedBytes≈2174976 maxHeap=2147483648 fraction=0.001013
+- n=10000 b=100 retainedBytes≈2174976 maxHeap=2147483648 fraction=0.001013
+- n=100000 b=1 retainedBytes≈21258240 maxHeap=2147483648 fraction=0.009900
+- n=100000 b=10 retainedBytes≈21299200 maxHeap=2147483648 fraction=0.009918
+- n=100000 b=100 retainedBytes≈21299200 maxHeap=2147483648 fraction=0.009918
+- arm (ii): largest Ok point in the declared grid is n=100000 b=100; fraction=0.009918 against 0.25 — does not hold
 
 ### D13 arm (i)
 
-No replay/recover OutOfMemoryError was observed.
+- replay and recover completed at: n=1000 b=1, n=1000 b=10, n=1000 b=100, n=10000 b=1, n=10000 b=10, n=10000 b=100, n=100000 b=1, n=100000 b=10, n=100000 b=100
+- not evaluated (replay/recover did not both complete) at: n=1000000 b=1, n=1000000 b=10, n=1000000 b=100
+- No replay/recover OutOfMemoryError was observed at evaluated points.
 
 ### Export
 
 - Before: structural=87 exclusions=10 laws=10 unfitted=30
-- After: structural=93 exclusions=16 laws=10 unfitted=32
-- JOURNAL: structural=6 exclusions=6 fittedLaws=0 unfitted=2
-- Run harness SHA: `07dcacab`
+- After: structural=96 exclusions=13 laws=10 unfitted=32
+- JOURNAL: structural=9 exclusions=3 fittedLaws=0 unfitted=2
+- Run harness SHA: `0826c8e5`
 
 ### Verdict
 
