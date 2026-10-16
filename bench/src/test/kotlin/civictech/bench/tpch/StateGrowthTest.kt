@@ -3,6 +3,7 @@ package civictech.bench.tpch
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class StateGrowthTest {
@@ -30,6 +31,43 @@ class StateGrowthTest {
         }
         assertEquals(GrowthNote.Flat, record.header.retainedState.growth)
         assertFalse(record.header.retainedState.foldKeys.isEmpty(), "Q3 fold keys were not accounted")
+    }
+
+    @Test
+    fun `default balanced Q3 reports only a monotonically growing outlet`() {
+        val record = assertInstanceOf(
+            TpchRecord.Verified::class.java,
+            TpchRun.run(
+                query = TpchQuery.Q03,
+                seed = 7L,
+                sf = 0.001,
+                plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 20),
+                drive = Drive.SIM,
+                env = tpchTestEnvironment(),
+            ),
+        )
+
+        val note = assertInstanceOf(GrowthNote.Growing::class.java, record.header.retainedState.growth)
+        val counts = record.header.stateSeries.map { it.liveRows.getValue(note.structure) }
+        assertTrue(
+            counts.last() > counts.first(),
+            "${note.structure} did not finish above its baseline: $counts",
+        )
+        assertTrue(
+            counts.zipWithNext().all { (previous, current) -> previous <= current },
+            "${note.structure} did not grow monotonically: $counts",
+        )
+    }
+
+    @Test
+    fun `balanced outlet shifts without monotone growth are named separately`() {
+        val plan = RefreshPlan.alternating(seed = 17L, sf = 0.001, batches = 4)
+        val series = listOf(10L, 12L, 9L, 11L, 10L).map(::retainedState)
+
+        assertEquals(
+            GrowthNote.NotOutletBalanced("outlet"),
+            StateAccounting.growthNote(series, plan),
+        )
     }
 
     @Test
@@ -71,4 +109,10 @@ class StateGrowthTest {
             batch
         }
     }
+
+    private fun retainedState(rows: Long): RetainedState = RetainedState(
+        liveRows = mapOf("outlet" to rows),
+        foldKeys = emptyMap(),
+        growth = GrowthNote.Flat,
+    )
 }

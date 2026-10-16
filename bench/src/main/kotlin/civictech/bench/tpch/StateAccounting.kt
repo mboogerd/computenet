@@ -20,10 +20,13 @@ object StateAccounting {
     }
 
     /**
-     * Compare balanced RF1/RF2 checkpoints with the post-LOAD baseline.
+     * Classify live-row growth over the stream's relevant checkpoints.
      *
-     * A non-balanced plan is a control: its terminal sample is compared with LOAD, so
-     * the insert-only stream used by BS-6 can prove this verdict is not vacuous.
+     * [GrowthNote.Growing] means that the named outlet is non-decreasing across every
+     * captured sample and finishes above its post-LOAD baseline. For a balanced plan,
+     * completed RF1/RF2 pair checkpoints distinguish a genuinely flat stream from one
+     * whose outlet population merely shifts; the expected intra-pair rise and fall does
+     * not make a paired stream non-flat.
      */
     fun growthNote(
         series: List<RetainedState>,
@@ -34,17 +37,22 @@ object StateAccounting {
         }
         val balanced = plan.batches.size % 2 == 0 &&
             plan.batches.chunked(2).all { it == listOf(RefreshKind.RF1, RefreshKind.RF2) }
-        val checkpoints = if (balanced) {
-            (2 until series.size step 2).map(series::get)
-        } else {
-            listOf(series.last())
-        }
-        val baseline = series.first().liveRows
-        checkpoints.forEach { sample ->
-            (baseline.keys + sample.liveRows.keys).sorted().forEach { outlet ->
-                if (baseline[outlet] != sample.liveRows[outlet]) {
-                    return GrowthNote.Growing(outlet)
+        val outlets = series.flatMapTo(sortedSetOf()) { it.liveRows.keys }
+        outlets.firstOrNull { outlet ->
+            val counts = series.map { it.liveRows[outlet] ?: 0L }
+            counts.last() > counts.first() &&
+                counts.zipWithNext().all { (previous, current) -> previous <= current }
+        }?.let { return GrowthNote.Growing(it) }
+
+        if (balanced) {
+            val baseline = series.first().liveRows
+            val checkpoints = (2 until series.size step 2).map(series::get)
+            outlets.firstOrNull { outlet ->
+                checkpoints.any { sample ->
+                    (sample.liveRows[outlet] ?: 0L) != (baseline[outlet] ?: 0L)
                 }
+            }?.let { outlet ->
+                return GrowthNote.NotOutletBalanced(outlet)
             }
         }
         return GrowthNote.Flat
