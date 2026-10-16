@@ -17,7 +17,7 @@ class TpchRunHooks(
     },
     val refreshFactory: (RefreshPlan, TpchTables) -> List<RefreshBatch> = RefreshStream::generate,
     val comparisonObserved: (Int, Comparison) -> Unit = { _, _ -> },
-    /** Cumulative applied-element counters, keyed by query outlet name. */
+    /** Cumulative applied-element counters that form the reported SIM maintenance work. */
     val emissionCounters: (MaintainedQuery) -> Map<String, Long> = MaintainedQuery::emissionCounters,
     val rigHooks: TpchRigHooks = TpchRigHooks(),
 )
@@ -169,16 +169,21 @@ object TpchRun {
                 }
                 rig.beginPhase()
                 base.apply(batch)
-                val figure = rig.completePhase(kind.name.lowercase() + "-$batchIndex")
+                val quiescenceFigure = rig.completePhase(kind.name.lowercase() + "-$batchIndex")
                 val countersAfter = hooks.emissionCounters(maintained)
+                val emittedElements = IncrementalityAccounting.delta(countersBefore, countersAfter)
                 emissions += EmissionObservation(
                     batchIndex = batchIndex,
                     kind = kind,
-                    emittedElements = IncrementalityAccounting.delta(countersBefore, countersAfter),
+                    emittedElements = emittedElements,
                     upstreamRowsDeleted = deletedRows,
                 )
                 rawStateSeries += StateAccounting.capture(maintained)
-                val batchFigure = BatchFigure(kind, batchIndex, figure)
+                val batchFigure = BatchFigure(
+                    kind = kind,
+                    index = batchIndex,
+                    figure = maintenanceFigure(drive, quiescenceFigure, emittedElements),
+                )
                 if (kind == RefreshKind.RF1) rf1 += batchFigure else rf2 += batchFigure
 
                 compare(
@@ -255,6 +260,34 @@ object TpchRun {
     private fun Comparison.failureRowsOrNull(): List<RowDiff>? = when (this) {
         Comparison.Equal -> null
         is Comparison.Differs -> rows
+    }
+
+    /**
+     * SIM's scheduler count is query-independent refresh-ingress instrumentation. Report
+     * the observable query propagation volume instead: every delta element applied by a
+     * materialized query-outlet collector during this quiescent refresh interval. REAL
+     * retains its elapsed-time figure; JMH is its primary measurement path.
+     */
+    private fun maintenanceFigure(
+        drive: Drive,
+        quiescenceFigure: Figure,
+        emittedElements: Map<String, Long>,
+    ): Figure = when (drive) {
+        Drive.SIM -> {
+            check(quiescenceFigure is Figure.Work) {
+                "SIM quiescence must produce scheduler work, was $quiescenceFigure"
+            }
+            Figure.Work(
+                emittedElements.values.fold(0L) { total, count -> Math.addExact(total, count) },
+            )
+        }
+
+        Drive.REAL -> {
+            check(quiescenceFigure is Figure.Duration) {
+                "REAL quiescence must produce elapsed time, was $quiescenceFigure"
+            }
+            quiescenceFigure
+        }
     }
 }
 

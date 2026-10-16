@@ -21,7 +21,9 @@ class TpchFindingsRenderTest {
             ?: error("civictech.bench.harnessSha must not be blank")
         val env = RunEnvironment.forRun(
             measuringJvm = FootprintReport.inProcessMeasuringJvm(),
-            jmhMode = "TPC-H SIM work steps per RF1/RF2 batch (JUnit @Tag(bench) probe)",
+            jmhMode =
+                "TPC-H SIM collector-applied delta elements per RF1/RF2 batch " +
+                    "(JUnit @Tag(bench) probe)",
             forkCount = 1,
             warmupIterations = 1,
             measurementIterations = SEEDS.count(),
@@ -102,13 +104,18 @@ class TpchFindingsRenderTest {
             bs6Series = "insufficient heap-path samples",
         )
 
-        assertTrue(rendered.contains("| Q01 RF1 | 10.0 ± n/a steps/batch | |"))
-        assertTrue(rendered.contains("| Q03 RF2 | 12.0 ± n/a steps/batch | |"))
+        assertTrue(rendered.contains("| Q01 RF1 | 10.0 ± n/a applied delta elements/batch | |"))
+        assertTrue(rendered.contains("| Q03 RF2 | 12.0 ± n/a applied delta elements/batch | |"))
         assertTrue(
             rendered.contains(
-                "SIM work caveat (all RF1/RF2 rows above): `steps/batch` counts " +
-                    "host-scheduler tasks for the refresh's hosted ORDERS/LINEITEM messages; " +
-                    "it is query-independent and does not measure per-query operator maintenance.",
+                "SIM maintenance-work caveat (all RF1/RF2 rows above): " +
+                    "`applied delta elements/batch` sums adds+dels or puts+removals applied " +
+                    "by every materialized query-outlet collector between quiescence points; " +
+                    "the same logical change counts once at each observed outlet it reaches. " +
+                    "It is query-specific propagation volume, not elapsed time, internal " +
+                    "operator operations, or deliveries on unmaterialized edges. RF1/RF2 " +
+                    "host-scheduler task counts are query-independent ingress instrumentation " +
+                    "and are not retained in these rows.",
             ),
         )
         assertTrue(rendered.contains("| Q02 | BLOCKED_2 | hand | blocked |"))

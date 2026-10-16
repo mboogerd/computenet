@@ -7295,38 +7295,38 @@ Candidate G-item (`[BEN2-50]`; nothing implemented, `[BEN2-52]`): make the kerne
 
 ## 2026-10-16 — BB-TPCH — incremental TPC-H hand-assembly coverage
 Harness: bb019792185bd3529258d251a5747f804fd54575 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
-JMH: mode=TPC-H SIM work steps per RF1/RF2 batch (JUnit @Tag(bench) probe) forks=1 warmup=1 iters=5 · drive=SIM
+JMH: mode=TPC-H SIM collector-applied delta elements per RF1/RF2 batch (JUnit @Tag(bench) probe) forks=1 warmup=1 iters=5 · drive=SIM
 | subject | value | notes |
 | --- | --- | --- |
-| Q01 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q01 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q03 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q03 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q04 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q04 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q05 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q05 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q06 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q06 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q07 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q07 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q08 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q08 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q09 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q09 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q10 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q10 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q12 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q12 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q14 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q14 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q16 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q16 RF2 | 8.2 ± 6.0 steps/batch | |
-| Q19 RF1 | 11.2 ± 10.0 steps/batch | |
-| Q19 RF2 | 8.2 ± 6.0 steps/batch | |
+| Q01 RF1 | 107.0 ± 119.0 applied delta elements/batch | |
+| Q01 RF2 | 73.6 ± 71.0 applied delta elements/batch | |
+| Q03 RF1 | 8.6 ± 11.0 applied delta elements/batch | |
+| Q03 RF2 | 4.0 ± 3.0 applied delta elements/batch | |
+| Q04 RF1 | 5.4 ± 4.0 applied delta elements/batch | |
+| Q04 RF2 | 3.8 ± 2.0 applied delta elements/batch | |
+| Q05 RF1 | 1.6 ± 8.0 applied delta elements/batch | |
+| Q05 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q06 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q06 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q07 RF1 | 23.2 ± 54.0 applied delta elements/batch | |
+| Q07 RF2 | 13.2 ± 24.0 applied delta elements/batch | |
+| Q08 RF1 | 0.8 ± 2.0 applied delta elements/batch | |
+| Q08 RF2 | 1.2 ± 2.0 applied delta elements/batch | |
+| Q09 RF1 | 2.4 ± 12.0 applied delta elements/batch | |
+| Q09 RF2 | 2.4 ± 12.0 applied delta elements/batch | |
+| Q10 RF1 | 1.2 ± 3.0 applied delta elements/batch | |
+| Q10 RF2 | 3.6 ± 9.0 applied delta elements/batch | |
+| Q12 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q12 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q14 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q14 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q16 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q16 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q19 RF1 | 9.2 ± 10.0 applied delta elements/batch | |
+| Q19 RF2 | 6.2 ± 6.0 applied delta elements/batch | |
 Trigger: G-42 — FIRES for tag/tombstone accretion under a balanced RF1/RF2 stream: balanced Q3 SF 0.001 stream, live rows flat; least-squares slope 2293.95627854251 B/refresh projected over the 1000-20000-refresh fit window vs 2x the first-window spread of 1114064 B (StateAccounting.heapGrowthFinding rule)
 
-SIM work caveat (all RF1/RF2 rows above): `steps/batch` counts host-scheduler tasks for the refresh's hosted ORDERS/LINEITEM messages; it is query-independent and does not measure per-query operator maintenance.
+SIM maintenance-work caveat (all RF1/RF2 rows above): `applied delta elements/batch` sums adds+dels or puts+removals applied by every materialized query-outlet collector between quiescence points; the same logical change counts once at each observed outlet it reaches. It is query-specific propagation volume, not elapsed time, internal operator operations, or deliveries on unmaterialized edges. RF1/RF2 host-scheduler task counts are query-independent ingress instrumentation and are not retained in these rows.
 
 Specification: TPC Benchmark H Standard Specification Revision 3.0.1
 Framing: incremental view maintenance (DBToaster framing); not TPC-H's audited execution model; no QphH@Size, no price/performance, no compliance claim

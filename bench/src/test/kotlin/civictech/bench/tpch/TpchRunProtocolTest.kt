@@ -4,17 +4,18 @@ import civictech.bench.RunEnvironment
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class TpchRunProtocolTest {
 
     @Test
-    fun `SIM work evidence distinguishes scheduler tasks from query emissions`() {
+    fun `SIM work reports per-query collector-applied elements`() {
         data class Evidence(
             val query: TpchQuery,
-            val rf1Steps: List<Long>,
-            val rf2Steps: List<Long>,
+            val rf1Work: List<Long>,
+            val rf2Work: List<Long>,
             val emittedPerBatch: List<Long>,
         )
 
@@ -36,20 +37,23 @@ class TpchRunProtocolTest {
             val emittedPerBatch = snapshots.chunked(2).map { (before, after) ->
                 after.keys.sumOf { outlet -> after.getValue(outlet) - before.getValue(outlet) }
             }
+            val reportedPerBatch = (verified.rf1 + verified.rf2)
+                .sortedBy(BatchFigure::index)
+                .map { (it.figure as Figure.Work).steps }
+            assertEquals(emittedPerBatch, reportedPerBatch, query.name)
             return Evidence(
                 query = query,
-                rf1Steps = verified.rf1.map { (it.figure as Figure.Work).steps },
-                rf2Steps = verified.rf2.map { (it.figure as Figure.Work).steps },
+                rf1Work = verified.rf1.map { (it.figure as Figure.Work).steps },
+                rf2Work = verified.rf2.map { (it.figure as Figure.Work).steps },
                 emittedPerBatch = emittedPerBatch,
             )
         }
 
         val evidence = listOf(evidence(TpchQuery.Q06), evidence(TpchQuery.Q09))
-        assertEquals(evidence[0].rf1Steps, evidence[1].rf1Steps)
-        assertEquals(evidence[0].rf2Steps, evidence[1].rf2Steps)
-        assertTrue(
-            evidence[0].emittedPerBatch != evidence[1].emittedPerBatch,
-            "Q06 and Q09 must exercise different query-maintenance work: $evidence",
+        assertNotEquals(
+            evidence[0].rf1Work,
+            evidence[1].rf1Work,
+            "Q06 and Q09 must report different RF1 query-maintenance work: $evidence",
         )
         println("SIM_WORK_EVIDENCE=$evidence")
     }
