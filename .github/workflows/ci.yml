@@ -487,9 +487,12 @@ jobs:
       # test is opt-in by design and a gate for nothing ([BEN1-38], [BEN2-05],
       # [BEN2-06]; :bench's WireCrossCheckTest/WirePeerSmokeTest,
       # computenet-0cnmw). Scoping its module in here would run nothing.
+      # Match annotation lines rather than raw substrings: a KDoc, comment or
+      # string that merely mentions `Tag("bench")` must not exempt a real
+      # multi-jvm test from this guard.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
-          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./(demo/(alignment|backlog-triage|shopping|exchange|beadsmirror|tiering)|runtime)/' | xargs -r grep -L 'Tag("bench")' || true)
+          stray=$(grep -rlE '^[[:space:]]*@Tag[[:space:]]*\([[:space:]]*"multi-jvm"[[:space:]]*\)' --include='*.kt' --exclude-dir=build . | grep -vE '^\./(demo/(alignment|backlog-triage|shopping|exchange|beadsmirror|tiering)|runtime)/' | xargs -r grep -L -E '^[[:space:]]*@Tag[[:space:]]*\([[:space:]]*"bench"[[:space:]]*\)' || true)
           if [ -n "$stray" ]; then
             echo "multi-jvm-tagged tests outside the serial lane's scoped modules — widen the module list in this job:"
             echo "$stray"
