@@ -144,7 +144,15 @@ object JournalProbe {
             },
         )
 
-        val outcome = runner.run(at).reSubjected()
+        val outcome = try {
+            runner.run(at).reSubjected()
+        } catch (error: OutOfMemoryError) {
+            // SweepRunner classifies OOMs from setup/drive, but a mesh builder can exhaust
+            // the heap before its attempt-level catch is entered. Keep the declared point
+            // in the export as an honest SIM exclusion instead of letting the JUnit executor
+            // die and losing the rest of the grid.
+            return excluded(unschedulable(at, "sweep", error, maxHeapBytes), maxHeapBytes)
+        }
         if (outcome !is PointOutcome.Ok) return excluded(outcome, maxHeapBytes)
 
         val file = File(journalDir, "attempt1/peer0/host.journal")
