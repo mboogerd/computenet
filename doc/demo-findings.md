@@ -68,31 +68,31 @@ under an existing key retracts the previous element) or `GroupByCell` over map s
 > aligned through one `observeAligned` sink; `votes`, `wanted` and `shared`
 > stay on point-consistent `host.observe` hubs because not every view shares a
 > single source root — see F-27 for why a sink spanning all four views is not
-> a KE2 deliverable. `:demo:skillmatch` and `:demo:tiering` now adopt the same
-> idiom. Skillmatch aligns `{matches, gap, qualification, market}`, whose views
-> all descend from the candidate-skill and job-skill roots; its raw
-> `{candSkills}` and `{jobSkills}` views remain independent point-consistent
+> a KE2 deliverable. `:demo:tiering` adopts the same idiom. Skillmatch has no
+> aligned subgroup: `matches`, `gap`, `qualification`, and `market` each descend
+> from both the candidate-skill and job-skill roots, and frontier-gating any of
+> those cross-root joins leaves candidate-only or job-only updates unpublished
+> without application-authored `Progress`. It therefore materializes all six
+> raw and derived outlets through independent point-consistent `host.observe`
 > sinks. Tiering aligns `{valuations, tierAvg}` on the valuation root and
 > `{prefs, prefAvg}` on the preference root. Its `{items}`, `{fused}`,
 > `{manual}` and `{board}` views have distinct root sets and remain
-> point-consistent. This grouping follows F-27: views with different root sets
-> cannot safely share an aligned sink.
+> point-consistent. These groupings follow F-27: alignment is retained only
+> for same-root views that settle without manufactured cross-root progress.
 
-**Observation**: `:demo:skillmatch`'s UI folds four derived outlets (matches,
-qualification, gap, market) into one state snapshot. Before the adoption above,
-independent observation hubs updated asynchronously, so a snapshot could be
-momentarily inconsistent — the server test first observed a state where a match
-was counted (`matched: 1`) while the gap view still listed that same skill as
-uncovered. Tests had to await joint conditions, and the UI could flash
-contradictory panels.
-**Why it's a gap**: not a kernel bug — this is exactly what `GlitchFreeCell` exists
-for — but there is no ergonomic way to apply glitch-freedom at the *observation
-edge* (a hub folding N outlets). Each demo hand-rolls per-view folds with no wave
-alignment, so the strongest consistency machinery in the kernel is unused where
-apps actually read state.
-**Proposed shape**: a glitch-free multi-inlet hub/collector idiom (or a
-`GlitchFree`-wrapped composite view cell) that delivers wave-aligned snapshots to
-the app edge; possibly just a documented recipe over the existing `GlitchFreeCell`.
+**Historical observation**: `:demo:skillmatch`'s UI folds four derived outlets
+(matches, qualification, gap, market) into one rendered state. Independent
+observation hubs can publish at different frontiers, so that cross-view assembly
+may momentarily show a match while the gap view still lists the same skill as
+uncovered. The current skillmatch topology accepts that F-27 boundary: each view
+is point-consistent, while the UI and tests wait for joint terminal conditions and
+claim no cross-view frontier.
+**Why it was a gap**: same-root views had no ergonomic way to apply glitch-freedom
+at the *observation edge*. The landed `observation {}` API closes that gap where a
+real same-root group exists; it deliberately does not manufacture alignment for
+skillmatch's cross-root views.
+**Landed shape**: a named-inlet aligned collector for same-root groups, with
+independent point-consistent sinks at F-27 boundaries.
 
 ## F-4 — Fixed intersect chains: topology evolution not exercised
 
