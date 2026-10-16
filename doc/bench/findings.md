@@ -7294,7 +7294,7 @@ Run time 00:04:34. JMH command (toolchain JDK 21 by absolute path; CSV and log r
 Candidate G-item (`[BEN2-50]`; nothing implemented, `[BEN2-52]`): make the kernel `TagState.applyReBaseline` fold memory-bounded per tap. The retained-heap OOM was harness-side, and the kernel retains no second per-tap C-sized map beyond the tags the taps must hold, but the fold currently calls `live.keys.toList()` before scanning each tap. That is a transient C-sized key-list allocation repeated D times, beyond the resident C x D tag state; the histograms force full GCs during setup and neither prove it absent nor quantify its peak during the timed restart. A future G-item should replace that defensive copy with a traversal that remains correct while dropping superseded entries. The pricing gap already named in the 2026-10-15 REAL entry stands and is now quantified at the corner: the cost model prices a restart at `messages x localDispatchNanos` (about 2.78 ms at fan-out 256, independent of C) against 7501.9 ms measured at (1e5, 256).
 
 ## 2026-10-16 — BB-TPCH — incremental TPC-H hand-assembly coverage
-Harness: bb019792185bd3529258d251a5747f804fd54575 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+Harness: 1146a4203a80aaae2d1d976df7e7295d04965c73 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
 JMH: mode=TPC-H SIM collector-applied delta elements per RF1/RF2 batch (JUnit @Tag(bench) probe) forks=1 warmup=1 iters=5 · drive=SIM
 | subject | value | notes |
 | --- | --- | --- |
@@ -7324,7 +7324,7 @@ JMH: mode=TPC-H SIM collector-applied delta elements per RF1/RF2 batch (JUnit @T
 | Q16 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
 | Q19 RF1 | 9.2 ± 10.0 applied delta elements/batch | |
 | Q19 RF2 | 6.2 ± 6.0 applied delta elements/batch | |
-Trigger: G-42 — FIRES for tag/tombstone accretion under a balanced RF1/RF2 stream: balanced Q3 SF 0.001 stream, live rows flat; least-squares slope 2293.95627854251 B/refresh projected over the 1000-20000-refresh fit window vs 2x the first-window spread of 1114064 B (StateAccounting.heapGrowthFinding rule)
+Trigger: G-42 — FIRES for tag/tombstone accretion under a balanced RF1/RF2 stream: balanced Q3 SF 0.001 stream, live rows flat; least-squares slope 2293.1243627530366 B/refresh projected over the 1000-20000-refresh fit window vs 2x the first-window spread of 1221064 B (StateAccounting.heapGrowthFinding rule)
 
 SIM maintenance-work caveat (all RF1/RF2 rows above): `applied delta elements/batch` sums adds+dels or puts+removals applied by every materialized query-outlet collector between quiescence points; the same logical change counts once at each observed outlet it reaches. It is query-specific propagation volume, not elapsed time, internal operator operations, or deliveries on unmaterialized edges. RF1/RF2 host-scheduler task counts are query-independent ingress instrumentation and are not retained in these rows.
 
