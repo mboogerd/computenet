@@ -19,7 +19,7 @@ class StateGrowthTest {
                 plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 20),
                 drive = Drive.SIM,
                 env = tpchTestEnvironment(),
-                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes),
+                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes, outletBalancedStream = true),
             ),
         )
 
@@ -34,7 +34,7 @@ class StateGrowthTest {
     }
 
     @Test
-    fun `default balanced Q3 reports only a monotonically growing outlet`() {
+    fun `default balanced Q3 reports its population shift before monotone growth`() {
         val record = assertInstanceOf(
             TpchRecord.Verified::class.java,
             TpchRun.run(
@@ -47,15 +47,16 @@ class StateGrowthTest {
             ),
         )
 
-        val note = assertInstanceOf(GrowthNote.Growing::class.java, record.header.retainedState.growth)
-        val counts = record.header.stateSeries.map { it.liveRows.getValue(note.structure) }
-        assertTrue(
-            counts.last() > counts.first(),
-            "${note.structure} did not finish above its baseline: $counts",
+        val note = assertInstanceOf(
+            GrowthNote.NotOutletBalanced::class.java,
+            record.header.retainedState.growth,
         )
+        val counts = record.header.stateSeries.map { it.liveRows.getValue(note.outlet) }
+        val baseline = counts.first()
+        val pairCheckpoints = counts.drop(2).filterIndexed { index, _ -> index % 2 == 0 }
         assertTrue(
-            counts.zipWithNext().all { (previous, current) -> previous <= current },
-            "${note.structure} did not grow monotonically: $counts",
+            pairCheckpoints.any { it != baseline },
+            "${note.outlet} returned to its baseline at every pair checkpoint: $counts",
         )
     }
 
@@ -67,6 +68,34 @@ class StateGrowthTest {
         assertEquals(
             GrowthNote.NotOutletBalanced("outlet"),
             StateAccounting.growthNote(series, plan),
+        )
+    }
+
+    @Test
+    fun `outlet-balanced stream reports monotone retained growth`() {
+        val plan = RefreshPlan.alternating(seed = 17L, sf = 0.001, batches = 4)
+        val series = listOf(10L, 11L, 11L, 12L, 12L).map(::retainedState)
+
+        assertEquals(
+            GrowthNote.Growing("outlet"),
+            StateAccounting.growthNote(series, plan, outletBalancedStream = true),
+        )
+    }
+
+    @Test
+    fun `outlet-balanced stream names the monotone outlet among population shifts`() {
+        val plan = RefreshPlan.alternating(seed = 17L, sf = 0.001, batches = 4)
+        val series = listOf(
+            retainedState("a" to 10L, "b" to 5L),
+            retainedState("a" to 12L, "b" to 6L),
+            retainedState("a" to 9L, "b" to 6L),
+            retainedState("a" to 11L, "b" to 7L),
+            retainedState("a" to 10L, "b" to 7L),
+        )
+
+        assertEquals(
+            GrowthNote.Growing("b"),
+            StateAccounting.growthNote(series, plan, outletBalancedStream = true),
         )
     }
 
@@ -110,8 +139,10 @@ class StateGrowthTest {
         }
     }
 
-    private fun retainedState(rows: Long): RetainedState = RetainedState(
-        liveRows = mapOf("outlet" to rows),
+    private fun retainedState(rows: Long): RetainedState = retainedState("outlet" to rows)
+
+    private fun retainedState(vararg rows: Pair<String, Long>): RetainedState = RetainedState(
+        liveRows = mapOf(*rows),
         foldKeys = emptyMap(),
         growth = GrowthNote.Flat,
     )
