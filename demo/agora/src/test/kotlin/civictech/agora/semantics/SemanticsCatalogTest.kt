@@ -1,0 +1,256 @@
+package civictech.agora.semantics
+
+import civictech.agora.cell.Polarity
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+
+/**
+ * Reference and invariant tests for the gradual-semantics catalog. The
+ * reference values were computed with the prototype `semantics.js` under node
+ * (`combine_<id>(base, attacks.map(energy_<id>(c, s)), …)` at the defaults).
+ */
+class SemanticsCatalogTest {
+
+    private data class Case(val base: Double, val attacks: List<Double>, val supports: List<Double>)
+
+    /** Arguments whose source is certain, so their energy is the strength [e] (jnb: `energy_jnb(1, e)`). */
+    private fun sure(e: List<Double>) = e.map { Arg(strength = it, credence = 1.0) }
+    private fun GradualSemantics.at(base: Double, attacks: List<Double>, supports: List<Double>) =
+        evaluate(base, sure(attacks), sure(supports))
+
+    private val cases = listOf(
+        Case(0.8, listOf(0.95 * 0.9), emptyList()),
+        Case(0.5, List(4) { 0.4 }, List(4) { 0.6 }),
+        Case(0.3, listOf(0.2), listOf(0.7, 0.5)),
+        Case(0.5, emptyList(), emptyList()),
+        Case(0.9, listOf(0.9, 0.85), listOf(0.1)),
+    )
+
+    private val reference = mapOf(
+        "dfquad" to listOf(0.11599999999999999, 0.55200000000000005, 0.75499999999999989, 0.5, 0.10350000000000004),
+        "wlo" to listOf(0.36089065754885208, 0.73346192328260873, 0.65777234409665264, 0.5, 0.36862007558071008),
+        "jnb" to listOf(0.46213194266167712, 0.68017912323104301, 0.57594371873408989, 0.5, 0.54054892923259579),
+        "woe" to listOf(0.48538591265427544, 0.72574019845840698, 0.63460520460457437, 0.5, 0.56965595410448899),
+        "euler" to listOf(0.73138869750773972, 0.64501586296664981, 0.49875640597824877, 0.5, 0.83800074747896569),
+        "qe" to listOf(0.46215392614202572, 0.69512195121951215, 0.64999999999999991, 0.5, 0.24177300201477503),
+        "mlp" to listOf(0.62978495051931360, 0.68997448112761250, 0.53810152622444896, 0.5, 0.63349143234382577),
+        // glo is not in the prototype: values from an independent Python port of its formula
+        // (doc/research/deliberate-credence-bench; credence 1 opens the gate fully, so energy = 2·atanh(min(e, .999))).
+        "glo" to listOf(0.23819301848049287, 0.7461139896373057, 0.6900762679573311, 0.5, 0.18653467765532622),
+    )
+
+    @Test
+    fun `every layer matches the prototype on recorded values`() {
+        assertEquals(SemanticsCatalog.IDS.toSet(), reference.keys)
+        for ((id, expected) in reference) {
+            val s = SemanticsCatalog.of(id)
+            cases.zip(expected).forEach { (c, want) ->
+                assertEquals(want, s.at(c.base, c.attacks, c.supports), 1e-12, "$id $c")
+            }
+        }
+    }
+
+    @Test
+    fun `weighted log-odds reference behaviour`() {
+        val wlo = WeightedLogOdds()
+        assertTrue(wlo.combine(0.8, listOf(0.95 * 0.9), emptyList()) < 0.5)
+        assertTrue(wlo.combine(0.5, List(4) { 0.4 }, List(4) { 0.6 }) >= 0.6)
+        val custom = WeightedLogOdds(alpha = 0.5, k = 1.0, p = 1.0, gamma = 1.0)
+        val z = 0.5 * ln(0.7 / 0.3) + (0.5 + 0.25) - 0.4
+        assertEquals(1 / (1 + exp(-z)), custom.combine(0.7, listOf(0.4), listOf(0.5, 0.25)), 1e-12)
+        assertFailsWith<IllegalArgumentException> { WeightedLogOdds(p = 0.5) }
+    }
+
+    @Test
+    fun `every layer is bounded, neutral without arguments and monotone in each energy`() {
+        val grid = listOf(0.0, 0.1, 0.35, 0.6, 0.9, 1.0)
+        for (id in SemanticsCatalog.IDS) {
+            val s = SemanticsCatalog.of(id)
+            for (b in listOf(0.01, 0.2, 0.5, 0.8, 0.99)) {
+                assertEquals(b, s.at(b, emptyList(), emptyList()), 1e-12, "$id keeps its base")
+                for (x in grid) for (y in grid) {
+                    val v = s.at(b, listOf(x), listOf(y))
+                    assertTrue(v in 0.0..1.0, "$id($b, $x, $y) = $v")
+                    if (y < 1.0) assertTrue(s.at(b, listOf(x), listOf(y, 0.3)) >= v - 1e-12, "$id support monotone")
+                    if (x < 1.0) assertTrue(s.at(b, listOf(x, 0.3), listOf(y)) <= v + 1e-12, "$id attack monotone")
+                    for (c in grid) {
+                        val sup = s.evaluate(b, emptyList(), listOf(Arg(y, c)))
+                        assertTrue(s.evaluate(b, emptyList(), listOf(Arg(y, minOf(c + 0.1, 1.0)))) >= sup - 1e-12, "$id credence monotone")
+                    }
+                }
+                assertTrue(s.at(minOf(b + 0.05, 0.99), listOf(0.4), listOf(0.3)) >= s.at(b, listOf(0.4), listOf(0.3)) - 1e-12, id)
+            }
+        }
+    }
+
+    @Test
+    fun `symmetric layers treat attack as mirrored support`() {
+        for (id in listOf("dfquad", "wlo", "jnb", "woe", "qe", "mlp", "glo")) {
+            val s = SemanticsCatalog.of(id)
+            for (b in listOf(0.2, 0.5, 0.7)) {
+                val a = listOf(0.3, 0.8)
+                val sup = listOf(0.5)
+                assertEquals(1 - s.at(1 - b, sup, a), s.at(b, a, sup), 1e-12, "$id at $b")
+            }
+        }
+    }
+
+    @Test
+    fun `jnb matches the prototype's Jeffrey conditioning exactly`() {
+        data class J(val base: Double, val attacks: List<Arg>, val supports: List<Arg>)
+        val js = listOf(
+            J(0.8, listOf(Arg(0.95, 0.9)), emptyList()),
+            J(0.5, listOf(Arg(0.6, 0.3), Arg(0.2, 0.7)), listOf(Arg(0.9, 0.4), Arg(0.5, 1.0))),
+            J(0.3, emptyList(), listOf(Arg(0.7, 0.5))),
+            J(0.9, listOf(Arg(0.9, 0.1), Arg(0.85, 0.95)), listOf(Arg(0.1, 0.6))),
+        )
+        val r0 = listOf(0.48251003362507106, 0.67576802703019578, 0.48345213537677784, 0.68000351754621557)
+        val r1 = listOf(0.48712392335374854, 0.70629345097282104, 0.43986176237851315, 0.75527207436080979)
+        js.zip(r0).forEach { (j, want) -> assertEquals(want, JeffreyNaiveBayes().evaluate(j.base, j.attacks, j.supports), 1e-12, "$j") }
+        js.zip(r1).forEach { (j, want) -> assertEquals(want, JeffreyNaiveBayes(r = 1.0).evaluate(j.base, j.attacks, j.supports), 1e-12, "r=1 $j") }
+        val doubted = listOf(Arg(0.9, 0.5))
+        assertTrue(abs(JeffreyNaiveBayes().evaluate(0.5, emptyList(), doubted) -
+            JeffreyNaiveBayes().evaluate(0.5, emptyList(), listOf(Arg(0.45, 1.0)))) > 1e-3)
+    }
+
+    @Test
+    fun `glo - a refuted or unknown source is inert`() {
+        val glo = GatedLogOdds()
+        for (b in listOf(0.3, 0.5, 0.7)) {
+            assertEquals(b, glo.evaluate(b, emptyList(), listOf(Arg(0.9, 0.05))), 0.02, "refuted support at $b")
+            assertEquals(b, glo.evaluate(b, listOf(Arg(0.9, 0.05)), emptyList()), 0.02, "refuted attack at $b")
+            assertEquals(b, glo.evaluate(b, emptyList(), listOf(Arg(0.9, 0.5))), 0.02, "unknown support at $b")
+            assertEquals(b, glo.evaluate(b, listOf(Arg(0.9, 0.5)), emptyList()), 0.02, "unknown attack at $b")
+        }
+    }
+
+    @Test
+    fun `glo - one strong believed unrebutted argument outweighs the prior (computenet-nxege)`() {
+        val glo = GatedLogOdds()
+        assertTrue(glo.evaluate(0.25, emptyList(), listOf(Arg(0.9, 0.9))) > 0.5)
+        assertTrue(glo.evaluate(0.75, listOf(Arg(0.9, 0.9)), emptyList()) < 0.5)
+    }
+
+    @Test
+    fun `glo - support and attack are weighed alike`() {
+        val glo = GatedLogOdds()
+        val up = glo.evaluate(0.5, emptyList(), listOf(Arg(0.7, 0.8))) - 0.5
+        val down = 0.5 - glo.evaluate(0.5, listOf(Arg(0.7, 0.8)), emptyList())
+        assertTrue(up > 0.1)
+        assertEquals(up, down, 1e-12)
+    }
+
+    @Test
+    fun `glo - one decisive certain argument does not create certainty`() {
+        val glo = GatedLogOdds()
+        assertTrue(glo.evaluate(0.5, emptyList(), listOf(Arg(1.0, 1.0))) < 0.9999)
+        assertTrue(glo.evaluate(0.5, listOf(Arg(1.0, 1.0)), emptyList()) > 0.0001)
+    }
+
+    @Test
+    fun `glo - a duplicate is damped and a flood of weak arguments does not overturn a strong one`() {
+        val glo = GatedLogOdds()
+        fun lo(p: Double) = ln(p / (1 - p))
+        val once = lo(glo.evaluate(0.5, emptyList(), listOf(Arg(0.7, 0.8))))
+        val twice = lo(glo.evaluate(0.5, emptyList(), List(2) { Arg(0.7, 0.8) }))
+        assertEquals(kotlin.math.sqrt(2.0), twice / once, 1e-9)
+        val flood = glo.evaluate(0.5, listOf(Arg(0.9, 0.9)), List(50) { Arg(0.2, 0.7) })
+        assertTrue(flood < 0.5, "50 weak supports overturned one strong attack: $flood")
+    }
+
+    @Test
+    fun `consensus is the geometric mean of the members' odds`() {
+        val credences = mapOf("dfquad" to 0.1, "wlo" to 0.2, "jnb" to 0.5, "woe" to 0.9, "mlp" to 0.99)
+        assertEquals(0.56716902562290783, Consensus.of(credences, listOf("wlo", "jnb", "woe")), 1e-12)
+        assertEquals(0.037303723009214855, Consensus.of(mapOf("a" to 0.0, "b" to 0.6), listOf("a", "b")), 1e-12)
+        assertEquals(0.7, Consensus.of(mapOf("wlo" to 0.7), listOf("wlo", "jnb")), 1e-12)
+        assertEquals(0.3, Consensus.of(mapOf("dfquad" to 0.3), listOf("wlo")), 1e-12)
+        assertEquals(0.5, Consensus.of(emptyMap(), listOf("wlo")))
+    }
+
+    @Test
+    fun `the second root verdict weighs the same arguments from a neutral prior`() {
+        val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
+        val attacks = listOf(List(all.ids.size) { Arg(strength = 0.5, credence = 0.8) })
+        val neutral = all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = LayerSet.WEAK_PRIOR_WEIGHT)
+        assertEquals(0.0, LayerSet.WEAK_PRIOR_WEIGHT)
+        assertEquals(all.evaluate(listOf(LayerSet.NEUTRAL_PRIOR), attacks, emptyList()), neutral)
+        assertEquals(all.evaluate(listOf(0.9), attacks, emptyList()), all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = 1.0))
+        all.evaluate(listOf(0.7), attacks, emptyList())
+            .zip(all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = 0.5))
+            .forEach { (a, b) -> assertEquals(a, b, 1e-12) }
+        assertTrue(LayerSet.oppositeSides(0.54, 0.3))
+        assertTrue(!LayerSet.oppositeSides(0.94, 0.7))
+        assertTrue(!LayerSet.oppositeSides(0.5, 0.2), "½ is on neither side")
+    }
+
+    @Test
+    fun `arguments first outweighs the retained prior for a strong unrebutted support and attack in every active layer`() {
+        val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
+        val argument = List(all.ids.size) { Arg(strength = 0.8, credence = 0.8) }
+
+        for (side in listOf(Polarity.SUPPORT, Polarity.ATTACK)) {
+            val attacks = if (side == Polarity.ATTACK) listOf(argument) else emptyList()
+            val supports = if (side == Polarity.SUPPORT) listOf(argument) else emptyList()
+            for (prior in (1..19).map { it * 0.05 }) {
+                val argumentsRemoved = all.evaluate(listOf(prior), emptyList(), emptyList())
+                val localNeutralPrior = all.evaluate(listOf(prior), attacks, supports, 0.0)
+                val argumentsFirst = all.evaluate(listOf(prior), attacks, supports, LayerSet.WEAK_PRIOR_WEIGHT)
+
+                argumentsFirst.forEachIndexed { i, standing ->
+                    val argumentDriven = abs(standing - argumentsRemoved[i])
+                    val retainedPrior = abs(standing - localNeutralPrior[i])
+                    assertTrue(
+                        argumentDriven > retainedPrior,
+                        "${all.ids[i]} $side prior $prior: argument movement $argumentDriven did not exceed retained-prior movement $retainedPrior",
+                    )
+                    assertTrue(standing in 0.0..1.0, "${all.ids[i]} $side prior $prior left [0,1]: $standing")
+                }
+
+                val consensus = all.consensus(argumentsFirst)
+                assertTrue(
+                    abs(consensus - all.consensus(argumentsRemoved)) > abs(consensus - all.consensus(localNeutralPrior)),
+                    "consensus $side prior $prior did not move more with the argument than with the retained prior",
+                )
+                assertTrue(consensus in 0.0..1.0)
+            }
+        }
+    }
+
+    @Test
+    fun `unknown semantics are refused`() {
+        assertFailsWith<IllegalArgumentException> { SemanticsCatalog.of("nope") }
+    }
+
+    @Test
+    fun `catalog maps dfquad to the original singleton`() {
+        assertSame(DfQuad, SemanticsCatalog.of("dfquad"))
+    }
+
+    @Test
+    fun `dfquad keeps the legacy serialized uid`() {
+        assertEquals(3368913810358108050L, java.io.ObjectStreamClass.lookup(DfQuad::class.java).serialVersionUID)
+    }
+
+    @Test
+    fun `only jnb and glo separate credence`() {
+        assertEquals(setOf("jnb", "glo"), SemanticsCatalog.IDS.filter { SemanticsCatalog.of(it).separatesCredence }.toSet())
+    }
+
+    @Test
+    fun `ordinary layers use product energy`() {
+        val grid = listOf(0.0, 0.2, 0.7, 1.0)
+        for (id in SemanticsCatalog.IDS.filter { it !in setOf("jnb", "glo") }) {
+            val semantics = SemanticsCatalog.of(id)
+            for (strength in grid) for (credence in grid) {
+                assertEquals(strength * credence, semantics.energy(Arg(strength, credence)), 1e-12, id)
+            }
+        }
+    }
+}

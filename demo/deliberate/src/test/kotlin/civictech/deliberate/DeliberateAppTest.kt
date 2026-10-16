@@ -1,5 +1,7 @@
 package civictech.deliberate
 
+import civictech.agora.semantics.*
+
 import civictech.cell.host.ManagedHost
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitSseData
