@@ -34,6 +34,20 @@ import java.util.concurrent.CountDownLatch
 class PointAccountingTest {
 
     @Test
+    fun singleHostChainCountsOneExactLocalDeliveryPerInput() {
+        // A one-host generated CHAIN has one externally scheduled source delivery per
+        // input. Every cell-to-cell hop stays synchronous inside that task (the same
+        // unit MacroCalibrationBenchmark.realLocalDispatch measures), so three inputs
+        // are exactly three local deliveries; setup has already left the count window.
+        val at = coordinate(hostCount = 1).copy(cardinality = 3, batchSize = 3)
+
+        val outcome = SweepRunner().run(at).shouldBeInstanceOf<PointOutcome.Ok>()
+
+        outcome.counts.messages shouldBe 3L
+        outcome.counts.messagesNotMeasured shouldBe null
+    }
+
+    @Test
     fun okPointEchoesItsCoordinateAndRecordsCounts() {
         // Seed 7 places the eight chain nodes on both peers (1,1,1,0,1,0,0,1).
         val at = coordinate()
@@ -43,8 +57,8 @@ class PointAccountingTest {
         outcome.at shouldBe at
         outcome.subject shouldBe CostSubject.PROPAGATION
         outcome.wall shouldBe null
-        outcome.counts.messages shouldBe null
-        outcome.counts.messagesNotMeasured shouldBe Counters.MESSAGES_NOT_MEASURED
+        checkNotNull(outcome.counts.messages) shouldBeGreaterThan 0L
+        outcome.counts.messagesNotMeasured shouldBe null
         (outcome.counts.simSteps >= 4) shouldBe true
         // The placement crosses peers, but seed 7's second filter is `value >= 250`.
         // Required inputs 0..19 therefore stop before the first cross-host edge.
