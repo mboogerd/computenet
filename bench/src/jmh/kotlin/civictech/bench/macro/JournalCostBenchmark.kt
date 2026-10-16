@@ -35,8 +35,11 @@ import java.util.concurrent.TimeUnit
  * declared three forks and five measured single shots is the dispersion reported by
  * the render step. An OOM kills a fork and therefore leaves an absent row for the
  * render to disclose rather than inventing a successful result. REAL C=1e6 is omitted
- * because three forks × seven invocations × one million fsyncs is roughly eight minutes
- * per method at the current ~24 microsecond sync cost, before propagation overhead.
+ * based on a corrected-harness smoke on Apple M3 Max (Darwin arm64, JDK 21.0.11):
+ * at C=1e5 a file drive took 3.65 s and a memory drive 0.62 s. Linear extrapolation
+ * puts C=1e6 at about 36 s and 6 s per invocation respectively, or roughly 28 minutes
+ * for the three-fork, seven-invocation file, memory, and checkpoint-drive setup, plus
+ * about four minutes of replay trial setup, before the replay and checkpoint work.
  */
 @Fork(JournalCostBenchmark.FORKS)
 @Warmup(iterations = JournalCostBenchmark.WARMUP)

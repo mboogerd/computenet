@@ -302,8 +302,10 @@ object JournalProbe {
  * same graph and drive under file-backed and in-memory persistence. Recovery
  * uses the very [FileJournal] instance installed on the fresh host; checkpoint
  * likewise receives the caller's installed instance, preserving D8's identity
- * rule. Fold reads page the sink's whole bounded state instead of taking an
- * unbounded snapshot; see [SinkFold].
+ * rule. Each batch waits on the instrumented scheduler's completion notification,
+ * not a sampling interval, so the REAL wall time is drive + scheduler idle rather
+ * than drive + harness polling. Fold reads page the sink's whole bounded state
+ * instead of taking an unbounded snapshot; see [SinkFold].
  */
 class JournalRealRig(
     val at: Coordinate,
@@ -333,7 +335,10 @@ class JournalRealRig(
         requireHealthy()
     }
 
-    /** Drive exactly [Coordinate.cardinality] elements in the declared batches. */
+    /**
+     * Drive exactly [Coordinate.cardinality] elements in the declared batches,
+     * waiting for scheduler completion after each batch without a polling floor.
+     */
     fun drive(realMillis: Long = 30_000): Long {
         check(graphApplied) { "applyGraph() must run before drive()" }
         require(realMillis >= 0) { "realMillis must be non-negative" }

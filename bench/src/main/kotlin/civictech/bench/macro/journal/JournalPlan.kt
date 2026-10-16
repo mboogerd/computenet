@@ -56,7 +56,7 @@ object JournalPlan {
         Omission(
             what = "REAL C=1e6",
             count = 1,
-            reason = "per-run cost: 3 forks × 7 invocations × 1e6 fsyncs at ~24 µs ≈ 8 min per method plus propagation (unverified before the run)",
+            reason = "measured on Apple M3 Max (Darwin arm64, JDK 21.0.11): corrected C=1e5 file/memory invocations were 3.65 s/0.62 s; linear C=1e6 extrapolation is ~36 s/~6 s per invocation and at least ~32 min of drive/setup for the four-method setting",
         ),
         Omission(
             what = "REAL batch ∈ {1, 100}",
@@ -93,6 +93,10 @@ object JournalPlan {
         appendLine("- Per-invocation timeout: $TIMEOUT_MINUTES minutes")
         appendLine("- REAL cardinalities at batch 10: ${REAL_CARDINALITIES.joinToString()}")
         appendLine("- Calibration cardinality: $CALIBRATION_CARDINALITY")
+        appendLine(
+            "- D12 REAL idle decision: remove the 5 ms polling floor; each batch waits " +
+                "on scheduler completion notification, with no after-the-fact subtraction.",
+        )
         appendLine(
             "- D13 FIRES iff (i) replay or recover raises OutOfMemoryError at any SIM point; " +
                 "(ii) retainedBytes at the largest Ok SIM point is at least " +
