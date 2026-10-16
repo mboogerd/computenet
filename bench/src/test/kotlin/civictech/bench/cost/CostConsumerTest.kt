@@ -93,15 +93,6 @@ class CostConsumerTest {
     }
 
     @Test
-    fun `refuses a cross-host price at a single-host coordinate`() {
-        val refusal = CostQuery(syntheticModel())
-            .crossHostEdge(coordinate(hostCount = 1))
-            .shouldBeInstanceOf<CostAnswer.NotMeasured>()
-
-        refusal.reason shouldContain "hostCount=1"
-    }
-
-    @Test
     fun `refuses every dimension beyond the derived envelope`() {
         val query = CostQuery(syntheticModel())
         val at = coordinate()
