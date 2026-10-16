@@ -372,7 +372,10 @@ if [ $st -ne 0 ] || grep -qi "already claimed" <<<"$out"; then
 fi
 
 bd update "$id" --add-label="owner:$BEADS_ACTOR" >/dev/null
-bd update "$id" --set-metadata "skill_version=$(git hash-object "$SCRIPT_DIR/../SKILL.md")" >/dev/null
+# skill_version: the full origin/main commit sha at claim time (computenet-icusw).
+sv=$(git -C "$SCRIPT_DIR" rev-parse --verify --quiet "origin/main^{commit}") \
+  && bd update "$id" --set-metadata "skill_version=$sv" >/dev/null \
+  || echo "note: origin/main does not resolve — skill_version not stamped" >&2
 holder=$("$SCRIPT_DIR/session-holder.sh" 2>/dev/null) \
   && bd update "$id" --set-metadata "holder=$holder" >/dev/null \
   || echo "note: could not stamp metadata.holder — liveness falls back to the recency test" >&2

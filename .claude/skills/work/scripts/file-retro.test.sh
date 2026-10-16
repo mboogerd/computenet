@@ -20,11 +20,16 @@ ok()  { pass=$((pass+1)); echo "  PASS $*"; }
 bad() { fail=$((fail+1)); echo "  FAIL $*"; }
 good() { printf '## Summary\n- s\n\n## Outcomes\n- none\n\n## Issues\n%s\n\n## Judgment calls\n- none\n\n## Time\n- t\n\n## Handoff\n- none\n' "$1" > "$ROOT/r.md"; }
 
+SHA=$(git -C "$(dirname "$SCRIPT")" rev-parse origin/main); BLOB=$(git -C "$(dirname "$SCRIPT")" hash-object "$SCRIPT")
 good '- [flake] X flaked (evidence: seed 7)'
-out=$("$SCRIPT" --skill work --file "$ROOT/r.md" --skill-version abc 2>&1); st=$?
+out=$("$SCRIPT" --skill work --file "$ROOT/r.md" --skill-version "${SHA:0:8}" 2>&1); st=$?
 [ $st -eq 0 ] && [ "$out" = computenet-r3tro ] && ok "valid record files and prints the id" || bad "valid record: $st $out"
 grep -q -- '--type=retro' "$BD_LOG" && ok "created as type retro" || bad "type"
-grep -q '"skill_version":"abc"' "$BD_LOG" && ok "metadata carries skill_version" || bad "metadata"
+grep -q "\"skill_version\":\"$SHA\"" "$BD_LOG" && ok "an abbreviated sha is stored in full" || bad "metadata"
+: > "$BD_LOG"; "$SCRIPT" --skill work --file "$ROOT/r.md" >/dev/null 2>&1
+grep -q "\"skill_version\":\"$SHA\"" "$BD_LOG" && ok "skill_version defaults to origin/main's sha" || bad "default sha"
+: > "$BD_LOG"; "$SCRIPT" --skill work --file "$ROOT/r.md" --skill-version "$BLOB" >/dev/null 2>&1; st=$?
+[ $st -eq 2 ] && ! grep -q create "$BD_LOG" && ok "a blob hash is refused, nothing filed" || bad "blob hash: $st"
 grep -q recurs_of "$BD_LOG" && bad "empty recurs_of written" || ok "no recurs_of without the flag"
 [ "$(cat "$ROOT/types")" = retro ] && ok "registers the retro type when missing" || bad "type registration"
 

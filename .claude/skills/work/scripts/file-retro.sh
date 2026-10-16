@@ -8,6 +8,8 @@
 #   file-retro.sh --skill <work|remediate-friction|...> --file <retro.md> \
 #     [--skill-version <sha>] [--started <iso8601>] [--model <id>] [--recurs-of <id>[,<id>]]
 # --recurs-of: landed friction fix(es) this session hit again; recurrence-audit.py reads it.
+# skill_version is the full commit sha of origin/main at filing time; --skill-version
+# overrides it with another commit and refuses anything else, e.g. a blob hash (computenet-icusw).
 #
 # Unparented on purpose: a hash id cannot collide across machines (AGENTS.md,
 # "Creating tickets under a shared epic"), and no epic's ready-listing should
@@ -39,6 +41,9 @@ case ",$(bd config get types.custom 2>/dev/null | tail -1)," in *,retro,*) ;; *)
   bd config set types.custom "$new" >/dev/null || { echo "file-retro: could not register the retro type" >&2; exit 1; } ;;
 esac
 
+asked=$ver
+ver=$(git -C "$(dirname "$0")" rev-parse --verify --quiet "${asked:-origin/main}^{commit}") \
+  || { [ -z "$asked" ] || { echo "file-retro: --skill-version $asked is not a commit" >&2; exit 2; }; }
 machine=${BEADS_ACTOR:-$(hostname -s)}
 now=$(date -u +%FT%TZ)
 meta=$(jq -nc --arg s "$skill" --arg m "$machine" --arg v "$ver" --arg st "$started" --arg e "$now" --arg mo "$model" --arg r "$recurs" \

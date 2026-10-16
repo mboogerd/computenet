@@ -102,8 +102,8 @@ documents outputs and exit codes; an exit meaning "nothing was checked"
 | `twin-scan.py` | `<parent-id>` — children filed twice by a double breakdown |
 | `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--model M] [--breakdown T] [--claim] [--no-dup-check]` — the create path under a shared parent |
 | `breakdown-marker.sh` | `<subcommand> <epic-id>` — check, acquire (pull+push), or survivor (adjudicate) the epic's write-time breakdown marker |
-| `file-retro.sh` | `--skill S --file F [--skill-version <sha>] [--started T] [--model M]` — files the session's retro record (references/retro.md) |
-| `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — files a friction item |
+| `file-retro.sh` | `--skill S --file F [--started T] [--model M]` — files the session's retro record (references/retro.md) |
+| `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N]` — files a friction item |
 | `publish-beads.sh` | `(no arguments)` — the publication push, with rejection recovery |
 
 Also: `slot-elapsed.sh <scratch-dir>`, `verify-ready.sh <id>...`,
@@ -568,7 +568,7 @@ the main checkout's HEAD against `<scratch>/step1-head` if it moved.
 2. **Utilisation:** `bd comment <epic> "utilisation: worked <N>m of <slot>m; continuation items: <ids or none>"`.
 3. **Friction:** step 7. Then the **retro record**, always, even for an empty
    run: fill [retro.md](references/retro.md)'s template and
-   `.claude/skills/work/scripts/file-retro.sh --skill work --file <scratch>/retro.md --skill-version <sha> --started <t> --model <id>`.
+   `.claude/skills/work/scripts/file-retro.sh --skill work --file <scratch>/retro.md --started <t> --model <id>`.
 4. **Publish:** in each feature worktree you touched, `git status --short`
    (leftovers: report, do not commit) and push. Then `publish-beads.sh`; exit 2 →
    its ESCALATE line names a conflict (recovery.md) or a failure, and the

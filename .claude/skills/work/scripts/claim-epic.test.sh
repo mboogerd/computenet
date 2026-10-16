@@ -13,6 +13,9 @@ export BEADS_ACTOR=testbox
 # the subtree-hot check reads git refs: point git at an empty repo so the real
 # checkout's feature branches cannot leak into the cases
 git init -q "$ROOT/git"; export GIT_DIR="$ROOT/git/.git"
+# claim-epic stamps skill_version from origin/main (computenet-icusw)
+SHA=$(GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
+      git commit-tree "$(git mktree </dev/null)" -m base); git update-ref refs/remotes/origin/main "$SHA"
 
 cat > "$ROOT/bin/bd" <<'EOF'
 #!/usr/bin/env bash
@@ -67,7 +70,7 @@ fixture
 out=$("$SCRIPT" computenet-e 2>&1); st=$?
 if [ "$st" = 0 ] && grep -q -- "--claim" "$BD_LOG" \
    && grep -q -- "--add-label=owner:testbox" "$BD_LOG" \
-   && grep -q "skill_version=" "$BD_LOG" && grep -q "dolt push" "$BD_LOG"; then
+   && grep -q "skill_version=$SHA" "$BD_LOG" && grep -q "dolt push" "$BD_LOG"; then
   ok "clean claim runs the full bracket"
 else bad "clean claim: exit=$st log=$(tr '\n' '|' < "$BD_LOG")"; fi
 
