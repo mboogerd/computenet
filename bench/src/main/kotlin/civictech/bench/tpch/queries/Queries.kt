@@ -9,6 +9,7 @@ object Queries {
         rowPayload: Class<*> = Any::class.java,
     ): QueryGraphBuilder? = when (query) {
         TpchQuery.Q01 -> Q01Builder(rowPayload = rowPayload)
+        TpchQuery.Q03 -> Q03Builder(rowPayload = rowPayload)
         else -> null
     }
 }
