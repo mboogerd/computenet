@@ -20,6 +20,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 /** A live hand-assembled TPC-H query attached to hosted base relations. */
 interface MaintainedQuery {
@@ -29,6 +30,9 @@ interface MaintainedQuery {
 
     /** Current rows/keys at each operator outlet, keyed by the operator's spawn name. */
     fun liveRows(): Map<String, Long>
+
+    /** Cumulative delta elements applied by each outlet collector. */
+    fun emissionCounters(): Map<String, Long>
 
     /** Every live intermediate row or grouped key that still names [orderKey]. */
     fun rowsReferencing(orderKey: Long): List<Pair<String, Any>>
@@ -70,14 +74,22 @@ internal class SetRowsCollectorCell<E>(
 ) : Cell {
     val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
     private val view = SetView<E>()
+    private val appliedElementCounter = AtomicLong()
 
     val size: Int
         get() = view.size
 
+    val appliedElements: Long
+        get() = appliedElementCounter.get()
+
     fun rows(): Set<E> = view.current()
 
     init {
-        inlet.onEach(view::apply)
+        inlet.onEach { delta ->
+            view.apply(delta)
+            val elements = delta.adds.size.toLong() + delta.dels.size.toLong()
+            appliedElementCounter.updateAndGet { current -> Math.addExact(current, elements) }
+        }
     }
 }
 
@@ -87,14 +99,22 @@ internal class GroupCollectorCell<K>(
 ) : Cell {
     val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<K, Long>>>())
     private val view = MapView<K, Long>()
+    private val appliedElementCounter = AtomicLong()
 
     val size: Int
         get() = view.size
 
+    val appliedElements: Long
+        get() = appliedElementCounter.get()
+
     fun values(): Map<K, Long> = view.current()
 
     init {
-        inlet.onEach(view::apply)
+        inlet.onEach { delta ->
+            view.apply(delta)
+            val elements = delta.puts.size.toLong() + delta.removals.size.toLong()
+            appliedElementCounter.updateAndGet { current -> Math.addExact(current, elements) }
+        }
     }
 }
 
@@ -108,6 +128,11 @@ internal abstract class CollectedQuery(
     final override fun liveRows(): Map<String, Long> = linkedMapOf<String, Long>().apply {
         setOutlets.forEach { (name, collector) -> put(name, collector.size.toLong()) }
         groupOutlets.forEach { (name, collector) -> put(name, collector.size.toLong()) }
+    }
+
+    final override fun emissionCounters(): Map<String, Long> = linkedMapOf<String, Long>().apply {
+        setOutlets.forEach { (name, collector) -> put(name, collector.appliedElements) }
+        groupOutlets.forEach { (name, collector) -> put(name, collector.appliedElements) }
     }
 
     final override fun rowsReferencing(orderKey: Long): List<Pair<String, Any>> = buildList {

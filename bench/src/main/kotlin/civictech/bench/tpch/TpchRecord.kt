@@ -162,6 +162,8 @@ data class RetainedState(
     val liveRows: Map<String, Long>,
     val foldKeys: Map<String, Long>,
     val growth: GrowthNote,
+    val snapshotBytes: Long? = null,
+    val ledgerProbe: String = "none",
 ) {
     init {
         require(liveRows.keys.all { it.isNotBlank() }) {
@@ -176,6 +178,10 @@ data class RetainedState(
         require(foldKeys.values.all { it >= 0 }) {
             "fold key counts must be non-negative"
         }
+        require(snapshotBytes == null || snapshotBytes >= 0) {
+            "snapshot bytes must be non-negative when present"
+        }
+        require(ledgerProbe.isNotBlank()) { "ledgerProbe must not be blank" }
     }
 }
 
@@ -190,6 +196,7 @@ data class RunHeader(
     val loadMode: LoadModeLabel,
     val env: RunEnvironment,
     val retainedState: RetainedState,
+    val stateSeries: List<RetainedState> = listOf(retainedState),
     val specRevision: String = SPEC_REVISION,
     val framing: String = FRAMING,
     val tier: TpchTier = query.tier,
@@ -223,6 +230,10 @@ data class RunHeader(
         }
         require(variance == null || variance.isFinite() && variance >= 0.0) {
             "variance must be finite and non-negative when present"
+        }
+        require(stateSeries.isNotEmpty()) { "stateSeries must include the post-LOAD sample" }
+        require(stateSeries.last() == retainedState) {
+            "retainedState must be the terminal stateSeries sample"
         }
     }
 
@@ -442,4 +453,3 @@ private fun RunHeader.compatibleForSummary(other: RunHeader): Boolean =
         refreshPlan = refreshPlan.copy(seed = other.refreshPlan.seed),
         variance = other.variance,
     ) == other
-
