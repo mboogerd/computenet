@@ -7337,7 +7337,7 @@ Applied `transportValidated = true`: both host counts completed and every frame 
 A later `MacroSweepTest` whole-export rewrite or `SubjectMerge` replacement drops `transportValidated`; rerun this cross-check after either operation (0cnmw-D17).
 
 ## 2026-10-16 — durable DIAMOND point on ONE host: journal file size, bytes per record, records, retained bytes at replay, checkpoint size and the recovery check, per (cardinality, batch size), SIM drive
-Harness: 0826c8e5 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+Harness: 18d9afc0 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
 JMH: mode=SIM durable journal growth probe (JUnit @Tag("bench"), one deterministic BenchMesh per attempt; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both forks=1 warmup=1 iters=2 · drive=SIM
 | subject | value | notes |
 | --- | --- | --- |
@@ -7345,63 +7345,63 @@ JMH: mode=SIM durable journal growth probe (JUnit @Tag("bench"), one determinist
 | n=1000 b=1 bytesPerRecord | 191.898 ± n/a bytes/record | |
 | n=1000 b=1 records | 1000.0 ± n/a records/point | |
 | n=1000 b=1 journalRecords | 1000.0 ± n/a journalRecords/point | |
-| n=1000 b=1 retainedBytes (rounded to 4KiB) | 212992.0 ± n/a bytes/point (rounded to 4KiB) | |
+| n=1000 b=1 retainedBytes (rounded to 0.1MiB) | 0.2 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=1000 b=1 checkpointBytes | 154006.0 ± n/a bytes/point | |
 | n=1000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=1000 b=10 fileBytes | 191898.0 ± n/a bytes/point | |
 | n=1000 b=10 bytesPerRecord | 191.898 ± n/a bytes/record | |
 | n=1000 b=10 records | 1000.0 ± n/a records/point | |
 | n=1000 b=10 journalRecords | 1000.0 ± n/a journalRecords/point | |
-| n=1000 b=10 retainedBytes (rounded to 4KiB) | 212992.0 ± n/a bytes/point (rounded to 4KiB) | |
+| n=1000 b=10 retainedBytes (rounded to 0.1MiB) | 0.2 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=1000 b=10 checkpointBytes | 154006.0 ± n/a bytes/point | |
 | n=1000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=1000 b=100 fileBytes | 191898.0 ± n/a bytes/point | |
 | n=1000 b=100 bytesPerRecord | 191.898 ± n/a bytes/record | |
 | n=1000 b=100 records | 1000.0 ± n/a records/point | |
 | n=1000 b=100 journalRecords | 1000.0 ± n/a journalRecords/point | |
-| n=1000 b=100 retainedBytes (rounded to 4KiB) | 212992.0 ± n/a bytes/point (rounded to 4KiB) | |
+| n=1000 b=100 retainedBytes (rounded to 0.1MiB) | 0.2 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=1000 b=100 checkpointBytes | 154006.0 ± n/a bytes/point | |
 | n=1000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=10000 b=1 fileBytes | 1928898.0 ± n/a bytes/point | |
 | n=10000 b=1 bytesPerRecord | 192.8898 ± n/a bytes/record | |
 | n=10000 b=1 records | 10000.0 ± n/a records/point | |
 | n=10000 b=1 journalRecords | 10000.0 ± n/a journalRecords/point | |
-| n=10000 b=1 retainedBytes (rounded to 4KiB) | 2174976.0 ± n/a bytes/point (rounded to 4KiB) | |
+| n=10000 b=1 retainedBytes (rounded to 0.1MiB) | 2.1 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=10000 b=1 checkpointBytes | 1595506.0 ± n/a bytes/point | |
 | n=10000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=10000 b=10 fileBytes | 1928898.0 ± n/a bytes/point | |
 | n=10000 b=10 bytesPerRecord | 192.8898 ± n/a bytes/record | |
 | n=10000 b=10 records | 10000.0 ± n/a records/point | |
 | n=10000 b=10 journalRecords | 10000.0 ± n/a journalRecords/point | |
-| n=10000 b=10 retainedBytes (rounded to 4KiB) | 2174976.0 ± n/a bytes/point (rounded to 4KiB) | |
+| n=10000 b=10 retainedBytes (rounded to 0.1MiB) | 2.1 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=10000 b=10 checkpointBytes | 1595506.0 ± n/a bytes/point | |
 | n=10000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=10000 b=100 fileBytes | 1928898.0 ± n/a bytes/point | |
 | n=10000 b=100 bytesPerRecord | 192.8898 ± n/a bytes/record | |
 | n=10000 b=100 records | 10000.0 ± n/a records/point | |
 | n=10000 b=100 journalRecords | 10000.0 ± n/a journalRecords/point | |
-| n=10000 b=100 retainedBytes (rounded to 4KiB) | 2174976.0 ± n/a bytes/point (rounded to 4KiB) | |
+| n=10000 b=100 retainedBytes (rounded to 0.1MiB) | 2.1 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=10000 b=100 checkpointBytes | 1595506.0 ± n/a bytes/point | |
 | n=10000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=100000 b=1 fileBytes | 1.9388898E7 ± n/a bytes/point | |
 | n=100000 b=1 bytesPerRecord | 193.88898 ± n/a bytes/record | |
 | n=100000 b=1 records | 100000.0 ± n/a records/point | |
 | n=100000 b=1 journalRecords | 100000.0 ± n/a journalRecords/point | |
-| n=100000 b=1 retainedBytes (rounded to 4KiB) | 2.125824E7 ± n/a bytes/point (rounded to 4KiB) | |
+| n=100000 b=1 retainedBytes (rounded to 0.1MiB) | 20.3 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=100000 b=1 checkpointBytes | 1.6010506E7 ± n/a bytes/point | |
 | n=100000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=100000 b=10 fileBytes | 1.9388898E7 ± n/a bytes/point | |
 | n=100000 b=10 bytesPerRecord | 193.88898 ± n/a bytes/record | |
 | n=100000 b=10 records | 100000.0 ± n/a records/point | |
 | n=100000 b=10 journalRecords | 100000.0 ± n/a journalRecords/point | |
-| n=100000 b=10 retainedBytes (rounded to 4KiB) | 2.12992E7 ± n/a bytes/point (rounded to 4KiB) | |
+| n=100000 b=10 retainedBytes (rounded to 0.1MiB) | 20.3 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=100000 b=10 checkpointBytes | 1.6010506E7 ± n/a bytes/point | |
 | n=100000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 | n=100000 b=100 fileBytes | 1.9388898E7 ± n/a bytes/point | |
 | n=100000 b=100 bytesPerRecord | 193.88898 ± n/a bytes/record | |
 | n=100000 b=100 records | 100000.0 ± n/a records/point | |
 | n=100000 b=100 journalRecords | 100000.0 ± n/a journalRecords/point | |
-| n=100000 b=100 retainedBytes (rounded to 4KiB) | 2.12992E7 ± n/a bytes/point (rounded to 4KiB) | |
+| n=100000 b=100 retainedBytes (rounded to 0.1MiB) | 20.3 ± n/a MiB/point (rounded to 0.1MiB) | |
 | n=100000 b=100 checkpointBytes | 1.6010506E7 ± n/a bytes/point | |
 | n=100000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
 Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
@@ -7464,16 +7464,16 @@ admitted=9 NonConvergent=0 NonDeterministic=0 Unschedulable=0 Failed=0 Unreporta
 
 ### Retained-bytes fraction
 
-- n=1000 b=1 retainedBytes≈212992 maxHeap=2147483648 fraction=0.000099
-- n=1000 b=10 retainedBytes≈212992 maxHeap=2147483648 fraction=0.000099
-- n=1000 b=100 retainedBytes≈212992 maxHeap=2147483648 fraction=0.000099
-- n=10000 b=1 retainedBytes≈2174976 maxHeap=2147483648 fraction=0.001013
-- n=10000 b=10 retainedBytes≈2174976 maxHeap=2147483648 fraction=0.001013
-- n=10000 b=100 retainedBytes≈2174976 maxHeap=2147483648 fraction=0.001013
-- n=100000 b=1 retainedBytes≈21258240 maxHeap=2147483648 fraction=0.009900
-- n=100000 b=10 retainedBytes≈21299200 maxHeap=2147483648 fraction=0.009918
-- n=100000 b=100 retainedBytes≈21299200 maxHeap=2147483648 fraction=0.009918
-- arm (ii): largest Ok point in the declared grid is n=100000 b=100; fraction=0.009918 against 0.25 — does not hold
+- n=1000 b=1 retainedBytes≈0.2MiB maxHeap=2147483648 fraction=0.000098
+- n=1000 b=10 retainedBytes≈0.2MiB maxHeap=2147483648 fraction=0.000098
+- n=1000 b=100 retainedBytes≈0.2MiB maxHeap=2147483648 fraction=0.000098
+- n=10000 b=1 retainedBytes≈2.1MiB maxHeap=2147483648 fraction=0.001025
+- n=10000 b=10 retainedBytes≈2.1MiB maxHeap=2147483648 fraction=0.001025
+- n=10000 b=100 retainedBytes≈2.1MiB maxHeap=2147483648 fraction=0.001025
+- n=100000 b=1 retainedBytes≈20.3MiB maxHeap=2147483648 fraction=0.009912
+- n=100000 b=10 retainedBytes≈20.3MiB maxHeap=2147483648 fraction=0.009912
+- n=100000 b=100 retainedBytes≈20.3MiB maxHeap=2147483648 fraction=0.009912
+- arm (ii): largest Ok point in the declared grid is n=100000 b=100; fraction=0.009912 against 0.25 — does not hold
 
 ### D13 arm (i)
 
@@ -7486,7 +7486,7 @@ admitted=9 NonConvergent=0 NonDeterministic=0 Unschedulable=0 Failed=0 Unreporta
 - Before: structural=87 exclusions=10 laws=10 unfitted=30
 - After: structural=96 exclusions=13 laws=10 unfitted=32
 - JOURNAL: structural=9 exclusions=3 fittedLaws=0 unfitted=2
-- Run harness SHA: `0826c8e5`
+- Run harness SHA: `18d9afc0`
 
 ### Verdict
 

@@ -2136,7 +2136,7 @@
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2159,7 +2159,7 @@
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2182,7 +2182,7 @@
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2205,7 +2205,7 @@
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2228,7 +2228,7 @@
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2251,7 +2251,7 @@
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2274,7 +2274,7 @@
                 "journalRecords": 100000,
                 "simSteps": 100000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2297,7 +2297,7 @@
                 "journalRecords": 100000,
                 "simSteps": 100000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         },
         {
             "at": {
@@ -2320,7 +2320,7 @@
                 "journalRecords": 100000,
                 "simSteps": 100000
             },
-            "harnessSha": "0826c8e5"
+            "harnessSha": "18d9afc0"
         }
     ],
     "calibration": [
