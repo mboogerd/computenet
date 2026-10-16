@@ -421,7 +421,8 @@ class WireCrossCheckTest {
         }
         val reading = if (constant) "constant at the measured precision" else "not constant across host counts"
         return "Socket minus loopback encoded-byte offset: $details; the per-frame offset is $reading. " +
-            "It is reported rather than modelled; whether PLC1 should price it remains PLC1's question (0cnmw-D6)."
+            "It is reported rather than modelled; whether PLC1 should price it remains PLC1's question (0cnmw-D6). " +
+            BYTE_SEAM_CAVEAT
     }
 
     private fun exportPath(): Path = Path.of(requiredRepoRoot(), CostSchema.STABLE_PATH)
@@ -518,6 +519,11 @@ class WireCrossCheckTest {
         private const val DATE_PROPERTY = "civictech.bench.date"
         private const val REPO_ROOT_PROPERTY = "computenet.repo.root"
         private const val PER_FRAME_OFFSET_EPSILON = 0.000_001
+        private const val BYTE_SEAM_CAVEAT =
+            "Both byte columns count `WireCodec`-encoded bridge payloads (loopback: the mesh's frame " +
+                "counter; socket: a tap on each `BridgeEgressCell` outlet), before WebSocket framing; " +
+                "WebSocket frame headers and TCP/IP overhead are not measured, so this offset says " +
+                "nothing about on-the-wire framing cost (0cnmw-D7)."
         private const val SOCKET_MODE =
             "REAL structural cross-check (JUnit @Tag(\"bench\") + @Tag(\"multi-jvm\"); " +
                 "forked WsTransport peers; not JMH)"

@@ -7321,7 +7321,7 @@ Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 
 ### Systematic offset
 
-Socket minus loopback encoded-byte offset: h=2: ±0 bytes total (0.000000000 bytes/frame); h=3: ±0 bytes total (0.000000000 bytes/frame); the per-frame offset is constant at the measured precision. It is reported rather than modelled; whether PLC1 should price it remains PLC1's question (0cnmw-D6).
+Socket minus loopback encoded-byte offset: h=2: ±0 bytes total (0.000000000 bytes/frame); h=3: ±0 bytes total (0.000000000 bytes/frame); the per-frame offset is constant at the measured precision. It is reported rather than modelled; whether PLC1 should price it remains PLC1's question (0cnmw-D6). Both byte columns count `WireCodec`-encoded bridge payloads (loopback: the mesh's frame counter; socket: a tap on each `BridgeEgressCell` outlet), before WebSocket framing; WebSocket frame headers and TCP/IP overhead are not measured, so this offset says nothing about on-the-wire framing cost (0cnmw-D7).
 
 ### Export marking
 
