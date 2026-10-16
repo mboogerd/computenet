@@ -7703,6 +7703,25 @@ Pulled trigger: [BEN1-03] fences `:query`/`:oracle` out of `:bench`, so BB-TPCH 
 
 This entry contradicts the RF1 rows of the 2026-10-16 BB-TPCH entry above (harness `1146a420`); its RF2 rows, coverage table and generator deviations are unchanged. What changed: RF1 order rows now draw O_CUSTKEY, O_ORDERDATE and O_CLERK by the base generator's §4.2.3 rules (computenet-yxlvc), so the RF1 stream differs for every seed.
 
+## 2026-10-16 — Erratum: audit of pre-`0e266a6a` REAL wall-time entries for the 5 ms `awaitIdle` poll
+
+Residual: `computenet-9be7m`. This audit answers which already-rendered REAL wall-time entries were timed through the pre-removal `InstrumentedScheduler.awaitIdle` path. The poll removal originated at `a947b58c` and landed on `origin/main` in `0e266a6a`.
+
+**Affected rendered entries: none.** Consequently there are no reported `(C, batch)` points for which to calculate `ceil(C / batch) × 5 ms`, and no poll-floor share of a reported wall time. The empty result is intentional: a zero floor table here must not be read as evidence that a floor-bearing measurement had a zero contribution.
+
+The audit distinguishes the likely candidates as follows:
+
+| findings entry or candidate | REAL timing path established from its harness | poll-floor status |
+| --- | --- | --- |
+| `computenet-x9e.4.5` REAL operator sweep; `computenet-am2h` re-measure | `OperatorThroughputBenchmark.real` → `Graphs` → `HostScheduler.awaitDrained`; the harness revisions are `9622223b` and `6951a26e`, and their `AwaitDrained.kt` uses the kernel quiescence fence/`CountDownLatch` | no `InstrumentedScheduler.awaitIdle`; no `ceil(C / batch) × 5 ms` floor |
+| 2026-08-19/20 REAL bounded-read, footprint and fan-out entries, including their later REAL re-measures | the BEN1 micro fixtures use `HostScheduler.awaitDrained`, not the macro `RealWorld` | no poll floor |
+| 2026-10-14 macro REAL per-unit calibration | `MacroCalibrationBenchmark` → `FanOutFixtures` → `HostScheduler.awaitDrained` | no poll floor |
+| 2026-10-14 macro sweep | all rendered wall-time rows are SIM; the plan explicitly omits every REAL coordinate | no REAL wall time to correct |
+| 2026-10-15 RESTART re-baseline REAL entries | `ReBaselineFanOutBenchmark` uses `HostScheduler.awaitDrained` | no poll floor |
+| 2026-10-16 durable DIAMOND REAL entry | `JournalCostBenchmark` → `JournalRealRig` → `RealWorld`; this entry was measured after `0e266a6a` changed `awaitIdle` to the completion-signalled condition | post-removal; not an earlier poll-bearing entry |
+
+The only pre-removal `InstrumentedScheduler.awaitIdle` consumer is the macro `RealWorld` path used by `SweepRunner.realTrial`. Before `0e266a6a`, that path did have the 5 ms poll, but no findings entry published its REAL wall times: the macro sweep entry records its REAL coordinates as omitted, and the journal REAL rig is a separate path. No existing rendered block above was edited.
+
 ## 2026-10-16 — amendment to the two durable DIAMOND journal entries above (SIM grid and REAL G-25 verdict): the three C=1e6 SIM points observed in bounded forks (computenet-9f7x5.5)
 
 C=1e6 fork amendment (computenet-9f7x5.5; supersedes the SIM entry's 9f7x5-D19 omission for the verdict):
