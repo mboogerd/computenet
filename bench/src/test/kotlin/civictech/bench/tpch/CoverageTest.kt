@@ -57,6 +57,10 @@ class CoverageTest {
         assertThrows(IllegalArgumentException::class.java) {
             CoverageTable(rows.dropLast(1) + rows.first())
         }
+        // 23 rows covering every query once plus a duplicate: only the row-count check refuses it.
+        assertThrows(IllegalArgumentException::class.java) {
+            CoverageTable(rows + rows.first())
+        }
         assertThrows(IllegalArgumentException::class.java) {
             CoverageTable(rows.map { row ->
                 if (row.query == TpchQuery.Q01) row.copy(status = Status.failed) else row
