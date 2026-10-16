@@ -23,6 +23,9 @@ object JournalPlan {
     const val TIMEOUT_MINUTES: Long = 30L
     const val DETERMINISM_CHECK: Boolean = true
     const val RETAINED_FRACTION_FIRES: Double = 0.25
+    const val SIM_OMITTED_CARDINALITY: Long = 1_000_000L
+    const val SIM_OMISSION_REASON =
+        "9f7x5-D19: not attempted in-process: safety under the test executor's heap not established"
 
     /**
      * One declared omission or explicitly excluded edge of the `[BEN2-37]`,
@@ -51,7 +54,15 @@ object JournalPlan {
     /** The macro runner's calibrated allowance for this coordinate. */
     fun budgetFor(at: Coordinate): PointBudget = SweepPlan.budgetFor(at)
 
-    /** D14's four declared omissions/exclusion cases, with its reasons preserved. */
+    /** The declared a-priori omission covering the three C=1e6 SIM points. */
+    fun omissionFor(at: Coordinate): Omission? =
+        omissions().firstOrNull {
+            it.what == "SIM C=1e6" &&
+                at.drive == Drive.SIM &&
+                at.cardinality == SIM_OMITTED_CARDINALITY
+        }
+
+    /** D14/D19's four declared omissions/exclusion cases, with reasons preserved. */
     fun omissions(): List<Omission> = listOf(
         Omission(
             what = "REAL C=1e6",
@@ -69,9 +80,9 @@ object JournalPlan {
             reason = "9f7x5-D6: G-25's unit is one file per host",
         ),
         Omission(
-            what = "a 1e6 SIM point that ends Unschedulable",
-            count = 1,
-            reason = "listed as such with the stage and heap limit rather than replaced by a smaller point",
+            what = "SIM C=1e6",
+            count = BATCH_SIZES.size,
+            reason = SIM_OMISSION_REASON,
         ),
     )
 
