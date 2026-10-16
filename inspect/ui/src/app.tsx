@@ -83,7 +83,7 @@ function GraphGone() {
           Graphs are connected components over the live link set, so they merge and split whenever links change — and
           their ids change with them. Its cells are still running, under a different component.
         </p>
-        <button class="canvas__gone-action" onClick={goHome}>
+        <button class="canvas__gone-action pressable" onClick={goHome}>
           Back to graphs
         </button>
       </div>
