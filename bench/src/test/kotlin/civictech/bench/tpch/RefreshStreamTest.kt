@@ -1,12 +1,36 @@
 package civictech.bench.tpch
 
 import kotlin.math.round
+import java.time.LocalDate
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class RefreshStreamTest {
+
+    @Test
+    fun `RF1 orders follow the base generator customer date and clerk rules`() {
+        val generated = TpchGenerator.generate(seed = 7L, sf = 0.001)
+        val narrowBase = generated.copy(
+            orders = listOf(generated.orders.first()),
+            lineitem = emptyList(),
+        )
+        val plan = RefreshPlan(
+            seed = 17L,
+            sf = 0.001,
+            ordersPerRefresh = 512,
+            batches = listOf(RefreshKind.RF1),
+        )
+        val rf1 = RefreshStream.generate(plan, narrowBase).single() as RefreshBatch.Rf1
+        val startDate = LocalDate.parse("1992-01-01").toEpochDay().toInt()
+        val endDate = LocalDate.parse("1998-12-31").minusDays(151).toEpochDay().toInt()
+
+        assertTrue(rf1.orders.all { it.custKey % 3L != 0L })
+        assertTrue(rf1.orders.all { it.orderDate in startDate..endDate })
+        assertTrue(rf1.orders.any { it.orderDate != narrowBase.orders.single().orderDate })
+        assertTrue(rf1.orders.all { it.clerk == "Clerk#000000001" })
+    }
 
     @Test
     fun `refresh stream is deterministic and follows sparse RF1 RF2 rules`() {
