@@ -930,8 +930,9 @@ def drop_unmerged_blocked(candidates):
             blocked[current] = []
         elif line.startswith(("READY ", "PARKED ")):
             current = None
-        elif current:
-            blocked[current].append(line.strip())
+        elif current and not line.strip().startswith(
+                ("STALE-BASE ", "LIVE-BASE ", "UNCHECKED-BASE ")):
+            blocked[current].append(line.strip())    # a base note is not a blocker
     for tid in resumed_ids & blocked.keys():
         if all("[unmerged on " in why for why in blocked[tid]):
             del blocked[tid]
