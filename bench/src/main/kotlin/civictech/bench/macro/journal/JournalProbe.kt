@@ -25,6 +25,7 @@ import civictech.cell.StateReadResult
 import civictech.cell.data.op.TaggedEntry
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.Journal
+import civictech.cell.host.SimulationController
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -111,13 +112,17 @@ object JournalProbe {
         recoveryJournal = ::FileJournal,
     )
 
-    /** Test seam for proving that an empty recovery cannot be classified as Ok. */
+    /**
+     * Test seams for proving recovery classification and that both recovery drains receive
+     * the point-specific SIM budget rather than [SimulationController.DEFAULT_BUDGET].
+     */
     internal fun run(
         at: Coordinate,
         journalDir: File,
         budget: PointBudget = JournalPlan.budgetFor(at),
         determinismCheck: Boolean = JournalPlan.DETERMINISM_CHECK,
         recoveryJournal: (File) -> Journal,
+        recoveryDrain: (BenchMesh, Int) -> Unit = { mesh, simSteps -> mesh.runToIdle(simSteps) },
     ): JournalMeasurement {
         require(at.durability) { "journal probe requires durability=true" }
         require(at.hostCount == 1) { "journal probe requires hostCount=1" }
@@ -276,9 +281,9 @@ object JournalProbe {
             }
             recoveredMesh = (recoveredBuild as MeshBuild.Built).mesh
             recoveredMesh.apply(generated.spec)
-            recoveredMesh.runToIdle(budget.simSteps)
+            recoveryDrain(recoveredMesh, budget.simSteps)
             val recovery = recoveredMesh.peers[0].host.recoverFrom(installedRecoveryJournal)
-            recoveredMesh.runToIdle(budget.simSteps)
+            recoveryDrain(recoveredMesh, budget.simSteps)
 
             val deadLetters = (firstMesh.deadLetters + recoveredMesh.deadLetters).map { it.toString() }
             if (deadLetters.isNotEmpty()) {

@@ -7,6 +7,7 @@ import civictech.bench.macro.CountingJournal
 import civictech.bench.macro.PointBudget
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.host.SimulationController
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.doubles.shouldBeGreaterThan
 import io.kotest.matchers.ints.shouldBeGreaterThan
@@ -51,14 +52,18 @@ class JournalProbeTest {
     fun `a recovery that restores nothing is Failed, not Ok`() {
         val at = JournalPlan.coordinate(100, 10)
 
-        val outcome = JournalProbe.run(
+        val measured = JournalProbe.run(
             at = at,
             journalDir = temporaryRoot.resolve("empty-recovery"),
             recoveryJournal = { InMemoryJournal() },
-        ).outcome.shouldBeInstanceOf<PointOutcome.Failed>()
+        )
+        val outcome = measured.outcome.shouldBeInstanceOf<PointOutcome.Failed>()
 
         outcome.subject shouldBe CostSubject.JOURNAL
         outcome.cause shouldContain "recovery restored no journal frames"
+        measured.stage shouldBe "recover"
+        measured.replayCompleted shouldBe true
+        measured.recoverCompleted shouldBe false
     }
 
     @Test
@@ -187,5 +192,51 @@ class JournalProbeTest {
         JournalPlan.describe() shouldContain "D13 FIRES iff"
         JournalPlan.describe() shouldContain "D13 RETIRES iff"
         JournalPlan.describe() shouldContain "D13 is INCONCLUSIVE otherwise"
+    }
+
+    @Test
+    fun `journal plan distinguishes declared SIM combinations from executed omissions`() {
+        JournalPlan.executedPoints().size shouldBe 9
+        JournalPlan.executedPoints().none { it.cardinality == 1_000_000L } shouldBe true
+        JournalPlan.describe() shouldContain "Declared SIM combinations: 4 × 3 = 12"
+        JournalPlan.describe() shouldContain "Executed SIM combinations: 3 × 3 = 9"
+    }
+
+    @Test
+    fun `a declared C=1e6 SIM point is omitted before a mesh is built`() {
+        val journalDir = temporaryRoot.resolve("declared-omission")
+
+        val measured = JournalProbe.run(
+            at = JournalPlan.coordinate(1_000_000, 1),
+            journalDir = journalDir,
+            determinismCheck = false,
+        )
+
+        measured.declaredOmission shouldBe true
+        measured.stage shouldBe "omission"
+        measured.outcome.shouldBeInstanceOf<PointOutcome.Unschedulable>().reason shouldContain "9f7x5-D19"
+        journalDir.exists() shouldBe false
+    }
+
+    @Test
+    fun `recovery drains use the point budget rather than the simulation default`() {
+        val at = JournalPlan.coordinate(100, 10)
+        val recoveryBudget = SimulationController.DEFAULT_BUDGET + 7
+        val observedBudgets = mutableListOf<Int>()
+
+        val measured = JournalProbe.run(
+            at = at,
+            journalDir = temporaryRoot.resolve("recovery-budget"),
+            budget = PointBudget(simSteps = recoveryBudget),
+            determinismCheck = false,
+            recoveryJournal = ::FileJournal,
+            recoveryDrain = { mesh, simSteps ->
+                observedBudgets += simSteps
+                mesh.runToIdle(simSteps)
+            },
+        )
+
+        measured.outcome.shouldBeInstanceOf<PointOutcome.Ok>()
+        observedBudgets shouldBe listOf(recoveryBudget, recoveryBudget)
     }
 }

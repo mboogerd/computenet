@@ -51,6 +51,9 @@ object JournalPlan {
         BATCH_SIZES.map { batchSize -> coordinate(cardinality, batchSize) }
     }
 
+    /** The declared SIM points that are actually attempted by [JournalProbe]. */
+    fun executedPoints(): List<Coordinate> = points().filterNot { omissionFor(it) != null }
+
     /** The macro runner's calibrated allowance for this coordinate. */
     fun budgetFor(at: Coordinate): PointBudget = SweepPlan.budgetFor(at)
 
@@ -88,11 +91,19 @@ object JournalPlan {
 
     /** Markdown copied into the SIM findings entry by the owning macro suite. */
     fun describe(): String = buildString {
+        val declaredPoints = points()
+        val executedPoints = executedPoints()
+        val executedCardinalities = executedPoints.map { it.cardinality }.distinct()
+        val executedBatchSizes = executedPoints.map { it.batchSize }.distinct()
         appendLine("### Plan")
         appendLine()
         appendLine("- Cardinalities: ${CARDINALITIES.joinToString()}")
         appendLine("- Batch sizes: ${BATCH_SIZES.joinToString()}")
-        appendLine("- Executed SIM combinations: ${CARDINALITIES.size} × ${BATCH_SIZES.size} = ${points().size}")
+        appendLine("- Declared SIM combinations: ${CARDINALITIES.size} × ${BATCH_SIZES.size} = ${declaredPoints.size}")
+        appendLine(
+            "- Executed SIM combinations: ${executedCardinalities.size} × ${executedBatchSizes.size} = " +
+                "${executedPoints.size} (${declaredPoints.size - executedPoints.size} D19 omissions)",
+        )
         appendLine("- Nesting: cardinality -> batch size")
         appendLine(
             "- Coordinate: ${SweepPlan.BASELINE.shape}, seed=${SweepPlan.SHAPE_SEED}, " +
