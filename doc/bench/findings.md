@@ -6645,11 +6645,7 @@ propagation entry again carries `transportValidated = true` and h=1 remains unma
 
 With the retained calibrations, `CostQuery.coLocatedEdge` and
 `CostQuery.crossHostEdge` now return `Priced` (including provenance and dispersion) at
-the baseline, and `coLocatedEdge` is priced at h=1. The BS-3 boundary remains open in
-the query layer: `crossHostEdge` currently returns the local-only price when h=1 has
-zero frames, rather than `NotMeasured`; the required guard belongs in `CostQuery.kt`,
-outside the file claim of computenet-wl8.3, and is recorded on that item rather than
-hidden by the new count.
+the baseline, and `coLocatedEdge` is priced at h=1.
 
 ## 2026-10-14 — macro REAL per-unit time calibration
 Harness: c4366b8a · JVM Amazon.com Inc. (Corretto-21.0.5.11.1)/21.0.5 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.7.1
