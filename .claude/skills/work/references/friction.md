@@ -13,7 +13,7 @@ The SDLC epic is shared, so pull first. Search one distinctive word at a time
   cost) and acceptance (what would prevent it) to files, then:
 
 ```bash
-.claude/skills/work/scripts/file-friction.sh --type <bug|feature> --title "<one line>" --desc-file <desc> --accept-file <accept> --skill-version <the epic's metadata.skill_version>
+.claude/skills/work/scripts/file-friction.sh --type <bug|feature> --title "<one line>" --desc-file <desc> --accept-file <accept>
 ```
 
 `bd comment` refused → `bd update <id> --append-notes "<plain text>"` (never

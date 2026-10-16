@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for file-friction.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "13 passed, 0 failed".
+# Expect "16 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/file-friction.sh"}
@@ -29,13 +29,14 @@ EOF
 chmod +x "$ROOT/bin/bd"
 export PATH="$ROOT/bin:$PATH"
 
+SHA=$(git -C "$(dirname "$SCRIPT")" rev-parse origin/main)
 pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "  PASS $*"; }
 bad() { fail=$((fail+1)); echo "  FAIL $*"; }
 CASE=0
 fixture() { CASE=$((CASE+1)); export CTRL="$ROOT/c$CASE" BD_LOG="$ROOT/c$CASE/bd.log"
             mkdir -p "$CTRL"; : > "$BD_LOG"; }
-run() { "$SCRIPT" --type bug --title "t" --desc "d" --accept "a" --skill-version abc123 2>&1; }
+run() { "$SCRIPT" --type bug --title "t" --desc "d" --accept "a" --skill-version "$SHA" 2>&1; }
 
 # 1. happy path: unparented create, then re-parent. No claim: filing is not
 # picking up, and a filing-time claim is what broke the friction lane's drain
@@ -44,7 +45,7 @@ fixture
 out=$(run); st=$?
 [ "$st" = 0 ] && [ "$(tail -1 <<<"$out")" = computenet-h4sh ] \
   && grep -q "^create" "$BD_LOG" && grep -q -- "--parent=computenet-wpvy" "$BD_LOG" \
-  && ! grep -q -- "--claim" "$BD_LOG" && grep -q "skill_version.*abc123" "$BD_LOG" \
+  && ! grep -q -- "--claim" "$BD_LOG" && grep -q "skill_version.*$SHA" "$BD_LOG" \
   && ok "create -> parent, unclaimed, id printed" || bad "happy: exit=$st out=$out log=$(cat "$BD_LOG")"
 
 # 2. create returns non-JSON: exit 1, nothing parented
@@ -82,7 +83,7 @@ out=$("$SCRIPT" --type chore --title t --desc d --accept a 2>&1); st=$?
 # the TITLE is the only field bd search reads (computenet-rtoo).
 title_case() { # given-title expected-stored-title label
   fixture
-  "$SCRIPT" --type bug --title "$1" --desc d --accept a --skill-version abc >/dev/null 2>&1
+  "$SCRIPT" --type bug --title "$1" --desc d --accept a --skill-version "$SHA" >/dev/null 2>&1
   # create-ticket.sh passes the title POSITIONALLY, so the stored title is
   # everything between `create ` and the first flag.
   if grep -q -- "^create work skill: $2 --" "$BD_LOG"; then
@@ -102,16 +103,26 @@ out=$("$SCRIPT" --type bug --title "work skill: " --desc d --accept a 2>&1); st=
 
 # s5dh: --desc-file body reaches create-ticket verbatim, backticks inert
 printf 'has `ticks` and $(echo NO)\n' > "$ROOT/body.txt"
-out=$("$SCRIPT" --type bug --title t --desc-file "$ROOT/body.txt" --accept a --skill-version abc 2>&1); st=$?
+out=$("$SCRIPT" --type bug --title t --desc-file "$ROOT/body.txt" --accept a --skill-version "$SHA" 2>&1); st=$?
 [ "$st" = 0 ] && ok "--desc-file accepted" || bad "desc-file: exit=$st out=$out"
 
 # nbd5h: --recurs-of lands in metadata as the structured recurrence link;
 # omitted, no empty recurs_of key is written (case 1's log).
 fixture
-"$SCRIPT" --type bug --title t --desc d --accept a --skill-version abc --recurs-of computenet-2jx46 >/dev/null 2>&1
+"$SCRIPT" --type bug --title t --desc d --accept a --skill-version "$SHA" --recurs-of computenet-2jx46 >/dev/null 2>&1
 grep -q '"recurs_of":"computenet-2jx46"' "$BD_LOG" && ok "--recurs-of reaches metadata" || bad "recurs-of: $(cat "$BD_LOG")"
 fixture; run >/dev/null
 grep -q recurs_of "$BD_LOG" && bad "empty recurs_of written" || ok "no recurs_of without the flag"
+
+# icusw: skill_version is a full commit sha; a blob hash is refused before create.
+fixture
+"$SCRIPT" --type bug --title t --desc d --accept a --skill-version "$(git -C "$(dirname "$SCRIPT")" hash-object "$SCRIPT")" >/dev/null 2>&1; st=$?
+[ "$st" = 2 ] && ! grep -q create "$BD_LOG" && ok "a blob hash --skill-version is refused" || bad "blob: exit=$st"
+fixture
+"$SCRIPT" --type bug --title t --desc d --accept a --skill-version "${SHA:0:8}" >/dev/null 2>&1
+grep -q "skill_version\":\"$SHA" "$BD_LOG" && ok "an abbreviated sha is stored in full" || bad "abbrev: $(cat "$BD_LOG")"
+fixture; "$SCRIPT" --type bug --title t --desc d --accept a >/dev/null 2>&1
+grep -q "skill_version\":\"$SHA" "$BD_LOG" && ok "skill_version defaults to origin/main's sha" || bad "default: $(cat "$BD_LOG")"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

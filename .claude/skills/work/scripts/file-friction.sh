@@ -7,7 +7,8 @@
 # --title WITHOUT it; a leading one is stripped so the call is idempotent
 # either way (21 of 235 friction beads carried it twice, computenet-rtoo) —
 # the skill_version
-# stamp (which skill revision produced the report), and the skill-friction
+# stamp (the full origin/main commit sha at filing time, or the commit
+# --skill-version names; a blob hash is refused, computenet-icusw), and the skill-friction
 # label — labels are NOT inherited when created unparented.
 #
 # It does NOT claim. Filing is not picking up: a claim belongs to the session
@@ -63,7 +64,9 @@ case "$TYPE" in bug|feature) ;; *) echo "--type must be bug or feature (bug = th
   || { echo "--title, --desc[-file] and --accept[-file] are all required" >&2; exit 2; }
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-[ -n "$SKILL_V" ] || SKILL_V=$(git hash-object "$SCRIPT_DIR/../SKILL.md")
+ASKED=$SKILL_V
+SKILL_V=$(git -C "$SCRIPT_DIR" rev-parse --verify --quiet "${ASKED:-origin/main}^{commit}") \
+  || { [ -z "$ASKED" ] || { echo "--skill-version $ASKED is not a commit" >&2; exit 2; }; }
 
 # The prefix is a deliberate, useful convention, but it is invisible at the
 # call site: SKILL.md step 7's template reads as the complete title, so a
