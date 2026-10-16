@@ -32,8 +32,6 @@ object StateAccounting {
         require(series.size == plan.batchCount + 1) {
             "state series has ${series.size} samples for ${plan.batchCount} batches"
         }
-        if (series.isEmpty()) return GrowthNote.Flat
-
         val balanced = plan.batches.size % 2 == 0 &&
             plan.batches.chunked(2).all { it == listOf(RefreshKind.RF1, RefreshKind.RF2) }
         val checkpoints = if (balanced) {

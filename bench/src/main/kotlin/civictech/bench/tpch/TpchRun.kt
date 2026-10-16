@@ -122,19 +122,19 @@ object TpchRun {
                 val completedPlan = plan.copy(batches = plan.batches.take(rawStateSeries.size - 1))
                 val stateSeries = StateAccounting.withGrowth(rawStateSeries, completedPlan)
                 return RunHeader(
-                seed = seed,
-                sf = sf,
-                query = query,
-                refreshPlan = plan,
-                drive = drive,
-                scheduler = rig.schedulerLabel,
-                loadMode = loadModeLabel(journal, dispatchBatch),
-                env = env,
-                retainedState = stateSeries.last(),
-                stateSeries = stateSeries,
-                generatorDeviations = TpchGenerator.deviations,
-                incremental = IncrementalityAccounting.measure(emissions),
-            )
+                    seed = seed,
+                    sf = sf,
+                    query = query,
+                    refreshPlan = plan,
+                    drive = drive,
+                    scheduler = rig.schedulerLabel,
+                    loadMode = loadModeLabel(journal, dispatchBatch),
+                    env = env,
+                    retainedState = stateSeries.last(),
+                    stateSeries = stateSeries,
+                    generatorDeviations = TpchGenerator.deviations,
+                    incremental = IncrementalityAccounting.measure(emissions),
+                )
             }
 
             val streamingReference = hooks.referenceFactory()
@@ -388,7 +388,11 @@ class TpchRefreshSession internal constructor(
     }
 
     override fun close() {
-        pending = null
-        rig.close()
+        try {
+            if (appliedSinceValidation) validate()
+        } finally {
+            pending = null
+            rig.close()
+        }
     }
 }
