@@ -9,7 +9,11 @@ import kotlinx.serialization.Serializable
  * A SIM-derived structural cost entry ([BEN2-33], [BEN2-42]).
  *
  * The nullable [transportValidated] slot is reserved for the later wire cross-check;
- * leaving it null is meaningful and must survive serialization without a schema bump.
+ * [TransportValidation] is its only writer. Leaving it null is meaningful and must
+ * survive serialization without a schema bump. The whole-export rewrite performed by
+ * `MacroSweepTest`, and the subject rewrite performed by [SubjectMerge], drop marks
+ * from the entries they regenerate; the wire cross-check must therefore be rerun after
+ * either operation ([BEN2-21], 0cnmw-D17).
  */
 @Serializable
 data class StructuralCost(
