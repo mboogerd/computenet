@@ -42,7 +42,7 @@ class TpchReferenceTest {
         val q3 = TpchReference.evaluate(TpchQuery.Q03, tables)
         assertEquals(196_000L, q3.rows[listOf<Any>(1L, date("1993-07-01"), 0)]!![0])
 
-        val q10 = TpchReference.evaluate(TpchQuery.Q10, tables)
+        val q10 = TpchReference.evaluate(TpchQuery.Q10, tables, Q10Params(date = date("1993-01-01")))
         val customerKey = listOf<Any>(1L, "Customer#000000001", 10_000L, "phone-1", "INDONESIA", "customer-address", "customer-comment")
         assertEquals(95_000L, q10.rows[customerKey]!![0])
     }
