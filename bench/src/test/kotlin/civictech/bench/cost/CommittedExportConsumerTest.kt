@@ -3,6 +3,7 @@ package civictech.bench.cost
 import civictech.bench.Drive
 import io.kotest.matchers.doubles.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
@@ -33,12 +34,16 @@ class CommittedExportConsumerTest {
     }
 
     @Test
-    fun `committed baseline prices local and cross-host edges and h1 prices the local edge`() {
+    fun `committed baseline prices measured edges and refuses a cross-host price at h1`() {
         val query = CostQuery(model)
 
         assertPriced(query.coLocatedEdge(BASELINE), CostSubject.PROPAGATION, BASELINE)
         assertPriced(query.crossHostEdge(BASELINE), CostSubject.PROPAGATION, BASELINE)
         assertPriced(query.coLocatedEdge(HOST_ONE), CostSubject.PROPAGATION, HOST_ONE)
+
+        val hostOneCrossHost = query.crossHostEdge(HOST_ONE)
+            .shouldBeInstanceOf<CostAnswer.NotMeasured>()
+        hostOneCrossHost.reason shouldContain "hostCount=1"
     }
 
     private fun assertPriced(answer: CostAnswer, subject: CostSubject, at: Coordinate) {
