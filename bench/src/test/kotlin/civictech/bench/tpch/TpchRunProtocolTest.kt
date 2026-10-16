@@ -10,6 +10,51 @@ import org.junit.jupiter.api.Test
 class TpchRunProtocolTest {
 
     @Test
+    fun `SIM work evidence distinguishes scheduler tasks from query emissions`() {
+        data class Evidence(
+            val query: TpchQuery,
+            val rf1Steps: List<Long>,
+            val rf2Steps: List<Long>,
+            val emittedPerBatch: List<Long>,
+        )
+
+        fun evidence(query: TpchQuery): Evidence {
+            val snapshots = mutableListOf<Map<String, Long>>()
+            val record = TpchRun.run(
+                query = query,
+                seed = 7L,
+                plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 4),
+                drive = Drive.SIM,
+                env = tpchTestEnvironment(),
+                hooks = TpchRunHooks(
+                    emissionCounters = { maintained ->
+                        maintained.emissionCounters().also(snapshots::add)
+                    },
+                ),
+            )
+            val verified = assertInstanceOf(TpchRecord.Verified::class.java, record)
+            val emittedPerBatch = snapshots.chunked(2).map { (before, after) ->
+                after.keys.sumOf { outlet -> after.getValue(outlet) - before.getValue(outlet) }
+            }
+            return Evidence(
+                query = query,
+                rf1Steps = verified.rf1.map { (it.figure as Figure.Work).steps },
+                rf2Steps = verified.rf2.map { (it.figure as Figure.Work).steps },
+                emittedPerBatch = emittedPerBatch,
+            )
+        }
+
+        val evidence = listOf(evidence(TpchQuery.Q06), evidence(TpchQuery.Q09))
+        assertEquals(evidence[0].rf1Steps, evidence[1].rf1Steps)
+        assertEquals(evidence[0].rf2Steps, evidence[1].rf2Steps)
+        assertTrue(
+            evidence[0].emittedPerBatch != evidence[1].emittedPerBatch,
+            "Q06 and Q09 must exercise different query-maintenance work: $evidence",
+        )
+        println("SIM_WORK_EVIDENCE=$evidence")
+    }
+
+    @Test
     fun `one quiescence occurs per phase and batch figures retain their kind`() {
         val phases = mutableListOf<String>()
         val record = TpchRun.run(
