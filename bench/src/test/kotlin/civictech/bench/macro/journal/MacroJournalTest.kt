@@ -40,6 +40,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit.MINUTES
 import java.util.concurrent.TimeoutException
+import kotlin.math.round
 
 /** Runs, merges, and renders the G-25 durable journal SIM grid (9f7x5-D6..D10/D13..D15). */
 @Tag("bench")
@@ -414,17 +415,17 @@ class MacroJournalTest {
             appendLine("### Retained-bytes fraction")
             appendLine()
             okMeasurements.forEach { measurement ->
-                val fraction = reportedRetainedBytes(measurement).toDouble() / measurement.maxHeapBytes
+                val fraction = reportedRetainedBytes(measurement).toBytes() / measurement.maxHeapBytes
                 appendLine(
                     "- ${coordinateLabel(measurement.outcome.at)} retainedBytes≈" +
-                        "${reportedRetainedBytes(measurement)} maxHeap=${measurement.maxHeapBytes} " +
+                        "${reportedRetainedBytes(measurement)}MiB maxHeap=${measurement.maxHeapBytes} " +
                         "fraction=${fraction.formatFraction()}",
                 )
             }
             if (largestOk == null) {
                 appendLine("- arm (ii): not evaluated — no Ok SIM point")
             } else {
-                val fraction = reportedRetainedBytes(largestOk).toDouble() / largestOk.maxHeapBytes
+                val fraction = reportedRetainedBytes(largestOk).toBytes() / largestOk.maxHeapBytes
                 appendLine(
                     "- arm (ii): largest Ok point in the declared grid is " +
                         "${coordinateLabel(largestOk.outcome.at)}; fraction=" +
@@ -491,7 +492,7 @@ class MacroJournalTest {
             "bytesPerRecord" to measurement.bytesPerRecord!!,
             "records" to measurement.records!!.toDouble(),
             "journalRecords" to outcome.counts.journalRecords.toDouble(),
-            "retainedBytes (rounded to 1MiB)" to reportedRetainedBytes(measurement).toDouble(),
+            "retainedBytes (rounded to 0.1MiB)" to reportedRetainedBytes(measurement),
             "checkpointBytes" to measurement.checkpointBytes!!.toDouble(),
             "recordsAfterCheckpoint" to measurement.recordsAfterCheckpoint!!.toDouble(),
         )
@@ -499,7 +500,7 @@ class MacroJournalTest {
 
     private fun unit(metric: String): String = when (metric) {
         "fileBytes", "checkpointBytes" -> "bytes/point"
-        "retainedBytes (rounded to 1MiB)" -> "bytes/point (rounded to 1MiB)"
+        "retainedBytes (rounded to 0.1MiB)" -> "MiB/point (rounded to 0.1MiB)"
         "bytesPerRecord" -> "bytes/record"
         "records", "recordsAfterCheckpoint" -> "records/point"
         "journalRecords" -> "journalRecords/point"
@@ -543,11 +544,13 @@ class MacroJournalTest {
         is PointOutcome.Unreportable -> "relativeDispersion=${outcome.result.relativeDispersion}"
     }
 
-    private fun reportedRetainedBytes(measurement: JournalMeasurement): Long {
+    private fun reportedRetainedBytes(measurement: JournalMeasurement): Double {
         val raw = requireNotNull(measurement.retainedBytes)
-        return ((raw + RETAINED_BYTES_GRANULARITY / 2) / RETAINED_BYTES_GRANULARITY) *
-            RETAINED_BYTES_GRANULARITY
+        return round(raw.toDouble() / BYTES_PER_MIB / RETAINED_MIB_GRANULARITY) *
+            RETAINED_MIB_GRANULARITY
     }
+
+    private fun Double.toBytes(): Double = this * BYTES_PER_MIB
 
     private fun coordinateLabel(at: Coordinate): String = "n=${at.cardinality} b=${at.batchSize}"
 
@@ -589,7 +592,8 @@ class MacroJournalTest {
     }
 
     companion object {
-        private const val RETAINED_BYTES_GRANULARITY = 1_048_576L
+        private const val BYTES_PER_MIB = 1_048_576.0
+        private const val RETAINED_MIB_GRANULARITY = 0.1
         private const val HARNESS_SHA_PROPERTY = "civictech.bench.harnessSha"
         private const val DATE_PROPERTY = "civictech.bench.date"
         private const val REPO_ROOT_PROPERTY = "computenet.repo.root"
