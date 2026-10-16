@@ -14,12 +14,18 @@ plugins {
 //   src/test/kotlin  package civictech.bench        fast unit tests (sub-second)
 //
 // `jmh` and `test` both compile against `main`'s output, which is why fixtures live in
-// `main` and not in either leaf. Project dependencies are :kernel and :testkit and
-// nothing else [BEN1-03] — benchmarks drive existing kernel cells, so the ksp-cell
-// convention is deliberately NOT applied: this module authors no cells of its own.
+// `main` and not in either leaf. Project dependencies are :kernel, :testkit and :wire
+// and nothing else [BEN1-03, BEN2-07; amendment recorded in doc/bench/findings.md] —
+// benchmarks drive existing kernel cells, while the BEN2 real-transport cross-check is
+// the sole reason this module reaches :wire. The transitive :identity brought by
+// :wire is runtime plumbing only; bench sources do not import civictech.identity.
+// The ksp-cell convention is deliberately NOT applied: this module authors no cells
+// of its own.
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":testkit"))
+    // BEN2-07: the real-transport cross-check exercises :wire from forked JVMs.
+    implementation(project(":wire"))
     implementation(libs.kotlinx.serialization)
 }
 
