@@ -19,7 +19,7 @@ class StateGrowthTest {
                 plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 20),
                 drive = Drive.SIM,
                 env = tpchTestEnvironment(),
-                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes),
+                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes, outletBalancedStream = true),
             ),
         )
 
@@ -72,6 +72,34 @@ class StateGrowthTest {
     }
 
     @Test
+    fun `outlet-balanced stream reports monotone retained growth`() {
+        val plan = RefreshPlan.alternating(seed = 17L, sf = 0.001, batches = 4)
+        val series = listOf(10L, 11L, 11L, 12L, 12L).map(::retainedState)
+
+        assertEquals(
+            GrowthNote.Growing("outlet"),
+            StateAccounting.growthNote(series, plan, outletBalancedStream = true),
+        )
+    }
+
+    @Test
+    fun `outlet-balanced stream names the monotone outlet among population shifts`() {
+        val plan = RefreshPlan.alternating(seed = 17L, sf = 0.001, batches = 4)
+        val series = listOf(
+            retainedState("a" to 10L, "b" to 5L),
+            retainedState("a" to 12L, "b" to 6L),
+            retainedState("a" to 9L, "b" to 6L),
+            retainedState("a" to 11L, "b" to 7L),
+            retainedState("a" to 10L, "b" to 7L),
+        )
+
+        assertEquals(
+            GrowthNote.Growing("b"),
+            StateAccounting.growthNote(series, plan, outletBalancedStream = true),
+        )
+    }
+
+    @Test
     fun `insert-only Q3 control grows at least one outlet`() {
         val plan = RefreshPlan(
             seed = 11L,
@@ -111,8 +139,10 @@ class StateGrowthTest {
         }
     }
 
-    private fun retainedState(rows: Long): RetainedState = RetainedState(
-        liveRows = mapOf("outlet" to rows),
+    private fun retainedState(rows: Long): RetainedState = retainedState("outlet" to rows)
+
+    private fun retainedState(vararg rows: Pair<String, Long>): RetainedState = RetainedState(
+        liveRows = mapOf(*rows),
         foldKeys = emptyMap(),
         growth = GrowthNote.Flat,
     )
