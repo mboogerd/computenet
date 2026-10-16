@@ -19,11 +19,17 @@ class CountersTest {
 
         assertSame(five, world.edges.deliver("e", five).single())
         assertSame(seven, world.edges.deliver("e", seven).single())
-        assertEquals(CounterSnapshot(frames = 2, bytes = 12, journalRecords = 0), counters.snapshot())
+        assertEquals(
+            CounterSnapshot(messages = 0, frames = 2, bytes = 12, journalRecords = 0),
+            counters.snapshot(),
+        )
 
         registration.close()
         world.edges.deliver("e", ByteArray(11))
-        assertEquals(CounterSnapshot(frames = 2, bytes = 12, journalRecords = 0), counters.snapshot())
+        assertEquals(
+            CounterSnapshot(messages = 0, frames = 2, bytes = 12, journalRecords = 0),
+            counters.snapshot(),
+        )
     }
 
     @Test
@@ -62,8 +68,8 @@ class CountersTest {
 
         assertEquals(
             StructuralCounts(
-                messages = null,
-                messagesNotMeasured = Counters.MESSAGES_NOT_MEASURED,
+                messages = 0,
+                messagesNotMeasured = null,
                 crossHostFrames = 1,
                 wireBytes = 3,
                 journalRecords = 1,

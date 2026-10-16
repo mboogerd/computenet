@@ -1,5 +1,6 @@
 package civictech.bench.macro.mesh
 
+import civictech.bench.macro.LocalDeliveryCounter
 import civictech.cell.durability.Journal
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -27,8 +28,14 @@ class BenchPeer(
 ) {
     val name: String = "peer$index"
     val registry: LocationRegistry = LocationRegistry()
+    /**
+     * Harness-side counter on the data host only. Its snapshot is taken after graph
+     * construction, so spawn/link management never enters a propagation point, while
+     * the undecorated bridge scheduler keeps transport work in the frame/byte counters.
+     */
+    val localDeliveries = LocalDeliveryCounter(world.controller.scheduler())
     val host: ManagedHost = ManagedHost(
-        scheduler = world.controller.scheduler(),
+        scheduler = localDeliveries,
         registry = registry,
         journal = journal,
     )

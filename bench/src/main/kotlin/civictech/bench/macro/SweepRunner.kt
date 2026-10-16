@@ -364,7 +364,11 @@ class SweepRunner(
         }
 
         val sourcePeers = sourcePeers(generated)
-        val (counters, registration) = Counters.installOn(mesh.world, journals)
+        val (counters, registration) = Counters.installOn(
+            world = mesh.world,
+            journals = journals,
+            deliveries = mesh.peers.map { it.localDeliveries },
+        )
         val start = counters.snapshot()
         var simSteps = 0L
         var outOfMemory: OutOfMemoryError? = null

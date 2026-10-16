@@ -66,6 +66,9 @@ data class CalibrationRef(
  * fan-out, shape, replication, durability order. It then looks up the required
  * structural subject at the same coordinate under [Drive.SIM], followed by each
  * calibration constant in formula order. No interpolation or extrapolation is used.
+ * A cross-host edge at host count one is inside the envelope but has no host boundary
+ * to measure, so that query returns [CostAnswer.NotMeasured] instead of pricing only
+ * its local-dispatch term (BS-3).
  * The dominant constant is the one with the largest `count * value` contribution;
  * ties select the first constant in formula order.
  */
@@ -81,7 +84,7 @@ class CostQuery(private val model: CostModel) {
         entry.counts.messages?.let { listOf(it.toDouble()) }
     }
 
-    /** Prices local delivery plus the measured frame and wire-byte costs at [at]. */
+    /** Prices local delivery plus measured frame and wire-byte costs, when a boundary exists. */
     fun crossHostEdge(at: Coordinate): CostAnswer = query(
         at = at,
         subject = CostSubject.PROPAGATION,
@@ -91,6 +94,7 @@ class CostQuery(private val model: CostModel) {
             Calibration.CROSS_HOST_FRAME_NANOS,
             Calibration.WIRE_BYTE_NANOS,
         ),
+        requiresHostBoundary = true,
     ) { entry ->
         entry.counts.messages?.let { messages ->
             listOf(
@@ -136,6 +140,7 @@ class CostQuery(private val model: CostModel) {
         subject: CostSubject,
         unit: String,
         calibrationNames: List<String>,
+        requiresHostBoundary: Boolean = false,
         countsFor: (StructuralCost) -> List<Double>?,
     ): CostAnswer {
         outsideEnvelope(at)?.let { return it }
@@ -144,6 +149,11 @@ class CostQuery(private val model: CostModel) {
         val structural = model.structural.firstOrNull { entry ->
             entry.subject == subject && entry.at == normalized
         } ?: return CostAnswer.NotMeasured("no $subject point at $normalized")
+        if (requiresHostBoundary && structural.at.hostCount == 1) {
+            return CostAnswer.NotMeasured(
+                "cross-host edge cost not measured at hostCount=1: no host boundary exists",
+            )
+        }
 
         val constants = mutableListOf<CalibrationConstant>()
         for (name in calibrationNames) {
