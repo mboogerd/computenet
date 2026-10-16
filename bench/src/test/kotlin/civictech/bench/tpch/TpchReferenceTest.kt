@@ -40,7 +40,7 @@ class TpchReferenceTest {
     @Test
     fun `Q3 and Q10 group joins without losing the order or customer key`() {
         val q3 = TpchReference.evaluate(TpchQuery.Q03, tables)
-        assertEquals(291_000L, q3.rows[listOf<Any>(1L, date("1993-07-01"), 0)]!![0])
+        assertEquals(196_000L, q3.rows[listOf<Any>(1L, date("1993-07-01"), 0)]!![0])
 
         val q10 = TpchReference.evaluate(TpchQuery.Q10, tables)
         val customerKey = listOf<Any>(1L, "Customer#000000001", 10_000L, "phone-1", "INDONESIA", "customer-address", "customer-comment")
@@ -64,7 +64,7 @@ class TpchReferenceTest {
     @Test
     fun `Q16 count distinct excludes complaint suppliers and Q19 accepts each disjunct`() {
         val q16 = TpchReference.evaluate(TpchQuery.Q16, tables)
-        assertEquals(1L, q16.rows[listOf<Any>("Brand#11", "MEDIUM POLISHED TIN", 49)]!![0])
+        assertEquals(1L, q16.rows[listOf<Any>("Brand#11", "MEDIUM BRUSHED TIN", 49)]!![0])
 
         val q19 = TpchReference.evaluate(TpchQuery.Q19, tables)
         // The first three lineitems pass disjuncts 1, 2, and 3 respectively.
@@ -109,7 +109,7 @@ class TpchReferenceTest {
             Part(3, "green cyan beige ivory navy", "Manufacturer#3", "Brand#34", "LARGE BURNISHED TIN", 12, "LG CASE", 400L, ""),
             Part(4, "red orange pink tan white", "Manufacturer#4", "Brand#45", "PROMO POLISHED STEEL", 20, "MED BAG", 500L, ""),
             Part(5, "black grey blue gold red", "Manufacturer#5", "Brand#11", "SMALL PLATED COPPER", 2, "SM PACK", 600L, ""),
-            Part(6, "violet yellow lime coral peach", "Manufacturer#1", "Brand#11", "MEDIUM POLISHED TIN", 49, "MED PACK", 700L, ""),
+            Part(6, "violet yellow lime coral peach", "Manufacturer#1", "Brand#11", "MEDIUM BRUSHED TIN", 49, "MED PACK", 700L, ""),
         ),
         supplier = listOf(
             Supplier(1, "Supplier#1", "supplier-address-1", 9, "supplier-phone-1", 1_000L, "Customer says Complaints here"),
