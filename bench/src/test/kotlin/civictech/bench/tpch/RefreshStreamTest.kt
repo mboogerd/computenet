@@ -58,6 +58,9 @@ class RefreshStreamTest {
         ).single() as RefreshBatch.Rf1
 
         logical.applyRf1(rf1)
+        val afterRf1 = logical.snapshot()
+        assertEquals(afterRf1.orders.sortedBy { it.orderKey }, afterRf1.orders)
+        assertEquals(base.orders.size + rf1.orders.size, afterRf1.orders.size)
         logical.applyRf2(RefreshBatch.Rf2(rf1.orders.map { it.orderKey }.sorted()))
 
         assertEquals(base, logical.snapshot())

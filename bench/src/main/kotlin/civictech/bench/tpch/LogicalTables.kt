@@ -48,11 +48,13 @@ class LogicalTables(base: TpchTables) {
     val customer: List<Customer>
         get() = customers.values.toList()
 
+    // RF1 slots (9..32 of each block) sit BELOW later base keys, so insertion
+    // order is not key order: sort on read for the two mutable relations.
     val orders: List<Orders>
-        get() = ordersByKey.values.toList()
+        get() = ordersByKey.values.sortedBy { it.orderKey }
 
     val lineitem: List<Lineitem>
-        get() = lineitemsByKey.values.toList()
+        get() = lineitemsByKey.values.sortedWith(compareBy<Lineitem> { it.orderKey }.thenBy { it.lineNumber })
 
     val lineItem: List<Lineitem>
         get() = lineitem

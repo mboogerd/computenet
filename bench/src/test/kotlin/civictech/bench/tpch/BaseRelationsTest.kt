@@ -22,6 +22,8 @@ class BaseRelationsTest {
                 rig.completePhase("load")
             }
             assertInstanceOf(Figure.Work::class.java, loadFigure)
+            // Ingress must pass through the host scheduler: a bare-cell call reads 0.
+            assertTrue((loadFigure as Figure.Work).steps > 0, "SIM load work was $loadFigure")
             assertEquals(LogicalTables(base).counts(), relations.membership())
 
             val rf1 = RefreshStream.generate(
@@ -32,12 +34,14 @@ class BaseRelationsTest {
             relations.apply(rf1)
             val rf1Figure = rig.completePhase("RF1")
             assertInstanceOf(Figure.Work::class.java, rf1Figure)
+            assertTrue((rf1Figure as Figure.Work).steps > 0, "SIM RF1 work was $rf1Figure")
 
             val rf2 = RefreshBatch.Rf2((rf1 as RefreshBatch.Rf1).orders.map { it.orderKey }.sorted())
             rig.beginPhase()
             relations.apply(rf2)
             val rf2Figure = rig.completePhase("RF2")
             assertInstanceOf(Figure.Work::class.java, rf2Figure)
+            assertTrue((rf2Figure as Figure.Work).steps > 0, "SIM RF2 work was $rf2Figure")
             assertEquals(base, relations.logicalTables.snapshot())
             assertEquals(LogicalTables(base).counts(), relations.membership())
         } finally {
@@ -77,10 +81,11 @@ class BaseRelationsTest {
     @Test
     fun `a journal-backed SIM load can encode every row type`(@TempDir root: Path) {
         val base = TpchGenerator.generate(seed = 7L, sf = 0.0001)
+        val journalFile = root.resolve("tpch-rows.journal").toFile()
         val rig = TpchRig.open(
             drive = Drive.SIM,
             seed = 7L,
-            journal = FileJournal(root.resolve("tpch-rows.journal").toFile()),
+            journal = FileJournal(journalFile),
         )
         try {
             val relations = BaseRelations.spawn(rig)
@@ -88,6 +93,8 @@ class BaseRelationsTest {
             relations.load(base)
             rig.completePhase("journal-load")
             assertEquals(LogicalTables(base).counts(), relations.membership())
+            // The rows were journalled, i.e. encoded through TpchWireSerializers.
+            assertTrue(journalFile.length() > 0, "journal is empty: ingress bypassed the host")
         } finally {
             rig.close()
         }

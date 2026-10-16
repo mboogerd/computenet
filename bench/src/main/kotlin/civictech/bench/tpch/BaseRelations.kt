@@ -1,6 +1,9 @@
 package civictech.bench.tpch
 
+import civictech.cell.CellRef
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.host.ManagedHost
 import civictech.cell.graph.graph
 import civictech.cell.wire.WireCodec
 import civictech.cell.wire.WireSerializers
@@ -43,7 +46,21 @@ class BaseRelations private constructor(
     val orders: SetCell<Orders>,
     val lineitem: SetCell<Lineitem>,
     private val rig: TpchRig,
+    refs: Map<SetCell<*>, CellRef>,
 ) {
+
+    // Ingress goes through the HOSTED proxy, never the bare cell's inlet: a
+    // direct call on the locally-built instance bypasses host dispatch, the
+    // scheduler and the journal, so SIM work reads 0 and nothing is journalled.
+    // The bare cells are kept only for membership() reads (the GraRun idiom).
+    private val regionIn = rig.host.api<Region>(refs.getValue(region))
+    private val nationIn = rig.host.api<Nation>(refs.getValue(nation))
+    private val supplierIn = rig.host.api<Supplier>(refs.getValue(supplier))
+    private val partIn = rig.host.api<Part>(refs.getValue(part))
+    private val partSuppIn = rig.host.api<PartSupp>(refs.getValue(partSupp))
+    private val customerIn = rig.host.api<Customer>(refs.getValue(customer))
+    private val ordersIn = rig.host.api<Orders>(refs.getValue(orders))
+    private val lineitemIn = rig.host.api<Lineitem>(refs.getValue(lineitem))
 
     val partsupp: SetCell<PartSupp>
         get() = partSupp
@@ -66,14 +83,14 @@ class BaseRelations private constructor(
     fun load(tables: TpchTables) {
         check(logical == null) { "TPC-H base relations are already loaded" }
         logical = LogicalTables(tables)
-        tables.region.forEach(region.inlet.call::add)
-        tables.nation.forEach(nation.inlet.call::add)
-        tables.supplier.forEach(supplier.inlet.call::add)
-        tables.part.forEach(part.inlet.call::add)
-        tables.partSupp.forEach(partSupp.inlet.call::add)
-        tables.customer.forEach(customer.inlet.call::add)
-        tables.orders.forEach(orders.inlet.call::add)
-        tables.lineitem.forEach(lineitem.inlet.call::add)
+        tables.region.forEach(regionIn.inlet.call::add)
+        tables.nation.forEach(nationIn.inlet.call::add)
+        tables.supplier.forEach(supplierIn.inlet.call::add)
+        tables.part.forEach(partIn.inlet.call::add)
+        tables.partSupp.forEach(partSuppIn.inlet.call::add)
+        tables.customer.forEach(customerIn.inlet.call::add)
+        tables.orders.forEach(ordersIn.inlet.call::add)
+        tables.lineitem.forEach(lineitemIn.inlet.call::add)
     }
 
     /** Apply RF1 in referential order: ORDERS first, then LINEITEM. */
@@ -82,8 +99,8 @@ class BaseRelations private constructor(
         when (batch) {
             is RefreshBatch.Rf1 -> {
                 state.applyRf1(batch)
-                batch.orders.forEach(orders.inlet.call::add)
-                batch.lineitems.forEach(lineitem.inlet.call::add)
+                batch.orders.forEach(ordersIn.inlet.call::add)
+                batch.lineitems.forEach(lineitemIn.inlet.call::add)
             }
 
             is RefreshBatch.Rf2 -> {
@@ -94,8 +111,8 @@ class BaseRelations private constructor(
                         ?: error("RF2 order key $orderKey is not live in LogicalTables")
                     order to state.lineitemsFor(orderKey)
                 }
-                removals.forEach { (_, lines) -> lines.forEach(lineitem.inlet.call::remove) }
-                removals.forEach { (order, _) -> orders.inlet.call.remove(order) }
+                removals.forEach { (_, lines) -> lines.forEach(lineitemIn.inlet.call::remove) }
+                removals.forEach { (order, _) -> ordersIn.inlet.call.remove(order) }
                 state.applyRf2(batch)
             }
         }
@@ -127,16 +144,17 @@ class BaseRelations private constructor(
             lateinit var customer: SetCell<Customer>
             lateinit var orders: SetCell<Orders>
             lateinit var lineitem: SetCell<Lineitem>
+            val refs = HashMap<SetCell<*>, CellRef>()
 
             graph(rig.host.managementInlet) {
-                region = spawn("tpch-region") { ref -> SetCell<Region>(ref) }.cell
-                nation = spawn("tpch-nation") { ref -> SetCell<Nation>(ref) }.cell
-                supplier = spawn("tpch-supplier") { ref -> SetCell<Supplier>(ref) }.cell
-                part = spawn("tpch-part") { ref -> SetCell<Part>(ref) }.cell
-                partSupp = spawn("tpch-partsupp") { ref -> SetCell<PartSupp>(ref) }.cell
-                customer = spawn("tpch-customer") { ref -> SetCell<Customer>(ref) }.cell
-                orders = spawn("tpch-orders") { ref -> SetCell<Orders>(ref) }.cell
-                lineitem = spawn("tpch-lineitem") { ref -> SetCell<Lineitem>(ref) }.cell
+                region = spawn("tpch-region") { ref -> SetCell<Region>(ref) }.also { refs[it.cell] = it.ref }.cell
+                nation = spawn("tpch-nation") { ref -> SetCell<Nation>(ref) }.also { refs[it.cell] = it.ref }.cell
+                supplier = spawn("tpch-supplier") { ref -> SetCell<Supplier>(ref) }.also { refs[it.cell] = it.ref }.cell
+                part = spawn("tpch-part") { ref -> SetCell<Part>(ref) }.also { refs[it.cell] = it.ref }.cell
+                partSupp = spawn("tpch-partsupp") { ref -> SetCell<PartSupp>(ref) }.also { refs[it.cell] = it.ref }.cell
+                customer = spawn("tpch-customer") { ref -> SetCell<Customer>(ref) }.also { refs[it.cell] = it.ref }.cell
+                orders = spawn("tpch-orders") { ref -> SetCell<Orders>(ref) }.also { refs[it.cell] = it.ref }.cell
+                lineitem = spawn("tpch-lineitem") { ref -> SetCell<Lineitem>(ref) }.also { refs[it.cell] = it.ref }.cell
             }
             return BaseRelations(
                 region = region,
@@ -148,9 +166,15 @@ class BaseRelations private constructor(
                 orders = orders,
                 lineitem = lineitem,
                 rig = rig,
+                refs = refs,
             )
         }
 
         fun open(rig: TpchRig): BaseRelations = spawn(rig)
     }
 }
+
+@Suppress("UNCHECKED_CAST")
+private fun <T : Any> ManagedHost.api(ref: CellRef): SetApi<T> =
+    lookup(ref, SetApi::class.java) as SetApi<T>?
+        ?: error("TPC-H relation $ref is not hosted")

@@ -55,10 +55,12 @@ class TpchRig private constructor(
         phase = null
         val figure = when (drive) {
             Drive.SIM -> {
+                // Read the pre-drain count BEFORE runToIdle(): the drain's own
+                // steps also pass through the counting wrapper (GraRun order).
+                val consumedBeforeDrain = countingScheduler!!.executedSteps - started.startedSteps
                 val drained = simulation!!.runToIdle().toLong()
-                val submitted = countingScheduler!!.executedSteps - started.startedSteps
                 hooks.phaseQuiesced(label)
-                Figure.Work(submitted + drained)
+                Figure.Work(consumedBeforeDrain + drained)
             }
 
             Drive.REAL -> {
