@@ -96,6 +96,11 @@ class TpchGeneratorTest {
             assertTrue(
                 line.suppKey in (0..3).map { supplierFor(line.partKey, it, scale) },
             )
+            // §4.2.2.13 list Instructions, verbatim from the Revision 3.0.1 PDF.
+            assertTrue(
+                line.shipInstruct in setOf("DELIVER IN PERSON", "COLLECT COD", "NONE", "TAKE BACK RETURN"),
+                line.shipInstruct,
+            )
         }
     }
 

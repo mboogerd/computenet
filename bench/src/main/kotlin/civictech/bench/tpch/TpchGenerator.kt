@@ -43,7 +43,8 @@ object TpchGenerator {
     }
     private val segments = listOf("AUTOMOBILE", "BUILDING", "FURNITURE", "MACHINERY", "HOUSEHOLD")
     private val priorities = listOf("1-URGENT", "2-HIGH", "3-MEDIUM", "4-NOT SPECIFIED", "5-LOW")
-    private val instructions = listOf("DELIVER IN PERSON", "COLLECT COD", "NONE", "TAKE BACK")
+    /** §4.2.2.13 list Instructions. */
+    private val instructions = listOf("DELIVER IN PERSON", "COLLECT COD", "NONE", "TAKE BACK RETURN")
     private val modes = listOf("REG AIR", "AIR", "RAIL", "SHIP", "TRUCK", "MAIL", "FOB")
 
     private val colours = listOf(
@@ -291,21 +292,27 @@ object TpchGenerator {
     ): Pair<List<Orders>, List<Lineitem>> {
         val orders = ArrayList<Orders>(orderCount)
         val lineitems = ArrayList<Lineitem>()
+        // §4.2.3: O_ORDERDATE uniformly distributed between STARTDATE and (ENDDATE - 151 days).
         val maxOrderDate = endDate - 151
 
         (0 until orderCount).forEach { index ->
             val orderKey = sparseOrderKey(index)
             val custKey = randomCustomerKey(ordersRandom, customerCount)
             val orderDate = ordersRandom.nextInt(startDate, maxOrderDate + 1)
+            // §4.2.3: a random number of rows within [1 .. 7] in the LINEITEM table.
             val lineCount = lineitemRandom.nextInt(1, 8)
             val lines = (1..lineCount).map { lineNumber ->
                 val partKey = lineitemRandom.nextLong(1L, part.size.toLong() + 1L)
                 val partRow = part[partKey.toInt() - 1]
                 val supplierIndex = lineitemRandom.nextInt(4)
                 val quantity = lineitemRandom.nextLong(1L, 51L)
+                // §4.2.3: L_SHIPDATE = O_ORDERDATE + random value [1 .. 121];
+                // L_COMMITDATE = O_ORDERDATE + random value [30 .. 90];
+                // L_RECEIPTDATE = L_SHIPDATE + random value [1 .. 30].
                 val shipDate = orderDate + lineitemRandom.nextInt(1, 122)
                 val commitDate = orderDate + lineitemRandom.nextInt(30, 91)
                 val receiptDate = shipDate + lineitemRandom.nextInt(1, 31)
+                // §4.2.3: L_RETURNFLAG is "R" or "A" at random if L_RECEIPTDATE <= CURRENTDATE, else "N".
                 val returnFlag = if (receiptDate <= currentDate) {
                     if (lineitemRandom.nextBoolean()) "R" else "A"
                 } else {
@@ -321,6 +328,7 @@ object TpchGenerator {
                     discount = lineitemRandom.nextInt(0, 11),
                     tax = lineitemRandom.nextInt(0, 9),
                     returnFlag = returnFlag,
+                    // §4.2.3: L_LINESTATUS is "O" if L_SHIPDATE > CURRENTDATE, "F" otherwise.
                     lineStatus = if (shipDate > currentDate) "O" else "F",
                     shipDate = shipDate,
                     commitDate = commitDate,
@@ -330,7 +338,9 @@ object TpchGenerator {
                     comment = randomVString(lineitemRandom, 10, 43),
                 )
             }
+            // §4.2.3: O_TOTALPRICE = sum (L_EXTENDEDPRICE * (1+L_TAX) * (1-L_DISCOUNT)), rounded half-up to cents (3xi.3-D6).
             val totalPrice = roundToCents(lines.sumOf { TpchDecimal.chargeS6(it.extendedPrice, it.discount, it.tax) })
+            // §4.2.3: O_ORDERSTATUS is "F" if all lineitems are "F", "O" if all are "O", "P" otherwise.
             val status = when {
                 lines.all { it.lineStatus == "F" } -> "F"
                 lines.all { it.lineStatus == "O" } -> "O"
