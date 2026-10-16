@@ -21,6 +21,7 @@ import civictech.cell.host.JournalRecords
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.RecoveryIncomplete
+import civictech.cell.host.SimulationController
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
@@ -83,10 +84,11 @@ class TopologyRecoveryTest {
         val deadLetters: MutableList<DeadLetter>,
     )
 
-    private fun runtime(journal: Journal): Runtime {
+    private fun runtime(journal: Journal, controller: SimulationController? = null): Runtime {
         val registry = LocationRegistry()
         lateinit var context: ApplyContext
         val host = ManagedHost(
+            scheduler = controller?.scheduler(),
             registry = registry,
             journalFor = { ref -> context.journalFor(ref) },
         )
@@ -183,6 +185,79 @@ class TopologyRecoveryTest {
         val compacted = runtime(journal)
         compacted.context.recover(journal).awaitApplied(30_000)
         assertRecovered(compacted, setOf("apple", "banana"))
+    }
+
+    @Test
+    fun `recovery does not deliver pre-despawn input to a same-ref replacement`() {
+        val journal = InMemoryJournal()
+        val beforeController = SimulationController()
+        val before = runtime(journal, beforeController)
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    "source",
+                    RecordingSetFactory,
+                    IdentityBinding.Exact(sourceRef),
+                    journalId = "j",
+                ),
+            ),
+        ).apply(before.context)
+
+        sourceOps(before).add("incarnation-a")
+        GraphSpec(listOf(DespawnStep("source"))).apply(before.context)
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    "source",
+                    RecordingSetFactory,
+                    IdentityBinding.Exact(sourceRef),
+                    journalId = "j",
+                ),
+            ),
+        ).apply(before.context)
+        sourceOps(before).add("incarnation-b")
+        journal.replay().count { JournalRecords.decode(it) is DecodedJournalRecord.Frame } shouldBe 2
+
+        val recoveredController = SimulationController()
+        val recovered = runtime(journal, recoveredController)
+        val recovery = recovered.context.recover(journal)
+
+        recovery.replayedFrames shouldBe 1
+        source(recovered).membership().shouldBeEmpty()
+        recovery.isApplied shouldBe false
+
+        recoveredController.runToIdle()
+
+        recovery.isApplied shouldBe true
+        source(recovered).membership() shouldBe setOf("incarnation-b")
+        recovered.deadLetters.shouldBeEmpty()
+    }
+
+    @Test
+    fun `recovery still dead letters pre-despawn input when the ref is not respawned`() {
+        val journal = InMemoryJournal()
+        val before = runtime(journal, SimulationController())
+        GraphSpec(
+            listOf(
+                SpawnStep(
+                    "source",
+                    RecordingSetFactory,
+                    IdentityBinding.Exact(sourceRef),
+                    journalId = "j",
+                ),
+            ),
+        ).apply(before.context)
+        sourceOps(before).add("incarnation-a")
+        GraphSpec(listOf(DespawnStep("source"))).apply(before.context)
+
+        val recoveredController = SimulationController()
+        val recovered = runtime(journal, recoveredController)
+        val recovery = recovered.context.recover(journal)
+        recoveredController.runToIdle()
+
+        recovered.deadLetters.map { it.description } shouldBe listOf("unknown cell $sourceRef")
+        recovery.replayedFrames shouldBe 1
+        recovered.host.portAt(sourceRef, "inlet") shouldBe null
     }
 
     @Test
