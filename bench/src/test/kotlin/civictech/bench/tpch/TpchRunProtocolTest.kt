@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -60,6 +61,38 @@ class TpchRunProtocolTest {
             "Q06 and Q09 must report different RF1 query-maintenance work: $evidence",
         )
         println("SIM_WORK_EVIDENCE=$evidence")
+    }
+
+    @Test
+    fun `summarise keeps each SIM work unit and refuses to fold mixed units`() {
+        val verified = assertInstanceOf(
+            TpchRecord.Verified::class.java,
+            TpchRun.run(
+                query = TpchQuery.Q06,
+                seed = 7L,
+                plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 2),
+                drive = Drive.SIM,
+                env = tpchTestEnvironment(),
+            ),
+        )
+
+        val summary = assertInstanceOf(
+            TpchRecord.Verified::class.java,
+            summarise(listOf(verified, verified)),
+        )
+        assertEquals(WorkUnit.SCHEDULER_TASKS, (summary.load as Figure.Work).unit)
+        assertTrue((summary.rf1 + summary.rf2).all {
+            (it.figure as Figure.Work).unit == WorkUnit.COLLECTOR_APPLIED_DELTA_ELEMENTS
+        })
+
+        val relabelled = verified.copy(
+            rf1 = verified.rf1.map {
+                it.copy(figure = (it.figure as Figure.Work).copy(unit = WorkUnit.SCHEDULER_TASKS))
+            },
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            summarise(listOf(verified, relabelled))
+        }
     }
 
     @Test
