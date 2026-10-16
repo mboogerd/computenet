@@ -338,6 +338,10 @@ data class RowLabel(
                 params = listOf("dataset", "loadMode"),
                 includeMethod = true,
             ),
+            "TpchBenchmark" to RowLabel(
+                params = listOf("query", "sf", "loadMode"),
+                includeMethod = true,
+            ),
             // Both numeric axes stay explicit in the G-43 findings table.
             "ReBaselineFanOutBenchmark" to RowLabel(
                 params = listOf("cardinality", "fanOut"),
