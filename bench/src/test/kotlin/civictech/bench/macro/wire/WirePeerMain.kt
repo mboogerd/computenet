@@ -106,12 +106,15 @@ private class WirePeer(private val launch: WirePeerProtocol.Launch) : AutoClosea
         protocolLine(WirePeerProtocol.ready(index))
 
         while (true) {
-            val command = readlnOrNull() ?: return
+            val command = readlnOrNull() ?: run { checkHealthy(); return }
             checkHealthy()
             when (command.trim()) {
                 WirePeerProtocol.GO -> beginAndDrive()
                 WirePeerProtocol.READ -> protocolLine(WirePeerProtocol.counts(index, awaitCounts()))
-                WirePeerProtocol.STOP -> return
+                WirePeerProtocol.STOP -> {
+                    checkHealthy()
+                    return
+                }
                 else -> failPeer("unknown command '$command'")
             }
         }
