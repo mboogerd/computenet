@@ -498,14 +498,18 @@ class WireCrossCheckTest {
         const val SETTLE_ROUNDS: Int = 10
 
         /**
-         * Bootstrap threshold for the first run. Replace with the observed loopback/socket
-         * frame pairs and their derived fixed tolerance before this evidence is committed.
+         * First observed loopback/socket frame pairs: h=2 was 21,458/21,458 and h=3
+         * was 26,583/26,583, relative error 0 at both points (2026-10-16). Both paths
+         * count each encoded bridge frame exactly once, so exact agreement is the
+         * contract and the tolerance is fixed at 0 rather than widened to absorb drift.
          */
         const val FRAME_TOLERANCE: Double = 0.0
 
         /**
-         * Bootstrap threshold for the first run. Replace with the observed loopback/socket
-         * byte pairs and their derived fixed tolerance before this evidence is committed.
+         * First observed loopback/socket byte pairs: h=2 was 10,789,569/10,789,569 and
+         * h=3 was 13,605,747/13,605,747, relative error 0 at both points (2026-10-16).
+         * Each byte tap sees the same pre-WebSocket `WireCodec` payload as the loopback
+         * counter, so exact agreement is required and the tolerance is fixed at 0.
          */
         const val BYTE_TOLERANCE: Double = 0.0
 
