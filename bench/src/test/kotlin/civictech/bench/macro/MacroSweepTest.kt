@@ -301,9 +301,10 @@ class MacroSweepTest {
             appendLine()
             appendLine(
                 "This structural export has an empty calibration list. `CostQuery.coLocatedEdge` " +
-                    "and `CostQuery.crossHostEdge` answer `NotMeasured` in this sweep's export only " +
+                    "and `CostQuery.crossHostEdge` answer `NotMeasured` in this sweep's export " +
                     "because its calibration list is empty; `CalibrationExport.merge` adds the " +
-                    "calibration later. SIM " +
+                    "calibration later. `CostQuery.crossHostEdge` still answers `NotMeasured` at " +
+                    "host count 1 after that merge, because no host boundary exists there. SIM " +
                     "`PROPAGATION` points carry a measured local-delivery count in `counts.messages`; " +
                     "`CostQuery.cellResidency` becomes answerable after that calibration merge.",
             )
