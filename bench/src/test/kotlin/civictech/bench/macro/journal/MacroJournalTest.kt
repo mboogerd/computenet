@@ -414,7 +414,7 @@ class MacroJournalTest {
             appendLine("### Retained-bytes fraction")
             appendLine()
             okMeasurements.forEach { measurement ->
-                val fraction = measurement.retainedBytes!!.toDouble() / measurement.maxHeapBytes
+                val fraction = reportedRetainedBytes(measurement).toDouble() / measurement.maxHeapBytes
                 appendLine(
                     "- ${coordinateLabel(measurement.outcome.at)} retainedBytes≈" +
                         "${reportedRetainedBytes(measurement)} maxHeap=${measurement.maxHeapBytes} " +
@@ -424,7 +424,7 @@ class MacroJournalTest {
             if (largestOk == null) {
                 appendLine("- arm (ii): not evaluated — no Ok SIM point")
             } else {
-                val fraction = largestOk.retainedBytes!!.toDouble() / largestOk.maxHeapBytes
+                val fraction = reportedRetainedBytes(largestOk).toDouble() / largestOk.maxHeapBytes
                 appendLine(
                     "- arm (ii): largest Ok point in the declared grid is " +
                         "${coordinateLabel(largestOk.outcome.at)}; fraction=" +
@@ -491,7 +491,7 @@ class MacroJournalTest {
             "bytesPerRecord" to measurement.bytesPerRecord!!,
             "records" to measurement.records!!.toDouble(),
             "journalRecords" to outcome.counts.journalRecords.toDouble(),
-            "retainedBytes (rounded to 4KiB)" to reportedRetainedBytes(measurement).toDouble(),
+            "retainedBytes (rounded to 1MiB)" to reportedRetainedBytes(measurement).toDouble(),
             "checkpointBytes" to measurement.checkpointBytes!!.toDouble(),
             "recordsAfterCheckpoint" to measurement.recordsAfterCheckpoint!!.toDouble(),
         )
@@ -499,7 +499,7 @@ class MacroJournalTest {
 
     private fun unit(metric: String): String = when (metric) {
         "fileBytes", "checkpointBytes" -> "bytes/point"
-        "retainedBytes (rounded to 4KiB)" -> "bytes/point (rounded to 4KiB)"
+        "retainedBytes (rounded to 1MiB)" -> "bytes/point (rounded to 1MiB)"
         "bytesPerRecord" -> "bytes/record"
         "records", "recordsAfterCheckpoint" -> "records/point"
         "journalRecords" -> "journalRecords/point"
@@ -589,7 +589,7 @@ class MacroJournalTest {
     }
 
     companion object {
-        private const val RETAINED_BYTES_GRANULARITY = 4_096L
+        private const val RETAINED_BYTES_GRANULARITY = 1_048_576L
         private const val HARNESS_SHA_PROPERTY = "civictech.bench.harnessSha"
         private const val DATE_PROPERTY = "civictech.bench.date"
         private const val REPO_ROOT_PROPERTY = "computenet.repo.root"
