@@ -150,9 +150,17 @@ sealed interface Incrementality {
 sealed interface GrowthNote {
     data object Flat : GrowthNote
 
+    /** [structure] met the growth rule declared by the accounting path that produced this note. */
     data class Growing(val structure: String) : GrowthNote {
         init {
             require(structure.isNotBlank()) { "growth structure must not be blank" }
+        }
+    }
+
+    /** The cardinality-balanced stream did not return [outlet] to its post-LOAD population. */
+    data class NotOutletBalanced(val outlet: String) : GrowthNote {
+        init {
+            require(outlet.isNotBlank()) { "unbalanced outlet must not be blank" }
         }
     }
 }
