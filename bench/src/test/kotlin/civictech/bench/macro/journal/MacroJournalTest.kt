@@ -169,7 +169,7 @@ class MacroJournalTest {
                 if (measurement.declaredOmission) {
                     exclusion.copy(
                         kind = "Omitted",
-                        reason = requireNotNull(JournalPlan.omissionFor(exclusion.at)).reason,
+                        reason = requireNotNull(JournalPlan.inProcessDeferralFor(exclusion.at)).reason,
                     )
                 } else {
                     exclusion
@@ -615,7 +615,7 @@ class MacroJournalTest {
 /**
  * Runs the three D19 C=1e6 points in isolated JVMs with a stated heap. The
  * [JvmPeer] child is only a launcher: the measured grandchild receives the
- * explicit [FORKED_XMX] option, and the launcher's shutdown hook reaps it if
+ * explicit [JournalPlan.FORKED_XMX] option, and the launcher's shutdown hook reaps it if
  * the per-point wait expires.
  */
 @Tag("bench")
@@ -635,7 +635,7 @@ class ForkedMillionJournalTest {
     fun `records the probe-owned stage from an explicitly sized fork`(batchSize: Int) {
         val peer = JvmPeer.launch(
             LAUNCHER_MAIN,
-            FORKED_XMX,
+            JournalPlan.FORKED_XMX,
             batchSize.toString(),
             File(requireNotNull(temporaryRoot), "batch-$batchSize").absolutePath,
         )
@@ -653,7 +653,18 @@ class ForkedMillionJournalTest {
             val result = peer.output().lineSequence().filter { it.startsWith(RESULT_PREFIX) }.toList()
             assertEquals(1, result.size, peer.report())
             assertEquals(0, peer.process.exitValue(), peer.report())
+            val expected = JournalPlan.forkedObservations().single { it.batchSize == batchSize }
             assertTrue(result.single().contains("batch=$batchSize|"), result.single())
+            assertTrue(result.single().contains("kind=${expected.kind}|"), result.single())
+            assertTrue(result.single().contains("stage=${expected.stage}|"), result.single())
+            assertTrue(
+                result.single().contains("replayCompleted=${expected.replayCompleted}|"),
+                result.single(),
+            )
+            assertTrue(
+                result.single().contains("recoverCompleted=${expected.recoverCompleted}|"),
+                result.single(),
+            )
             println(peer.output())
         } finally {
             JvmPeer.destroy(peer)
@@ -661,7 +672,6 @@ class ForkedMillionJournalTest {
     }
 
     private companion object {
-        const val FORKED_XMX = "-Xmx8g"
         const val FORK_TIMEOUT_MINUTES = 30L
         const val LAUNCHER_MAIN =
             "civictech.bench.macro.journal.JournalMillionForkLauncherMain"
@@ -702,7 +712,7 @@ object JournalMillionForkMain {
     fun main(args: Array<String>) {
         require(args.size == 2) { "expected: <batchSize> <journalDir>" }
         val batchSize = args[0].toInt()
-        val at = JournalPlan.coordinate(JournalPlan.SIM_OMITTED_CARDINALITY, batchSize)
+        val at = JournalPlan.coordinate(JournalPlan.FORKED_CARDINALITY, batchSize)
         val inputArguments = ManagementFactory.getRuntimeMXBean().inputArguments.joinToString(" ")
         println(
             "$ENV_PREFIX os=${System.getProperty("os.name")}|arch=${System.getProperty("os.arch")}|" +

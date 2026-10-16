@@ -154,7 +154,7 @@ object JournalProbe {
 
         val maxHeapBytes = Runtime.getRuntime().maxMemory()
         if (honorDeclaredOmission) {
-            JournalPlan.omissionFor(at)?.let { omission ->
+            JournalPlan.inProcessDeferralFor(at)?.let { omission ->
                 return omitted(at, omission, maxHeapBytes)
             }
         }
