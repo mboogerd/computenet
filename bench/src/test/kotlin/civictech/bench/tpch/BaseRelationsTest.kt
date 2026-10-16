@@ -44,6 +44,7 @@ class BaseRelationsTest {
             assertTrue((rf2Figure as Figure.Work).steps > 0, "SIM RF2 work was $rf2Figure")
             assertEquals(base, relations.logicalTables.snapshot())
             assertEquals(LogicalTables(base).counts(), relations.membership())
+            assertRowsMatch(relations)
         } finally {
             rig.close()
         }
@@ -59,6 +60,22 @@ class BaseRelationsTest {
             relations.load(base)
             assertInstanceOf(Figure.Duration::class.java, rig.completePhase("load"))
             assertEquals(LogicalTables(base).counts(), relations.membership())
+
+            val rf1 = RefreshStream.generate(
+                RefreshPlan(seed = 9L, sf = 0.001, batches = listOf(RefreshKind.RF1)),
+                base,
+            ).single() as RefreshBatch.Rf1
+            rig.beginPhase()
+            relations.apply(rf1)
+            assertInstanceOf(Figure.Duration::class.java, rig.completePhase("RF1"))
+            assertEquals(relations.logicalTables.counts(), relations.membership())
+            assertRowsMatch(relations)
+
+            rig.beginPhase()
+            relations.apply(RefreshBatch.Rf2(rf1.orders.map { it.orderKey }.sorted()))
+            assertInstanceOf(Figure.Duration::class.java, rig.completePhase("RF2"))
+            assertEquals(LogicalTables(base).counts(), relations.membership())
+            assertRowsMatch(relations)
         } finally {
             rig.close()
         }
@@ -98,5 +115,11 @@ class BaseRelationsTest {
         } finally {
             rig.close()
         }
+    }
+
+    /** Row-level, not only count-level, equality for the two refreshed relations. */
+    private fun assertRowsMatch(relations: BaseRelations) {
+        assertEquals(relations.logicalTables.orders.toSet(), relations.orders.membership())
+        assertEquals(relations.logicalTables.lineitem.toSet(), relations.lineitem.membership())
     }
 }
