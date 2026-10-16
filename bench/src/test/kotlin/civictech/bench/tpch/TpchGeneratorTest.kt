@@ -26,9 +26,40 @@ class TpchGeneratorTest {
 
         assertEquals(tables.part.map { it.partKey }, tables.part.map { it.partKey }.sorted())
         assertEquals(tables.orders.map { it.orderKey }, tables.orders.map { it.orderKey }.sorted())
+        val partSuppPairs = tables.partSupp.map { it.partKey to it.suppKey }
+        assertEquals(partSuppPairs.size, partSuppPairs.toSet().size)
         assertEquals(
             tables.lineitem.map { it.orderKey to it.lineNumber },
             tables.lineitem.map { it.orderKey to it.lineNumber }.sortedWith(compareBy({ it.first }, { it.second })),
+        )
+    }
+
+    @Test
+    fun `small scale supplier collisions are resolved and measurement scale keeps the printed formula`() {
+        val smallScale = TpchGenerator.generate(seed = 7L, sf = 0.001)
+        val smallScalePairs = smallScale.partSupp.map { it.partKey to it.suppKey }
+        assertEquals(smallScalePairs.size, smallScalePairs.toSet().size)
+        assertTrue(
+            TpchGenerator.deviations.any { it.contains("supplier-key collisions") },
+            TpchGenerator.deviations.toString(),
+        )
+
+        val measurementScale = TpchGenerator.generate(seed = 7L, sf = 0.01)
+        val expectedFormulaPairs = measurementScale.part.flatMap { part ->
+            (0..3).map { supplierIndex ->
+                part.partKey to formulaSupplierFor(part.partKey, supplierIndex, 100L)
+            }
+        }.sortedWith(compareBy({ it.first }, { it.second }))
+        assertEquals(
+            expectedFormulaPairs,
+            measurementScale.partSupp.map { it.partKey to it.suppKey },
+        )
+        assertTrue(
+            measurementScale.lineitem.all { line ->
+                line.suppKey in (0..3).map { supplierIndex ->
+                    formulaSupplierFor(line.partKey, supplierIndex, 100L)
+                }
+            },
         )
     }
 
@@ -50,8 +81,8 @@ class TpchGeneratorTest {
             val rows = tables.partSupp.filter { it.partKey == part.partKey }
             assertEquals(4, rows.size)
             assertEquals(
-                (0..3).map { supplierFor(part.partKey, it, scale) }.toSet(),
-                rows.map { it.suppKey }.toSet(),
+                resolvedSupplierKeys(part.partKey, scale),
+                rows.map { it.suppKey }.sorted(),
             )
             rows.forEach { row ->
                 assertTrue(row.availQty in 1..9_999)
@@ -94,7 +125,7 @@ class TpchGeneratorTest {
                 assertEquals("N", line.returnFlag)
             }
             assertTrue(
-                line.suppKey in (0..3).map { supplierFor(line.partKey, it, scale) },
+                line.suppKey in resolvedSupplierKeys(line.partKey, scale),
             )
             // §4.2.2.13 list Instructions, verbatim from the Revision 3.0.1 PDF.
             assertTrue(
@@ -122,9 +153,20 @@ class TpchGeneratorTest {
         assertTrue(failure.message!!.contains("allowOverflowRisk=true"))
     }
 
-    private fun supplierFor(partKey: Long, supplierIndex: Int, scale: Long): Long {
+    private fun formulaSupplierFor(partKey: Long, supplierIndex: Int, scale: Long): Long {
         val stride = scale / 4L + (partKey - 1L) / scale
         return (partKey + supplierIndex * stride) % scale + 1L
+    }
+
+    private fun resolvedSupplierKeys(partKey: Long, scale: Long): List<Long> {
+        val used = mutableSetOf<Long>()
+        return (0..3).map { supplierIndex ->
+            var candidate = formulaSupplierFor(partKey, supplierIndex, scale)
+            while (!used.add(candidate)) {
+                candidate = candidate % scale + 1L
+            }
+            candidate
+        }.sorted()
     }
 
     private fun roundToCents(scale6Value: Long): Long = BigDecimal.valueOf(scale6Value)
