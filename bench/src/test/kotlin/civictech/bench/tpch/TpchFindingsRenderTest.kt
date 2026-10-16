@@ -1,6 +1,8 @@
 package civictech.bench.tpch
 
 import civictech.bench.Drive
+import civictech.bench.RunEnvironment
+import civictech.bench.micro.FootprintReport
 import civictech.bench.micro.HeapProbe
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -13,12 +15,17 @@ class TpchFindingsRenderTest {
     @Test
     @Tag("bench")
     fun `renders a five-seed SIM sweep with coverage and BS-6 evidence`() {
-        val env = tpchTestEnvironment().copy(
+        val harnessSha = requireNotNull(System.getProperty("civictech.bench.harnessSha")) {
+            "set -Dcivictech.bench.harnessSha=<git rev-parse HEAD>"
+        }.takeIf { it.isNotBlank() }
+            ?: error("civictech.bench.harnessSha must not be blank")
+        val env = RunEnvironment.forRun(
+            measuringJvm = FootprintReport.inProcessMeasuringJvm(),
             jmhMode = "TPC-H SIM work steps per RF1/RF2 batch (JUnit @Tag(bench) probe)",
+            forkCount = 1,
+            warmupIterations = 1,
             measurementIterations = SEEDS.count(),
-            harnessCommitSha = System.getProperty("civictech.bench.harnessSha")
-                ?.takeIf { it.isNotBlank() }
-                ?: tpchTestEnvironment().harnessCommitSha,
+            harnessCommitSha = harnessSha,
         )
         val records = TpchQuery.entries
             .filter { it.tier == TpchTier.HAND_1 }
@@ -44,8 +51,10 @@ class TpchFindingsRenderTest {
                 ?: "2026-10-16",
             bs6Verdict = heapFinding.verdict,
             bs6Series =
-                "slope=${heapFinding.slopeBytesPerRefresh} B/refresh vs " +
-                    "spread=${heapFinding.firstWindowSpreadBytes}",
+                "balanced Q3 SF 0.001 stream, live rows flat; least-squares slope " +
+                    "${heapFinding.slopeBytesPerRefresh} B/refresh projected over the " +
+                    "1000-20000-refresh fit window vs 2x the first-window spread of " +
+                    "${heapFinding.firstWindowSpreadBytes} B (StateAccounting.heapGrowthFinding rule)",
         )
         println(rendered)
 
