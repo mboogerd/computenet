@@ -68,23 +68,23 @@ internal data class ValidationScenario(
  * The first seed in 1..256 at the smallest tested refresh size (2, 4, 8, ...)
  * whose 20-batch stream changes the reference after both RF1 and RF2. Two orders
  * is the SF 0.001 default. Q08 also keeps a non-zero share numerator, so it needs
- * seed 72 and eight orders; Q19 has no two-order match and first matches at seed
- * 220 with four. Q16 reads neither ORDERS nor LINEITEM and retains the old stream.
+ * seed 176 and eight orders; Q19 has no match below sixteen orders and first matches at
+ * seed 135 with sixteen. Q16 reads neither ORDERS nor LINEITEM and retains the old stream.
  */
 internal fun validationScenario(query: TpchQuery): ValidationScenario = when (query) {
     TpchQuery.Q01 -> ValidationScenario(seed = 1L, ordersPerRefresh = 2)
-    TpchQuery.Q03 -> ValidationScenario(seed = 4L, ordersPerRefresh = 2)
-    TpchQuery.Q04 -> ValidationScenario(seed = 2L, ordersPerRefresh = 2)
-    TpchQuery.Q05 -> ValidationScenario(seed = 1L, ordersPerRefresh = 2)
-    TpchQuery.Q06 -> ValidationScenario(seed = 2L, ordersPerRefresh = 2)
+    TpchQuery.Q03 -> ValidationScenario(seed = 28L, ordersPerRefresh = 2)
+    TpchQuery.Q04 -> ValidationScenario(seed = 1L, ordersPerRefresh = 2)
+    TpchQuery.Q05 -> ValidationScenario(seed = 10L, ordersPerRefresh = 2)
+    TpchQuery.Q06 -> ValidationScenario(seed = 1L, ordersPerRefresh = 2)
     TpchQuery.Q07 -> ValidationScenario(seed = 2L, ordersPerRefresh = 2)
-    TpchQuery.Q08 -> ValidationScenario(seed = 72L, ordersPerRefresh = 8)
+    TpchQuery.Q08 -> ValidationScenario(seed = 176L, ordersPerRefresh = 8)
     TpchQuery.Q09 -> ValidationScenario(seed = 1L, ordersPerRefresh = 2)
-    TpchQuery.Q10 -> ValidationScenario(seed = 3L, ordersPerRefresh = 2)
-    TpchQuery.Q12 -> ValidationScenario(seed = 4L, ordersPerRefresh = 2)
-    TpchQuery.Q14 -> ValidationScenario(seed = 6L, ordersPerRefresh = 2)
+    TpchQuery.Q10 -> ValidationScenario(seed = 2L, ordersPerRefresh = 2)
+    TpchQuery.Q12 -> ValidationScenario(seed = 1L, ordersPerRefresh = 2)
+    TpchQuery.Q14 -> ValidationScenario(seed = 1L, ordersPerRefresh = 2)
     TpchQuery.Q16 -> ValidationScenario(seed = 7L, ordersPerRefresh = 2)
-    TpchQuery.Q19 -> ValidationScenario(seed = 220L, ordersPerRefresh = 4)
+    TpchQuery.Q19 -> ValidationScenario(seed = 135L, ordersPerRefresh = 16)
     else -> error("${query.name} has no hand-route validation scenario")
 }
 

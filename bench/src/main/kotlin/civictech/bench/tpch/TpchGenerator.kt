@@ -93,6 +93,7 @@ object TpchGenerator {
     private val startDate = LocalDate.parse(START_DATE).toEpochDay().toInt()
     private val currentDate = LocalDate.parse(CURRENT_DATE).toEpochDay().toInt()
     private val endDate = LocalDate.parse(END_DATE).toEpochDay().toInt()
+    private val maxOrderDate = endDate - 151
 
     /**
      * Generate one population. Cardinalities are `ceil(SF × base)`, with a minimum
@@ -112,7 +113,7 @@ object TpchGenerator {
         val supplierCount = scaledCardinality(sf, 10_000)
         val partCount = scaledCardinality(sf, 200_000)
         val customerCount = scaledCardinality(sf, 150_000)
-        val clerkCount = scaledCardinality(sf, 1_000)
+        val clerkCount = clerkCount(sf)
         val orderCount = Math.multiplyExact(customerCount, 10)
         val supplierScale = supplierCount.toLong()
         val specialSupplierCount = scaledCardinality(sf, 5)
@@ -293,13 +294,10 @@ object TpchGenerator {
     ): Pair<List<Orders>, List<Lineitem>> {
         val orders = ArrayList<Orders>(orderCount)
         val lineitems = ArrayList<Lineitem>()
-        // §4.2.3: O_ORDERDATE uniformly distributed between STARTDATE and (ENDDATE - 151 days).
-        val maxOrderDate = endDate - 151
-
         (0 until orderCount).forEach { index ->
             val orderKey = sparseOrderKey(index)
             val custKey = randomCustomerKey(ordersRandom, customerCount)
-            val orderDate = ordersRandom.nextInt(startDate, maxOrderDate + 1)
+            val orderDate = randomOrderDate(ordersRandom)
             // §4.2.3: a random number of rows within [1 .. 7] in the LINEITEM table.
             val lineCount = lineitemRandom.nextInt(1, 8)
             val lines = (1..lineCount).map { lineNumber ->
@@ -354,7 +352,7 @@ object TpchGenerator {
                 totalPrice = totalPrice,
                 orderDate = orderDate,
                 orderPriority = priorities[ordersRandom.nextInt(priorities.size)],
-                clerk = "Clerk#${ordersRandom.nextLong(1L, clerkCount.toLong() + 1L).toString().padStart(9, '0')}",
+                clerk = randomClerk(ordersRandom, clerkCount),
                 shipPriority = 0,
                 comment = randomVString(ordersRandom, 19, 78),
             )
@@ -368,13 +366,24 @@ object TpchGenerator {
         ((index / 8) * 32L) + (index % 8) + 1L
 
     /** The §4.2.3 customer rule rejects every third customer key. */
-    private fun randomCustomerKey(random: SplittableRandom, customerCount: Int): Long {
+    internal fun randomCustomerKey(random: SplittableRandom, customerCount: Int): Long {
         var key: Long
         do {
             key = random.nextLong(1L, customerCount.toLong() + 1L)
         } while (key % 3L == 0L)
         return key
     }
+
+    /** The §4.2.3 order-date range shared by base and RF1 generation. */
+    internal fun randomOrderDate(random: SplittableRandom): Int =
+        random.nextInt(startDate, maxOrderDate + 1)
+
+    /** The §4.2.3 clerk cardinality is scaled with the population. */
+    internal fun clerkCount(sf: Double): Int = scaledCardinality(sf, 1_000)
+
+    /** Draw an O_CLERK value from the SF-scaled range used by the base generator. */
+    internal fun randomClerk(random: SplittableRandom, clerkCount: Int): String =
+        "Clerk#${random.nextLong(1L, clerkCount.toLong() + 1L).toString().padStart(9, '0')}"
 
     /** The §4.2.3 supplier mapping shared by PARTSUPP and LINEITEM. */
     private fun supplierFor(partKey: Long, supplierIndex: Int, supplierScale: Long): Long {

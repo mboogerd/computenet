@@ -7623,3 +7623,81 @@ SIM counts, file sizes, retained bytes and the recovery check: see the "journal 
 - uptime after: `15:52  up 9 days, 20:23, 2 users, load averages: 6.61 9.25 9.62`
 - Retained run artifacts (not durable in-repo): `~/computenet-runs/computenet-9f7x5.4/journal-real.{csv,log}`
 - Scope: arm (i) is not evaluated at C=1e6 (9f7x5-D19) and REAL C=1e6 is omitted (D14/D19); the observed 1e6 outcome belongs to computenet-9f7x5.5, which amends this entry to FIRES if replay/recover runs out of memory there.
+
+## 2026-10-16 — BB-TPCH — incremental TPC-H hand-assembly coverage
+Harness: 0f5375db0f74eec220a19b62bcd46809aa083a28 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=TPC-H SIM collector-applied delta elements per RF1/RF2 batch (JUnit @Tag(bench) probe) forks=1 warmup=1 iters=5 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| Q01 RF1 | 122.2 ± 36.0 applied delta elements/batch | |
+| Q01 RF2 | 73.6 ± 71.0 applied delta elements/batch | |
+| Q03 RF1 | 6.0 ± 8.0 applied delta elements/batch | |
+| Q03 RF2 | 4.0 ± 3.0 applied delta elements/batch | |
+| Q04 RF1 | 6.6 ± 4.0 applied delta elements/batch | |
+| Q04 RF2 | 3.8 ± 2.0 applied delta elements/batch | |
+| Q05 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q05 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q06 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q06 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q07 RF1 | 4.8 ± 24.0 applied delta elements/batch | |
+| Q07 RF2 | 13.2 ± 24.0 applied delta elements/batch | |
+| Q08 RF1 | 0.2 ± 1.0 applied delta elements/batch | |
+| Q08 RF2 | 1.2 ± 2.0 applied delta elements/batch | |
+| Q09 RF1 | 7.2 ± 18.0 applied delta elements/batch | |
+| Q09 RF2 | 2.4 ± 12.0 applied delta elements/batch | |
+| Q10 RF1 | 2.6 ± 4.0 applied delta elements/batch | |
+| Q10 RF2 | 3.6 ± 9.0 applied delta elements/batch | |
+| Q12 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q12 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q14 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q14 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q16 RF1 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q16 RF2 | 0.0 ± 0.0 applied delta elements/batch | |
+| Q19 RF1 | 10.2 ± 3.0 applied delta elements/batch | |
+| Q19 RF2 | 6.2 ± 6.0 applied delta elements/batch | |
+Trigger: G-42 — FIRES for tag/tombstone accretion under a balanced RF1/RF2 stream: balanced Q3 SF 0.001 stream, live rows flat; least-squares slope 2291.0666429149796 B/refresh projected over the 1000-20000-refresh fit window vs 2x the first-window spread of 1160112 B (StateAccounting.heapGrowthFinding rule)
+
+SIM maintenance-work caveat (all RF1/RF2 rows above): `applied delta elements/batch` sums adds+dels or puts+removals applied by every materialized query-outlet collector between quiescence points; the same logical change counts once at each observed outlet it reaches. It is query-specific propagation volume, not elapsed time, internal operator operations, or deliveries on unmaterialized edges. RF1/RF2 host-scheduler task counts are query-independent ingress instrumentation and are not retained in these rows.
+
+Specification: TPC Benchmark H Standard Specification Revision 3.0.1
+Framing: incremental view maintenance (DBToaster framing); not TPC-H's audited execution model; no QphH@Size, no price/performance, no compliance claim
+Generator deviations:
+- comment columns: v-strings, not §4.2.2.14 pseudo text
+- supplier-key collisions: probe the next unused PARTSUPP/L_SUPPKEY key modulo the supplier scale when four keys fit
+Route: hand (QRY1 route unbuildable in :bench — [BEN1-03]; see finding below)
+
+| Query | Tier | Route | Status | Cause |
+| --- | --- | --- | --- | --- |
+| Q01 | HAND_1 | hand | verified |  |
+| Q02 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q2: scalar MIN per part |
+| Q03 | HAND_1 | hand | verified |  |
+| Q04 | HAND_1 | hand | verified |  |
+| Q05 | HAND_1 | hand | verified |  |
+| Q06 | HAND_1 | hand | verified |  |
+| Q07 | HAND_1 | hand | verified |  |
+| Q08 | HAND_1 | hand | verified |  |
+| Q09 | HAND_1 | hand | verified |  |
+| Q10 | HAND_1 | hand | verified |  |
+| Q11 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q11: scalar SUM threshold |
+| Q12 | HAND_1 | hand | verified |  |
+| Q13 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q13: count of per-customer counts, plus the outer join |
+| Q14 | HAND_1 | hand | verified |  |
+| Q15 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q15: MAX over grouped revenue |
+| Q16 | HAND_1 | hand | verified |  |
+| Q17 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q17: per-part AVG threshold |
+| Q18 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q18: IN over grouped SUM |
+| Q19 | HAND_1 | hand | verified |  |
+| Q20 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q20: grouped SUM threshold inside IN |
+| Q21 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q21: correlated EXISTS/NOT EXISTS with l_suppkey <>, which needs a per-order distinct-supplier count |
+| Q22 | BLOCKED_2 | hand | blocked | blocked — [BB-TPCH-14]: aggregate output as a relation (second-level aggregate / scalar-subquery threshold) — GroupByCell emits MapDelta and no kernel relation operator consumes it (kernel data/op: only JoinCell, CombineLatestCell, LookupJoinCell.fact take a MapDelta inlet); on the QRY1 route the same wall is Lowering.kt's non-root GroupAggregate refusal — Q22: scalar AVG threshold |
+
+Candidate G-item
+| Gap | Missing surface | Trigger | Tier |
+| --- | --- | --- | --- |
+| G-NN | aggregate output as a relation: GroupByCell emits MapDelta and no kernel relation operator (fold, filter, semijoin) consumes it; blocks TPC-H Q2, Q11, Q13, Q15, Q17, Q18, Q20, Q21, Q22; QRY1-side twin: Lowering.kt non-root GroupAggregate refusal | trigger: first consumer needing a second-level aggregate or scalar-subquery threshold | 24 |
+
+Pulled trigger: [BEN1-03] fences `:query`/`:oracle` out of `:bench`, so BB-TPCH cannot be QRY1's acceptance corpus until BEN1 or the module layout decides otherwise; the evidence is `bench/build.gradle.kts` and `ProjectGraphTest`.
+
+[BB-TPCH-30] No comparison against DBToaster or any published IVM figure is drawn: this is SF 0.001 hand coverage with set-semantics-over-keyed-rows, the comment-column deviation, and only 13/22 queries covered.
+
+This entry contradicts the RF1 rows of the 2026-10-16 BB-TPCH entry above (harness `1146a420`); its RF2 rows, coverage table and generator deviations are unchanged. What changed: RF1 order rows now draw O_CUSTKEY, O_ORDERDATE and O_CLERK by the base generator's §4.2.3 rules (computenet-yxlvc), so the RF1 stream differs for every seed.

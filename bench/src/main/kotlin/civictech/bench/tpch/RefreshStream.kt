@@ -63,7 +63,7 @@ object RefreshStream {
                     val lineitems = ArrayList<Lineitem>(plan.ordersPerRefresh * 4)
                     repeat(plan.ordersPerRefresh) {
                         val orderKey = allocator.next()
-                        val orderAndLines = newOrder(orderKey, base, batchRandom)
+                        val orderAndLines = newOrder(orderKey, base, plan.sf, batchRandom)
                         orders += orderAndLines.first
                         lineitems += orderAndLines.second
                         liveKeys += orderKey
@@ -84,17 +84,16 @@ object RefreshStream {
     private fun newOrder(
         orderKey: Long,
         base: TpchTables,
+        sf: Double,
         random: SplittableRandom,
     ): Pair<Orders, List<Lineitem>> {
         require(base.customer.isNotEmpty()) { "RF1 requires at least one customer" }
         require(base.part.isNotEmpty()) { "RF1 requires at least one part" }
         require(base.supplier.isNotEmpty()) { "RF1 requires at least one supplier" }
 
-        val customer = base.customer[random.nextInt(base.customer.size)]
-        val orderDate = base.orders.minOfOrNull { it.orderDate }?.let { min ->
-            val max = base.orders.maxOfOrNull { it.orderDate } ?: min
-            if (max == min) min else random.nextInt(min, max + 1)
-        } ?: LocalDate.parse("1992-01-01").toEpochDay().toInt()
+        val customerKey = TpchGenerator.randomCustomerKey(random, base.customer.size)
+        val customer = base.customer.first { it.custKey == customerKey }
+        val orderDate = TpchGenerator.randomOrderDate(random)
         val lineCount = random.nextInt(1, 8)
         val lines = (1..lineCount).map { lineNumber ->
             val part = base.part[random.nextInt(base.part.size)]
@@ -152,7 +151,7 @@ object RefreshStream {
             orderPriority = listOf("1-URGENT", "2-HIGH", "3-MEDIUM", "4-NOT SPECIFIED", "5-LOW")[
                 random.nextInt(5)
             ],
-            clerk = "Clerk#${random.nextInt(1, 1_001).toString().padStart(9, '0')}",
+            clerk = TpchGenerator.randomClerk(random, TpchGenerator.clerkCount(sf)),
             shipPriority = 0,
             comment = "refresh-${random.nextLong().toULong().toString(16)}",
         ) to lines
