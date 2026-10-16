@@ -2129,14 +2129,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 1000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2152,14 +2152,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 1000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2175,14 +2175,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 1000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2198,14 +2198,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 10000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2221,14 +2221,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 10000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2244,14 +2244,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 10000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2267,14 +2267,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 100000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 100000,
                 "simSteps": 100000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2290,14 +2290,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 100000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 100000,
                 "simSteps": 100000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         },
         {
             "at": {
@@ -2313,14 +2313,14 @@
             },
             "subject": "JOURNAL",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 100000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 100000,
                 "simSteps": 100000
             },
-            "harnessSha": "18d9afc0"
+            "harnessSha": "e27ec3df"
         }
     ],
     "calibration": [
@@ -4507,8 +4507,8 @@
                 "drive": "SIM"
             },
             "subject": "JOURNAL",
-            "kind": "Omitted",
-            "reason": "9f7x5-D19: not attempted in-process: safety under the test executor's heap not established"
+            "kind": "ForkedOk",
+            "reason": "computenet-9f7x5.5: executed separately in a bounded fork at -Xmx8g; the 2 GiB Gradle executor does not repeat that measurement"
         },
         {
             "at": {
@@ -4523,8 +4523,8 @@
                 "drive": "SIM"
             },
             "subject": "JOURNAL",
-            "kind": "Omitted",
-            "reason": "9f7x5-D19: not attempted in-process: safety under the test executor's heap not established"
+            "kind": "ForkedOk",
+            "reason": "computenet-9f7x5.5: executed separately in a bounded fork at -Xmx8g; the 2 GiB Gradle executor does not repeat that measurement"
         },
         {
             "at": {
@@ -4539,8 +4539,8 @@
                 "drive": "SIM"
             },
             "subject": "JOURNAL",
-            "kind": "Omitted",
-            "reason": "9f7x5-D19: not attempted in-process: safety under the test executor's heap not established"
+            "kind": "ForkedOk",
+            "reason": "computenet-9f7x5.5: executed separately in a bounded fork at -Xmx8g; the 2 GiB Gradle executor does not repeat that measurement"
         }
     ]
 }
