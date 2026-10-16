@@ -22,17 +22,17 @@ class TierOneCValidationTest {
         query: TpchQuery,
         drive: Drive,
     ) {
-        val seed = when (query) {
-            TpchQuery.Q07 -> Q7_VALIDATION_SEED
-            TpchQuery.Q08 -> Q8_VALIDATION_SEED
-            else -> 7L
+        val scenario = validationScenario(query)
+        val plan = scenario.plan()
+        if (query != TpchQuery.Q16) {
+            assertReferenceAnswerChangesForBothRefreshKinds(query, plan)
         }
         val comparisons = mutableListOf<Pair<Int, Comparison>>()
         val record = TpchRun.run(
             query = query,
-            seed = seed,
+            seed = scenario.seed,
             sf = 0.001,
-            plan = RefreshPlan.alternating(seed = seed, sf = 0.001, batches = 20),
+            plan = plan,
             drive = drive,
             env = tpchTestEnvironment(),
             hooks = TpchRunHooks(
@@ -53,13 +53,13 @@ class TierOneCValidationTest {
 
     @Test
     fun `Q7 nation pair keeps a row in the selected validation population`() {
-        val seed = Q7_VALIDATION_SEED
+        val seed = validationScenario(TpchQuery.Q07).seed
         assertTrue(q7PairRows(seed) > 0, "seed $seed produced no Q7 nation-pair rows")
     }
 
     @Test
     fun `Q8 share numerator is non-zero in the selected validation population`() {
-        val seed = Q8_VALIDATION_SEED
+        val seed = validationScenario(TpchQuery.Q08).seed
         val view = TpchReference.evaluate(TpchQuery.Q08, TpchGenerator.generate(seed = seed, sf = 0.001))
         assertTrue(view.rows.values.any { it[0] != 0L }, "seed $seed produced no Q8 share_num volume")
     }
@@ -85,14 +85,6 @@ class TierOneCValidationTest {
     }
 
     companion object {
-        // Seed 7 has no FRANCE/GERMANY pair; seed 2 is the first seed in 1..64 that does.
-        private const val Q7_VALIDATION_SEED = 2L
-
-        // Seed 7 has no BRAZIL-supplied volume, so share_num is 0 throughout and its
-        // nation predicate goes unchecked; seed 3 is the only seed in 1..64 whose
-        // loaded population has a non-zero share_num.
-        private const val Q8_VALIDATION_SEED = 3L
-
         @JvmStatic
         fun queriesAndDrives(): Stream<Arguments> = Stream.of(
             TpchQuery.Q07,
