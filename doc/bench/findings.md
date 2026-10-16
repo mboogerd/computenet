@@ -7487,7 +7487,7 @@ Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 - Cardinalities: 1000, 10000, 100000, 1000000
 - Batch sizes: 1, 10, 100
 - Declared SIM combinations: 4 × 3 = 12
-- Executed SIM combinations: 3 × 3 = 9 (12 declared minus 3 D19 omissions)
+- Executed SIM combinations: 3 × 3 = 9 (3 D19 omissions)
 - Nesting: cardinality -> batch size
 - Coordinate: DIAMOND, seed=1, fanOut=4, H=1, replication=false, durability=true, drive=SIM
 - D6: H=1 because G-25's measured unit is one journal file per host; multi-host ingress is not mixed into that file.
