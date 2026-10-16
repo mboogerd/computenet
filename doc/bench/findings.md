@@ -6615,6 +6615,42 @@ This structural export has an empty calibration list. `CostQuery.coLocatedEdge` 
 
 local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.
 
+### 2026-10-16 amendment — exact harness-side local-delivery counts
+
+This amendment supersedes the `Cost-query consequences` and `Candidate G-item`
+paragraphs immediately above. Every one of the 22 admitted SIM `PROPAGATION` points now
+carries a non-null `counts.messages`; the regenerated range is 3,583–5,499,791 local
+deliveries per point. The baseline DIAMOND point (seed 1, n=10,000, b=10, h=3, f=4,
+replication off, durability off) records 36,583, while its h=1 slice records 10,000.
+
+The count is measured without a kernel change. Each benchmark peer wraps only its data
+host's `SimulationController` scheduler in `LocalDeliveryCounter`; the bridge-host
+scheduler stays undecorated because frames and encoded bytes already have their own
+counters. The counter advances when a priority-20 data task starts, inside the measured
+window after graph setup. This is exact for this sweep rather than a `simSteps` proxy:
+the mesh uses `ManagedHost`'s default `dispatchBatch == 1`, so each accepted invocation
+submits one `dispatchOneWhenRecoveryReady` task; the generated shapes are DAGs, so no
+cycle-head barrier shares that priority; and no recovery loop runs in a propagation
+point. Local cell-to-cell fan-out remains synchronous inside that one task, matching the
+one-delivery-plus-scheduler-hop unit measured by
+`MacroCalibrationBenchmark.realLocalDispatch`. A three-input, one-host CHAIN test pins
+the exact total at three and will fail if the kernel's data priority or batching contract
+changes.
+
+`MacroSweepTest` regenerated only the `PROPAGATION` subject through `SubjectMerge`; the
+65 `REBASELINE` entries, nine `JOURNAL` entries, nine calibration constants, ten fitted
+laws and 32 unfitted records were retained. `WireCrossCheckTest` was then rerun for h=2
+and h=3: frame and byte counts agreed exactly at both coordinates, so every h>1
+propagation entry again carries `transportValidated = true` and h=1 remains unmarked.
+
+With the retained calibrations, `CostQuery.coLocatedEdge` and
+`CostQuery.crossHostEdge` now return `Priced` (including provenance and dispersion) at
+the baseline, and `coLocatedEdge` is priced at h=1. The BS-3 boundary remains open in
+the query layer: `crossHostEdge` currently returns the local-only price when h=1 has
+zero frames, rather than `NotMeasured`; the required guard belongs in `CostQuery.kt`,
+outside the file claim of computenet-wl8.3, and is recorded on that item rather than
+hidden by the new count.
+
 ## 2026-10-14 — macro REAL per-unit time calibration
 Harness: c4366b8a · JVM Amazon.com Inc. (Corretto-21.0.5.11.1)/21.0.5 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.7.1
 JMH: mode=Average time forks=3 warmup=5 iters=5 · drive=REAL

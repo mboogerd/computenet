@@ -62,7 +62,8 @@
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -85,7 +86,8 @@
                 "journalRecords": 0,
                 "simSteps": 16500
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -108,7 +110,8 @@
                 "journalRecords": 0,
                 "simSteps": 70000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -131,7 +134,8 @@
                 "journalRecords": 0,
                 "simSteps": 25000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -154,7 +158,8 @@
                 "journalRecords": 0,
                 "simSteps": 120000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -177,7 +182,8 @@
                 "journalRecords": 0,
                 "simSteps": 6166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -200,7 +206,8 @@
                 "journalRecords": 0,
                 "simSteps": 633166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -223,7 +230,8 @@
                 "journalRecords": 0,
                 "simSteps": 6333166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -246,7 +254,8 @@
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -269,7 +278,8 @@
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -315,7 +325,8 @@
                 "journalRecords": 0,
                 "simSteps": 52916
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -338,7 +349,8 @@
                 "journalRecords": 0,
                 "simSteps": 66250
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -361,7 +373,8 @@
                 "journalRecords": 0,
                 "simSteps": 99582
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -384,7 +397,8 @@
                 "journalRecords": 0,
                 "simSteps": 10000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -407,7 +421,8 @@
                 "journalRecords": 0,
                 "simSteps": 170000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -430,7 +445,8 @@
                 "journalRecords": 0,
                 "simSteps": 850000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -453,7 +469,8 @@
                 "journalRecords": 0,
                 "simSteps": 3330000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -476,7 +493,8 @@
                 "journalRecords": 0,
                 "simSteps": 863166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -499,7 +517,8 @@
                 "journalRecords": 36583,
                 "simSteps": 63166
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -522,7 +541,8 @@
                 "journalRecords": 0,
                 "simSteps": 9999582
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -545,7 +565,8 @@
                 "journalRecords": 0,
                 "simSteps": 4550000
             },
-            "harnessSha": "f81eef28"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
