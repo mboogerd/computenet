@@ -42,6 +42,19 @@ class TransportValidationTest {
     }
 
     @Test
+    fun `single-host points are reset rather than inheriting a previous marker`() {
+        val premarked = fixture().let { model ->
+            model.copy(structural = model.structural.map { it.copy(transportValidated = true) })
+        }
+
+        val marked = TransportValidation.mark(premarked, false)
+
+        marked.structural.filter { it.at.hostCount == 1 }.size shouldBe 1
+        marked.structural.filter { it.at.hostCount == 1 }
+            .all { it.transportValidated == null } shouldBe true
+    }
+
+    @Test
     fun `path marking validates and persists only the marked entries`() {
         val file = tempDir.resolve("cost-model.json")
         Files.writeString(file, CostSchema.encode(fixture()))
