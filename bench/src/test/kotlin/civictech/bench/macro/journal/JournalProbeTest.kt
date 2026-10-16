@@ -9,6 +9,7 @@ import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.doubles.shouldBeGreaterThan
+import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
@@ -58,6 +59,24 @@ class JournalProbeTest {
 
         outcome.subject shouldBe CostSubject.JOURNAL
         outcome.cause shouldContain "recovery restored no journal frames"
+    }
+
+    @Test
+    fun `a recovery that replays only part of the journal is Failed with a fold mismatch`() {
+        val at = JournalPlan.coordinate(100, 10)
+
+        val outcome = JournalProbe.run(
+            at = at,
+            journalDir = temporaryRoot.resolve("partial-recovery"),
+            determinismCheck = false,
+            recoveryJournal = { file ->
+                val records = FileJournal(file).replay()
+                InMemoryJournal().apply { records.take(records.size / 2).forEach(::append) }
+            },
+        ).outcome.shouldBeInstanceOf<PointOutcome.Failed>()
+
+        outcome.subject shouldBe CostSubject.JOURNAL
+        outcome.cause shouldContain "recovery fold mismatch: 1 of 1 sinks differ"
     }
 
     @Test
@@ -111,6 +130,8 @@ class JournalProbeTest {
 
             val originalFold = rig.sinkFold()
             originalFold.keys shouldBe rig.generated.sinks.toSet()
+            // A vacuous (empty) fold would make the recovery equality below prove nothing.
+            originalFold.values.sumOf { it.values.sum() } shouldBeGreaterThan 0
             rig.recoverInto(file).use { recovered ->
                 recovered.sinkFold() shouldBe originalFold
             }

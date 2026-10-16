@@ -302,8 +302,8 @@ object JournalProbe {
  * same graph and drive under file-backed and in-memory persistence. Recovery
  * uses the very [FileJournal] instance installed on the fresh host; checkpoint
  * likewise receives the caller's installed instance, preserving D8's identity
- * rule. Fold reads page the materialized live state instead of taking an
- * unbounded snapshot.
+ * rule. Fold reads page the sink's whole bounded state instead of taking an
+ * unbounded snapshot; see [SinkFold].
  */
 class JournalRealRig(
     val at: Coordinate,
@@ -370,13 +370,13 @@ class JournalRealRig(
         requireHealthy()
     }
 
-    /** Read every generated sink's live element fold. */
-    fun sinkFold(): Map<String, Set<Long>> {
+    /** Read every generated sink's state fold. */
+    fun sinkFold(): SinkFold {
         check(graphApplied) { "applyGraph() must run before sinkFold()" }
         requireHealthy()
         return generated.sinks.associateWith { handle ->
             val ref = MeshRefs.ref(handle, 0, 1)
-            liveElements { request ->
+            foldEntries { request ->
                 when (val result = world.host.readState(ref, request).get(30, TimeUnit.SECONDS)) {
                     is StateReadResult.Page -> result.page
                     is StateReadResult.Unavailable -> error(
@@ -419,6 +419,18 @@ class JournalRealRig(
     }
 }
 
+/**
+ * Sink handle -> (sub-state, element) -> entry multiplicity, over every page of
+ * the sink's bounded state (9f7x5-D8 c).
+ *
+ * Every sub-state is kept: the DIAMOND sink is a binary operator whose state is
+ * `left`/`right`/`ledger` entries, so filtering to one sub-state (as the
+ * `"live"` membership read in MeshApplyTest does for a set-like operator)
+ * reads an empty fold on both sides and makes the recovery comparison vacuous.
+ * Tags are dropped; the comparison is of content, not of tag identity.
+ */
+typealias SinkFold = Map<String, Map<Pair<String, Any?>, Int>>
+
 private const val SINK_PAGE_LIMIT = 1_000_000
 
 private fun generatedShape(at: Coordinate): GeneratedShape {
@@ -432,28 +444,28 @@ private fun generatedShape(at: Coordinate): GeneratedShape {
     ).generate()
 }
 
-private fun sinkFold(mesh: BenchMesh, sinks: List<String>): Map<String, Set<Long>> =
+private fun sinkFold(mesh: BenchMesh, sinks: List<String>): SinkFold =
     sinks.associateWith { handle ->
         val cell = mesh.cell(handle)
         check(cell is BoundedStateful) {
             "sink '$handle' is ${cell.javaClass.name}, not BoundedStateful"
         }
-        liveElements(cell::readBounded)
+        foldEntries(cell::readBounded)
     }
 
-private fun liveElements(read: (StateRead) -> StatePage): Set<Long> {
-    val elements = linkedSetOf<Long>()
+private fun foldEntries(read: (StateRead) -> StatePage): Map<Pair<String, Any?>, Int> {
+    val counts = linkedMapOf<Pair<String, Any?>, Int>()
     var request = StateRead(limit = SINK_PAGE_LIMIT, byteBudget = Int.MAX_VALUE)
     while (true) {
         val page = read(request)
-        page.entries
-            .filterIsInstance<TaggedEntry>()
-            .filter { it.subState == "live" }
-            .mapTo(elements) { entry -> entry.element as Long }
+        page.entries.forEach { entry ->
+            val key = if (entry is TaggedEntry) entry.subState to entry.element else entry.javaClass.name to entry
+            counts.merge(key, 1, Int::plus)
+        }
         val next = page.next ?: break
         request = request.copy(cursor = next)
     }
-    return elements
+    return counts
 }
 
 private fun PointOutcome.reSubjected(): PointOutcome = when (this) {
