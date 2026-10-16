@@ -28,15 +28,6 @@ object JournalCalibration {
     const val METHOD_MEMORY_JOURNAL_POINT: String = "realMemoryJournalPoint"
     const val METHOD_REPLAY: String = "realReplay"
     const val METHOD_CHECKPOINT: String = "realCheckpoint"
-    const val METHOD_FILE: String = METHOD_FILE_JOURNAL_POINT
-    const val METHOD_MEMORY: String = METHOD_MEMORY_JOURNAL_POINT
-
-    // Short aliases keep the mapping readable at call sites and make the four CSV names
-    // part of the same reviewed vocabulary as the exported constant names.
-    const val REAL_FILE_JOURNAL_POINT: String = METHOD_FILE_JOURNAL_POINT
-    const val REAL_MEMORY_JOURNAL_POINT: String = METHOD_MEMORY_JOURNAL_POINT
-    const val REAL_REPLAY: String = METHOD_REPLAY
-    const val REAL_CHECKPOINT: String = METHOD_CHECKPOINT
 
     val NAMES: List<String> = listOf(
         JOURNAL_BYTES_PER_RECORD,
