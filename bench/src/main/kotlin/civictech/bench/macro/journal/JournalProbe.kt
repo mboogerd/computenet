@@ -46,8 +46,8 @@ data class JournalMeasurement(
     /** Whether the probe completed replay and the recovery fold check. */
     val replayCompleted: Boolean,
     val recoverCompleted: Boolean,
-    /** True only for an a-priori JournalPlan omission, not an observed outcome. */
-    val declaredOmission: Boolean = false,
+    /** True when the 2 GiB executor defers this coordinate to recorded fork evidence. */
+    val inProcessDeferral: Boolean = false,
     val fileBytes: Long?,
     val secondAttemptFileBytes: Long?,
     val records: Long?,
@@ -61,8 +61,8 @@ data class JournalMeasurement(
     init {
         require(maxHeapBytes > 0) { "maxHeapBytes must be positive" }
         require(stage.isNotBlank()) { "stage must not be blank" }
-        require(!declaredOmission || stage == "omission") {
-            "declared omissions must use the omission stage"
+        require(!inProcessDeferral || stage == "forked-evidence") {
+            "in-process deferrals must use the forked-evidence stage"
         }
         val requiredForOk = listOf(
             fileBytes,
@@ -155,7 +155,7 @@ object JournalProbe {
         val maxHeapBytes = Runtime.getRuntime().maxMemory()
         if (honorDeclaredOmission) {
             JournalPlan.inProcessDeferralFor(at)?.let { omission ->
-                return omitted(at, omission, maxHeapBytes)
+                return deferredToFork(at, omission, maxHeapBytes)
             }
         }
         val generated = generatedShape(at)
@@ -634,7 +634,7 @@ private fun excluded(
         recordsAfterCheckpoint = null,
     )
 
-private fun omitted(
+private fun deferredToFork(
     at: Coordinate,
     omission: JournalPlan.Omission,
     maxHeapBytes: Long,
@@ -645,10 +645,10 @@ private fun omitted(
         reason = omission.reason,
         observedLimit = "",
     ),
-    stage = "omission",
+    stage = "forked-evidence",
     replayCompleted = false,
     recoverCompleted = false,
-    declaredOmission = true,
+    inProcessDeferral = true,
     fileBytes = null,
     secondAttemptFileBytes = null,
     records = null,

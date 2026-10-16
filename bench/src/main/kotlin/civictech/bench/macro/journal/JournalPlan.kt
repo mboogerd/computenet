@@ -46,6 +46,8 @@ object JournalPlan {
         val stage: String,
         val replayCompleted: Boolean,
         val recoverCompleted: Boolean,
+        val retainedBytes: Long,
+        val maxHeapBytes: Long,
     )
 
     /** The D6 coordinate: durable DIAMOND, SIM drive, and exactly one host. */
@@ -76,6 +78,8 @@ object JournalPlan {
             stage = "complete",
             replayCompleted = true,
             recoverCompleted = true,
+            retainedBytes = 216_486_328L,
+            maxHeapBytes = 8_589_934_592L,
         )
     }
 

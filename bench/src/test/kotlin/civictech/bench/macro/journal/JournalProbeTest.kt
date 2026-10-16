@@ -201,7 +201,8 @@ class JournalProbeTest {
         JournalPlan.inProcessPoints().none { it.cardinality == 1_000_000L } shouldBe true
         JournalPlan.forkedObservations().map { it.batchSize } shouldBe JournalPlan.BATCH_SIZES
         JournalPlan.forkedObservations().all {
-            it.kind == "Ok" && it.stage == "complete" && it.replayCompleted && it.recoverCompleted
+            it.kind == "Ok" && it.stage == "complete" && it.replayCompleted && it.recoverCompleted &&
+                it.retainedBytes == 216_486_328L && it.maxHeapBytes == 8_589_934_592L
         } shouldBe true
         JournalPlan.describe() shouldContain "Declared SIM combinations: 4 × 3 = 12"
         JournalPlan.describe() shouldContain "Executed SIM combinations: 4 × 3 = 12"
@@ -218,14 +219,14 @@ class JournalProbeTest {
             determinismCheck = false,
         )
 
-        measured.declaredOmission shouldBe true
-        measured.stage shouldBe "omission"
+        measured.inProcessDeferral shouldBe true
+        measured.stage shouldBe "forked-evidence"
         measured.outcome.shouldBeInstanceOf<PointOutcome.Unschedulable>().reason shouldContain "computenet-9f7x5.5"
         journalDir.exists() shouldBe false
     }
 
     @Test
-    fun `forked probe bypasses the declared omission and reports its own drive stage`() {
+    fun `forked probe bypasses the in-process deferral and reports its own drive stage`() {
         val journalDir = temporaryRoot.resolve("forked-stage")
         val stages = mutableListOf<String>()
 
@@ -237,7 +238,7 @@ class JournalProbeTest {
             stageObserver = stages::add,
         )
 
-        measured.declaredOmission shouldBe false
+        measured.inProcessDeferral shouldBe false
         measured.stage shouldBe "drive"
         measured.outcome.shouldBeInstanceOf<PointOutcome.NonConvergent>()
         stages shouldBe listOf("setup", "drive")

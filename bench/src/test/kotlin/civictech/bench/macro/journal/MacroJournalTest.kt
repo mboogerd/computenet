@@ -166,9 +166,9 @@ class MacroJournalTest {
         val replacement = rawReplacement.copy(
             exclusions = rawReplacement.exclusions.map { exclusion ->
                 val measurement = orderedMeasurements.first { it.outcome.at == exclusion.at }
-                if (measurement.declaredOmission) {
+                if (measurement.inProcessDeferral) {
                     exclusion.copy(
-                        kind = "Omitted",
+                        kind = "ForkedOk",
                         reason = requireNotNull(JournalPlan.inProcessDeferralFor(exclusion.at)).reason,
                     )
                 } else {
@@ -360,12 +360,17 @@ class MacroJournalTest {
             outcome is PointOutcome.Unschedulable &&
                 measurement.stage in setOf("replay", "recover")
         }
-        val replayRecoverCompleted = orderedMeasurements.filter {
-            it.replayCompleted && it.recoverCompleted
+        val replayRecoverCompleted = orderedMeasurements.filter { measurement ->
+            (measurement.replayCompleted && measurement.recoverCompleted) ||
+                (measurement.inProcessDeferral && JournalPlan.forkedObservations().any { observation ->
+                    observation.batchSize == measurement.outcome.at.batchSize &&
+                        observation.replayCompleted && observation.recoverCompleted
+                })
         }
-        val replayRecoverNotEvaluated = orderedMeasurements.filterNot {
-            it.replayCompleted && it.recoverCompleted
-        }
+        val replayRecoverNotEvaluated = orderedMeasurements.filterNot(replayRecoverCompleted::contains)
+        val largestForkedOk = JournalPlan.forkedObservations()
+            .filter { it.kind == "Ok" }
+            .maxByOrNull { it.batchSize }
 
         return buildString {
             appendLine(entry)
@@ -396,7 +401,7 @@ class MacroJournalTest {
                     "- ${coordinateLabel(measurement.outcome.at)} " +
                         "kind=${displayKind(measurement)} " +
                         "stage=${measurement.stage} " +
-                        if (measurement.declaredOmission) {
+                        if (measurement.inProcessDeferral) {
                             "heap=n/a reason=${reason(measurement)}"
                         } else {
                             "maxHeap=${measurement.maxHeapBytes} reason=${reason(measurement)}"
@@ -426,7 +431,16 @@ class MacroJournalTest {
                         "fraction=${fraction.formatFraction()}",
                 )
             }
-            if (largestOk == null) {
+            if (largestForkedOk != null) {
+                val fraction = largestForkedOk.retainedBytes.toDouble() / largestForkedOk.maxHeapBytes
+                appendLine(
+                    "- arm (ii): largest Ok point in the declared grid is " +
+                        "n=${JournalPlan.FORKED_CARDINALITY} b=${largestForkedOk.batchSize}; " +
+                        "fraction=${fraction.formatFraction()} against " +
+                        "${JournalPlan.RETAINED_FRACTION_FIRES} " +
+                        if (fraction >= JournalPlan.RETAINED_FRACTION_FIRES) "— holds" else "— does not hold",
+                )
+            } else if (largestOk == null) {
                 appendLine("- arm (ii): not evaluated — no Ok SIM point")
             } else {
                 val fraction = reportedRetainedBytes(largestOk).toBytes() / largestOk.maxHeapBytes
@@ -515,10 +529,10 @@ class MacroJournalTest {
         "admitted=${measurements.count { it.outcome is PointOutcome.Ok }} " +
             "NonConvergent=${measurements.count { it.outcome is PointOutcome.NonConvergent }} " +
             "NonDeterministic=${measurements.count { it.outcome is PointOutcome.NonDeterministic }} " +
-            "Unschedulable=${measurements.count { !it.declaredOmission && it.outcome is PointOutcome.Unschedulable }} " +
+            "Unschedulable=${measurements.count { !it.inProcessDeferral && it.outcome is PointOutcome.Unschedulable }} " +
             "Failed=${measurements.count { it.outcome is PointOutcome.Failed }} " +
             "Unreportable=${measurements.count { it.outcome is PointOutcome.Unreportable }} " +
-            "Omitted=${measurements.count { it.declaredOmission }}"
+            "ForkedOk=${measurements.count { it.inProcessDeferral }}"
 
     private fun outcomeKind(outcome: PointOutcome): String = when (outcome) {
         is PointOutcome.Ok -> "Ok"
@@ -530,16 +544,16 @@ class MacroJournalTest {
     }
 
     private fun exclusionKind(measurement: JournalMeasurement): String =
-        if (measurement.declaredOmission) "Omitted" else outcomeKind(measurement.outcome)
+        if (measurement.inProcessDeferral) "ForkedOk" else outcomeKind(measurement.outcome)
 
     private fun displayKind(measurement: JournalMeasurement): String =
-        if (measurement.declaredOmission) "Omitted" else outcomeKind(measurement.outcome)
+        if (measurement.inProcessDeferral) "ForkedOk" else outcomeKind(measurement.outcome)
 
     private fun reason(measurement: JournalMeasurement): String = when (val outcome = measurement.outcome) {
         is PointOutcome.Ok -> "admitted"
         is PointOutcome.NonConvergent -> outcome.budget
         is PointOutcome.NonDeterministic -> "structural counts differ"
-        is PointOutcome.Unschedulable -> if (measurement.declaredOmission) {
+        is PointOutcome.Unschedulable -> if (measurement.inProcessDeferral) {
             outcome.reason
         } else {
             "${outcome.reason}; observedLimit=${outcome.observedLimit}"
