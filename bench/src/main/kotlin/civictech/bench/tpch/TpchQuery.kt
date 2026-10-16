@@ -39,7 +39,10 @@ enum class TpchQuery(
     Q20(TpchTier.BLOCKED_2, blockedCause("Q20: grouped SUM threshold inside IN")),
     Q21(
         TpchTier.BLOCKED_2,
-        blockedCause("Q21: correlated EXISTS/NOT EXISTS with l_suppkey <>"),
+        blockedCause(
+            "Q21: correlated EXISTS/NOT EXISTS with l_suppkey <>, " +
+                "which needs a per-order distinct-supplier count",
+        ),
     ),
     Q22(TpchTier.BLOCKED_2, blockedCause("Q22: scalar AVG threshold")),
     ;
