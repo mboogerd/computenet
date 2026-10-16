@@ -1052,11 +1052,13 @@ dir_claim_cases_n = len(dir_claim_cases) + 7
 class _Out:
     def __init__(self, rc, out): self.returncode, self.stdout = rc, out
 _saved_run = nb.subprocess.run
-_vr_cands = [(t("a", "x/A.kt"), False), (t("b", "x/B.kt"), False), (t("r", "x/R.kt"), True)]
+_vr_cands = [(t("a", "x/A.kt"), False), (t("b", "x/B.kt"), False), (t("r", "x/R.kt"), True),
+             (t("s", "x/S.kt"), True)]
 _seen_args = []
 def _vr(args, **k):
     _seen_args.append(args)
-    return _Out(0, "READY a\nBLOCKED b by:\n    c.1 (closed) [unmerged on c]\nPARKED p (status=blocked)\n")
+    return _Out(0, "READY a\nBLOCKED b by:\n    c.1 (closed) [unmerged on c]\nPARKED p (status=blocked)\n"
+                   "BLOCKED r by:\n    c.2 (closed) [unmerged on c]\nBLOCKED s by:\n    f.9 (open) via blocks\n")
 nb.subprocess.run = _vr
 try:
     _kept, _skip = nb.drop_unmerged_blocked(_vr_cands)
@@ -1065,10 +1067,12 @@ try:
 finally:
     nb.subprocess.run = _saved_run
 unmerged_cases = [
-    ([x["id"] for x, _ in _kept] == ["a", "r"], "BLOCKED candidate is dropped, READY and resumed kept"),
-    (_skip == [{"id": "b", "reason": "blocked (verify-ready): c.1 (closed) [unmerged on c]"}], "skip names the unmerged feature"),
-    ("r" not in _seen_args[0], "resumed tasks are not re-checked"),
-    (len(_kept3) == 3 and _skip3 == [], "a failed check drops nothing"),
+    ([x["id"] for x, _ in _kept] == ["a", "r"], "BLOCKED candidate is dropped, READY kept"),
+    (_skip[0] == {"id": "b", "reason": "blocked (verify-ready): c.1 (closed) [unmerged on c]"}, "skip names the unmerged feature"),
+    ("r" in [x["id"] for x, _ in _kept], "a resumed task with only an unmerged blocker is kept"),
+    ([x["id"] for x in _skip] == ["b", "s"], "a resumed task with an OPEN blocker is dropped (computenet-5va38)"),
+    ("s" in _seen_args[0], "resumed tasks are checked"),
+    (len(_kept3) == 4 and _skip3 == [], "a failed check drops nothing"),
 ]
 for ok_, what in unmerged_cases:
     if not ok_:

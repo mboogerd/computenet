@@ -910,14 +910,17 @@ def drop_unmerged_blocked(candidates):
     `bd ready` counts a closed blocker as done, but a task closes when it merges
     into ITS feature branch: a blocker under another, unmerged feature is not on
     this feature's branch yet (computenet-frxh6). verify-ready.sh owns that test;
-    this only routes on it. Resumed tasks are already under way and pass through.
+    this only routes on it. A resumed task's closed-but-unmerged blocker was
+    already handled when it was first dispatched, so only an OPEN blocker drops
+    it: one added after the claim (computenet-5va38).
     If the check itself fails, nothing is dropped: it is advisory, not a gate.
     """
-    fresh = [t["id"] for t, resumed in candidates if not resumed]
-    if not fresh:
+    if not candidates:
         return candidates, []
+    resumed_ids = {t["id"] for t, r in candidates if r}
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify-ready.sh")
-    out = subprocess.run(["sh", script, *fresh], capture_output=True, text=True)
+    out = subprocess.run(["sh", script, *(t["id"] for t, _ in candidates)],
+                         capture_output=True, text=True)
     if out.returncode not in (0, 1):
         return candidates, []
     blocked, current = {}, None
@@ -929,6 +932,9 @@ def drop_unmerged_blocked(candidates):
             current = None
         elif current:
             blocked[current].append(line.strip())
+    for tid in resumed_ids & blocked.keys():
+        if all("[unmerged on " in why for why in blocked[tid]):
+            del blocked[tid]
     kept = [(t, r) for t, r in candidates if t["id"] not in blocked]
     skipped = [{"id": tid, "reason": "blocked (verify-ready): " + "; ".join(why)}
                for tid, why in blocked.items()]
