@@ -679,6 +679,11 @@ class ForkedMillionJournalTest {
                 result.single().contains("recoverCompleted=${expected.recoverCompleted}|"),
                 result.single(),
             )
+            assertTrue(result.single().contains("retainedBytes=${expected.retainedBytes}|"), result.single())
+            assertTrue(result.single().contains("maxHeap=${expected.maxHeapBytes}|"), result.single())
+            val environment = peer.output().lineSequence().single { it.startsWith(ENV_PREFIX) }
+            assertTrue(environment.contains("vmArgs=${JournalPlan.FORKED_XMX}|"), environment)
+            assertTrue(environment.contains("maxHeap=${expected.maxHeapBytes}"), environment)
             println(peer.output())
         } finally {
             JvmPeer.destroy(peer)
