@@ -178,11 +178,11 @@ class MacroSweepTest {
         model.structural.forEach { entry ->
             assertTrue(
                 query.coLocatedEdge(entry.at) is CostAnswer.NotMeasured,
-                "co-located edge must remain NotMeasured without a dispatch count/calibration",
+                "co-located edge must remain NotMeasured before calibration is merged",
             )
             assertTrue(
                 query.crossHostEdge(entry.at) is CostAnswer.NotMeasured,
-                "cross-host edge must remain NotMeasured without a dispatch count/calibration",
+                "cross-host edge must remain NotMeasured before calibration is merged",
             )
             assertTrue(
                 query.cellResidency(entry.at) is CostAnswer.NotMeasured,
@@ -301,15 +301,12 @@ class MacroSweepTest {
             appendLine()
             appendLine(
                 "This structural export has an empty calibration list. `CostQuery.coLocatedEdge` " +
-                    "and `CostQuery.crossHostEdge` answer `NotMeasured` at every point until a " +
-                    "per-host dispatch counter exists; `CostQuery.cellResidency` becomes answerable " +
-                    "afterwards, when `MacroCalibrationRenderTest` merges the calibration constants " +
-                        "through `CalibrationExport.merge`.",
+                    "and `CostQuery.crossHostEdge` answer `NotMeasured` in this sweep's export only " +
+                    "because its calibration list is empty; `CalibrationExport.merge` adds the " +
+                    "calibration later. SIM " +
+                    "`PROPAGATION` points carry a measured local-delivery count in `counts.messages`; " +
+                    "`CostQuery.cellResidency` becomes answerable after that calibration merge.",
             )
-            appendLine()
-            appendLine("### Candidate G-item")
-            appendLine()
-            append(Counters.MESSAGES_NOT_MEASURED)
         }
     }
 
