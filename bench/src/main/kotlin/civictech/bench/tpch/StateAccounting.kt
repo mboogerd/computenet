@@ -80,7 +80,14 @@ data class HeapGrowthFinding(
     val firstWindowSpreadBytes: Long?,
 )
 
-/** Apply BS-6's least-squares slope and first-window spread decision rule. */
+/**
+ * Apply BS-6's least-squares slope and first-window spread decision rule.
+ *
+ * Interpretation: the task text compares "slope > 2x spread", which mixes bytes/refresh
+ * with bytes. This compares the slope projected over the fit window (bytes) with twice
+ * the first-window spread (bytes). The literal per-refresh comparison would RETIRE far
+ * more readily, so a verdict quoted from here carries this rule, not the literal one.
+ */
 fun heapGrowthFinding(samples: List<HeapGrowthSample>): HeapGrowthFinding {
     val ordered = samples.sortedBy(HeapGrowthSample::refreshes)
     val firstWindow = ordered.filter { it.refreshes <= 1_000 }
