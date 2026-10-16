@@ -2136,7 +2136,7 @@
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "ccf0f4d4"
+            "harnessSha": "07dcacab"
         },
         {
             "at": {
@@ -2159,7 +2159,7 @@
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "ccf0f4d4"
+            "harnessSha": "07dcacab"
         },
         {
             "at": {
@@ -2182,7 +2182,7 @@
                 "journalRecords": 1000,
                 "simSteps": 1000
             },
-            "harnessSha": "ccf0f4d4"
+            "harnessSha": "07dcacab"
         },
         {
             "at": {
@@ -2205,7 +2205,7 @@
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "ccf0f4d4"
+            "harnessSha": "07dcacab"
         },
         {
             "at": {
@@ -2228,7 +2228,7 @@
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "ccf0f4d4"
+            "harnessSha": "07dcacab"
         },
         {
             "at": {
@@ -2251,7 +2251,7 @@
                 "journalRecords": 10000,
                 "simSteps": 10000
             },
-            "harnessSha": "ccf0f4d4"
+            "harnessSha": "07dcacab"
         }
     ],
     "calibration": [

@@ -7337,7 +7337,7 @@ Applied `transportValidated = true`: both host counts completed and every frame 
 A later `MacroSweepTest` whole-export rewrite or `SubjectMerge` replacement drops `transportValidated`; rerun this cross-check after either operation (0cnmw-D17).
 
 ## 2026-10-16 — durable DIAMOND point on ONE host: journal file size, bytes per record, records, retained bytes at replay, checkpoint size and the recovery check, per (cardinality, batch size), SIM drive
-Harness: ccf0f4d4 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+Harness: 07dcacab · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
 JMH: mode=SIM durable journal growth probe (JUnit @Tag("bench"), one deterministic BenchMesh per attempt; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both forks=1 warmup=1 iters=2 · drive=SIM
 | subject | value | notes |
 | --- | --- | --- |
@@ -7466,7 +7466,7 @@ No replay/recover OutOfMemoryError was observed.
 - Before: structural=87 exclusions=10 laws=10 unfitted=30
 - After: structural=93 exclusions=16 laws=10 unfitted=32
 - JOURNAL: structural=6 exclusions=6 fittedLaws=0 unfitted=2
-- Run harness SHA: `ccf0f4d4`
+- Run harness SHA: `07dcacab`
 
 ### Verdict
 
