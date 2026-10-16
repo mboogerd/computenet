@@ -372,7 +372,7 @@ object TpchReference {
         )
     }
 
-    /** `s_comment like '%Customer%Complaints%'` (§2.4.16.1): ordered, any text between. */
+    /** `s_comment like '%Customer%Complaints%'` (§2.4.16.2): ordered, any text between. */
     private val COMPLAINTS = Regex("Customer.*Complaints", RegexOption.DOT_MATCHES_ALL)
 
     private fun globalRows(columns: List<String>, rows: Map<List<Any>, Long>): ViewResult =
