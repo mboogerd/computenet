@@ -1,0 +1,95 @@
+package civictech.bench.tpch
+
+import civictech.cell.durability.FileJournal
+import civictech.cell.durability.InMemoryJournal
+import java.nio.file.Path
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+
+class BaseRelationsTest {
+
+    @Test
+    fun `SIM load and refreshes quiesce with work figures`() {
+        val base = TpchGenerator.generate(seed = 7L, sf = 0.001)
+        val rig = TpchRig.open(Drive.SIM, seed = 7L)
+        try {
+            val relations = BaseRelations.spawn(rig)
+            val loadFigure = rig.beginPhase().let {
+                relations.load(base)
+                rig.completePhase("load")
+            }
+            assertInstanceOf(Figure.Work::class.java, loadFigure)
+            assertEquals(LogicalTables(base).counts(), relations.membership())
+
+            val rf1 = RefreshStream.generate(
+                RefreshPlan(seed = 9L, sf = 0.001, batches = listOf(RefreshKind.RF1)),
+                base,
+            ).single()
+            rig.beginPhase()
+            relations.apply(rf1)
+            val rf1Figure = rig.completePhase("RF1")
+            assertInstanceOf(Figure.Work::class.java, rf1Figure)
+
+            val rf2 = RefreshBatch.Rf2((rf1 as RefreshBatch.Rf1).orders.map { it.orderKey }.sorted())
+            rig.beginPhase()
+            relations.apply(rf2)
+            val rf2Figure = rig.completePhase("RF2")
+            assertInstanceOf(Figure.Work::class.java, rf2Figure)
+            assertEquals(base, relations.logicalTables.snapshot())
+            assertEquals(LogicalTables(base).counts(), relations.membership())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun `REAL load and refreshes quiesce with duration figures`() {
+        val base = TpchGenerator.generate(seed = 7L, sf = 0.001)
+        val rig = TpchRig.open(Drive.REAL, seed = 7L)
+        try {
+            val relations = BaseRelations.spawn(rig)
+            rig.beginPhase()
+            relations.load(base)
+            assertInstanceOf(Figure.Duration::class.java, rig.completePhase("load"))
+            assertEquals(LogicalTables(base).counts(), relations.membership())
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test
+    fun `load modes expose KBLK labels and synchronous WAL`() {
+        assertEquals(LoadModes.names, listOf("volatile", "wal-bound", "batched-8", "batched-ingress-64"))
+        assertEquals(LoadModeLabel("volatile", "per-message"), loadModeLabel(null, 1))
+        assertEquals(LoadModeLabel("in-memory", "batched(64)"), loadModeLabel(InMemoryJournal(), 64))
+    }
+
+    @Test
+    fun `a synchronous file journal is labelled WAL-bound`(@TempDir root: Path) {
+        val journal = FileJournal(root.resolve("tpch.journal").toFile())
+        assertEquals(LoadModeLabel("WAL-bound", "per-message"), loadModeLabel(journal, 1))
+        assertTrue(journal.durability.name.isNotBlank())
+    }
+
+    @Test
+    fun `a journal-backed SIM load can encode every row type`(@TempDir root: Path) {
+        val base = TpchGenerator.generate(seed = 7L, sf = 0.0001)
+        val rig = TpchRig.open(
+            drive = Drive.SIM,
+            seed = 7L,
+            journal = FileJournal(root.resolve("tpch-rows.journal").toFile()),
+        )
+        try {
+            val relations = BaseRelations.spawn(rig)
+            rig.beginPhase()
+            relations.load(base)
+            rig.completePhase("journal-load")
+            assertEquals(LogicalTables(base).counts(), relations.membership())
+        } finally {
+            rig.close()
+        }
+    }
+}

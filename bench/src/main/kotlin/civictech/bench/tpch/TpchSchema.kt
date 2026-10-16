@@ -1,8 +1,10 @@
 package civictech.bench.tpch
 
+import kotlinx.serialization.Serializable as KotlinSerializable
 import java.io.Serializable
 
 /** A row in PART; the primary key is [partKey]. */
+@KotlinSerializable
 data class Part(
     val partKey: Long,
     val name: String,
@@ -16,6 +18,7 @@ data class Part(
 ) : Serializable
 
 /** A row in SUPPLIER; the primary key is [suppKey]. */
+@KotlinSerializable
 data class Supplier(
     val suppKey: Long,
     val name: String,
@@ -27,6 +30,7 @@ data class Supplier(
 ) : Serializable
 
 /** A row in PARTSUPP; the primary key is ([partKey], [suppKey]). */
+@KotlinSerializable
 data class PartSupp(
     val partKey: Long,
     val suppKey: Long,
@@ -36,6 +40,7 @@ data class PartSupp(
 ) : Serializable
 
 /** A row in CUSTOMER; the primary key is [custKey]. */
+@KotlinSerializable
 data class Customer(
     val custKey: Long,
     val name: String,
@@ -48,6 +53,7 @@ data class Customer(
 ) : Serializable
 
 /** A row in ORDERS; the primary key is [orderKey]. */
+@KotlinSerializable
 data class Orders(
     val orderKey: Long,
     val custKey: Long,
@@ -61,6 +67,7 @@ data class Orders(
 ) : Serializable
 
 /** A row in LINEITEM; the primary key is ([orderKey], [lineNumber]). */
+@KotlinSerializable
 data class Lineitem(
     val orderKey: Long,
     val partKey: Long,
@@ -81,6 +88,7 @@ data class Lineitem(
 ) : Serializable
 
 /** A row in NATION; the primary key is [nationKey]. */
+@KotlinSerializable
 data class Nation(
     val nationKey: Int,
     val name: String,
@@ -89,6 +97,7 @@ data class Nation(
 ) : Serializable
 
 /** A row in REGION; the primary key is [regionKey]. */
+@KotlinSerializable
 data class Region(
     val regionKey: Int,
     val name: String,
@@ -108,6 +117,7 @@ enum class TpchTable {
 }
 
 /** One generated TPC-H population, with every table emitted in primary-key order. */
+@KotlinSerializable
 data class TpchTables(
     val part: List<Part>,
     val supplier: List<Supplier>,
