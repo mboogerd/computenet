@@ -481,9 +481,18 @@ jobs:
       # 32004218853 job 95310345107). The install step above provisions both,
       # and the assertion step at the end of this job makes a repeat of that
       # skip red rather than green.
+      #
+      # A file that also carries `@Tag("bench")` is exempt: the bench tag is
+      # excluded from every lane unless `-PbenchOnly` asks for it, so such a
+      # test is opt-in by design and a gate for nothing ([BEN1-38], [BEN2-05],
+      # [BEN2-06]; :bench's WireCrossCheckTest/WirePeerSmokeTest,
+      # computenet-0cnmw). Scoping its module in here would run nothing.
+      # Match annotation lines rather than raw substrings: a KDoc, comment or
+      # string that merely mentions `Tag("bench")` must not exempt a real
+      # multi-jvm test from this guard.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
-          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./(demo/(alignment|backlog-triage|shopping|exchange|beadsmirror|tiering)|runtime)/' || true)
+          stray=$(grep -rlE '^[[:space:]]*@Tag[[:space:]]*\([[:space:]]*"multi-jvm"[[:space:]]*\)' --include='*.kt' --exclude-dir=build . | grep -vE '^\./(demo/(alignment|backlog-triage|shopping|exchange|beadsmirror|tiering)|runtime)/' | xargs -r grep -L -E '^[[:space:]]*@Tag[[:space:]]*\([[:space:]]*"bench"[[:space:]]*\)' || true)
           if [ -n "$stray" ]; then
             echo "multi-jvm-tagged tests outside the serial lane's scoped modules — widen the module list in this job:"
             echo "$stray"
