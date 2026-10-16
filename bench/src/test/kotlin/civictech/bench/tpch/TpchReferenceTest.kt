@@ -98,17 +98,18 @@ class TpchReferenceTest {
             ),
             TpchReference.evaluate(TpchQuery.Q07, tables).plain(),
         )
-        // Q8 ECONOMY ANODIZED STEEL is part 2 (lines 2, 6). Line 2's order is from
-        // 1993 (outside 1995..1996); line 6 (order 4, 1995, customer 1 in ASIA,
-        // supplier 2 BRAZIL) = 5000*92. Defaults (AMERICA) select no customer.
+        // Q8 defaults: ECONOMY ANODIZED STEEL is part 2, sold only on line 2, whose
+        // order is from 1993 (outside 1995..1996) -> empty. SMALL PLATED COPPER is
+        // part 5, line 6: order 4 (1995), customer 1 in ASIA, supplier 2 BRAZIL
+        // = 5000*92 in the denominator, and in the numerator only for BRAZIL.
         assertEquals(emptyMap<List<Any>, List<Long>>(), TpchReference.evaluate(TpchQuery.Q08, tables).plain())
         assertEquals(
             mapOf(listOf<Any>(1995) to listOf(460_000L, 460_000L)),
-            TpchReference.evaluate(TpchQuery.Q08, tables, Q8Params(region = "ASIA")).plain(),
+            TpchReference.evaluate(TpchQuery.Q08, tables, Q8Params(region = "ASIA", type = "SMALL PLATED COPPER")).plain(),
         )
         assertEquals(
             mapOf(listOf<Any>(1995) to listOf(0L, 460_000L)),
-            TpchReference.evaluate(TpchQuery.Q08, tables, Q8Params(nation = "INDONESIA", region = "ASIA")).plain(),
+            TpchReference.evaluate(TpchQuery.Q08, tables, Q8Params(nation = "INDONESIA", region = "ASIA", type = "SMALL PLATED COPPER")).plain(),
         )
         // Q9 green parts 1..3; amount = ext*(100-disc) - supplycost*qty*100 (s4):
         // line 1 (s1 INDONESIA, 1993): 1000*95 - 50*5*100   = 70000
