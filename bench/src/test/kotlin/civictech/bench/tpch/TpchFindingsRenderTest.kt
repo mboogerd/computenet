@@ -104,6 +104,13 @@ class TpchFindingsRenderTest {
 
         assertTrue(rendered.contains("| Q01 RF1 | 10.0 ± n/a steps/batch | |"))
         assertTrue(rendered.contains("| Q03 RF2 | 12.0 ± n/a steps/batch | |"))
+        assertTrue(
+            rendered.contains(
+                "SIM work caveat (all RF1/RF2 rows above): `steps/batch` counts " +
+                    "host-scheduler tasks for the refresh's hosted ORDERS/LINEITEM messages; " +
+                    "it is query-independent and does not measure per-query operator maintenance.",
+            ),
+        )
         assertTrue(rendered.contains("| Q02 | BLOCKED_2 | hand | blocked |"))
         assertTrue(rendered.contains("aggregate output as a relation"))
     }

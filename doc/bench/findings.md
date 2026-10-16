@@ -7326,6 +7326,8 @@ JMH: mode=TPC-H SIM work steps per RF1/RF2 batch (JUnit @Tag(bench) probe) forks
 | Q19 RF2 | 8.2 ± 6.0 steps/batch | |
 Trigger: G-42 — FIRES for tag/tombstone accretion under a balanced RF1/RF2 stream: balanced Q3 SF 0.001 stream, live rows flat; least-squares slope 2291.810976518218 B/refresh projected over the 1000-20000-refresh fit window vs 2x the first-window spread of 1119808 B (StateAccounting.heapGrowthFinding rule)
 
+SIM work caveat (all RF1/RF2 rows above): `steps/batch` counts host-scheduler tasks for the refresh's hosted ORDERS/LINEITEM messages; it is query-independent and does not measure per-query operator maintenance.
+
 Specification: TPC Benchmark H Standard Specification Revision 3.0.1
 Framing: incremental view maintenance (DBToaster framing); not TPC-H's audited execution model; no QphH@Size, no price/performance, no compliance claim
 Generator deviations:

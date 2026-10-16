@@ -74,6 +74,8 @@ object TpchFindings {
             append(entry)
             appendLine()
             appendLine()
+            appendLine(SIM_WORK_CAVEAT)
+            appendLine()
             appendLine("Specification: $SPEC_REVISION")
             appendLine("Framing: $FRAMING")
             appendLine("Generator deviations:")
@@ -146,4 +148,9 @@ object TpchFindings {
         val result: BenchResult,
         val dispersionObserved: Boolean,
     )
+
+    private const val SIM_WORK_CAVEAT =
+        "SIM work caveat (all RF1/RF2 rows above): `steps/batch` counts " +
+            "host-scheduler tasks for the refresh's hosted ORDERS/LINEITEM messages; " +
+            "it is query-independent and does not measure per-query operator maintenance."
 }
