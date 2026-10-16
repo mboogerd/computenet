@@ -7298,3 +7298,40 @@ Candidate G-item (`[BEN2-50]`; nothing implemented, `[BEN2-52]`): make the kerne
 The old [BEN1-03] rule said that `:bench` depended on exactly `:kernel` and `:testkit`. It is amended to the three-module set `:kernel`, `:testkit`, and `:wire`. Feature computenet-0cnmw forks `WirePeerMain` over `WsTransport` to validate the loopback mesh's structural counts, which is the reason for the new project edge ([BEN2-07], [BEN2-20]).
 
 The [BEN1-04]/[BEN2-08] direction is untouched: `ProjectGraphTest` still asserts that no other project depends on `:bench`, while its companion assertion enforces the widened three-module set. The transitive `:identity` consequence of `:wire` is therefore present on the benchmark runtime classpath, but no `:bench` source imports `civictech.identity`.
+
+## 2026-10-16 — wire cross-check — baseline structural counts over forked WsTransport peers versus the deterministic in-process loopback mesh (BS-16)
+Harness: 0252105b · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=REAL structural cross-check (JUnit @Tag("bench") + @Tag("multi-jvm"); forked WsTransport peers; not JMH) forks=3 warmup=1 iters=1 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| hostCount=2 crossHostFrames | 21458.0 ± n/a crossHostFrames/point | |
+| hostCount=2 wireBytes | 1.0789569E7 ± n/a wireBytes/point | |
+| hostCount=3 crossHostFrames | 26583.0 ± n/a crossHostFrames/point | |
+| hostCount=3 wireBytes | 1.3605747E7 ± n/a wireBytes/point | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+### Comparison
+
+| hostCount | metric | loopback (SIM) | socket (REAL, Σ peers) | relative error | tolerance | verdict |
+| ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 2 | crossHostFrames | 21458 | 21458 | 0.000000000 | 0.000000000 | AGREE |
+| 2 | wireBytes | 10789569 | 10789569 | 0.000000000 | 0.000000000 | AGREE |
+| 3 | crossHostFrames | 26583 | 26583 | 0.000000000 | 0.000000000 | AGREE |
+| 3 | wireBytes | 13605747 | 13605747 | 0.000000000 | 0.000000000 | AGREE |
+
+### Systematic offset
+
+Socket minus loopback encoded-byte offset: h=2: ±0 bytes total (0.000000000 bytes/frame); h=3: ±0 bytes total (0.000000000 bytes/frame); the per-frame offset is constant at the measured precision. It is reported rather than modelled; whether PLC1 should price it remains PLC1's question (0cnmw-D6).
+
+### Export marking
+
+Applied `transportValidated = true`: both host counts completed and every frame and byte comparison was within its fixed tolerance.
+
+### Omissions
+
+- Host counts 5 and 8 were not run over sockets; BEN2 §2.4 limits the real-transport cross-check to 2 and 3.
+- REAL-drive wall time was not compared; [BEN2-33] separates REAL calibration time from SIM structural counts.
+
+### Reset hazard
+
+A later `MacroSweepTest` whole-export rewrite or `SubjectMerge` replacement drops `transportValidated`; rerun this cross-check after either operation (0cnmw-D17).
