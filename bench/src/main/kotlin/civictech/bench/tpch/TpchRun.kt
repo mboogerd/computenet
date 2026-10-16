@@ -18,7 +18,7 @@ class TpchRunHooks(
     val refreshFactory: (RefreshPlan, TpchTables) -> List<RefreshBatch> = RefreshStream::generate,
     val comparisonObserved: (Int, Comparison) -> Unit = { _, _ -> },
     /** Cumulative applied-element counters, keyed by query outlet name. */
-    val emissionCounters: (MaintainedQuery) -> Map<String, Long> = { emptyMap() },
+    val emissionCounters: (MaintainedQuery) -> Map<String, Long> = MaintainedQuery::emissionCounters,
     val rigHooks: TpchRigHooks = TpchRigHooks(),
 )
 
