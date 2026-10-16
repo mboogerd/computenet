@@ -22,7 +22,11 @@ class TierOneCValidationTest {
         query: TpchQuery,
         drive: Drive,
     ) {
-        val seed = if (query == TpchQuery.Q07) Q7_VALIDATION_SEED else 7L
+        val seed = when (query) {
+            TpchQuery.Q07 -> Q7_VALIDATION_SEED
+            TpchQuery.Q08 -> Q8_VALIDATION_SEED
+            else -> 7L
+        }
         val comparisons = mutableListOf<Pair<Int, Comparison>>()
         val record = TpchRun.run(
             query = query,
@@ -54,6 +58,13 @@ class TierOneCValidationTest {
     }
 
     @Test
+    fun `Q8 share numerator is non-zero in the selected validation population`() {
+        val seed = Q8_VALIDATION_SEED
+        val view = TpchReference.evaluate(TpchQuery.Q08, TpchGenerator.generate(seed = seed, sf = 0.001))
+        assertTrue(view.rows.values.any { it[0] != 0L }, "seed $seed produced no Q8 share_num volume")
+    }
+
+    @Test
     fun `Q16 negated semijoin removes a partsupp row`() {
         val tables = TpchGenerator.generate(seed = 7L, sf = 0.001)
         TpchRig.open(drive = Drive.SIM, seed = 7L).use { rig ->
@@ -76,6 +87,11 @@ class TierOneCValidationTest {
     companion object {
         // Seed 7 has no FRANCE/GERMANY pair; seed 2 is the first seed in 1..64 that does.
         private const val Q7_VALIDATION_SEED = 2L
+
+        // Seed 7 has no BRAZIL-supplied volume, so share_num is 0 throughout and its
+        // nation predicate goes unchecked; seed 3 is the only seed in 1..64 whose
+        // loaded population has a non-zero share_num.
+        private const val Q8_VALIDATION_SEED = 3L
 
         @JvmStatic
         fun queriesAndDrives(): Stream<Arguments> = Stream.of(
