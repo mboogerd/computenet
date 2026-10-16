@@ -308,7 +308,7 @@ object TpchReference {
 
     private fun q16(tables: TpchTables, params: Q16Params): ViewResult {
         val complaintSuppliers = tables.supplier
-            .filter { "Customer" in it.comment && "Complaints" in it.comment }
+            .filter { COMPLAINTS.containsMatchIn(it.comment) }
             .map { it.suppKey }
             .toSet()
         val parts = tables.part.filter {
@@ -340,7 +340,7 @@ object TpchReference {
                     line.quantity in params.quantity2..params.quantity2 + 10L && part.size in 1..10,
                 part.brand == params.brand3 && part.container in setOf("LG CASE", "LG BOX", "LG PACK", "LG PKG") &&
                     line.quantity in params.quantity3..params.quantity3 + 10L && part.size in 1..15,
-            ).any()
+            ).any { it }
             if (matches && line.shipMode in setOf("AIR", "AIR REG") && line.shipInstruct == "DELIVER IN PERSON") {
                 TpchDecimal.revenueS4(line.extendedPrice, line.discount)
             } else {
@@ -371,6 +371,9 @@ object TpchReference {
             }}"
         )
     }
+
+    /** `s_comment like '%Customer%Complaints%'` (§2.4.16.1): ordered, any text between. */
+    private val COMPLAINTS = Regex("Customer.*Complaints", RegexOption.DOT_MATCHES_ALL)
 
     private fun globalRows(columns: List<String>, rows: Map<List<Any>, Long>): ViewResult =
         ViewResult(

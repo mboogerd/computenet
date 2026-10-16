@@ -40,7 +40,16 @@ class TpchReferenceTest {
     @Test
     fun `Q3 and Q10 group joins without losing the order or customer key`() {
         val q3 = TpchReference.evaluate(TpchQuery.Q03, tables)
-        assertEquals(196_000L, q3.rows[listOf<Any>(1L, date("1993-07-01"), 0)]!![0])
+        // Defaults BUILDING / 1995-03-15: orders 1 and 2 (customers 1, 2) qualify;
+        // line 1 shipped 1994-01-10 (not after DATE) is excluded, so order 1 keeps
+        // only line 2 = 2000*98 and order 2 keeps only line 3 = 3000*94.
+        assertEquals(
+            mapOf(
+                listOf<Any>(1L, date("1993-07-01"), 0) to listOf(196_000L),
+                listOf<Any>(2L, date("1994-06-01"), 0) to listOf(282_000L),
+            ),
+            q3.plain(),
+        )
 
         val q10 = TpchReference.evaluate(TpchQuery.Q10, tables, Q10Params(date = date("1993-05-01")))
         val customerKey = listOf<Any>(1L, "Customer#000000001", 10_000L, "phone-1", "INDONESIA", "customer-address", "customer-comment")
@@ -72,22 +81,85 @@ class TpchReferenceTest {
     }
 
     @Test
-    fun `the remaining hand queries return the declared view shapes`() {
-        val expectedColumns = mapOf(
-            TpchQuery.Q05 to listOf("revenue"),
-            TpchQuery.Q07 to listOf("revenue"),
-            TpchQuery.Q08 to listOf("share_num", "share_den"),
-            TpchQuery.Q09 to listOf("sum_profit"),
-            TpchQuery.Q14 to listOf("promo_num", "promo_den"),
+    fun `Q5 Q7 Q8 Q9 and Q14 equal hand-computed views`() {
+        // Q5 ASIA, orders in 1993: only order 1 (customer 1, INDONESIA). Line 1's
+        // supplier 1 is also INDONESIA: 1000*95. Line 2's supplier 2 is BRAZIL.
+        assertEquals(
+            mapOf(listOf<Any>("INDONESIA") to listOf(95_000L)),
+            TpchReference.evaluate(TpchQuery.Q05, tables, Q5Params(region = "ASIA", date = date("1993-01-01"))).plain(),
         )
-        expectedColumns.forEach { (query, columns) ->
-            val params = if (query == TpchQuery.Q05) {
-                Q5Params(region = "ASIA", date = date("1993-01-01"))
-            } else {
-                TpchReference.defaults(query)
-            }
-            assertEquals(columns, TpchReference.evaluate(query, tables, params).columns, query.name)
-        }
+        // Q7 FRANCE/GERMANY, ship 1995..1996: line 3 supplier FRANCE -> customer 2
+        // GERMANY = 3000*94; line 5 supplier GERMANY -> customer 3 FRANCE = 4000*90.
+        // Lines 2 and 6 have a BRAZIL supplier.
+        assertEquals(
+            mapOf(
+                listOf<Any>("FRANCE", "GERMANY", 1995) to listOf(282_000L),
+                listOf<Any>("GERMANY", "FRANCE", 1995) to listOf(360_000L),
+            ),
+            TpchReference.evaluate(TpchQuery.Q07, tables).plain(),
+        )
+        // Q8 ECONOMY ANODIZED STEEL is part 2 (lines 2, 6). Line 2's order is from
+        // 1993 (outside 1995..1996); line 6 (order 4, 1995, customer 1 in ASIA,
+        // supplier 2 BRAZIL) = 5000*92. Defaults (AMERICA) select no customer.
+        assertEquals(emptyMap<List<Any>, List<Long>>(), TpchReference.evaluate(TpchQuery.Q08, tables).plain())
+        assertEquals(
+            mapOf(listOf<Any>(1995) to listOf(460_000L, 460_000L)),
+            TpchReference.evaluate(TpchQuery.Q08, tables, Q8Params(region = "ASIA")).plain(),
+        )
+        assertEquals(
+            mapOf(listOf<Any>(1995) to listOf(0L, 460_000L)),
+            TpchReference.evaluate(TpchQuery.Q08, tables, Q8Params(nation = "INDONESIA", region = "ASIA")).plain(),
+        )
+        // Q9 green parts 1..3; amount = ext*(100-disc) - supplycost*qty*100 (s4):
+        // line 1 (s1 INDONESIA, 1993): 1000*95 - 50*5*100   = 70000
+        // line 2 (s2 BRAZIL, 1993):    2000*98 - 70*15*100  = 91000
+        // line 3 (s4 FRANCE, 1994):    3000*94 - 80*25*100  = 82000
+        // line 4 (s1 INDONESIA, 1994): 1000*100 - 50*10*100 = 50000
+        assertEquals(
+            mapOf(
+                listOf<Any>("INDONESIA", 1993) to listOf(70_000L),
+                listOf<Any>("BRAZIL", 1993) to listOf(91_000L),
+                listOf<Any>("FRANCE", 1994) to listOf(82_000L),
+                listOf<Any>("INDONESIA", 1994) to listOf(50_000L),
+            ),
+            TpchReference.evaluate(TpchQuery.Q09, tables).plain(),
+        )
+        // Q14 September 1995: line 5 only, part 4 is PROMO = 4000*90 on both sides.
+        // June 1995: line 3 only, part 3 is not PROMO = 0 / 3000*94.
+        assertEquals(
+            mapOf(emptyList<Any>() to listOf(360_000L, 360_000L)),
+            TpchReference.evaluate(TpchQuery.Q14, tables).plain(),
+        )
+        assertEquals(
+            mapOf(emptyList<Any>() to listOf(0L, 282_000L)),
+            TpchReference.evaluate(TpchQuery.Q14, tables, Q14Params(date = date("1995-06-01"))).plain(),
+        )
+    }
+
+    @Test
+    fun `Q19 excludes a delivered-by-air row that passes no disjunct`() {
+        // Part 1 matches disjunct 1 on brand, container and size, but quantity 30
+        // is outside [1, 11]; it passes neither of the other brands either.
+        val extra = Lineitem(3, 1, 1, 2, 30L, 7_000L, 0, 0, "N", "O", date("1995-01-10"), date("1995-01-20"), date("1995-01-21"), "DELIVER IN PERSON", "AIR", "")
+        val q19 = TpchReference.evaluate(TpchQuery.Q19, tables.copy(lineitem = tables.lineitem + extra))
+        assertEquals(573_000L, q19.rows[emptyList<Any>()]!![0])
+    }
+
+    @Test
+    fun `Q16 counts distinct suppliers and matches Customer before Complaints`() {
+        // Part 7 shares part 6's (brand, type, size) and supplier 2, so the group has
+        // two partsupp rows from one supplier: count(distinct) = 1, count = 2.
+        // Supplier 3's comment has the words in the wrong order for
+        // '%Customer%Complaints%', so it is NOT excluded: suppliers {2, 3} -> 2.
+        val withDuplicates = tables.copy(
+            part = tables.part + Part(7, "plain", "Manufacturer#1", "Brand#11", "MEDIUM BRUSHED TIN", 49, "MED PACK", 800L, ""),
+            partSupp = tables.partSupp + PartSupp(7, 2, 10, 130L, "") + PartSupp(7, 3, 10, 140L, ""),
+            supplier = tables.supplier.map {
+                if (it.suppKey == 3L) it.copy(comment = "Complaints about a Customer") else it
+            },
+        )
+        val q16 = TpchReference.evaluate(TpchQuery.Q16, withDuplicates)
+        assertEquals(listOf(2L), q16.rows[listOf<Any>("Brand#11", "MEDIUM BRUSHED TIN", 49)]!!.toList())
     }
 
     @Test
@@ -99,6 +171,8 @@ class TpchReferenceTest {
             assertTrue(failure.message!!.contains(query.blockedCause!!), query.name)
         }
     }
+
+    private fun ViewResult.plain(): Map<List<Any>, List<Long>> = rows.mapValues { it.value.toList() }
 
     private fun date(value: String): Int = LocalDate.parse(value).toEpochDay().toInt()
 
