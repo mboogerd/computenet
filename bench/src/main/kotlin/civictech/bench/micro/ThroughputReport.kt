@@ -343,6 +343,11 @@ data class RowLabel(
                 params = listOf("cardinality", "fanOut"),
                 includeParamNames = true,
             ),
+            // Four REAL methods share the cardinality axis; retain the method in each label.
+            "JournalCostBenchmark" to RowLabel(
+                params = listOf("cardinality"),
+                includeMethod = true,
+            ),
         )
 
         /**
