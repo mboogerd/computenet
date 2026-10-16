@@ -223,6 +223,12 @@ internal object JournalRealReport {
             shares[cardinality]?.let { it > 0.5 } == true
         }
         if (majority) {
+            // "not dominated by journal sync" contains "dominated by journal sync": a
+            // negated sentence must not satisfy the majority arm (task .2 review).
+            require("not dominated by journal sync" !in statement) {
+                "$STATEMENT_ENV must not say 'not dominated by journal sync' when a " +
+                    "resolved fsync share exceeds 0.5"
+            }
             require("dominated by journal sync" in statement && "KBLK" in statement) {
                 "$STATEMENT_ENV must contain 'dominated by journal sync' and 'KBLK' " +
                     "when a resolved fsync share exceeds 0.5"
@@ -354,6 +360,18 @@ class JournalRealReportTest {
             ThroughputReport.runLogFor(results).delete()
             export.delete()
         }
+    }
+
+    @Test
+    fun `a negated sentence does not satisfy the majority arm`() {
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            JournalRealReport.validateStatement(
+                "G-25 not dominated by journal sync, KBLK",
+                mapOf(1000L to 0.9),
+                setOf(1000L),
+            )
+        }
+        assertTrue(failure.message!!.contains("must not say"))
     }
 
     @Test
