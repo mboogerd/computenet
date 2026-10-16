@@ -98,16 +98,18 @@ open class TpchBenchmark {
     @Benchmark
     @JvmName("rf1")
     fun realRf1(rows: Rows, blackhole: Blackhole) {
-        rows.record(session.applyPrepared(RefreshKind.RF1))
-        blackhole.consume(session.retainedState())
+        val refreshed = session.applyPrepared(RefreshKind.RF1)
+        rows.record(refreshed)
+        blackhole.consume(refreshed)
     }
 
     /** REAL RF2 is a separate benchmark body; it is never blended with RF1. */
     @Benchmark
     @JvmName("rf2")
     fun realRf2(rows: Rows, blackhole: Blackhole) {
-        rows.record(session.applyPrepared(RefreshKind.RF2))
-        blackhole.consume(session.retainedState())
+        val refreshed = session.applyPrepared(RefreshKind.RF2)
+        rows.record(refreshed)
+        blackhole.consume(refreshed)
     }
 
     @State(Scope.Thread)
