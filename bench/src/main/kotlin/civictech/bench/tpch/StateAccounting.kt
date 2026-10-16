@@ -23,16 +23,14 @@ object StateAccounting {
      * Classify live-row growth over the stream's relevant checkpoints.
      *
      * [GrowthNote.Growing] means that the named outlet is non-decreasing across every
-     * captured sample and finishes above its post-LOAD baseline. For a balanced plan,
-     * completed RF1/RF2 pair checkpoints distinguish a genuinely flat stream from one
-     * whose outlet population merely shifts; the expected intra-pair rise and fall does
-     * not make a paired stream non-flat.
+     * captured sample and finishes above its post-LOAD baseline. For an alternating plan,
+     * completed RF1/RF2 pair checkpoints are classified first: a population that does not
+     * return to baseline is [GrowthNote.NotOutletBalanced], even when one outlet also grows
+     * monotonically. This keeps a query-population shift under the default RF2 semantics
+     * from being presented as an unqualified state-reclamation finding.
      *
-     * Caveat: under the default (not outlet-balanced) RF2, a monotone population shift of
-     * correctly maintained rows also meets the [GrowthNote.Growing] rule and pre-empts
-     * [GrowthNote.NotOutletBalanced] (Q3 SF 0.001 seed 7: `q03-order-lines` 32 -> 37), so a
-     * per-record `Growing` is G-42 evidence only from a paired stream. A non-balanced plan
-     * whose rows only shrink or shift reports [GrowthNote.Flat], meaning "no growth".
+     * A non-balanced plan whose rows only shrink or shift reports [GrowthNote.Flat], meaning
+     * "no growth".
      */
     fun growthNote(
         series: List<RetainedState>,
@@ -44,12 +42,6 @@ object StateAccounting {
         val balanced = plan.batches.size % 2 == 0 &&
             plan.batches.chunked(2).all { it == listOf(RefreshKind.RF1, RefreshKind.RF2) }
         val outlets = series.flatMapTo(sortedSetOf()) { it.liveRows.keys }
-        outlets.firstOrNull { outlet ->
-            val counts = series.map { it.liveRows[outlet] ?: 0L }
-            counts.last() > counts.first() &&
-                counts.zipWithNext().all { (previous, current) -> previous <= current }
-        }?.let { return GrowthNote.Growing(it) }
-
         if (balanced) {
             val baseline = series.first().liveRows
             val checkpoints = (2 until series.size step 2).map(series::get)
@@ -61,6 +53,11 @@ object StateAccounting {
                 return GrowthNote.NotOutletBalanced(outlet)
             }
         }
+        outlets.firstOrNull { outlet ->
+            val counts = series.map { it.liveRows[outlet] ?: 0L }
+            counts.last() > counts.first() &&
+                counts.zipWithNext().all { (previous, current) -> previous <= current }
+        }?.let { return GrowthNote.Growing(it) }
         return GrowthNote.Flat
     }
 

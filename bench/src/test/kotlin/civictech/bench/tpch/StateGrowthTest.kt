@@ -34,7 +34,7 @@ class StateGrowthTest {
     }
 
     @Test
-    fun `default balanced Q3 reports only a monotonically growing outlet`() {
+    fun `default balanced Q3 reports its population shift before monotone growth`() {
         val record = assertInstanceOf(
             TpchRecord.Verified::class.java,
             TpchRun.run(
@@ -47,15 +47,16 @@ class StateGrowthTest {
             ),
         )
 
-        val note = assertInstanceOf(GrowthNote.Growing::class.java, record.header.retainedState.growth)
-        val counts = record.header.stateSeries.map { it.liveRows.getValue(note.structure) }
-        assertTrue(
-            counts.last() > counts.first(),
-            "${note.structure} did not finish above its baseline: $counts",
+        val note = assertInstanceOf(
+            GrowthNote.NotOutletBalanced::class.java,
+            record.header.retainedState.growth,
         )
+        val counts = record.header.stateSeries.map { it.liveRows.getValue(note.outlet) }
+        val baseline = counts.first()
+        val pairCheckpoints = counts.drop(2).filterIndexed { index, _ -> index % 2 == 0 }
         assertTrue(
-            counts.zipWithNext().all { (previous, current) -> previous <= current },
-            "${note.structure} did not grow monotonically: $counts",
+            pairCheckpoints.any { it != baseline },
+            "${note.outlet} returned to its baseline at every pair checkpoint: $counts",
         )
     }
 
