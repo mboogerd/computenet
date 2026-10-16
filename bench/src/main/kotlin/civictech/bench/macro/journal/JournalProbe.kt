@@ -466,6 +466,10 @@ class JournalRealRig(
         return generated.sinks.associateWith { handle ->
             val ref = MeshRefs.ref(handle, 0, 1)
             foldEntries { request ->
+                // KRD-27 recorded exception: a verification read of one local host's
+                // sink after the drive (or the recovery) has quiesced, compared whole
+                // against the other rig's fold; it is not a consumer walk, so it does
+                // not route through walkRouted.
                 when (val result = world.host.readState(ref, request).get(30, TimeUnit.SECONDS)) {
                     is StateReadResult.Page -> result.page
                     is StateReadResult.Unavailable -> error(
