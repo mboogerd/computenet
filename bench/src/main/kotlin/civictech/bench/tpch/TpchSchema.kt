@@ -29,7 +29,13 @@ data class Supplier(
     val comment: String,
 ) : Serializable
 
-/** A row in PARTSUPP; the primary key is ([partKey], [suppKey]). */
+/**
+ * A row in PARTSUPP; the primary key is ([partKey], [suppKey]). At the
+ * correctness and measurement scales, where four supplier keys fit, the
+ * generator probes the next unused key when the printed small-scale formula
+ * collides; below that floor, the specification's four rows cannot all have
+ * distinct supplier keys.
+ */
 @KotlinSerializable
 data class PartSupp(
     val partKey: Long,
