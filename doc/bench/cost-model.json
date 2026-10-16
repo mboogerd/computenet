@@ -2418,6 +2418,82 @@
                 "measurementIterations": 10,
                 "harnessCommitSha": "c4366b8a"
             }
+        },
+        {
+            "name": "journalBytesPerRecord",
+            "value": 192.8898,
+            "unit": "bytes/record",
+            "dispersion": 0.0,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
+        },
+        {
+            "name": "replayNanosPerRecord",
+            "value": 208.2856,
+            "unit": "ns/record",
+            "dispersion": 83.4591,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
+        },
+        {
+            "name": "checkpointNanosPerElement",
+            "value": 2947.6289,
+            "unit": "ns/element",
+            "dispersion": 546.9034,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
+        },
+        {
+            "name": "checkpointBytesPerElement",
+            "value": 159.5506,
+            "unit": "bytes/element",
+            "dispersion": 0.0,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
         }
     ],
     "laws": [

@@ -7491,3 +7491,59 @@ admitted=9 NonConvergent=0 NonDeterministic=0 Unschedulable=0 Failed=0 Unreporta
 ### Verdict
 
 The G-25 verdict is stated by the REAL companion entry below; this entry is the structural half, and arms (i) and (ii) of the rule read above.
+
+## 2026-10-16 — durable DIAMOND point, journal replay and checkpoint wall time per cardinality on ONE host, REAL drive, SingleShotTime
+Harness: 2d9e029e · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=Single shot invocation time forks=3 warmup=2 iters=5 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| realCheckpoint 1000 | 6.360934 ± 1.755875 ms/op | |
+| realCheckpoint 10000 | 29.476289 ± 5.469034 ms/op | |
+| realCheckpoint 100000 | 264.273486 ± 25.196016 ms/op | |
+| realFileJournalPoint 1000 | 43.880831 ± 3.363522 ms/op | |
+| realFileJournalPoint 10000 | 350.428058 ± 46.207108 ms/op | |
+| realFileJournalPoint 100000 | 3582.171992 ± 258.974906 ms/op | |
+| realMemoryJournalPoint 1000 | 21.2243 ± 4.687119 ms/op | |
+| realMemoryJournalPoint 10000 | 93.263719 ± 26.805221 ms/op | |
+| realMemoryJournalPoint 100000 | 613.684986 ± 45.158344 ms/op | |
+| realReplay 1000 | 0.541467 ± 0.288009 ms/op | |
+| realReplay 10000 | 2.082856 ± 0.834591 ms/op | |
+| realReplay 100000 | 8.675597 ± 1.890631 ms/op | |
+Comparisons (effect vs combined error bars):
+- realFileJournalPoint 1000 vs realMemoryJournalPoint 1000: |Δ| = 22.656531 ms/op > combined 99.9% error 8.050641 ms/op — fsync share 51.63% at C=1000
+- realFileJournalPoint 10000 vs realMemoryJournalPoint 10000: |Δ| = 257.16433900000004 ms/op > combined 99.9% error 73.012329 ms/op — fsync share 73.39% at C=10000
+- realFileJournalPoint 100000 vs realMemoryJournalPoint 100000: |Δ| = 2968.4870060000003 ms/op > combined 99.9% error 304.13325 ms/op — fsync share 82.87% at C=100000
+Trigger: G-25 — G-25 (journal segmentation — trigger: first workload where one file hurts) is INCONCLUSIVE at the measured workload: at ≤ 1e5 elements on one host a single journal file does not yet hurt, but D13 arm (i) was not evaluated at C=1e6 (the three 1e6 SIM points are an up-front omission, 9f7x5-D19, observed outcome owned by computenet-9f7x5.5) and arm (ii) was evaluated only up to C=1e5, so a retirement verdict is unavailable from this run. Arm (i): no replay or recover OutOfMemoryError at the nine SIM points evaluated (C ∈ {1e3,1e4,1e5} × batch {1,10,100}). Arm (ii): retained bytes at the largest Ok point (C=1e5) are 0.9912 % of maxHeap (≈20.3 MiB of 2 GiB; 0.0098 % at 1e3, 0.1025 % at 1e4) against the 25 % threshold, so it does not hold. Arm (iii): realReplay(1e5)=8.676 ms against realFileJournalPoint(1e5)=3582.172 ms, a replay/ingest ratio of 0.0024 (0.0123 at 1e3, 0.0059 at 1e4), so replaying the file costs far less than ingesting it and the arm does not hold. Checkpoint reduction (file bytes minus checkpoint bytes, checkpoint wall): 37892 B (19.7 %, 6.361 ms) at 1e3, 333392 B (17.3 %, 29.476 ms) at 1e4, 3378392 B (17.4 %, 264.273 ms) at 1e5. BS-15 fsync share (file minus memory over file): 51.63 % at 1e3, 73.39 % at 1e4 and 82.87 % at 1e5, each resolved beyond combined error by the Findings criterion that D12 names (at 1e3 the share is marginal: |Δ|=22.657 ms exceeds the combined error 8.051 ms but not the stricter 3 × (err₁ + err₂)=24.153 ms, while 1e4 and 1e5 pass both), so the REAL durable drive is dominated by journal sync — KBLK at every measured cardinality; no WAL-off, group-commit or segmentation path is added by this study ([BEN2-49], [BEN2-52]). No kernel limitation outside G-25, G-42 and G-43 was exposed, so no new candidate G-item is named.
+
+Not measured
+- REAL C=1e6 — measured on Apple M3 Max (Darwin arm64, JDK 21.0.11): corrected C=1e5 file/memory invocations were 3.65 s/0.62 s; linear C=1e6 extrapolation is ~36 s/~6 s per invocation and at least ~32 min of drive/setup for the four-method setting
+- REAL batch ∈ {1, 100} — batch is a SIM-structural dimension here
+
+Constants
+- journalBytesPerRecord = 192.8898 ± 0.0 bytes/record
+- replayNanosPerRecord = 208.2856 ± 83.4591 ns/record
+- checkpointNanosPerElement = 2947.6289 ± 546.9034 ns/element
+- checkpointBytesPerElement = 159.5506 ± 0.0 bytes/element
+- facts: cardinality=1000 records=1000 fileBytes=191898 checkpointBytes=154006
+- facts: cardinality=1000 records=1000 fileBytes=191898 checkpointBytes=154006
+- facts: cardinality=1000 records=1000 fileBytes=191898 checkpointBytes=154006
+- facts: cardinality=10000 records=10000 fileBytes=1928898 checkpointBytes=1595506
+- facts: cardinality=10000 records=10000 fileBytes=1928898 checkpointBytes=1595506
+- facts: cardinality=10000 records=10000 fileBytes=1928898 checkpointBytes=1595506
+- facts: cardinality=100000 records=100000 fileBytes=19388898 checkpointBytes=16010506
+- facts: cardinality=100000 records=100000 fileBytes=19388898 checkpointBytes=16010506
+- facts: cardinality=100000 records=100000 fileBytes=19388898 checkpointBytes=16010506
+
+D13 arm (iii)
+realReplay(1e5)=8.675597 ± 1.890631 ms/op vs realFileJournalPoint(1e5)=3582.171992 ± 258.974906 ms/op: |Δ|=3573.496395 against 3 × (err₁ + err₂)=782.5966109999999 ms/op — resolved
+
+SIM counts, file sizes, retained bytes and the recovery check: see the "journal growth" SIM entry above
+
+### Run provenance
+
+- Manifest: `Harness-Commit-Sha: 2d9e029e` (bench-jmh.jar built from this checkout)
+- JMH command: `/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java -jar bench/build/libs/bench-jmh.jar 'JournalCostBenchmark' -rf csv -rff journal-real.csv 2>&1 | tee journal-real.log` (no -f/-wi/-i overrides; run outside the sandbox)
+- uptime before: `15:48  up 9 days, 20:18, 2 users, load averages: 13.99 11.83 10.40`
+- uptime after: `15:52  up 9 days, 20:23, 2 users, load averages: 6.61 9.25 9.62`
+- Retained run artifacts (not durable in-repo): `~/computenet-runs/computenet-9f7x5.4/journal-real.{csv,log}`
+- Scope: arm (i) is not evaluated at C=1e6 (9f7x5-D19) and REAL C=1e6 is omitted (D14/D19); the observed 1e6 outcome belongs to computenet-9f7x5.5, which amends this entry to FIRES if replay/recover runs out of memory there.
