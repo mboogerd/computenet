@@ -278,7 +278,8 @@ object TpchRun {
                 "SIM quiescence must produce scheduler work, was $quiescenceFigure"
             }
             Figure.Work(
-                emittedElements.values.fold(0L) { total, count -> Math.addExact(total, count) },
+                steps = emittedElements.values.fold(0L) { total, count -> Math.addExact(total, count) },
+                unit = WorkUnit.COLLECTOR_APPLIED_DELTA_ELEMENTS,
             )
         }
 
