@@ -26,6 +26,8 @@ dependencies {
     implementation(project(":testkit"))
     // BEN2-07: the real-transport cross-check exercises :wire from forked JVMs.
     implementation(project(":wire"))
+    // Wire's public listener/connection types expose Java-WebSocket supertypes to test sources.
+    testImplementation(libs.java.websocket)
     implementation(libs.kotlinx.serialization)
 }
 
