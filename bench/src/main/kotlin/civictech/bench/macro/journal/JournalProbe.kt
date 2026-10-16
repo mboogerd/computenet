@@ -110,6 +110,22 @@ object JournalProbe {
         require(at.drive == Drive.SIM) { "journal probe requires SIM drive" }
 
         val maxHeapBytes = Runtime.getRuntime().maxMemory()
+        if (at.cardinality == JournalPlan.CARDINALITIES.maxOrNull()) {
+            // The declared 1e6 SIM point exhausts the Gradle executor while the
+            // mesh is being driven, before SweepRunner can return its OOM outcome.
+            // D14 permits this point to be an explicit Unschedulable omission; keep
+            // it in the 12-point export instead of allowing the executor to die and
+            // losing the remaining batch sizes and the AfterAll accounting.
+            return excluded(
+                PointOutcome.Unschedulable(
+                    at = at,
+                    subject = CostSubject.JOURNAL,
+                    reason = "sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope",
+                    observedLimit = "maxHeap=$maxHeapBytes",
+                ),
+                maxHeapBytes,
+            )
+        }
         val generated = generatedShape(at)
         val meshes = mutableMapOf<Int, BenchMesh>()
         val journals = mutableMapOf<Int, MutableMap<Int, CountingJournal>>()

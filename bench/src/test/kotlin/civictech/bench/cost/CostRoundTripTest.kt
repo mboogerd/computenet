@@ -33,10 +33,11 @@ class CostRoundTripTest {
         val model = CostSchema.parse(export.toFile().readText())
 
         model.schemaVersion shouldBe CostSchema.VERSION
-        model.unfitted.size shouldBe 30
+        model.unfitted.size shouldBe 32
         model.unfitted.groupingBy { it.dimension }.eachCount() shouldBe mapOf(
             Dimensions.FAN_OUT to 5,
-            Dimensions.CARDINALITY to 10,
+            Dimensions.CARDINALITY to 11,
+            Dimensions.BATCH_SIZE to 1,
             Dimensions.HOST_COUNT to 15,
         )
         model.unfitted.filter { it.fittedOver.isEmpty() }.map { it.slice }.toSet() shouldBe setOf(

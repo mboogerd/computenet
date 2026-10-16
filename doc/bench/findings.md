@@ -7335,3 +7335,139 @@ Applied `transportValidated = true`: both host counts completed and every frame 
 ### Reset hazard
 
 A later `MacroSweepTest` whole-export rewrite or `SubjectMerge` replacement drops `transportValidated`; rerun this cross-check after either operation (0cnmw-D17).
+
+## 2026-10-16 — durable DIAMOND point on ONE host: journal file size, bytes per record, records, retained bytes at replay, checkpoint size and the recovery check, per (cardinality, batch size), SIM drive
+Harness: ccf0f4d4 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=SIM durable journal growth probe (JUnit @Tag("bench"), one deterministic BenchMesh per attempt; not JMH; warmup=1 names attempt 1 of the determinism pair, iters=2 names both forks=1 warmup=1 iters=2 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| n=1000 b=1 fileBytes | 191898.0 ± n/a bytes/point | |
+| n=1000 b=1 bytesPerRecord | 191.898 ± n/a bytes/record | |
+| n=1000 b=1 records | 1000.0 ± n/a records/point | |
+| n=1000 b=1 journalRecords | 1000.0 ± n/a journalRecords/point | |
+| n=1000 b=1 retainedBytes | 212976.0 ± n/a bytes/point | |
+| n=1000 b=1 checkpointBytes | 154006.0 ± n/a bytes/point | |
+| n=1000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=1000 b=10 fileBytes | 191898.0 ± n/a bytes/point | |
+| n=1000 b=10 bytesPerRecord | 191.898 ± n/a bytes/record | |
+| n=1000 b=10 records | 1000.0 ± n/a records/point | |
+| n=1000 b=10 journalRecords | 1000.0 ± n/a journalRecords/point | |
+| n=1000 b=10 retainedBytes | 212976.0 ± n/a bytes/point | |
+| n=1000 b=10 checkpointBytes | 154006.0 ± n/a bytes/point | |
+| n=1000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=1000 b=100 fileBytes | 191898.0 ± n/a bytes/point | |
+| n=1000 b=100 bytesPerRecord | 191.898 ± n/a bytes/record | |
+| n=1000 b=100 records | 1000.0 ± n/a records/point | |
+| n=1000 b=100 journalRecords | 1000.0 ± n/a journalRecords/point | |
+| n=1000 b=100 retainedBytes | 212976.0 ± n/a bytes/point | |
+| n=1000 b=100 checkpointBytes | 154006.0 ± n/a bytes/point | |
+| n=1000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=10000 b=1 fileBytes | 1928898.0 ± n/a bytes/point | |
+| n=10000 b=1 bytesPerRecord | 192.8898 ± n/a bytes/record | |
+| n=10000 b=1 records | 10000.0 ± n/a records/point | |
+| n=10000 b=1 journalRecords | 10000.0 ± n/a journalRecords/point | |
+| n=10000 b=1 retainedBytes | 2176032.0 ± n/a bytes/point | |
+| n=10000 b=1 checkpointBytes | 1595506.0 ± n/a bytes/point | |
+| n=10000 b=1 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=10000 b=10 fileBytes | 1928898.0 ± n/a bytes/point | |
+| n=10000 b=10 bytesPerRecord | 192.8898 ± n/a bytes/record | |
+| n=10000 b=10 records | 10000.0 ± n/a records/point | |
+| n=10000 b=10 journalRecords | 10000.0 ± n/a journalRecords/point | |
+| n=10000 b=10 retainedBytes | 2176008.0 ± n/a bytes/point | |
+| n=10000 b=10 checkpointBytes | 1595506.0 ± n/a bytes/point | |
+| n=10000 b=10 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+| n=10000 b=100 fileBytes | 1928898.0 ± n/a bytes/point | |
+| n=10000 b=100 bytesPerRecord | 192.8898 ± n/a bytes/record | |
+| n=10000 b=100 records | 10000.0 ± n/a records/point | |
+| n=10000 b=100 journalRecords | 10000.0 ± n/a journalRecords/point | |
+| n=10000 b=100 retainedBytes | 2176032.0 ± n/a bytes/point | |
+| n=10000 b=100 checkpointBytes | 1595506.0 ± n/a bytes/point | |
+| n=10000 b=100 recordsAfterCheckpoint | 11.0 ± n/a records/point | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+### Plan
+
+- Cardinalities: 1000, 10000, 100000, 1000000
+- Batch sizes: 1, 10, 100
+- Executed SIM combinations: 4 × 3 = 12
+- Nesting: cardinality -> batch size
+- Coordinate: DIAMOND, seed=1, fanOut=4, H=1, replication=false, durability=true, drive=SIM
+- D6: H=1 because G-25's measured unit is one journal file per host; multi-host ingress is not mixed into that file.
+- Topology: FULL_MESH
+- Determinism check: true for every SIM point
+- Per-invocation timeout: 30 minutes
+- REAL cardinalities at batch 10: 1000, 10000, 100000
+- Calibration cardinality: 10000
+- D12 REAL idle decision: remove the 5 ms polling floor; each batch waits on scheduler completion notification, with no after-the-fact subtraction.
+- D13 FIRES iff (i) replay or recover raises OutOfMemoryError at any SIM point; (ii) retainedBytes at the largest Ok SIM point is at least 25.0% of that measuring JVM's maxHeap; or (iii) REAL realReplay(1e5) exceeds realFileJournalPoint(1e5) beyond combined error.
+- D13 RETIRES iff none of (i)-(iii) holds, all 12 SIM points are Ok, and all three REAL cardinalities have rows; the claim is limited to ≤ 1e6 elements on one host.
+- D13 is INCONCLUSIVE otherwise and names the arm that could not be evaluated.
+- D13 reports by how much: retained-bytes fraction, replay/ingest ratio, and checkpoint reduction at each cardinality.
+
+### Omissions
+
+- 1 REAL C=1e6 — reason: measured on Apple M3 Max (Darwin arm64, JDK 21.0.11): corrected C=1e5 file/memory invocations were 3.65 s/0.62 s; linear C=1e6 extrapolation is ~36 s/~6 s per invocation and at least ~32 min of drive/setup for the four-method setting
+- 2 REAL batch ∈ {1, 100} — reason: batch is a SIM-structural dimension here
+- 4 H ∈ {2, 3, 5, 8} — reason: 9f7x5-D6: G-25's unit is one file per host
+- 1 a 1e6 SIM point that ends Unschedulable — reason: listed as such with the stage and heap limit rather than replaced by a smaller point
+- n=100000 b=1: Failed — java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; 0 dead letters
+- n=100000 b=10: Failed — java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; 0 dead letters
+- n=100000 b=100: Failed — java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; 0 dead letters
+- n=1000000 b=1: Unschedulable — sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observed limit: maxHeap=2147483648
+- n=1000000 b=10: Unschedulable — sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observed limit: maxHeap=2147483648
+- n=1000000 b=100: Unschedulable — sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observed limit: maxHeap=2147483648
+
+### Growth laws
+
+- dimension=cardinality slice=[batch=10] metric=journalRecords Unfitted: a law requires at least 4 points, found 2; R²=1.0; fitted-over=2 points=Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=1000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM)
+- dimension=batchSize slice=[C=1e4] metric=journalRecords Unfitted: metric 'journalRecords' has no variance, so R² is undefined; R²=null; fitted-over=3 points=Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=1, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=10, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM), Coordinate(shape=DIAMOND, shapeSeed=1, cardinality=10000, batchSize=100, hostCount=1, fanOut=4, replication=false, durability=true, drive=SIM)
+
+### Outcome tally
+
+admitted=6 NonConvergent=0 NonDeterministic=0 Unschedulable=3 Failed=3 Unreportable=0
+- n=100000 b=1 kind=Failed stage=sweep maxHeap=2147483648 reason=java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; deadLetters=0
+- n=100000 b=10 kind=Failed stage=sweep maxHeap=2147483648 reason=java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; deadLetters=0
+- n=100000 b=100 kind=Failed stage=sweep maxHeap=2147483648 reason=java.lang.IllegalStateException: simulation did not quiesce within 60000 steps — likely livelock; deadLetters=0
+- n=1000000 b=1 kind=Unschedulable stage=sweep maxHeap=2147483648 reason=sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observedLimit=maxHeap=2147483648
+- n=1000000 b=10 kind=Unschedulable stage=sweep maxHeap=2147483648 reason=sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observedLimit=maxHeap=2147483648
+- n=1000000 b=100 kind=Unschedulable stage=sweep maxHeap=2147483648 reason=sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope; observedLimit=maxHeap=2147483648
+
+### Determinism
+
+- n=1000 b=1 kind=Ok attempt1=191898 attempt2=191898 equal=true
+- n=1000 b=10 kind=Ok attempt1=191898 attempt2=191898 equal=true
+- n=1000 b=100 kind=Ok attempt1=191898 attempt2=191898 equal=true
+- n=10000 b=1 kind=Ok attempt1=1928898 attempt2=1928898 equal=true
+- n=10000 b=10 kind=Ok attempt1=1928898 attempt2=1928898 equal=true
+- n=10000 b=100 kind=Ok attempt1=1928898 attempt2=1928898 equal=true
+- n=100000 b=1 kind=Failed attempt1=n/a attempt2=n/a equal=false
+- n=100000 b=10 kind=Failed attempt1=n/a attempt2=n/a equal=false
+- n=100000 b=100 kind=Failed attempt1=n/a attempt2=n/a equal=false
+- n=1000000 b=1 kind=Unschedulable attempt1=n/a attempt2=n/a equal=false
+- n=1000000 b=10 kind=Unschedulable attempt1=n/a attempt2=n/a equal=false
+- n=1000000 b=100 kind=Unschedulable attempt1=n/a attempt2=n/a equal=false
+
+### Retained-bytes fraction
+
+- n=1000 b=1 retainedBytes=212976 maxHeap=2147483648 fraction=0.000099
+- n=1000 b=10 retainedBytes=212976 maxHeap=2147483648 fraction=0.000099
+- n=1000 b=100 retainedBytes=212976 maxHeap=2147483648 fraction=0.000099
+- n=10000 b=1 retainedBytes=2176032 maxHeap=2147483648 fraction=0.001013
+- n=10000 b=10 retainedBytes=2176008 maxHeap=2147483648 fraction=0.001013
+- n=10000 b=100 retainedBytes=2176032 maxHeap=2147483648 fraction=0.001013
+- arm (ii) at n=10000 b=100: fraction=0.001013 against 0.25 — does not hold
+
+### D13 arm (i)
+
+No replay/recover OutOfMemoryError was observed.
+
+### Export
+
+- Before: structural=87 exclusions=10 laws=10 unfitted=30
+- After: structural=93 exclusions=16 laws=10 unfitted=32
+- JOURNAL: structural=6 exclusions=6 fittedLaws=0 unfitted=2
+- Run harness SHA: `ccf0f4d4`
+
+### Verdict
+
+The G-25 verdict is stated by the REAL companion entry below; this entry is the structural half, and arms (i) and (ii) of the rule read above.
