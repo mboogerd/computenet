@@ -2,6 +2,8 @@ package civictech.bench.tpch
 
 import civictech.cell.durability.FileJournal
 import civictech.cell.durability.InMemoryJournal
+import civictech.cell.host.HostScheduler
+import civictech.cell.host.ManagedHost
 import java.nio.file.Path
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -10,6 +12,33 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 class BaseRelationsTest {
+
+    @Test
+    fun `SIM phase counts a drained scheduler step once`() {
+        lateinit var scheduler: HostScheduler
+        val rig = TpchRig.open(
+            drive = Drive.SIM,
+            seed = 7L,
+            hooks = TpchRigHooks(
+                hostFactory = { phaseScheduler, journal, dispatchBatch ->
+                    scheduler = phaseScheduler
+                    ManagedHost(
+                        scheduler = phaseScheduler,
+                        journal = journal,
+                        dispatchBatch = dispatchBatch,
+                    )
+                },
+            ),
+        )
+        try {
+            rig.beginPhase()
+            scheduler.submit(priority = 0) {}
+            val figure = assertInstanceOf(Figure.Work::class.java, rig.completePhase("one-step"))
+            assertEquals(1L, figure.steps)
+        } finally {
+            rig.close()
+        }
+    }
 
     @Test
     fun `SIM load and refreshes quiesce with work figures`() {
