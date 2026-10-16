@@ -62,8 +62,8 @@ class CountingJournal(private val inner: Journal) : Journal {
  * Local cell-to-cell fan-out remains synchronous inside that one delivery task. This is
  * the same observable unit as `MacroCalibrationBenchmark.realLocalDispatch`, which
  * measures one delivery plus its scheduler hop. If the kernel changes the data priority
- * or batching contract, `PointAccountingTest.singleHostChainCountsOneExactLocalDeliveryPerInput`
- * fails instead of silently turning this into an estimate.
+ * or batching contract, `PointAccountingTest`'s single-host and cross-host exact-count
+ * cases fail instead of silently turning this into an estimate or a `simSteps` proxy.
  */
 class LocalDeliveryCounter(private val inner: HostScheduler) : HostScheduler by inner {
     val deliveries = AtomicLong()

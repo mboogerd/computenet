@@ -67,7 +67,7 @@ class PointAccountingTest {
     }
 
     @Test
-    fun nonReplicatedCrossHostSimPointCountsRoutedFramesAndBytes() {
+    fun nonReplicatedCrossHostSimPointCountsExactDeliveriesFramesAndBytes() {
         // Seed 0 places the CHAIN across both peers and routes its inputs over
         // the first cross-host edge (observed: 26 frames for this coordinate).
         // Pinned exactly, not `> 0`: a routed frame dropped on the edge stops the
@@ -77,6 +77,10 @@ class PointAccountingTest {
         val outcome = SweepRunner().run(at).shouldBeInstanceOf<PointOutcome.Ok>()
 
         outcome.at shouldBe at
+        // Twenty source-host deliveries plus the 26 routed target-host deliveries.
+        // The controller executes 72 total tasks here, so this exact assertion rejects
+        // the old `simSteps` upper bound as a substitute for a message count.
+        outcome.counts.messages shouldBe 46L
         outcome.counts.crossHostFrames shouldBe 26L
         outcome.counts.wireBytes shouldBeGreaterThan 0L
     }
