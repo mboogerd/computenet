@@ -264,6 +264,10 @@ object TpchReference {
         return ViewResult(
             columns = listOf("revenue"),
             rows = revenue.mapValuesTo(LinkedHashMap()) { (_, value) -> longArrayOf(value) },
+        ).topN(
+            n = 20,
+            ordering = compareByDescending<ViewResult.Row> { it.values[0] }
+                .thenBy { it.key[0] as Long },
         )
     }
 

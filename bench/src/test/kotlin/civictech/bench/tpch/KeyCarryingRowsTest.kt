@@ -13,29 +13,51 @@ import org.junit.jupiter.api.Test
 class KeyCarryingRowsTest {
 
     @Test
-    fun `every registered query has a source key specification`() {
-        assertTrue(
-            SOURCE_KEYS.keys.containsAll(TpchQuery.entries.filter { Queries.builderFor(it) != null }),
-            "every registered query needs a source-key specification",
+    fun `every registered query has a joined-row key rule`() {
+        val registered = TpchQuery.entries.filter { Queries.builderFor(it) != null }.toSet()
+
+        assertEquals(
+            registered,
+            FOLD_INPUT_RULES.keys,
+            "every registered query needs an explicit joined-row key or duplicate-insensitive exemption",
         )
     }
 
     @Test
-    fun `every registered fold input carries every source primary key`() {
+    fun `every registered fold input carries a key of its joined row`() {
         val failures = TpchQuery.entries.mapNotNull { query ->
             val builder = Queries.builderFor(query) ?: return@mapNotNull null
-            val missing = missingKeys(builder.foldInputTypes(), SOURCE_KEYS.getValue(query))
-            missing.takeIf { it.isNotEmpty() }?.let { query.name to it }
+            when (val rule = FOLD_INPUT_RULES.getValue(query)) {
+                is FoldInputRule.JoinedRowKey -> {
+                    val missing = missingKeys(builder.foldInputTypes(), rule.requiredKeys)
+                    missing.takeIf { it.isNotEmpty() }?.let {
+                        MissingJoinedRowKey(query.name, rule.keySource, it)
+                    }
+                }
+                is FoldInputRule.DuplicateInsensitive -> null
+            }
         }
 
-        assertEquals(emptyList<Pair<String, Set<String>>>(), failures)
+        assertEquals(emptyList<MissingJoinedRowKey>(), failures)
+    }
+
+    @Test
+    fun `duplicate-insensitive exemptions are explicit and limited to Q16`() {
+        val exemptions = FOLD_INPUT_RULES.filterValues {
+            it is FoldInputRule.DuplicateInsensitive
+        }
+
+        assertEquals(setOf(TpchQuery.Q16), exemptions.keys)
+        val q16 = exemptions.getValue(TpchQuery.Q16) as FoldInputRule.DuplicateInsensitive
+        assertTrue(q16.reason.contains("countDistinct"), q16.reason)
+        assertTrue(q16.reason.contains("existence-only"), q16.reason)
     }
 
     @Test
     fun `guard rejects a fold input that drops line number`() {
         val missing = missingKeys(
             FakeKeyDroppingBuilder().foldInputTypes(),
-            listOf(required("LINEITEM.orderkey", "orderKey"), required("LINEITEM.linenumber", "lineNumber")),
+            LINEITEM_KEY,
         )
 
         assertEquals(setOf("LINEITEM.linenumber"), missing)
@@ -57,6 +79,22 @@ class KeyCarryingRowsTest {
         val acceptedNames: Set<String>,
     )
 
+    private sealed interface FoldInputRule {
+        data class JoinedRowKey(
+            val keySource: String,
+            val requiredKeys: List<RequiredKey>,
+            val semijoinExemption: String? = null,
+        ) : FoldInputRule
+
+        data class DuplicateInsensitive(val reason: String) : FoldInputRule
+    }
+
+    private data class MissingJoinedRowKey(
+        val query: String,
+        val keySource: String,
+        val missing: Set<String>,
+    )
+
     private data class KeyDroppingFoldRow(val orderKey: Long)
 
     private class FakeKeyDroppingBuilder : QueryGraphBuilder(KeyDroppingFoldRow::class.java) {
@@ -71,93 +109,36 @@ class KeyCarryingRowsTest {
         private fun required(label: String, vararg acceptedNames: String): RequiredKey =
             RequiredKey(label, acceptedNames.toSet())
 
-        /** The SQL source lists pinned by each maintained query's query-plan KDoc. */
-        private val SOURCE_KEYS: Map<TpchQuery, List<RequiredKey>> = mapOf(
-            TpchQuery.Q01 to listOf(
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
+        private val LINEITEM_KEY = listOf(
+            required("LINEITEM.orderkey", "orderKey"),
+            required("LINEITEM.linenumber", "lineNumber"),
+        )
+
+        /**
+         * The key-determining source for every registered query. A finer key covers rows reached
+         * through full-primary-key FK joins; existence-only semijoin right sides add no tuple.
+         */
+        private val FOLD_INPUT_RULES: Map<TpchQuery, FoldInputRule> = mapOf(
+            TpchQuery.Q01 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q03 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q04 to FoldInputRule.JoinedRowKey(
+                keySource = "ORDERS",
+                requiredKeys = listOf(required("ORDERS.orderkey", "orderKey")),
+                semijoinExemption = "LINEITEM is the existence-only right side of a positive semijoin",
             ),
-            TpchQuery.Q03 to listOf(
-                required("CUSTOMER.custkey", "custKey"),
-                required("ORDERS.orderkey", "orderKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
+            TpchQuery.Q05 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q06 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q07 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q08 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q09 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q10 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q12 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q14 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
+            TpchQuery.Q16 to FoldInputRule.DuplicateInsensitive(
+                "Q16's only fold is countDistinct(suppKey), so duplicates cannot affect it; " +
+                    "the complaint SUPPLIER is an existence-only negated-semijoin source",
             ),
-            TpchQuery.Q04 to listOf(
-                required("ORDERS.orderkey", "orderKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-            ),
-            TpchQuery.Q05 to listOf(
-                required("REGION.regionkey", "regionKey"),
-                required("NATION.nationkey", "nationKey"),
-                required("CUSTOMER.custkey", "custKey"),
-                required("ORDERS.orderkey", "orderKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-                required("SUPPLIER.suppkey", "suppKey"),
-            ),
-            TpchQuery.Q06 to listOf(
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-            ),
-            TpchQuery.Q07 to listOf(
-                required("SUPPLIER.suppkey", "suppKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-                required("ORDERS.orderkey", "orderKey"),
-                required("CUSTOMER.custkey", "custKey"),
-                required("NATION.nationkey", "nationKey", "supplierNationKey", "custNationKey"),
-            ),
-            TpchQuery.Q08 to listOf(
-                required("PART.partkey", "partKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-                required("SUPPLIER.suppkey", "suppKey"),
-                required("ORDERS.orderkey", "orderKey"),
-                required("CUSTOMER.custkey", "custKey"),
-                required("NATION.nationkey", "nationKey", "supplierNationKey"),
-                // Q08 currently carries the customer region key in this reviewed legacy field name.
-                required("REGION.regionkey", "regionKey", "custNationKey"),
-            ),
-            TpchQuery.Q09 to listOf(
-                required("PART.partkey", "partKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-                required("PARTSUPP.partkey", "partKey"),
-                required("PARTSUPP.suppkey", "suppKey"),
-                required("SUPPLIER.suppkey", "suppKey"),
-                required("ORDERS.orderkey", "orderKey"),
-                required("NATION.nationkey", "nationKey"),
-            ),
-            TpchQuery.Q10 to listOf(
-                required("CUSTOMER.custkey", "custKey"),
-                required("ORDERS.orderkey", "orderKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-                required("NATION.nationkey", "nationKey"),
-            ),
-            TpchQuery.Q12 to listOf(
-                required("ORDERS.orderkey", "orderKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-            ),
-            TpchQuery.Q14 to listOf(
-                required("PART.partkey", "partKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-            ),
-            TpchQuery.Q16 to listOf(
-                required("PART.partkey", "partKey"),
-                required("PARTSUPP.partkey", "partKey"),
-                required("PARTSUPP.suppkey", "suppKey"),
-                required("SUPPLIER.suppkey", "suppKey"),
-            ),
-            TpchQuery.Q19 to listOf(
-                required("PART.partkey", "partKey"),
-                required("LINEITEM.orderkey", "orderKey"),
-                required("LINEITEM.linenumber", "lineNumber"),
-            ),
+            TpchQuery.Q19 to FoldInputRule.JoinedRowKey("LINEITEM", LINEITEM_KEY),
         )
 
     }
