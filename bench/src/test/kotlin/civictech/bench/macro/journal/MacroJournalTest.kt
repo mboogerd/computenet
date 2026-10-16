@@ -121,6 +121,9 @@ class MacroJournalTest {
             subject = CostSubject.JOURNAL,
             budget = "junitTimeout=${JournalPlan.TIMEOUT_MINUTES}m",
         ),
+        stage = "timeout",
+        replayCompleted = false,
+        recoverCompleted = false,
         fileBytes = null,
         secondAttemptFileBytes = null,
         records = null,
@@ -154,7 +157,20 @@ class MacroJournalTest {
 
         val replacementPath = File(requireNotNull(temporaryRoot), "journal-model.json").toPath()
         writer.write(replacementPath)
-        val replacement = CostSchema.parse(Files.readString(replacementPath))
+        val rawReplacement = CostSchema.parse(Files.readString(replacementPath))
+        val replacement = rawReplacement.copy(
+            exclusions = rawReplacement.exclusions.map { exclusion ->
+                val measurement = orderedMeasurements.first { it.outcome.at == exclusion.at }
+                if (measurement.declaredOmission) {
+                    exclusion.copy(
+                        kind = "Omitted",
+                        reason = requireNotNull(JournalPlan.omissionFor(exclusion.at)).reason,
+                    )
+                } else {
+                    exclusion
+                }
+            },
+        )
 
         val export = File(requiredRepoRoot(), CostSchema.STABLE_PATH).toPath()
         val before = CostSchema.parse(Files.readString(export))
@@ -273,7 +289,7 @@ class MacroJournalTest {
         assertEquals(excluded.size, actualExclusions.size, "every non-Ok outcome must be exported")
         excluded.zip(actualExclusions).forEach { (measured, actual) ->
             assertEquals(measured.outcome.at, actual.at)
-            assertEquals(outcomeKind(measured.outcome), actual.kind)
+            assertEquals(exclusionKind(measured), actual.kind)
             assertTrue(actual.reason.isNotBlank(), "excluded point must retain a reason: ${actual.at}")
         }
         assertEquals(admitted.size, structural.size)
@@ -337,7 +353,13 @@ class MacroJournalTest {
         val armOne = orderedMeasurements.filter { measurement ->
             val outcome = measurement.outcome
             outcome is PointOutcome.Unschedulable &&
-                (outcome.reason.startsWith("replay:") || outcome.reason.startsWith("recover:"))
+                measurement.stage in setOf("replay", "recover")
+        }
+        val replayRecoverCompleted = orderedMeasurements.filter {
+            it.replayCompleted && it.recoverCompleted
+        }
+        val replayRecoverNotEvaluated = orderedMeasurements.filterNot {
+            it.replayCompleted && it.recoverCompleted
         }
 
         return buildString {
@@ -367,10 +389,13 @@ class MacroJournalTest {
             orderedMeasurements.filter { it.outcome !is PointOutcome.Ok }.forEach { measurement ->
                 appendLine(
                     "- ${coordinateLabel(measurement.outcome.at)} " +
-                        "kind=${outcomeKind(measurement.outcome)} " +
-                        "stage=${stage(measurement.outcome)} " +
-                        "maxHeap=${measurement.maxHeapBytes} " +
-                        "reason=${reason(measurement.outcome)}",
+                        "kind=${displayKind(measurement)} " +
+                        "stage=${measurement.stage} " +
+                        if (measurement.declaredOmission) {
+                            "heap=n/a reason=${reason(measurement)}"
+                        } else {
+                            "maxHeap=${measurement.maxHeapBytes} reason=${reason(measurement)}"
+                        },
                 )
             }
             appendLine()
@@ -381,7 +406,7 @@ class MacroJournalTest {
                 val second = measurement.secondAttemptFileBytes?.toString() ?: "n/a"
                 appendLine(
                     "- ${coordinateLabel(measurement.outcome.at)} " +
-                        "kind=${outcomeKind(measurement.outcome)} attempt1=$first " +
+                        "kind=${displayKind(measurement)} attempt1=$first " +
                         "attempt2=$second equal=${first == second && first != "n/a"}",
                 )
             }
@@ -391,8 +416,8 @@ class MacroJournalTest {
             okMeasurements.forEach { measurement ->
                 val fraction = measurement.retainedBytes!!.toDouble() / measurement.maxHeapBytes
                 appendLine(
-                    "- ${coordinateLabel(measurement.outcome.at)} retainedBytes=" +
-                        "${measurement.retainedBytes} maxHeap=${measurement.maxHeapBytes} " +
+                    "- ${coordinateLabel(measurement.outcome.at)} retainedBytes≈" +
+                        "${reportedRetainedBytes(measurement)} maxHeap=${measurement.maxHeapBytes} " +
                         "fraction=${fraction.formatFraction()}",
                 )
             }
@@ -401,7 +426,8 @@ class MacroJournalTest {
             } else {
                 val fraction = largestOk.retainedBytes!!.toDouble() / largestOk.maxHeapBytes
                 appendLine(
-                    "- arm (ii) at ${coordinateLabel(largestOk.outcome.at)}: fraction=" +
+                    "- arm (ii): largest Ok point in the declared grid is " +
+                        "${coordinateLabel(largestOk.outcome.at)}; fraction=" +
                         "${fraction.formatFraction()} against ${JournalPlan.RETAINED_FRACTION_FIRES} " +
                         if (fraction >= JournalPlan.RETAINED_FRACTION_FIRES) "— holds" else "— does not hold",
                 )
@@ -409,14 +435,22 @@ class MacroJournalTest {
             appendLine()
             appendLine("### D13 arm (i)")
             appendLine()
+            appendLine(
+                "- replay and recover completed at: " +
+                    replayRecoverCompleted.joinToString { coordinateLabel(it.outcome.at) },
+            )
+            appendLine(
+                "- not evaluated (replay/recover did not both complete) at: " +
+                    replayRecoverNotEvaluated.joinToString { coordinateLabel(it.outcome.at) },
+            )
             if (armOne.isEmpty()) {
-                appendLine("No replay/recover OutOfMemoryError was observed.")
+                appendLine("- No replay/recover OutOfMemoryError was observed at evaluated points.")
             } else {
                 appendLine("Replay/recover OutOfMemoryError: yes")
                 armOne.forEach { measurement ->
                     appendLine(
                         "- ${coordinateLabel(measurement.outcome.at)}: " +
-                            reason(measurement.outcome),
+                            reason(measurement),
                     )
                 }
             }
@@ -424,8 +458,10 @@ class MacroJournalTest {
             appendLine("### Export")
             appendLine()
             appendLine(
-                "- Before: structural=${before.structural.size} exclusions=${before.exclusions.size} " +
-                    "laws=${before.laws.size} unfitted=${before.unfitted.size}",
+                "- Before: structural=${before.structural.count { it.subject != CostSubject.JOURNAL }} " +
+                    "exclusions=${before.exclusions.count { it.subject != CostSubject.JOURNAL }} " +
+                    "laws=${before.laws.count { it.subject != CostSubject.JOURNAL }} " +
+                    "unfitted=${before.unfitted.count { it.subject != CostSubject.JOURNAL }}",
             )
             appendLine(
                 "- After: structural=${model.structural.size} exclusions=${model.exclusions.size} " +
@@ -455,14 +491,15 @@ class MacroJournalTest {
             "bytesPerRecord" to measurement.bytesPerRecord!!,
             "records" to measurement.records!!.toDouble(),
             "journalRecords" to outcome.counts.journalRecords.toDouble(),
-            "retainedBytes" to measurement.retainedBytes!!.toDouble(),
+            "retainedBytes (rounded to 4KiB)" to reportedRetainedBytes(measurement).toDouble(),
             "checkpointBytes" to measurement.checkpointBytes!!.toDouble(),
             "recordsAfterCheckpoint" to measurement.recordsAfterCheckpoint!!.toDouble(),
         )
     }
 
     private fun unit(metric: String): String = when (metric) {
-        "fileBytes", "retainedBytes", "checkpointBytes" -> "bytes/point"
+        "fileBytes", "checkpointBytes" -> "bytes/point"
+        "retainedBytes (rounded to 4KiB)" -> "bytes/point (rounded to 4KiB)"
         "bytesPerRecord" -> "bytes/record"
         "records", "recordsAfterCheckpoint" -> "records/point"
         "journalRecords" -> "journalRecords/point"
@@ -473,9 +510,10 @@ class MacroJournalTest {
         "admitted=${measurements.count { it.outcome is PointOutcome.Ok }} " +
             "NonConvergent=${measurements.count { it.outcome is PointOutcome.NonConvergent }} " +
             "NonDeterministic=${measurements.count { it.outcome is PointOutcome.NonDeterministic }} " +
-            "Unschedulable=${measurements.count { it.outcome is PointOutcome.Unschedulable }} " +
+            "Unschedulable=${measurements.count { !it.declaredOmission && it.outcome is PointOutcome.Unschedulable }} " +
             "Failed=${measurements.count { it.outcome is PointOutcome.Failed }} " +
-            "Unreportable=${measurements.count { it.outcome is PointOutcome.Unreportable }}"
+            "Unreportable=${measurements.count { it.outcome is PointOutcome.Unreportable }} " +
+            "Omitted=${measurements.count { it.declaredOmission }}"
 
     private fun outcomeKind(outcome: PointOutcome): String = when (outcome) {
         is PointOutcome.Ok -> "Ok"
@@ -486,25 +524,29 @@ class MacroJournalTest {
         is PointOutcome.Unreportable -> "Unreportable"
     }
 
-    private fun stage(outcome: PointOutcome): String = when (outcome) {
-        is PointOutcome.Ok -> "admit"
-        is PointOutcome.NonConvergent -> "sweep"
-        is PointOutcome.NonDeterministic -> "determinism"
-        is PointOutcome.Unschedulable -> outcome.reason.substringBefore(':').ifBlank { "sweep" }
-        is PointOutcome.Failed -> when {
-            outcome.cause.startsWith("recovery") || outcome.cause.startsWith("dead letter") -> "recover"
-            else -> "sweep"
-        }
-        is PointOutcome.Unreportable -> "report"
-    }
+    private fun exclusionKind(measurement: JournalMeasurement): String =
+        if (measurement.declaredOmission) "Omitted" else outcomeKind(measurement.outcome)
 
-    private fun reason(outcome: PointOutcome): String = when (outcome) {
+    private fun displayKind(measurement: JournalMeasurement): String =
+        if (measurement.declaredOmission) "Omitted" else outcomeKind(measurement.outcome)
+
+    private fun reason(measurement: JournalMeasurement): String = when (val outcome = measurement.outcome) {
         is PointOutcome.Ok -> "admitted"
         is PointOutcome.NonConvergent -> outcome.budget
         is PointOutcome.NonDeterministic -> "structural counts differ"
-        is PointOutcome.Unschedulable -> "${outcome.reason}; observedLimit=${outcome.observedLimit}"
+        is PointOutcome.Unschedulable -> if (measurement.declaredOmission) {
+            outcome.reason
+        } else {
+            "${outcome.reason}; observedLimit=${outcome.observedLimit}"
+        }
         is PointOutcome.Failed -> "${outcome.cause}; deadLetters=${outcome.deadLetters.size}"
         is PointOutcome.Unreportable -> "relativeDispersion=${outcome.result.relativeDispersion}"
+    }
+
+    private fun reportedRetainedBytes(measurement: JournalMeasurement): Long {
+        val raw = requireNotNull(measurement.retainedBytes)
+        return ((raw + RETAINED_BYTES_GRANULARITY / 2) / RETAINED_BYTES_GRANULARITY) *
+            RETAINED_BYTES_GRANULARITY
     }
 
     private fun coordinateLabel(at: Coordinate): String = "n=${at.cardinality} b=${at.batchSize}"
@@ -547,6 +589,7 @@ class MacroJournalTest {
     }
 
     companion object {
+        private const val RETAINED_BYTES_GRANULARITY = 4_096L
         private const val HARNESS_SHA_PROPERTY = "civictech.bench.harnessSha"
         private const val DATE_PROPERTY = "civictech.bench.date"
         private const val REPO_ROOT_PROPERTY = "computenet.repo.root"

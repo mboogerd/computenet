@@ -40,6 +40,13 @@ import java.util.concurrent.TimeUnit
  */
 data class JournalMeasurement(
     val outcome: PointOutcome,
+    /** The probe stage that produced the outcome, not a cause-text guess. */
+    val stage: String,
+    /** Whether the probe completed replay and the recovery fold check. */
+    val replayCompleted: Boolean,
+    val recoverCompleted: Boolean,
+    /** True only for an a-priori JournalPlan omission, not an observed outcome. */
+    val declaredOmission: Boolean = false,
     val fileBytes: Long?,
     val secondAttemptFileBytes: Long?,
     val records: Long?,
@@ -52,6 +59,10 @@ data class JournalMeasurement(
 ) {
     init {
         require(maxHeapBytes > 0) { "maxHeapBytes must be positive" }
+        require(stage.isNotBlank()) { "stage must not be blank" }
+        require(!declaredOmission || stage == "omission") {
+            "declared omissions must use the omission stage"
+        }
         val requiredForOk = listOf(
             fileBytes,
             records,
@@ -68,6 +79,9 @@ data class JournalMeasurement(
                 requiredForOk.all { it == null } && secondAttemptFileBytes == null
             },
         ) { "journal figures must be present exactly for Ok outcomes" }
+        require(!recoverCompleted || replayCompleted) {
+            "recovery cannot complete before replay"
+        }
     }
 }
 
@@ -110,21 +124,8 @@ object JournalProbe {
         require(at.drive == Drive.SIM) { "journal probe requires SIM drive" }
 
         val maxHeapBytes = Runtime.getRuntime().maxMemory()
-        if (at.cardinality == JournalPlan.CARDINALITIES.maxOrNull()) {
-            // The declared 1e6 SIM point exhausts the Gradle executor while the
-            // mesh is being driven, before SweepRunner can return its OOM outcome.
-            // D14 permits this point to be an explicit Unschedulable omission; keep
-            // it in the 12-point export instead of allowing the executor to die and
-            // losing the remaining batch sizes and the AfterAll accounting.
-            return excluded(
-                PointOutcome.Unschedulable(
-                    at = at,
-                    subject = CostSubject.JOURNAL,
-                    reason = "sweep: declared 1e6 SIM point exceeds the in-process heap safety envelope",
-                    observedLimit = "maxHeap=$maxHeapBytes",
-                ),
-                maxHeapBytes,
-            )
+        JournalPlan.omissionFor(at)?.let { omission ->
+            return omitted(at, omission, maxHeapBytes)
         }
         val generated = generatedShape(at)
         val meshes = mutableMapOf<Int, BenchMesh>()
@@ -167,9 +168,15 @@ object JournalProbe {
             // the heap before its attempt-level catch is entered. Keep the declared point
             // in the export as an honest SIM exclusion instead of letting the JUnit executor
             // die and losing the rest of the grid.
-            return excluded(unschedulable(at, "sweep", error, maxHeapBytes), maxHeapBytes)
+            return excluded(
+                unschedulable(at, "sweep", error, maxHeapBytes),
+                maxHeapBytes,
+                stage = "sweep",
+            )
         }
-        if (outcome !is PointOutcome.Ok) return excluded(outcome, maxHeapBytes)
+        if (outcome !is PointOutcome.Ok) {
+            return excluded(outcome, maxHeapBytes, stage = "sweep")
+        }
 
         val file = File(journalDir, "attempt1/peer0/host.journal")
         val secondFile = File(journalDir, "attempt2/peer0/host.journal")
@@ -197,9 +204,17 @@ object JournalProbe {
             check(records > 0L) { "journal replay returned no records" }
             bytesPerRecord = fileBytes.toDouble() / records.toDouble()
         } catch (error: OutOfMemoryError) {
-            return excluded(unschedulable(at, "replay", error, maxHeapBytes), maxHeapBytes)
+            return excluded(
+                unschedulable(at, "replay", error, maxHeapBytes),
+                maxHeapBytes,
+                stage = "replay",
+            )
         } catch (error: Throwable) {
-            return excluded(failed(at, error, meshes.values), maxHeapBytes)
+            return excluded(
+                failed(at, error, meshes.values),
+                maxHeapBytes,
+                stage = "replay",
+            )
         }
 
         // SweepRunner keeps no attempt after run() returns. Removing our second-attempt
@@ -212,12 +227,23 @@ object JournalProbe {
             HeapProbe.requireCollectableHeap()
             HeapProbe.retainedBytes { FileJournal(file).replay() }
         } catch (error: OutOfMemoryError) {
-            return excluded(unschedulable(at, "retained", error, maxHeapBytes), maxHeapBytes)
+            return excluded(
+                unschedulable(at, "retained", error, maxHeapBytes),
+                maxHeapBytes,
+                stage = "retained",
+                replayCompleted = true,
+            )
         } catch (error: Throwable) {
-            return excluded(failed(at, error, meshes.values), maxHeapBytes)
+            return excluded(
+                failed(at, error, meshes.values),
+                maxHeapBytes,
+                stage = "retained",
+                replayCompleted = true,
+            )
         }
 
         var recoveredMesh: BenchMesh? = null
+        var recoverCompleted = false
         try {
             val originalFold = sinkFold(firstMesh, generated.sinks)
             lateinit var installedRecoveryJournal: Journal
@@ -244,19 +270,23 @@ object JournalProbe {
                         },
                     ),
                     maxHeapBytes,
+                    stage = "recover",
+                    replayCompleted = true,
                 )
             }
             recoveredMesh = (recoveredBuild as MeshBuild.Built).mesh
             recoveredMesh.apply(generated.spec)
-            recoveredMesh.runToIdle()
+            recoveredMesh.runToIdle(budget.simSteps)
             val recovery = recoveredMesh.peers[0].host.recoverFrom(installedRecoveryJournal)
-            recoveredMesh.runToIdle()
+            recoveredMesh.runToIdle(budget.simSteps)
 
             val deadLetters = (firstMesh.deadLetters + recoveredMesh.deadLetters).map { it.toString() }
             if (deadLetters.isNotEmpty()) {
                 return excluded(
                     PointOutcome.Failed(at, CostSubject.JOURNAL, "dead letter", deadLetters),
                     maxHeapBytes,
+                    stage = "recover",
+                    replayCompleted = true,
                 )
             }
 
@@ -269,6 +299,8 @@ object JournalProbe {
                         deadLetters = emptyList(),
                     ),
                     maxHeapBytes,
+                    stage = "recover",
+                    replayCompleted = true,
                 )
             }
 
@@ -283,12 +315,25 @@ object JournalProbe {
                         deadLetters = emptyList(),
                     ),
                     maxHeapBytes,
+                    stage = "recover",
+                    replayCompleted = true,
                 )
             }
+            recoverCompleted = true
         } catch (error: OutOfMemoryError) {
-            return excluded(unschedulable(at, "recover", error, maxHeapBytes), maxHeapBytes)
+            return excluded(
+                unschedulable(at, "recover", error, maxHeapBytes),
+                maxHeapBytes,
+                stage = "recover",
+                replayCompleted = true,
+            )
         } catch (error: Throwable) {
-            return excluded(failed(at, error, listOfNotNull(firstMesh, recoveredMesh)), maxHeapBytes)
+            return excluded(
+                failed(at, error, listOfNotNull(firstMesh, recoveredMesh)),
+                maxHeapBytes,
+                stage = "recover",
+                replayCompleted = true,
+            )
         }
 
         val checkpointBytes: Long
@@ -298,13 +343,28 @@ object JournalProbe {
             checkpointBytes = file.length()
             recordsAfterCheckpoint = FileJournal(file).replay().size.toLong()
         } catch (error: OutOfMemoryError) {
-            return excluded(unschedulable(at, "checkpoint", error, maxHeapBytes), maxHeapBytes)
+            return excluded(
+                unschedulable(at, "checkpoint", error, maxHeapBytes),
+                maxHeapBytes,
+                stage = "checkpoint",
+                replayCompleted = true,
+                recoverCompleted = recoverCompleted,
+            )
         } catch (error: Throwable) {
-            return excluded(failed(at, error, listOfNotNull(firstMesh, recoveredMesh)), maxHeapBytes)
+            return excluded(
+                failed(at, error, listOfNotNull(firstMesh, recoveredMesh)),
+                maxHeapBytes,
+                stage = "checkpoint",
+                replayCompleted = true,
+                recoverCompleted = recoverCompleted,
+            )
         }
 
         return JournalMeasurement(
             outcome = outcome,
+            stage = "complete",
+            replayCompleted = true,
+            recoverCompleted = recoverCompleted,
             fileBytes = fileBytes,
             secondAttemptFileBytes = secondAttemptFileBytes,
             records = records,
@@ -506,9 +566,18 @@ private fun PointOutcome.reSubjected(): PointOutcome = when (this) {
     is PointOutcome.Failed -> copy(subject = CostSubject.JOURNAL)
 }
 
-private fun excluded(outcome: PointOutcome, maxHeapBytes: Long): JournalMeasurement =
+private fun excluded(
+    outcome: PointOutcome,
+    maxHeapBytes: Long,
+    stage: String,
+    replayCompleted: Boolean = false,
+    recoverCompleted: Boolean = false,
+): JournalMeasurement =
     JournalMeasurement(
         outcome = outcome,
+        stage = stage,
+        replayCompleted = replayCompleted,
+        recoverCompleted = recoverCompleted,
         fileBytes = null,
         secondAttemptFileBytes = null,
         records = null,
@@ -519,6 +588,32 @@ private fun excluded(outcome: PointOutcome, maxHeapBytes: Long): JournalMeasurem
         checkpointBytes = null,
         recordsAfterCheckpoint = null,
     )
+
+private fun omitted(
+    at: Coordinate,
+    omission: JournalPlan.Omission,
+    maxHeapBytes: Long,
+): JournalMeasurement = JournalMeasurement(
+    outcome = PointOutcome.Unschedulable(
+        at = at,
+        subject = CostSubject.JOURNAL,
+        reason = omission.reason,
+        observedLimit = "",
+    ),
+    stage = "omission",
+    replayCompleted = false,
+    recoverCompleted = false,
+    declaredOmission = true,
+    fileBytes = null,
+    secondAttemptFileBytes = null,
+    records = null,
+    appended = null,
+    bytesPerRecord = null,
+    retainedBytes = null,
+    maxHeapBytes = maxHeapBytes,
+    checkpointBytes = null,
+    recordsAfterCheckpoint = null,
+)
 
 private fun unschedulable(
     at: Coordinate,
