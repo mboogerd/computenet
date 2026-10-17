@@ -15,7 +15,7 @@ const BANDS: Band[] = [
     screen; also the home for the cycle-guard and edges-are-arguable explainers. */
 export default function Legend() {
   return (
-    <div class="legend">
+    <div class="legend" aria-label="Legend">
       <div class="legend-group">
         <span class="legend-title">Credence</span>
         <For each={BANDS}>
@@ -41,10 +41,11 @@ export default function Legend() {
               y1="6"
               x2="26"
               y2="6"
-              stroke="var(--edge-muted)"
+              stroke="var(--edge-support)"
               stroke-width="1.5"
+              stroke-linecap="round"
             />
-            <path d="M26 6 l-6 -3 v6 z" fill="var(--edge-muted)" />
+            <path d="M26 6 l-6 -3 v6 z" fill="var(--edge-support)" />
           </svg>
           Support
         </span>
@@ -55,11 +56,19 @@ export default function Legend() {
               y1="6"
               x2="26"
               y2="6"
-              stroke="var(--edge-muted)"
+              stroke="var(--edge-attack)"
               stroke-width="1.5"
               stroke-dasharray="4 3"
             />
-            <line x1="26" y1="2" x2="26" y2="10" stroke="var(--edge-muted)" stroke-width="2" />
+            <line
+              x1="26"
+              y1="2"
+              x2="26"
+              y2="10"
+              stroke="var(--edge-attack)"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
           </svg>
           Attack
         </span>

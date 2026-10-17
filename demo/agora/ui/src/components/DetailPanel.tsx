@@ -6,6 +6,8 @@ import { labelOf } from '../util/label';
 import CredenceBadge from './CredenceBadge';
 import StanceSlider from './StanceSlider';
 import Sparkline from './Sparkline';
+import CredenceMeter from './CredenceMeter';
+import { AttackIcon, CloseIcon, SupportIcon, TrashIcon } from './Icons';
 import './DetailPanel.css';
 
 const HINT_KEY = 'agora.hint.edge';
@@ -66,19 +68,29 @@ export default function DetailPanel() {
   return (
     <Show when={node()}>
       {(n) => (
-        <aside class="panel">
+        <aside class="panel" aria-label="Selection details">
           <header class="panel__head">
-            <span class="panel__kind">{isEdge() ? 'Argument (link)' : 'Claim'}</span>
-            <button class="panel__close" title="Close" onClick={() => setSelection(null)}>
-              ×
+            <span class="panel__kind" classList={{ 'panel__kind--edge': isEdge() }}>
+              {isEdge() ? 'Argument (link)' : 'Claim'}
+            </span>
+            <button
+              class="panel__close pressable"
+              title="Close"
+              aria-label="Close details"
+              onClick={() => setSelection(null)}
+            >
+              <CloseIcon size={16} />
             </button>
           </header>
 
           <p class="panel__text">{labelOf(n())}</p>
 
           <div class="panel__credence">
-            <span class="panel__field-label">Aggregate credence</span>
-            <CredenceBadge credence={n().credence} />
+            <div class="panel__credence-head">
+              <span class="panel__field-label">Aggregate credence</span>
+              <CredenceBadge credence={n().credence} />
+            </div>
+            <CredenceMeter credence={n().credence} labels />
           </div>
 
           <div class="panel__field">
@@ -90,7 +102,7 @@ export default function DetailPanel() {
             <div class="panel__hint">
               You selected an <strong>argument</strong> — the link itself, not the claims it
               connects. Arguing here challenges or reinforces <em>the link</em>.
-              <button class="panel__hint-x" onClick={dismissHint}>
+              <button class="panel__hint-x pressable" onClick={dismissHint}>
                 Got it
               </button>
             </div>
@@ -109,17 +121,19 @@ export default function DetailPanel() {
             />
             <div class="panel__actions">
               <button
-                class="panel__btn panel__btn--attack"
+                class="panel__btn panel__btn--attack pressable"
                 disabled={busy() || !text().trim()}
                 onClick={() => argue('ATTACK')}
               >
+                <AttackIcon size={14} stroke={2} />
                 Attack
               </button>
               <button
-                class="panel__btn panel__btn--support"
+                class="panel__btn panel__btn--support pressable"
                 disabled={busy() || !text().trim()}
                 onClick={() => argue('SUPPORT')}
               >
+                <SupportIcon size={14} stroke={2} />
                 Support
               </button>
             </div>
@@ -134,7 +148,7 @@ export default function DetailPanel() {
             </span>
             <Show
               when={incoming().length}
-              fallback={<p class="panel__empty">None yet.</p>}
+              fallback={<p class="panel__empty">None yet — be the first to argue above.</p>}
             >
               <ul class="panel__incoming">
                 <For each={incoming()}>
@@ -157,11 +171,12 @@ export default function DetailPanel() {
           </div>
 
           <div class="panel__field">
-            <span class="panel__field-label">History (since you opened this page)</span>
+            <span class="panel__field-label">History · since you opened this page</span>
             <Sparkline nodeRef={n().ref} credence={n().credence} />
           </div>
 
-          <button class="panel__remove" onClick={del}>
+          <button class="panel__remove pressable" onClick={del}>
+            <TrashIcon size={14} />
             Remove this {isEdge() ? 'argument' : 'claim'}
           </button>
         </aside>

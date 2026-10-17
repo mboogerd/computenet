@@ -1,21 +1,24 @@
 .debate {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.1rem;
   min-height: 0;
 }
 
 .debate__bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.6rem;
 }
 
-.debate__bar-label {
-  font-size: 12px;
-  color: var(--text-secondary);
+.debate__bar-label,
+.debate__sort-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 
 .debate__bar-spacer {
@@ -28,71 +31,125 @@
   gap: 0.5rem;
 }
 
-.debate__sort-label {
+.debate__sort .segmented button {
+  padding: 0.25rem 0.7rem;
   font-size: 12px;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
-.debate__sort > button {
-  padding: 0.3rem 0.6rem;
-  background: var(--surface);
-  color: var(--text-secondary);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.debate__sort > button.active {
-  background: var(--accept-strong);
-  border-color: var(--accept-strong);
-  color: #fff;
-}
-
+/* Native select (keeps keyboard + a11y), restyled: custom chevron, real
+   border for the 3:1 input-boundary rule. */
 .focal-picker {
   flex: 1;
-  max-width: 46ch;
-  padding: 0.4rem 0.5rem;
-  background: var(--surface);
+  min-width: 0;
+  max-width: 52ch;
+  height: 34px;
+  padding: 0 2rem 0 0.7rem;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23898781' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+      no-repeat right 0.7rem center,
+    var(--surface);
   color: var(--text);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--hairline-strong);
   border-radius: var(--radius);
   font: inherit;
+  font-weight: 500;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  transition-property: border-color, box-shadow;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
+.focal-picker:focus {
+  outline: none;
+  border-color: var(--accept-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accept-strong) 22%, transparent);
+}
+
+/* The focal claim is the page's anchor — a raised card with a band-colored
+   rule along its top, the claim at display size, and the diverging meter. */
 .debate__focal {
+  position: relative;
   width: 100%;
   text-align: left;
   color: var(--text);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 1rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+  padding: 1.1rem 1.25rem 1.15rem;
   background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-left: 3px solid var(--accept-strong);
-  border-radius: var(--radius);
-  font-size: 1.05rem;
-  font-weight: 550;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-border);
   font-family: inherit;
   cursor: pointer;
+  overflow: hidden;
+  transition-property: box-shadow, outline-color;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.debate__focal:hover {
-  border-color: color-mix(in srgb, var(--text) 25%, var(--hairline));
+/* First-load staged entrance: focal card, then the two columns, 100ms apart. */
+.debate--enter .debate__focal,
+.debate--enter .debate-col {
+  animation: agora-enter-up var(--dur-enter) ease-out both;
+}
+.debate--enter .debate-col {
+  animation-delay: 100ms;
+}
+.debate--enter .debate-col + .debate-col {
+  animation-delay: 200ms;
+}
+
+.debate__focal::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--reject-strong), var(--contested) 50%, var(--accept-strong));
+  opacity: 0.85;
+}
+
+@media (hover: hover) {
+  .debate__focal:hover {
+    box-shadow: var(--shadow-border-hover);
+  }
 }
 
 .debate__focal.is-selected {
-  outline: 2px solid color-mix(in srgb, var(--accept-strong) 60%, transparent);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.debate__focal-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
 }
 
 .debate__focal-text {
   min-width: 0;
+  font-size: 1.3rem;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+.debate__focal-meter {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-top: 0.5rem;
+  max-width: 460px;
+}
+
+.debate__focal-meter .credence-badge {
+  margin-top: -3px;
 }
 
 .debate__cols {
@@ -102,49 +159,73 @@
   align-items: start;
 }
 
+/* Column panels: a sunken well (structure) so the raised argument cards
+   inside read as the interactive layer. Its padding is uneven (10/12px), so
+   per better-ui the two layers keep their own radius tokens. */
 .debate-col {
   min-width: 0;
-  padding: 0.5rem 0.75rem 0.75rem;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--surface) 60%, transparent);
-}
-
-.debate-col--attack {
-  border-top: 3px solid var(--reject-strong);
-}
-
-.debate-col--support {
-  border-top: 3px solid var(--accept-strong);
+  padding: 0.6rem 0.75rem 0.75rem;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-sunken) 70%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
 }
 
 .debate-col__title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin: 0.3rem 0 0.5rem;
-  font-size: 0.8rem;
+  gap: 0.45rem;
+  margin: 0.2rem 0 0.55rem;
+  font-size: 12px;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.debate-col__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+}
+
+.debate-col--attack .debate-col__icon {
+  color: var(--reject-strong);
+  background: color-mix(in srgb, var(--reject-strong) 14%, transparent);
+}
+
+.debate-col--support .debate-col__icon {
+  color: var(--accept-strong);
+  background: color-mix(in srgb, var(--accept-strong) 14%, transparent);
 }
 
 .debate-col__count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 1.4em;
-  height: 1.4em;
-  padding: 0 0.35em;
+  min-width: 1.6em;
+  height: 1.6em;
+  padding: 0 0.4em;
   border-radius: 999px;
-  background: var(--hairline);
-  font-size: 0.9em;
+  background: var(--surface);
+  box-shadow: var(--shadow-border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
 .debate-col__empty,
 .debate__empty {
-  color: var(--text-secondary);
+  margin: 0.25rem 0 0.4rem;
+  padding: 1rem;
+  border-radius: var(--radius);
+  border: 1px dashed var(--hairline-strong);
+  color: var(--text-muted);
   font-size: 0.85rem;
+  text-align: center;
+  text-wrap: pretty;
 }
 
 @media (max-width: 720px) {

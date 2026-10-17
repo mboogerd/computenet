@@ -44,6 +44,11 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
     --factor-1: #9333ea; --factor-2: #a855f7; --factor-3: #c026d3; --factor-4: #7e22ce;
     --unrated: #b4b9c6; --track: #e3e6ee;
     --shadow: 0 1px 2px rgba(20,24,40,.05), 0 6px 20px rgba(20,24,40,.06);
+    /* better-ui shadow recipe: a 1px ring, lift, ambient depth — elevation without a border */
+    --shadow-border: 0 0 0 1px rgba(0,0,0,.06), 0 1px 2px -1px rgba(0,0,0,.06), 0 2px 4px 0 rgba(0,0,0,.04);
+    --shadow-border-hover: 0 0 0 1px rgba(0,0,0,.08), 0 1px 2px -1px rgba(0,0,0,.08), 0 2px 4px 0 rgba(0,0,0,.06);
+    --shadow-pop: 0 0 0 1px rgba(0,0,0,.06), 0 12px 32px -8px rgba(20,24,40,.22), 0 4px 10px -4px rgba(20,24,40,.10);
+    --glow: rgba(124,58,237,.10);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -56,78 +61,118 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
       --factor-1: #c084fc; --factor-2: #d8b4fe; --factor-3: #e879f9; --factor-4: #c4b5fd;
       --unrated: #4b5060; --track: #272b37;
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.28);
+      /* depth shadows vanish on dark: one white ring instead */
+      --shadow-border: 0 0 0 1px rgba(255,255,255,.08);
+      --shadow-border-hover: 0 0 0 1px rgba(255,255,255,.13);
+      --shadow-pop: 0 0 0 1px rgba(255,255,255,.10), 0 16px 40px -8px rgba(0,0,0,.6);
+      --glow: rgba(177,151,252,.08);
     }
   }
-  /* ── scale (not colours) ── */
+  /* ── scale and motion (not colours) ── */
   :root {
     --radius: 8px; --radius-lg: 14px;
     --fs-1: .78rem; --fs-2: .875rem; --fs-3: 1rem; --fs-4: 1.45rem;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);        /* entrances, exits, feedback */
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);    /* things moving on screen */
+    --dur-fast: 150ms; --dur: 200ms;
   }
 
   /* ── page ── */
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  html { background: var(--bg); }
+  html { background: radial-gradient(ellipse 900px 420px at 50% -120px, var(--glow), transparent 70%) no-repeat, var(--bg);
+         -webkit-tap-highlight-color: transparent; }
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: var(--fs-3); line-height: 1.45;
-         color: var(--ink); background: var(--bg); max-width: 980px; margin: 0 auto; padding: 0 16px 3rem; }
-  h1 { font-size: var(--fs-4); margin: 0; letter-spacing: -.01em; }
-  h2 { font-size: var(--fs-3); margin: 0 0 .7rem; }
+         color: var(--ink); background: transparent; max-width: 980px; margin: 0 auto; padding: 0 16px 3rem;
+         -webkit-font-smoothing: antialiased; }
+  h1 { font-size: var(--fs-4); margin: 0; letter-spacing: -.02em; text-wrap: balance; }
+  h2 { font-size: var(--fs-3); margin: 0 0 .7rem; letter-spacing: -.01em; text-wrap: balance; }
   a { color: var(--accent); }
   .muted { color: var(--muted); }
   .num, .count, .score { font-variant-numeric: tabular-nums; }
   input, select, textarea { padding: .4rem .6rem; border: 1px solid var(--line); border-radius: var(--radius);
-                            font: inherit; font-size: var(--fs-2); color: var(--ink); background: var(--surface); }
+                            font: inherit; font-size: var(--fs-2); color: var(--ink); background: var(--surface);
+                            transition-property: border-color, box-shadow; transition-duration: var(--dur-fast);
+                            transition-timing-function: ease-out; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
   input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 1px; }
   input[type=range] { accent-color: var(--accent); padding: 0; border: none; background: none; }
   button { padding: .35rem .8rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
-           color: var(--ink); cursor: pointer; font: inherit; font-size: var(--fs-2); }
-  button:hover:not(:disabled) { border-color: var(--accent); }
+           color: var(--ink); cursor: pointer; font: inherit; font-size: var(--fs-2);
+           transition-property: background-color, border-color, color, box-shadow, scale;
+           transition-duration: var(--dur-fast); transition-timing-function: ease-out; }
+  /* press feedback: 0.96 over 150ms, never on a disabled control */
+  button:not(:disabled):active { scale: .96; }
   button:disabled { opacity: .5; cursor: default; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600;
+                   box-shadow: 0 1px 2px var(--glow), inset 0 1px 0 color-mix(in oklab, var(--accent-ink) 18%, transparent); }
   button.link { border: none; background: none; padding: 0 .2rem; color: var(--accent); font-size: var(--fs-1); }
+  button.link:not(:disabled):active { scale: 1; }
+  @media (hover: hover) {
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button.primary:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 88%, var(--ink)); }
+    button.link:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 2px; }
+  }
 
-  /* ── hierarchy: page → pane (a view) → card (an item) ── */
-  .pane { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
-          box-shadow: var(--shadow); padding: 1.1rem 1.2rem; }
-  .card { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius);
-          padding: .8rem 1rem; margin-bottom: .8rem; }
+  /* ── hierarchy: page → pane (a view) → card (an item) ──
+     elevation comes from the layered ring shadow; the transparent border keeps an edge in
+     forced-colors mode, which drops every box-shadow */
+  .pane { background: var(--surface); border: 1px solid transparent; border-radius: var(--radius-lg);
+          box-shadow: var(--shadow-border), var(--shadow); padding: 1.1rem 1.2rem; }
+  .card { background: var(--surface); border: 1px solid transparent; border-radius: var(--radius);
+          box-shadow: var(--shadow-border); padding: .8rem 1rem; margin-bottom: .8rem; }
   .card h3 { font-size: var(--fs-3); margin: 0 0 .3rem; display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; }
   .card h3 .count { font-size: var(--fs-1); font-weight: normal; color: var(--muted); white-space: nowrap; }
-  .card pre { margin: 0 0 .5rem; padding: .5rem .7rem; background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+  .card pre { margin: 0 0 .5rem; padding: .5rem .7rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
               font-size: var(--fs-1); line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
   .toggle { border: none; background: none; color: var(--accent); cursor: pointer; padding: 0; font-size: var(--fs-1); margin-bottom: .3rem; }
   form.inline { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-bottom: .8rem; font-size: var(--fs-2); }
 
+  /* ── empty states: an icon, a line saying what is missing, a line saying what to do ── */
+  .empty { display: flex; flex-direction: column; align-items: center; gap: .35rem; text-align: center;
+           padding: 2rem 1.5rem; border: 1.5px dashed var(--line); border-radius: var(--radius-lg); color: var(--muted); }
+  .empty .empty-icon { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; margin-bottom: .3rem;
+                       border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+  .empty .empty-icon svg { width: 1.3rem; height: 1.3rem; }
+  .empty strong { color: var(--ink); font-size: var(--fs-3); }
+  .empty span { font-size: var(--fs-2); }
+
   /* ── header ── */
   header.top { display: flex; align-items: center; gap: .6rem 1rem; flex-wrap: wrap; padding: 1rem 0 .9rem; }
   .brand { display: inline-flex; align-items: center; gap: .5rem; font-weight: 700; font-size: var(--fs-3);
-           color: var(--ink); text-decoration: none; }
+           color: var(--ink); text-decoration: none; letter-spacing: -.01em; }
   .logo { width: 1.3rem; height: 1.3rem; border-radius: 6px;
-          background: linear-gradient(135deg, var(--value-1), var(--accent) 55%, var(--cost-1)); }
+          background: linear-gradient(135deg, var(--value-1), var(--accent) 55%, var(--cost-1));
+          box-shadow: var(--shadow-border); }
   #crumb { display: flex; align-items: center; gap: .4rem; font-size: var(--fs-2); min-width: 0; }
-  #crumb a { color: var(--muted); text-decoration: none; }
-  #crumb a:hover { color: var(--accent); }
+  #crumb a { color: var(--muted); text-decoration: none; transition: color var(--dur-fast) ease-out; }
   #crumbTitle { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 16rem; }
   .spacer { flex: 1 1 auto; }
   .subbar { flex: 1 0 100%; display: flex; align-items: center; justify-content: space-between; gap: .6rem 1rem; flex-wrap: wrap; }
   .subbar:not(:has(> :not([hidden]))) { display: none; }
   #phase { display: flex; align-items: center; gap: .3rem; list-style: none; margin: 0; padding: 0; font-size: var(--fs-1); }
-  #phase li { color: var(--muted); padding: .15rem .55rem; border-radius: 999px; }
-  #phase li.arr { padding: 0; }
+  #phase li { color: var(--muted); padding: .15rem .55rem; border-radius: 999px;
+              transition-property: background-color, color; transition-duration: var(--dur); transition-timing-function: ease-out; }
+  #phase li.arr { padding: 0; opacity: .6; }
   #phase li.done { color: var(--ink); }
+  /* a finished step carries a static check, not just a colour */
+  #phase li.done::before { content: "✓ "; color: var(--ok); font-weight: 700; }
   #phase li.current { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
   #identity { display: inline-flex; align-items: center; gap: .4rem; padding: .25rem .35rem .25rem .7rem;
-              border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: var(--fs-2); }
-  #identity .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--ok); }
+              border: 1px solid transparent; border-radius: 999px; background: var(--surface); font-size: var(--fs-2);
+              box-shadow: var(--shadow-border); }
+  #identity .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--ok);
+                   box-shadow: 0 0 0 3px color-mix(in oklab, var(--ok) 22%, transparent); }
   #identity b { font-weight: 600; }
   #idInput { width: 10rem; padding: .15rem .45rem; font-size: var(--fs-2); }
 
-  /* ── tabs ── */
+  /* ── tabs: a high-frequency switch, so colour only, 150ms, no movement ── */
   .tabs { display: inline-flex; gap: .2rem; padding: .25rem; margin: 0; background: var(--surface-2);
           border: 1px solid var(--line); border-radius: 999px; }
-  .tabs button { border: none; border-radius: 999px; padding: .35rem 1rem; background: none; color: var(--muted); font-weight: 600; }
-  .tabs button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .tabs button { border: 1px solid transparent; border-radius: 999px; padding: .35rem 1rem; background: none; color: var(--muted); font-weight: 600; }
+  .tabs button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-border); }
   .tabs .beta { font-size: .62rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-left: .3rem; }
 
   /* ── landing ── */
@@ -135,16 +180,18 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
   .landing-head p { margin: .25rem 0 0; }
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .9rem; margin-bottom: 1.4rem; }
   .tcard { display: flex; flex-direction: column; gap: .45rem; padding: 1rem 1.1rem; color: var(--ink); text-decoration: none;
-           background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow);
-           transition: transform .15s, border-color .15s; }
-  .tcard:hover { transform: translateY(-2px); border-color: var(--accent); }
-  .tc-title { font-weight: 700; font-size: var(--fs-3); }
+           background: var(--surface); border: 1px solid transparent; border-radius: var(--radius-lg);
+           box-shadow: var(--shadow-border), var(--shadow);
+           transition-property: box-shadow, translate; transition-duration: var(--dur); transition-timing-function: var(--ease-out); }
+  .tc-title { font-weight: 700; font-size: var(--fs-3); letter-spacing: -.01em; }
   .tc-meta, .tc-prog { font-size: var(--fs-1); color: var(--muted); font-variant-numeric: tabular-nums; }
   .tc-dims { display: flex; flex-wrap: wrap; gap: .3rem; }
   .tc-dims span { font-size: .7rem; padding: .08rem .45rem; border-radius: 999px; color: var(--surface); font-weight: 600; }
-  .tc-bar { height: .35rem; border-radius: 999px; background: var(--track); overflow: hidden; }
-  .tc-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .tc-bar { height: .35rem; border-radius: 999px; background: var(--track); overflow: hidden; margin-top: auto; }
+  .tc-bar span { display: block; height: 100%; width: 100%; background: var(--accent); border-radius: inherit;
+                 transform-origin: left; scale: 0 1; transition: scale .4s var(--ease-out), background-color var(--dur) ease-out; }
   .tcard.done .tc-bar span { background: var(--ok); }
+  .tcard.done .tc-prog::before { content: "✓ "; color: var(--ok); font-weight: 700; }
   .tc-mine { align-self: flex-start; font-size: .68rem; padding: .05rem .45rem; border-radius: 999px;
              background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   #noTopics { grid-column: 1 / -1; }
@@ -156,12 +203,36 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
   .ntrow .sw { width: .8rem; height: .8rem; border-radius: 4px; }
   #ntAddDim { align-self: flex-start; }
   #newTopic .hint { font-size: var(--fs-1); color: var(--muted); margin: 0 0 .9rem; }
+  #loading { display: flex; align-items: center; gap: .5rem; }
+  #loading::before { content: ""; width: .9rem; height: .9rem; border-radius: 50%;
+                     border: 2px solid var(--track); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+  @keyframes spin { to { rotate: 1turn; } }
+
+  /* hover-only styling stays on hover-capable pointers: on touch :hover latches after a tap */
+  @media (hover: hover) {
+    #crumb a:hover { color: var(--accent); }
+    .tcard:hover { box-shadow: var(--shadow-border-hover), var(--shadow); }
+  }
+  /* a topic card lifts 2px on hover; movement only without the reduced-motion preference */
+  @media (hover: hover) and (prefers-reduced-motion: no-preference) {
+    .tcard:hover { translate: 0 -2px; }
+  }
+  /* first sight of the landing (a rare moment): cards stagger in 100ms apart — opacity, 4px blur,
+     12px rise over 300ms. Played once per card (the class is dropped on animationend), never on
+     an SSE re-render. Under reduced motion the same entrance is an opacity fade only. */
+  .tcard.entering { animation: tcIn 300ms ease-out both; animation-delay: var(--stagger, 0ms); }
+  @keyframes tcIn { from { opacity: 0; } }
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes tcIn { from { opacity: 0; filter: blur(4px); translate: 0 12px; } }
+  }
 
   @media (max-width: 640px) {
     #crumbTitle { max-width: 9rem; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .tcard, .tc-bar span { transition: none; }
+    .tc-bar span { transition-property: background-color; }
+    button:not(:disabled):active { scale: 1; }
+    #loading::before { animation-duration: 2.4s; }
   }
 </style>
 </head>
@@ -196,7 +267,10 @@ private const val SHELL_HEAD = """<!DOCTYPE html>
     <h1>Topics</h1>
     <p class="muted">Open a topic to rate its ideas, or start a new one.</p>
   </div>
-  <div id="topicCards" class="cards"><p id="noTopics" class="muted" hidden>No topics yet. Start the first one below.</p></div>
+  <div id="topicCards" class="cards"><div id="noTopics" class="empty" hidden>
+    <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h7"/><path d="M18 14v6M15 17h6"/></svg></span>
+    <strong>No topics yet</strong><span>Start the first one below — name it, pick a few dimensions, then invite your team.</span>
+  </div></div>
   <form id="newTopic" class="pane" autocomplete="off">
     <h2>New topic</h2>
     <label class="field"><span>Title</span><input id="ntTitle" maxlength="200" placeholder="e.g. Q4 roadmap bets"></label>
@@ -375,6 +449,17 @@ function editing(root) {
 
 function guard(fn) { try { fn(); } catch (e) { console.error(e); } }
 
+// an OS light/dark flip would fire every colour transition at once and smear: switch them off
+// for that one frame (better-ui, "suppress transitions on theme switch")
+function suppressThemeTransitions() {
+  const style = document.createElement('style');
+  style.textContent = '*,*::before,*::after{transition:none !important}';
+  document.head.appendChild(style);
+  void document.body.offsetHeight; // commit the new colours while the override applies
+  requestAnimationFrame(() => requestAnimationFrame(() => style.remove()));
+}
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', suppressThemeTransitions);
+
 // ── routing: / is the landing, /t/{id} a topic ──────────────────────────────
 let pendingTopic = null; // just created: its frame may lag the POST response
 function go(path) {
@@ -485,16 +570,21 @@ el('idInput').onblur = () => endNameEdit(true);
 
 // ── landing: one card per topic, plus New topic ────────────────────────────
 const topicCards = new Map(); // topic id -> card node, updated in place
+let landingFresh = 0;         // cards created in the current render, for the entrance stagger
 function renderLanding() {
   const box = el('topicCards');
   el('noTopics').hidden = !loaded || state.topics.length > 0;
   const seen = new Set();
   for (const t of state.topics) {
     seen.add(t.id);
-    let c = topicCards.get(t.id);
+    let c = topicCards.get(t.id), fresh = false;
     if (!c) {
+      fresh = true;
       c = document.createElement('a');
-      c.className = 'tcard';
+      c.className = 'tcard entering';
+      // staggered once-only entrance: 100ms apart, capped so a long list never waits long
+      c.style.setProperty('--stagger', Math.min(landingFresh++, 6) * 100 + 'ms');
+      c.addEventListener('animationend', () => { c.classList.remove('entering'); c.style.removeProperty('--stagger'); }, { once: true });
       c.setAttribute('data-nav', '');
       c.innerHTML = '<span class="tc-title"></span><span class="tc-mine" hidden>you facilitate</span>' +
                     '<span class="tc-meta"></span><span class="tc-dims"></span>' +
@@ -519,19 +609,21 @@ function renderLanding() {
         dims.appendChild(s);
       }
     }
-    box.insertBefore(c, el('noTopics'));
+    // a node re-inserted restarts its CSS animation, so only place a card when it is new
+    if (fresh) box.insertBefore(c, el('noTopics'));
     paintProgress(t.id);
     const tid = t.id;
     fetchMe(tid).then(() => paintProgress(tid), () => {});
   }
   for (const [id, c] of topicCards) if (!seen.has(id)) { topicCards.delete(id); c.remove(); }
+  landingFresh = 0;
 }
 function paintProgress(tid) {
   const c = topicCards.get(tid);
   const p = myProgress(tid);
   if (!c || !p) return;
   c.querySelector('.tc-prog').textContent = p.rated + ' of ' + p.total + ' rated';
-  c.querySelector('.tc-bar span').style.width = (p.total ? 100 * p.rated / p.total : 0) + '%';
+  c.querySelector('.tc-bar span').style.scale = (p.total ? p.rated / p.total : 0) + ' 1';
   c.classList.toggle('done', p.total > 0 && p.rated === p.total);
 }
 

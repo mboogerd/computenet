@@ -1,26 +1,64 @@
 .empty-state {
   margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
+  max-width: 40ch;
   color: var(--text-secondary);
   padding: 3rem 1rem;
 }
 
+/* Staged entrance: 100ms stagger, opacity + 4px blur + 12px rise over 300ms
+   ease-out (better-ui). Tokens zero the movement under reduced motion. */
+.empty-state > * {
+  animation: agora-enter-up var(--dur-enter) ease-out both;
+}
+.empty-state > :nth-child(2) {
+  animation-delay: 100ms;
+}
+.empty-state > :nth-child(3) {
+  animation-delay: 200ms;
+}
+.empty-state > :nth-child(4) {
+  animation-delay: 300ms;
+}
+
+.empty-state__art {
+  margin-bottom: 1.25rem;
+}
+
 .empty-state h2 {
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.4rem;
   color: var(--text);
-  font-size: 1.2rem;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .empty-state p {
-  margin: 0 0 1.25rem;
+  margin: 0 0 1.4rem;
+  text-wrap: pretty;
 }
 
+/* Icon side gets 2px less padding (optical alignment). */
 .empty-state__cta {
-  padding: 0.5rem 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1.1rem 0.55rem 0.95rem;
   background: var(--accept-strong);
-  color: #fff;
-  border: none;
+  color: var(--on-accent);
+  border: 1px solid transparent;
   border-radius: var(--radius);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12), inset 0 1px 0 oklch(1 0 0 / 0.15);
   font: inherit;
+  font-weight: 550;
   cursor: pointer;
+}
+
+@media (hover: hover) {
+  .empty-state__cta:hover {
+    background: color-mix(in srgb, var(--accept-strong) 88%, var(--text));
+  }
 }

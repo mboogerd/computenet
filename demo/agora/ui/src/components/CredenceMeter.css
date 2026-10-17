@@ -1,0 +1,94 @@
+.meter {
+  width: 100%;
+  min-width: 120px;
+}
+
+.meter__track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.meter__tick {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--hairline-strong);
+}
+
+/* Half-width bar anchored at the midpoint; scaleX ∈ [-1, 1] grows it right
+   (accepted) or, negative, left (rejected). Live credence changes glide over
+   200ms so a vote doesn't make the bar jump (animate: "preventing a jarring
+   change"); transform only, no layout. */
+.meter__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 50%;
+  transform-origin: left center;
+  border-radius: 0 999px 999px 0;
+  transition: transform 200ms var(--ease-out), background-color 200ms ease-out;
+}
+
+.meter__fill--contested {
+  background-image: var(--contested-texture) !important;
+}
+
+.meter__mid {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-muted);
+}
+
+/* Full-track positioner, so translateX(%) is a share of the track width:
+   the marker moves on transform rather than animating `left`. */
+.meter__dotpos {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: transform 200ms var(--ease-out);
+}
+
+/* End-of-value marker: 10px dot with a 2px surface ring (dataviz overlap
+   ring) and a 1px ink ring, so the pale contested fill stays findable. */
+.meter__dot {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  left: 0;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--hairline-strong), 0 0 0 2px var(--surface), 0 0 0 3px var(--hairline-strong);
+  transition: background-color 200ms ease-out;
+}
+
+.meter__labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter__fill,
+  .meter__dotpos {
+    transition-duration: 0ms;
+  }
+}
+:root[data-motion="off"] .meter__fill,
+:root[data-motion="off"] .meter__dotpos {
+  transition-duration: 0ms;
+}

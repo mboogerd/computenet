@@ -127,7 +127,7 @@ function SearchPanel() {
         <For each={SEARCH_MODES}>
           {(m) => (
             <button
-              class="search-chip"
+              class="search-chip pressable"
               classList={{ 'is-active': searchMode() === m.mode }}
               disabled={!m.enabled}
               title={m.disabledReason}
