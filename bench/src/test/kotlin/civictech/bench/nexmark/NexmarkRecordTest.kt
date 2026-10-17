@@ -78,6 +78,27 @@ class NexmarkRecordTest {
     }
 
     @Test
+    fun `evicting state label is present exactly when a policy is`() {
+        val header = nexmarkTestHeader(query = NexmarkQuery.Q7)
+        assertThrows(IllegalArgumentException::class.java) {
+            header.copy(stateLabel = StateLabel.Evicting(1L))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            header.copy(
+                policy = LatenessPolicy(1L),
+                lateness = LatenessAccounting(0L, 0L, 0L, 0L),
+                stateLabel = StateLabel.UNBOUNDED_STATE,
+            )
+        }
+    }
+
+    @Test
+    fun `fan out is covered only at a FanDegree degree`() {
+        assertTrue(nexmarkTestHeader(maxFanOut = 16).fanOutCovered)
+        assertFalse(nexmarkTestHeader(maxFanOut = 7).fanOutCovered)
+    }
+
+    @Test
     fun `verified keeps insert and retract figures separate and rejects crossed phases`() {
         val record = verifiedNexmark()
         assertEquals(Status.verified, record.status)
@@ -100,7 +121,11 @@ class NexmarkRecordTest {
         assertEquals(Status.failed, failed.status)
         assertEquals(Status.unverified, unverified.status)
         assertEquals(Status.state_bound, stateBound.status)
-        listOf(failed, unverified, stateBound).forEach { record ->
+        val unreportable = NexmarkRecord.Unreportable(
+            nexmarkTestHeader(),
+            NexmarkRecord.UnreportableCause.GenerationOnMeasuredPath(0.5),
+        )
+        listOf(failed, unverified, stateBound, unreportable).forEach { record ->
             assertTrue(record::class.java.declaredFields.none { field ->
                 Figure::class.java.isAssignableFrom(field.type)
             })

@@ -9,6 +9,9 @@ class NoLatencyFieldTest {
     fun `record model has no latency field property or nested type`() {
         val types = listOf(
             RunHeader::class.java,
+            NexmarkRecord::class.java,
+            NexmarkRecord.UnreportableCause::class.java,
+            Figure::class.java,
             NexmarkRecord.Verified::class.java,
             NexmarkRecord.Failed::class.java,
             NexmarkRecord.Unverified::class.java,
