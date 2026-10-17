@@ -11,6 +11,7 @@ import civictech.cell.host.HostManagementApi
 import civictech.cell.port.Use
 import kotlin.reflect.KClass
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -81,6 +82,18 @@ class KeyCarryingRowsTest {
         }
     }
 
+    @Test
+    fun `plain group by spawn cannot bypass the fold inventory`() {
+        TpchRig.open(drive = Drive.SIM, seed = 1L).use { rig ->
+            val base = BaseRelations.spawn(rig)
+            val error = assertThrows(IllegalStateException::class.java) {
+                UninventoriedFoldBuilder().attach(rig.host.managementInlet, base)
+            }
+
+            assertTrue(error.message.orEmpty().contains("spawnFold"), error.message)
+        }
+    }
+
     private fun missingKeys(
         foldInputTypes: List<KClass<*>>,
         requiredKeys: List<RequiredKey>,
@@ -136,6 +149,30 @@ class KeyCarryingRowsTest {
 
                 link(base.lineitem.outlet, projected.cell.inlet)
                 link(projected.cell.outlet, fold.cell.inlet)
+            }
+            return object : MaintainedQuery {
+                override val query: TpchQuery = TpchQuery.Q01
+                override fun read(): ViewResult = ViewResult(listOf("unused"), emptyMap())
+                override fun liveRows(): Map<String, Long> = emptyMap()
+                override fun emissionCounters(): Map<String, Long> = emptyMap()
+                override fun rowsReferencing(orderKey: Long): List<Pair<String, Any>> = emptyList()
+            }
+        }
+    }
+
+    private class UninventoriedFoldBuilder : QueryGraphBuilder(Lineitem::class.java) {
+        override val query: TpchQuery = TpchQuery.Q01
+        override val referenceParams: Any = Q1Params()
+
+        override fun attach(host: Use<HostManagementApi>, base: BaseRelations): MaintainedQuery {
+            graph(host) {
+                adopt(base.lineitem)
+                spawn("fake-uninventoried-fold") { ref ->
+                    GroupByCell.global(
+                        ref = ref,
+                        aggregator = Aggregators.count<Lineitem>(),
+                    )
+                }
             }
             return object : MaintainedQuery {
                 override val query: TpchQuery = TpchQuery.Q01

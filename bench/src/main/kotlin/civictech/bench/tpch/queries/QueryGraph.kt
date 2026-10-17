@@ -16,8 +16,10 @@ import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
 import civictech.cell.graph.GraphBuilder
+import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.TypedCellFactory
 import civictech.cell.graph.TypedCellHandle
+import civictech.cell.graph.graph as buildGraph
 import civictech.cell.host.HostManagementApi
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
@@ -58,6 +60,7 @@ abstract class QueryGraphBuilder(
     private val rowPayload: Class<*>,
 ) {
     private val foldInputTypesByName = linkedMapOf<String, KClass<*>>()
+    private val inventoriedFoldSpawn = ThreadLocal.withInitial { false }
 
     init {
         require(
@@ -94,9 +97,32 @@ abstract class QueryGraphBuilder(
         require(previous == null || previous == inputType) {
             "fold '$name' changed input type from $previous to $inputType"
         }
-        return spawn(name, factory = factory).also {
+        val spawned = try {
+            inventoriedFoldSpawn.set(true)
+            spawn(name, factory = factory)
+        } finally {
+            inventoriedFoldSpawn.remove()
+        }
+        return spawned.also {
             foldInputTypesByName.putIfAbsent(name, inputType)
         }
+    }
+
+    /** Builds a TPC-H graph through a host that rejects folds outside [spawnFold]. */
+    protected fun graph(
+        host: Use<HostManagementApi>,
+        block: GraphBuilder.() -> Unit,
+    ): GraphSpec {
+        val delegate = host.call
+        val guarded = object : HostManagementApi by delegate {
+            override fun spawn(cell: Cell): CellRef {
+                check(cell !is GroupByCell<*, *, *, *> || inventoriedFoldSpawn.get()) {
+                    "[BS-11] TPC-H GroupByCell must be spawned with QueryGraphBuilder.spawnFold"
+                }
+                return delegate.spawn(cell)
+            }
+        }
+        return buildGraph(Use.fixed(guarded), block)
     }
 
     abstract fun attach(host: Use<HostManagementApi>, base: BaseRelations): MaintainedQuery
