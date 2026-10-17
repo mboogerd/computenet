@@ -180,11 +180,10 @@ default remains ungated [24-OP-SEMIJOIN-04]. A compensating delta may repair
 the final value, but it does not restore never-having-been-observed
 (`24-data-cells.md` §Required next steps in the family).
 
-The exhaustive literal search used for the negative claim, including the
-repository-required command wrapper, was:
+The exhaustive literal search used for the negative claim was:
 
 ```text
-rtk grep -rniE 'abort|rollback|undo' doc/spec/20-dataflow-semantics doc/spec/40-distribution
+grep -rniE 'abort|rollback|undo' doc/spec/20-dataflow-semantics doc/spec/40-distribution
 ```
 
 It produced the following nine hits; the search is substring-based, so the
