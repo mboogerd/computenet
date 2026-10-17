@@ -13,7 +13,6 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.PriorityBlockingQueue
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
 
@@ -139,7 +138,11 @@ class CoroutineScheduler(
             "await called from the host's own execution context (would deadlock)"
         }
         return try {
-            future.get(5, TimeUnit.SECONDS)
+            // A wall-clock timeout cannot cancel the accepted management task: it would report
+            // failure while the queued spawn/connect can still land later. Synchronous management
+            // therefore waits for its real terminal outcome; explicitly asynchronous callers own
+            // their own bounds on the future they receive.
+            future.get()
         } catch (e: ExecutionException) {
             throw e.cause ?: e
         }
