@@ -21,7 +21,129 @@ first missing guarantee, not a substitute for a conformance corpus.
 
 ## 2. What TPC-C measures
 
-_Pending: owned by task T2._
+TPC-C is a mixed OLTP workload over nine related entities. The schema summary
+below records the shape that matters for this bridge, not every field in the
+standard (TPC-C §§1.2–1.3).
+
+### 2.1 Schema
+
+| Entity | Key | What it holds | Transactions that touch it |
+|---|---|---|---|
+| `WAREHOUSE` | `W_ID` | Warehouse identity, address, tax, and year-to-date sales total | New-Order (R), Payment (R/W) |
+| `DISTRICT` | `(D_W_ID, D_ID)` | District identity, tax, year-to-date sales total, and next order id | New-Order (R/W), Payment (R/W), Stock-Level (R) |
+| `CUSTOMER` | `(C_W_ID, C_D_ID, C_ID)` | Customer identity, credit, discount, balance, and payment/delivery counters | New-Order (R), Payment (R/W), Order-Status (R), Delivery (R/W) |
+| `STOCK` | `(S_W_ID, S_I_ID)` | Per-warehouse inventory for an item, including quantity and stock counters/data | New-Order (R/W), Stock-Level (R) |
+| `ORDER` | `(O_W_ID, O_D_ID, O_ID)` | Order header, customer, entry/carrier state, and line count | New-Order (W), Order-Status (R), Delivery (R/W) |
+| `ORDER-LINE` | `(OL_W_ID, OL_D_ID, OL_O_ID, OL_NUMBER)` | An order's item, supplying warehouse, quantity, amount, and delivery state | New-Order (W), Order-Status (R), Delivery (R/W), Stock-Level (R) |
+| `NEW-ORDER` | `(NO_W_ID, NO_D_ID, NO_O_ID)` | The outstanding-order marker used by Delivery | New-Order (W), Delivery (R/W) |
+| `HISTORY` | No benchmark-declared primary key; append-only record | A payment event and its participating customer, district, and warehouse | Payment (W) |
+| `ITEM` | `I_ID` | Item catalog identity, price, name, and data | New-Order (R) |
+
+Here `R` means read and `W` means write. The same logical transaction can
+therefore span several rows and several entities even when each row has a
+straightforward local key.
+
+### 2.2 The five transactions
+
+The standard's minimum mix is 43% Payment, 4% Order-Status, 4% Delivery, and
+4% Stock-Level. It leaves New-Order without a minimum because its measured rate
+is the reported workload rate; the stated intent is approximately one Payment
+per New-Order and one each of the other three transactions per ten New-Orders
+(TPC-C §5.2.3).
+
+#### New-Order
+
+- **Reads**: the warehouse tax, district tax and next order id, customer
+  discount/name/credit, each item row, and each supplying warehouse's stock
+  row (TPC-C §2.4.2.2).
+- **Writes**: the district's next order id, one `NEW-ORDER` row, one `ORDER`
+  row, the `ORDER-LINE` rows, and each affected stock quantity/counter
+  (TPC-C §2.4.2.2).
+- **Mix share**: no minimum is specified; New-Order is the rate against which
+  the workload is measured.
+- **Declared special behaviour**: the order is one database transaction over
+  a variable five-to-fifteen item set. A fixed 1% of New-Orders deliberately
+  uses an invalid final item id, and the resulting error must roll back the
+  update transaction (TPC-C §§2.4.1.3–2.4.1.4, 2.4.2.1–2.4.2.2).
+
+**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+
+#### Payment
+
+- **Reads**: warehouse, district, and customer records, with customer lookup
+  allowed by number or last name (TPC-C §2.5.2.2).
+- **Writes**: the warehouse and district year-to-date totals, the customer's
+  balance and payment counters, and one `HISTORY` record (TPC-C §2.5.2.2).
+- **Mix share**: 43% minimum of the workload mix.
+- **Declared special behaviour**: a single database transaction; the customer
+  may be remote from the warehouse where the payment is entered (TPC-C
+  §§2.5.1.2, 2.5.1.5–2.5.1.6, 2.5.2.1–2.5.2.2).
+
+**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+
+#### Order-Status
+
+- **Reads**: the selected customer, that customer's most recent order, and all
+  of its order lines, including the customer balance and order-line delivery
+  state (TPC-C §2.6.2.2).
+- **Writes**: none; this is a read-only transaction.
+- **Mix share**: 4% minimum of the workload mix.
+- **Declared special behaviour**: one database transaction, with customer
+  selection by number or by last name, followed by the latest-order and
+  order-line reads (TPC-C §§2.6.1.2, 2.6.2.1–2.6.2.2).
+
+**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+
+#### Delivery
+
+- **Reads**: the oldest outstanding order for each district, its order header
+  and lines, and the associated customer (TPC-C §2.7.4.2).
+- **Writes**: deletion of the `NEW-ORDER` marker, the order's carrier, every
+  order-line delivery date, and the customer's balance and delivery count
+  (TPC-C §2.7.4.2).
+- **Mix share**: 4% minimum of the workload mix.
+- **Declared special behaviour**: one business transaction processes one new
+  order from each of ten districts. Each order is delivered in full within a
+  read-write database transaction; the implementation may group the ten
+  database transactions, and the business transaction is queued for deferred
+  execution rather than completed interactively (TPC-C §§2.7, 2.7.2.1–2.7.2.2,
+  2.7.4).
+
+**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+
+#### Stock-Level
+
+- **Reads**: the district's next order id, the order lines in its last twenty
+  orders, and the distinct corresponding stock rows (TPC-C §2.8.2.2).
+- **Writes**: none; this is a read-only count.
+- **Mix share**: 4% minimum of the workload mix.
+- **Declared special behaviour**: a heavy, low-frequency read-only transaction
+  with relaxed consistency requirements; non-repeatable reads are explicitly
+  allowed for it (TPC-C §§2.8, 2.8.2.1–2.8.2.3, 3.1.1).
+
+**Isolation requirement**: Level 1 relative to the other transaction types and arbitrary transactions (TPC-C §3.4.1)
+
+### 2.3 What the benchmark is really asserting
+
+TPC-C asserts two properties that are easy to blur together. First, it exercises
+multi-row read-modify-write under a declared abort path: New-Order reads the
+inputs needed to construct an order, changes several related entities, and on
+the deliberately invalid input must leave no partial effects (TPC-C
+§§2.4.1.4, 2.4.2.2, 3.2.1–3.2.2). Second, its consistency conditions require
+the cross-table relationships to remain true: warehouse and district totals,
+district/order/new-order numbering, new-order contiguity, order/order-line
+cardinality, carrier and delivery markers, and the warehouse, district, and
+customer totals reconciled with `HISTORY` and `ORDER-LINE` amounts (TPC-C
+§3.3). The rest of this document uses these two properties as its acceptance
+lens: can the workload's related changes be all-or-nothing on an abort, and do
+the stated relationships remain true while the five transaction shapes run?
+
+### 2.4 Set aside: tpmC and the pricing metric
+
+TPC-C's `tpmC` throughput metric and the benchmark's pricing metric are out of
+scope for this bridge. This document reports no throughput, latency, cost, or
+price/performance figure; it describes workload shape and correctness
+obligations only. [BB-TPCC-17]
 
 ## 3. What ComputeNet's model guarantees today
 
