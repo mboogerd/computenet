@@ -19,7 +19,7 @@ class StateGrowthTest {
                 plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 20),
                 drive = Drive.SIM,
                 env = tpchTestEnvironment(),
-                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes, outletBalancedStream = true),
+                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes),
             ),
         )
 
@@ -97,6 +97,53 @@ class StateGrowthTest {
             GrowthNote.Growing("b"),
             StateAccounting.growthNote(series, plan, outletBalancedStream = true),
         )
+    }
+
+    @Test
+    fun `outlet balance is derived from the refresh batches`() {
+        val plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 4)
+        val base = TpchGenerator.generate(seed = 7L, sf = 0.001)
+
+        assertTrue(StateAccounting.isOutletBalanced(pairedRefreshes(plan, base)))
+        // The default stream's RF2 deletes the lowest live keys, not the RF1's.
+        assertFalse(StateAccounting.isOutletBalanced(RefreshStream.generate(plan, base)))
+        assertFalse(StateAccounting.isOutletBalanced(emptyList()))
+        val paired = pairedRefreshes(plan, base)
+        assertFalse(StateAccounting.isOutletBalanced(paired.take(3)), "odd stream")
+        assertFalse(StateAccounting.isOutletBalanced(paired.drop(1)), "misaligned stream")
+        val shortRf2 = RefreshBatch.Rf2((paired[1] as RefreshBatch.Rf2).orderKeys.drop(1))
+        assertFalse(StateAccounting.isOutletBalanced(listOf(paired[0], shortRf2)), "partial delete")
+    }
+
+    @Test
+    fun `TpchRun classifies a paired stream as outlet-balanced and the default stream as not`() {
+        fun classifiedBalance(refreshFactory: (RefreshPlan, TpchTables) -> List<RefreshBatch>): List<Boolean> {
+            val seen = mutableListOf<Boolean>()
+            val classifier = { series: List<RetainedState>, plan: RefreshPlan, balanced: Boolean ->
+                seen += balanced
+                StateAccounting.withGrowth(series, plan, balanced)
+            }
+            assertInstanceOf(
+                TpchRecord.Verified::class.java,
+                TpchRun.run(
+                    query = TpchQuery.Q03,
+                    seed = 7L,
+                    sf = 0.001,
+                    plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 4),
+                    drive = Drive.SIM,
+                    env = tpchTestEnvironment(),
+                    hooks = TpchRunHooks(refreshFactory = refreshFactory, growthClassifier = classifier),
+                ),
+            )
+            return seen
+        }
+
+        val paired = classifiedBalance(::pairedRefreshes)
+        assertFalse(paired.isEmpty(), "TpchRun never reached the growth classifier")
+        assertTrue(paired.all { it }, "paired stream classified as not outlet-balanced: $paired")
+        val default = classifiedBalance(RefreshStream::generate)
+        assertFalse(default.isEmpty(), "TpchRun never reached the growth classifier")
+        assertTrue(default.none { it }, "default stream classified as outlet-balanced: $default")
     }
 
     @Test
