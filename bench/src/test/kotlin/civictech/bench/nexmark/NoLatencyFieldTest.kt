@@ -31,6 +31,7 @@ class NoLatencyFieldTest {
 
     @Test
     fun `simulation header states its scheduler`() {
-        assertEquals("SimulationController", nexmarkTestHeader().scheduler)
+        assertEquals("SimulationController", SIM_SCHEDULER)
+        assertEquals(SIM_SCHEDULER, nexmarkTestHeader().scheduler)
     }
 }

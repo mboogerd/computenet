@@ -15,6 +15,9 @@ const val SPEC_REVISION: String = NexmarkSpec.SPEC_REVISION
 /** The framing carried by every Nexmark record. */
 const val FRAMING: String = NexmarkSpec.FRAMING
 
+/** The scheduler a SIM-driven run header states ([BB-NEX-19]). */
+const val SIM_SCHEDULER: String = "SimulationController"
+
 /** A relative spread above this boundary is not reportable as one figure. */
 const val VARIANCE_THRESHOLD = 0.10
 

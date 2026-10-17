@@ -26,7 +26,7 @@ fun nexmarkTestStateSeries(): List<RetainedState> = listOf(
 fun nexmarkTestHeader(
     query: NexmarkQuery = NexmarkQuery.Q1,
     seed: Long = 7L,
-    scheduler: String = "SimulationController",
+    scheduler: String = SIM_SCHEDULER,
     policy: LatenessPolicy? = null,
     stateLabel: StateLabel? = null,
     stateSeries: List<RetainedState> = nexmarkTestStateSeries(),
