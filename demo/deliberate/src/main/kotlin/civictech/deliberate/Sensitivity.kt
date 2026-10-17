@@ -1,5 +1,7 @@
 package civictech.deliberate
 
+import civictech.agora.semantics.*
+
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
