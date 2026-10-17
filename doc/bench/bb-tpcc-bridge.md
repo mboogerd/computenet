@@ -446,15 +446,25 @@ observer sees the order while a required stock change is outstanding.
 
 `GroupByCell` emits all keys touched by one input delta as one `MapDelta`
 [24-OP-GROUPBY-03]. The partitioned implementation first splits that delta by
-shard, however, invokes each shard separately, and forwards each shard's output
-without coalescing it. A reactive forward preserves the incoming timestamp,
-but it does not turn several shard emissions into one operator emission, and a
-context-free call causes each shard outlet to originate independently. The
-covered construction is therefore exactly one host, one shard, and one ingress
-delta, with a glitch-free downstream under [22-GF-01]; several shards or cells
-have no joint visibility guarantee under [22-SRC-01] and the scatter-gather
-contract has no joint cut (`42-replication.md` §Scatter-gather pull over an
-instance set (PN-5)).
+shard, however, and forwards a separate output from each shard rather than
+coalescing them. `PartitionedCell.route` calls those shards synchronously while
+a linked ingress's `CurrentContext` frame is active, so their outputs share the
+incoming timestamp; the earlier inference that several shards necessarily
+mean several waves was wrong. That shared timestamp is still not one
+coalesced operator emission, and no existing test pins the separate shard
+outputs as one joint publication. A context-free call instead lets each shard
+outlet originate independently.
+
+There is a second, tested construction beyond one shard. On one host, one
+linked ingress delta can synchronously fan out inside the same frame to
+several keyed cells, and [22-OBS-01]/[22-OBS-02] aligned observation publishes
+their changes at one wave position. The restriction is the whole construction:
+one host, one linked ingress delta, synchronous same-frame fan-out, and an
+aligned observer. It does not establish partitioned-shard publication,
+cross-host fan-out, or visibility to unaligned observers; [22-SRC-01] still
+promises convergence rather than simultaneity outside that construction, and
+the scatter-gather contract has no joint cut (`42-replication.md`
+§Scatter-gather pull over an instance set (PN-5)).
 
 Files read for this finding:
 `kernel/src/main/kotlin/civictech/cell/data/op/GroupByCell.kt`,
@@ -466,16 +476,23 @@ Files read for this finding:
 `kernel/src/main/kotlin/civictech/cell/partition/RoutedCommand.kt`,
 `kernel/src/main/kotlin/civictech/cell/port/FanOutlet.kt`,
 `kernel/src/main/kotlin/civictech/cell/consistency/WaveFrontier.kt`,
+`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt`,
+`kernel/src/test/kotlin/civictech/cell/app/KeyedFanOutOneWaveTest.kt`,
+`kernel/src/test/kotlin/civictech/cell/data/PartitionedCellTest.kt`,
 `kernel/src/test/kotlin/civictech/cell/partition/ShardCellBoundedReadTest.kt`,
 and
 `demo/exchange/src/test/kotlin/civictech/demo/exchange/ExchangeCompositionExitTest.kt`.
-No existing test pins “one ingress delta → one wave across several keyed
-entries.” `ShardCellBoundedReadTest` pins bounded-read and repartition
-inertness; `ExchangeCompositionExitTest` pins convergence to a batch group-by
-and selected frontier behavior, not atomic visibility of every key in one
-multi-key input.
+`KeyedFanOutOneWaveTest`'s `one ingress SetDelta fanned to a MapCell view and a
+KeyedSetCell view lands at one wave position` test pins one host, synchronous
+direct same-frame fan-out from one linked ingress delta to two keyed cells, and
+the joint result read through `observeAligned`. It does not pin partitioned
+shards, cross-host fan-out, or unaligned observers. `PartitionedCellTest`,
+`ShardCellBoundedReadTest`, and `ExchangeCompositionExitTest` cover functional
+shard equivalence, bounded-read/repartition behavior, and eventual
+batch-equivalent composition respectively, not joint publication of the
+separate outputs from several shards.
 
-**Verdict**: PARTIAL — [24-OP-GROUPBY-03] plus [24-PART-03] only for one host, one shard, and one ingress delta
+**Verdict**: PARTIAL — [24-OP-GROUPBY-03] or same-frame keyed fan-out, restricted to one host, one linked ingress delta, and [22-OBS-01]/[22-OBS-02] aligned observation
 
 ### S2 — New-Order 1% rollback
 
@@ -504,11 +521,14 @@ absence: no undo of an emitted delta.
 The source reading has the same result as S1. One `GroupByCell` input can emit
 one multi-key `MapDelta` [24-OP-GROUPBY-03], but `PartitionedCell` splits an
 input across shards and forwards the resulting shard emissions rather than
-coalescing them. [24-PART-03] proves disjoint union and convergence, not a
-commit spanning those emissions. Payment is therefore covered only under the
-deliberate encoding in which every logical record is in one family, on one
-host and one shard, and all four changes derive from one ingress delta; the
-ordinary multi-cell shape is not.
+coalescing them. Its synchronous `route` calls do preserve a linked ingress's
+timestamp across those emissions, but no test pins their joint publication;
+[24-PART-03] proves disjoint union and context-preserving forwarding, not a
+commit spanning the emissions. The tested broader case is a deliberate
+one-host construction in which all four changes derive from one linked ingress
+delta, fan out synchronously in the same frame to keyed cells, and are read
+through an aligned observer. The ordinary multi-cell shape, cross-host fan-out,
+and unaligned observation are not covered.
 
 Files read for this finding:
 `kernel/src/main/kotlin/civictech/cell/data/op/GroupByCell.kt`,
@@ -520,14 +540,22 @@ Files read for this finding:
 `kernel/src/main/kotlin/civictech/cell/partition/RoutedCommand.kt`,
 `kernel/src/main/kotlin/civictech/cell/port/FanOutlet.kt`,
 `kernel/src/main/kotlin/civictech/cell/consistency/WaveFrontier.kt`,
+`kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt`,
+`kernel/src/test/kotlin/civictech/cell/app/KeyedFanOutOneWaveTest.kt`,
+`kernel/src/test/kotlin/civictech/cell/data/PartitionedCellTest.kt`,
 `kernel/src/test/kotlin/civictech/cell/partition/ShardCellBoundedReadTest.kt`,
 and
 `demo/exchange/src/test/kotlin/civictech/demo/exchange/ExchangeCompositionExitTest.kt`.
-No existing test pins the multi-key one-ingress/one-wave property; the two test
-files above cover bounded reads and eventual/batch-equivalent composition,
-respectively.
+`KeyedFanOutOneWaveTest`'s `one ingress SetDelta fanned to a MapCell view and a
+KeyedSetCell view lands at one wave position` test pins one host, synchronous
+direct same-frame fan-out from one linked ingress delta to two keyed cells, and
+the joint result read through `observeAligned`. It does not pin partitioned
+shards, cross-host fan-out, or unaligned observers. The partitioned tests and
+exchange exit test pin functional shard behavior, bounded reads, and eventual
+batch-equivalent composition, not joint publication of the separate outputs
+from several shards.
 
-**Verdict**: PARTIAL — [24-OP-GROUPBY-03] plus [24-PART-03] only for one host, one shard, and one ingress delta
+**Verdict**: PARTIAL — [24-OP-GROUPBY-03] or same-frame keyed fan-out, restricted to one host, one linked ingress delta, and [22-OBS-01]/[22-OBS-02] aligned observation
 
 ### S4 — Order-Status coherent read
 
