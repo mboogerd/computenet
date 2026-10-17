@@ -347,8 +347,8 @@ imports `civictech.cell.*`, enforcing the L3 rule above; `DemoSurfaceAllowlistTe
 `.partition`/`.graph`/`.membrane`); demo modules may import any kernel package.
 The separate guardrail for demo-to-demo imports is tracked in computenet-yvzfh;
 `ArchitectureRatchetTest`
-(same directory) pins the current `civictech.cell` package→package import edge
-set against a checked-in baseline
+(same directory) pins the current `civictech.cell` package→package edge set from
+imports and fully qualified code references against a checked-in baseline
 (`kernel/src/test/resources/architecture/package-edges.txt`) — see
 `90/91` gap `G-63` (all 20 non-leaf `civictech.cell.*` packages form one SCC;
 this is a ratchet, not a claim of acyclicity) — and fails on any *new* edge, while a baseline
