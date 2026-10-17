@@ -15,8 +15,10 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
+import civictech.cell.graph.CellFactory
 import civictech.cell.graph.GraphBuilder
 import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.TypedCellFactory
 import civictech.cell.graph.TypedCellHandle
 import civictech.cell.graph.graph as buildGraph
@@ -108,24 +110,66 @@ abstract class QueryGraphBuilder(
         }
     }
 
+    /**
+     * Attaches through the fold-inventory boundary before subclass code chooses a graph API.
+     * This is the structural acceptance path: every host spawn the builder can reach is guarded,
+     * including `graphOf`, a fully-qualified graph call, and direct live-cell or bound-factory calls.
+     */
+    internal fun attachWithFoldInventoryGuard(
+        host: Use<HostManagementApi>,
+        base: BaseRelations,
+    ): MaintainedQuery = attach(guardFoldInventory(host), base)
+
     /** Builds a TPC-H graph through a host that rejects folds outside [spawnFold]. */
     protected fun graph(
         host: Use<HostManagementApi>,
         block: GraphBuilder.() -> Unit,
-    ): GraphSpec {
+    ): GraphSpec = buildGraph(guardFoldInventory(host), block)
+
+    private fun guardFoldInventory(host: Use<HostManagementApi>): Use<HostManagementApi> {
         val delegate = host.call
-        val guarded = object : HostManagementApi by delegate {
-            override fun spawn(cell: Cell): CellRef {
-                check(cell !is GroupByCell<*, *, *, *> || inventoriedFoldSpawn.get()) {
-                    "[BS-11] TPC-H GroupByCell must be spawned with QueryGraphBuilder.spawnFold"
-                }
-                return delegate.spawn(cell)
-            }
+        return if (delegate is FoldInventoryHost) {
+            host
+        } else {
+            Use.fixed(FoldInventoryHost(delegate))
         }
-        return buildGraph(Use.fixed(guarded), block)
+    }
+
+    private inner class FoldInventoryHost(
+        private val delegate: HostManagementApi,
+    ) : HostManagementApi by delegate {
+        override fun spawn(cell: Cell): CellRef {
+            requireInventoriedFold(cell, inventoriedFoldSpawn.get())
+            return delegate.spawn(cell)
+        }
+
+        override fun spawnBound(
+            factory: CellFactory,
+            identity: IdentityBinding,
+            parent: CellRef?,
+        ): CellRef = delegate.spawnBound(
+            FoldInventoryFactory(factory, inventoriedFoldSpawn.get()),
+            identity,
+            parent,
+        )
     }
 
     abstract fun attach(host: Use<HostManagementApi>, base: BaseRelations): MaintainedQuery
+}
+
+private class FoldInventoryFactory(
+    private val delegate: CellFactory,
+    private val inventoried: Boolean,
+) : CellFactory {
+    override fun create(ref: CellRef): Cell = delegate.create(ref).also { cell ->
+        requireInventoriedFold(cell, inventoried)
+    }
+}
+
+private fun requireInventoriedFold(cell: Cell, inventoried: Boolean) {
+    check(cell !is GroupByCell<*, *, *, *> || inventoried) {
+        "[BS-11] TPC-H GroupByCell must be spawned with QueryGraphBuilder.spawnFold"
+    }
 }
 
 /** Accounting and deletion-scan surface shared by materialized operator outlets. */

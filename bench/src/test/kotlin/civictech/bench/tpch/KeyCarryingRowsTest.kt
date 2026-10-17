@@ -3,17 +3,22 @@ package civictech.bench.tpch
 import civictech.bench.tpch.queries.MaintainedQuery
 import civictech.bench.tpch.queries.Queries
 import civictech.bench.tpch.queries.QueryGraphBuilder
+import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.graph.graph
+import civictech.cell.graph.graphOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.port.Use
+import java.util.UUID
 import kotlin.reflect.KClass
+import org.junit.jupiter.api.Assertions.assertAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.function.Executable
 
 class KeyCarryingRowsTest {
 
@@ -34,7 +39,7 @@ class KeyCarryingRowsTest {
             val base = BaseRelations.spawn(rig)
             val failures = TpchQuery.entries.mapNotNull { query ->
                 val builder = Queries.builderFor(query) ?: return@mapNotNull null
-                builder.attach(rig.host.managementInlet, base)
+                builder.attachWithFoldInventoryGuard(rig.host.managementInlet, base)
                 when (val rule = FOLD_INPUT_RULES.getValue(query)) {
                     is FoldInputRule.JoinedRowKey -> {
                         val missing = missingKeys(builder.foldInputTypes(), rule.requiredKeys)
@@ -92,6 +97,31 @@ class KeyCarryingRowsTest {
 
             assertTrue(error.message.orEmpty().contains("spawnFold"), error.message)
         }
+    }
+
+    @Test
+    fun `alternate host entry points cannot bypass the fold inventory`() {
+        assertAll(
+            UninventoriedEntryPoint.entries.map { entryPoint ->
+                Executable {
+                    TpchRig.open(drive = Drive.SIM, seed = 1L).use { rig ->
+                        val base = BaseRelations.spawn(rig)
+                        val error = assertThrows(
+                            IllegalStateException::class.java,
+                            Executable {
+                                BypassingFoldBuilder(entryPoint).attachWithFoldInventoryGuard(
+                                    rig.host.managementInlet,
+                                    base,
+                                )
+                            },
+                            entryPoint.name,
+                        )
+
+                        assertTrue(error.message.orEmpty().contains("spawnFold"), error.message)
+                    }
+                }
+            },
+        )
     }
 
     private fun missingKeys(
@@ -180,6 +210,64 @@ class KeyCarryingRowsTest {
                 override fun liveRows(): Map<String, Long> = emptyMap()
                 override fun emissionCounters(): Map<String, Long> = emptyMap()
                 override fun rowsReferencing(orderKey: Long): List<Pair<String, Any>> = emptyList()
+            }
+        }
+    }
+
+    private enum class UninventoriedEntryPoint {
+        GRAPH_OF,
+        QUALIFIED_GRAPH,
+        DIRECT_HOST_SPAWN,
+        DIRECT_HOST_BOUND_SPAWN,
+    }
+
+    private class BypassingFoldBuilder(
+        private val entryPoint: UninventoriedEntryPoint,
+    ) : QueryGraphBuilder(Lineitem::class.java) {
+        override val query: TpchQuery = TpchQuery.Q01
+        override val referenceParams: Any = Q1Params()
+
+        override fun attach(host: Use<HostManagementApi>, base: BaseRelations): MaintainedQuery {
+            when (entryPoint) {
+                UninventoriedEntryPoint.GRAPH_OF -> graphOf(host) {
+                    spawnUninventoriedFold("fake-graph-of-fold")
+                }
+
+                UninventoriedEntryPoint.QUALIFIED_GRAPH -> civictech.cell.graph.graph(host) {
+                    spawnUninventoriedFold("fake-qualified-graph-fold")
+                }
+
+                UninventoriedEntryPoint.DIRECT_HOST_SPAWN -> host.call.spawn(
+                    GroupByCell.global(
+                        ref = CellRef(UUID.randomUUID()),
+                        aggregator = Aggregators.count<Lineitem>(),
+                    ),
+                )
+
+                UninventoriedEntryPoint.DIRECT_HOST_BOUND_SPAWN -> host.call.spawnBound(
+                    factory = { ref ->
+                        GroupByCell.global(
+                            ref = ref,
+                            aggregator = Aggregators.count<Lineitem>(),
+                        )
+                    },
+                )
+            }
+            return object : MaintainedQuery {
+                override val query: TpchQuery = TpchQuery.Q01
+                override fun read(): ViewResult = ViewResult(listOf("unused"), emptyMap())
+                override fun liveRows(): Map<String, Long> = emptyMap()
+                override fun emissionCounters(): Map<String, Long> = emptyMap()
+                override fun rowsReferencing(orderKey: Long): List<Pair<String, Any>> = emptyList()
+            }
+        }
+
+        private fun civictech.cell.graph.GraphBuilder.spawnUninventoriedFold(name: String) {
+            spawn(name) { ref ->
+                GroupByCell.global(
+                    ref = ref,
+                    aggregator = Aggregators.count<Lineitem>(),
+                )
             }
         }
     }
