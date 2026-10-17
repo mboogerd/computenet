@@ -7777,8 +7777,22 @@ explicit participant cells, records one durable local outcome, publishes only
 on commit, and aborts before effective emission; it does not span hosts.
 
 Named wall: ComputeNet has no tentative durable participant state, no abort
-that restores never-having-been-observed, and no scope-wide recovery decision;
-extending that contract across hosts recreates the synchronous reply channel
-and global barrier the model has already refused.
+that restores never-having-been-observed, and no scope-wide recovery decision.
+No admitted cross-host mechanism closes that wall. Candidate C's known
+vote-collecting shape would use the synchronous reply channel and global
+barrier the model has already refused, so this study refuses that shape on P4
+and the no-global-consensus principle; it does not claim every possible
+cross-host design necessarily requires them. An adjacent proposal would have
+to avoid both refused mechanisms or justify amending those principles.
+
+GFR caveat: the analysis remains pinned to `f6fc66bf`. The owner decision in
+epic `computenet-nogtk`, also recorded in the 2026-10-17T08:15Z comment on
+feature `computenet-1ys`, will retire glitch-free frontier completeness,
+aligned observation, absorb-acks, and their requirement ids. Without aligned
+observation the local candidate loses its present publish-together foothold:
+S1/S3 retain only the one-`MapDelta` representation, S4 becomes MISSING, and
+S6 remains COVERED only through its Level 1 bounded-read allowance. The
+candidate continues to name missing tentative/abort semantics, not an existing
+post-GFR mechanism.
 
 Full analysis: `doc/bench/bb-tpcc-bridge.md`.
