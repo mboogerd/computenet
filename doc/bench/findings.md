@@ -7765,3 +7765,34 @@ C=1e6 fork amendment (computenet-9f7x5.5; supersedes the SIM entry's 9f7x5-D19 o
 - The stage is the probe's `JournalMeasurement.stage`, not inferred from exception text. Both deterministic attempts completed before replay/recovery at every point. Arm (i): no replay or recover `OutOfMemoryError`. Arm (ii): 216486328 / 8589934592 = 0.025202 (2.5202 %, about 206.5 MiB of 8 GiB), below 25 %. The one-file checkpoint reduction is 34728392 B (17.82 %) at each batch size.
 
 Trigger: G-25 — G-25 (journal segmentation — trigger: first workload where one file hurts) RETIRES at ≤ 1e6 elements on one host under the fixed D13 rule. All 12 SIM points are `Ok`: the nine C ∈ {1e3,1e4,1e5} points in the original 2 GiB executor run plus the three isolated `-Xmx8g` C=1e6 points above. Arm (i) does not hold: replay and recover completed without `OutOfMemoryError` at all 12 points. Arm (ii) does not hold: retained replay data at C=1e6 is 2.5202 % of the measuring fork's max heap, against the 25 % threshold. Arm (iii) does not hold: realReplay(1e5)=8.676 ms against realFileJournalPoint(1e5)=3582.172 ms, a replay/ingest ratio of 0.0024 (0.0123 at 1e3, 0.0059 at 1e4), so replaying the file costs far less than ingesting it. Checkpoint reduction (file bytes minus checkpoint bytes): 37892 B (19.7 %, 6.361 ms) at 1e3, 333392 B (17.3 %, 29.476 ms) at 1e4, 3378392 B (17.4 %, 264.273 ms) at 1e5, and 34728392 B (17.82 %, SIM structural measurement only) at 1e6. BS-15 fsync share (file minus memory over file) remains 51.63 % at 1e3, 73.39 % at 1e4 and 82.87 % at 1e5, so the REAL durable drive is dominated by journal sync — KBLK; no WAL-off, group-commit or segmentation path is added by this study ([BEN2-49], [BEN2-52]). The retirement is limited to the measured ≤1e6, one-host envelope; the G-25 trigger stays open beyond it. No kernel limitation outside G-25, G-42 and G-43 was exposed, so no new candidate G-item is named.
+
+## 2026-10-17 — BB-TPCC bridge document: hybrid local gap
+
+Decision: interactive cross-host, cross-cell transactions with abort are out
+of scope by design, while a bounded single-host transaction scope remains a
+candidate gap.
+
+Candidate statement: add an opt-in, host-local scope that stages changes in
+explicit participant cells, records one durable local outcome, publishes only
+on commit, and aborts before effective emission; it does not span hosts.
+
+Named wall: ComputeNet has no tentative durable participant state, no abort
+that restores never-having-been-observed, and no scope-wide recovery decision.
+No admitted cross-host mechanism closes that wall. Candidate C's known
+vote-collecting shape would use the synchronous reply channel and global
+barrier the model has already refused, so this study refuses that shape on P4
+and the no-global-consensus principle; it does not claim every possible
+cross-host design necessarily requires them. An adjacent proposal would have
+to avoid both refused mechanisms or justify amending those principles.
+
+GFR caveat: the analysis remains pinned to `f6fc66bf`. The owner decision in
+epic `computenet-nogtk`, also recorded in the 2026-10-17T08:15Z comment on
+feature `computenet-1ys`, will retire glitch-free frontier completeness,
+aligned observation, absorb-acks, and their requirement ids. Without aligned
+observation the local candidate loses its present publish-together foothold:
+S1/S3 retain only the one-`MapDelta` representation, S4 becomes MISSING, and
+S6 remains COVERED only through its Level 1 bounded-read allowance. The
+candidate continues to name missing tentative/abort semantics, not an existing
+post-GFR mechanism.
+
+Full analysis: `doc/bench/bb-tpcc-bridge.md`.
