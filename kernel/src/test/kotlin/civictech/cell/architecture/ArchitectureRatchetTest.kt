@@ -111,12 +111,26 @@ class ArchitectureRatchetTest {
                 return cursor
             }
 
+            fun skipBacktickIdentifier(identifierStart: Int): Int {
+                var cursor = identifierStart + 1
+                while (cursor < source.length) {
+                    if (source[cursor] == '`') return cursor + 1
+                    cursor++
+                }
+                return cursor
+            }
+
             fun skipString(stringStart: Int, raw: Boolean): Int {
                 var cursor = stringStart + if (raw) 3 else 1
                 while (cursor < source.length) {
                     when {
                         source.startsWith("${'$'}{", cursor) -> cursor = scanCode(cursor + 2, true)
-                        raw && source.startsWith("\"\"\"", cursor) -> return cursor + 3
+                        raw && source[cursor] == '"' -> {
+                            var quoteRunEnd = cursor
+                            while (quoteRunEnd < source.length && source[quoteRunEnd] == '"') quoteRunEnd++
+                            if (quoteRunEnd - cursor >= 3) return quoteRunEnd
+                            cursor = quoteRunEnd
+                        }
                         !raw && source[cursor] == '\\' -> cursor = (cursor + 2).coerceAtMost(source.length)
                         !raw && source[cursor] == '"' -> return cursor + 1
                         else -> cursor++
@@ -135,6 +149,7 @@ class ArchitectureRatchetTest {
                     source.startsWith("\"\"\"", index) -> index = skipString(index, raw = true)
                     source[index] == '"' -> index = skipString(index, raw = false)
                     source[index] == '\'' -> index = skipCharacter(index)
+                    source[index] == '`' -> index = skipBacktickIdentifier(index)
                     stopAtTemplateEnd && source[index] == '}' && nestedBraces == 0 -> return index + 1
                     else -> {
                         if (stopAtTemplateEnd) {
@@ -248,6 +263,20 @@ class ArchitectureRatchetTest {
         assertEquals(
             setOf("evolve"),
             targetPackagesIn("val text = \"\"\"effectful=${'$'}{civictech.cell.evolve.Effectful::class}\"\"\"", packages),
+        )
+        assertEquals(
+            setOf("evolve"),
+            targetPackagesIn(
+                "val raw = \"\"\"q\"\"\"\"\nval type = civictech.cell.evolve.Effectful::class",
+                packages,
+            ),
+        )
+        assertEquals(
+            setOf("evolve"),
+            targetPackagesIn(
+                "fun `it's`() {}\nval type = civictech.cell.evolve.Effectful::class",
+                packages,
+            ),
         )
         assertEquals(setOf("data"), targetPackagesIn("import civictech.cell.data.Replicable", packages))
         assertEquals(setOf("cell"), targetPackagesIn("civictech.cell.ReplayProvenance.get()", packages))
