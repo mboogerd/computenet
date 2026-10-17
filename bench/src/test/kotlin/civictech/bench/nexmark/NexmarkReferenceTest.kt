@@ -124,6 +124,33 @@ class NexmarkReferenceTest {
     }
 
     @Test
+    fun `Q7 policy evicts a window whose exclusive end equals the floor`() {
+        // max 15_000 - lateness 5_000 = floor 10_000 = window 0's exclusive end: evicted ([24-WL-06] is <=).
+        val batches = listOf(
+            Batch(
+                0,
+                listOf(
+                    StreamOp.Add(bid(id = 1, auction = 10, price = 100, time = 1_000)),
+                    StreamOp.Add(bid(id = 2, auction = 20, price = 200, time = 15_000)),
+                ),
+            ),
+        )
+
+        assertEquals(
+            ReferenceAnswer(
+                result = NexmarkResult(
+                    columns = listOf("windowStart", "id", "auction", "bidder", "price", "dateTime"),
+                    rows = setOf(listOf<Any>(10_000L, 2L, 20L, 502L, 200L, 15_000L)),
+                ),
+                floor = 10_000L,
+                droppedLate = 0,
+                evicted = 1,
+            ),
+            NexmarkReference.evaluate(NexmarkQuery.Q7, batches, LatenessPolicy(5_000)),
+        )
+    }
+
+    @Test
     fun `Q8 policy evicts join rows individually and ignores removes of evicted rows`() {
         val oldPerson = person(10, "Alice", "Portland", "OR", 1_000)
         val oldAuction = auction(100, seller = 10, category = 10, reserve = 1_000, time = 2_000)
