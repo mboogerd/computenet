@@ -4,9 +4,11 @@ import kotlin.math.exp
 import kotlin.math.ln
 
 /**
- * Consensus from the independent credence layers in `demo/deliberate/SPEC.md`
- * CRED-05: the geometric mean of member-layer odds. It summarizes layers and
- * never feeds back into them.
+ * `demo/deliberate/SPEC.md` §2 "Credence layers and consensus": the consensus
+ * credence of a node is the geometric mean of its member layers' odds,
+ * `sigmoid(mean(logit(c_i)))` with each c_i clamped to [[LOW], [HIGH]]. It
+ * summarises layers that were propagated independently; nothing feeds it back
+ * into any layer.
  */
 object Consensus {
     private const val serialVersionUID: Long = 1L
