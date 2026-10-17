@@ -35,6 +35,7 @@ class NexmarkRunHooks(
         NexmarkReferenceEvaluator(NexmarkReference::evaluate)
     },
     val comparisonObserved: (Int, Comparison) -> Unit = { _, _ -> },
+    val resultObserved: (Int, NexmarkResult) -> Unit = { _, _ -> },
     val rigHooks: NexmarkRigHooks = NexmarkRigHooks(),
     val emissionCounters: (MaintainedQuery) -> Map<String, Long> = MaintainedQuery::emissionCounters,
 )
@@ -55,6 +56,8 @@ object NexmarkRun {
         retraction: RetractionPlan = RetractionPlan(0.5),
         stateCeiling: Long? = null,
         generationPlacement: GenerationPlacement = GenerationPlacement.OUTSIDE,
+        /** Exact input batches for lateness/retraction fixtures; null generates from [scale]. */
+        batches: List<Batch>? = null,
         env: RunEnvironment,
         eventPayload: Class<*> = Any::class.java,
         hooks: NexmarkRunHooks = NexmarkRunHooks(),
@@ -63,6 +66,9 @@ object NexmarkRun {
         require(batchSize >= 1) { "batchSize must be >= 1, was $batchSize" }
         require(compareEvery >= 1) { "compareEvery must be >= 1, was $compareEvery" }
         require(stateCeiling == null || stateCeiling >= 0) { "stateCeiling must be non-negative" }
+        require(batches == null || generationPlacement == GenerationPlacement.OUTSIDE) {
+            "pre-built batches already place generation outside the measured path"
+        }
 
         // Construction deliberately precedes generation and every host-producing action.
         val builder = Queries.builderFor(query, policy, eventPayload)
@@ -71,7 +77,9 @@ object NexmarkRun {
             error("${query.name} hand graph is not assembled yet")
         }
 
-        var events: List<Event>? = if (generationPlacement == GenerationPlacement.OUTSIDE) {
+        var events: List<Event>? = if (
+            generationPlacement == GenerationPlacement.OUTSIDE && batches == null
+        ) {
             NexmarkGenerator.generate(seed, scale, config)
         } else {
             null
@@ -120,10 +128,12 @@ object NexmarkRun {
                 batchIndex: Int,
                 evaluator: NexmarkReferenceEvaluator,
             ): NexmarkRecord.Failed? {
+                val observed = maintained.read()
                 val comparison = ResultComparison.compare(
                     evaluator.evaluate(query, referenceBatches.toList(), policy).result,
-                    maintained.read(),
+                    observed,
                 )
+                hooks.resultObserved(batchIndex, observed)
                 hooks.comparisonObserved(batchIndex, comparison)
                 return when (comparison) {
                     Comparison.Equal -> null
@@ -161,20 +171,22 @@ object NexmarkRun {
                 generationNanos = System.nanoTime() - generationStarted
             }
 
-            val generated = checkNotNull(events)
-            val insertChunks = generated.chunked(batchSize)
-            if (generationPlacement == GenerationPlacement.INSIDE && insertChunks.isEmpty()) {
+            val insertBatches = batches?.map { batch -> batch.copy(ops = batch.ops.toList()) }
+                ?: checkNotNull(events).chunked(batchSize).mapIndexed { index, chunk ->
+                    Batch(index + 1, chunk.map(StreamOp::Add))
+                }
+            if (generationPlacement == GenerationPlacement.INSIDE && insertBatches.isEmpty()) {
                 measuredNanos += durationNanos(rig.completePhase("insert-0"))
             }
 
-            insertChunks.forEachIndexed { zeroBasedIndex, chunk ->
+            insertBatches.forEachIndexed { zeroBasedIndex, batch ->
                 val phaseIndex = zeroBasedIndex + 1
                 val countersBefore = if (phaseIndex == 1 && firstInsideCounters != null) {
                     firstInsideCounters!!
                 } else {
                     hooks.emissionCounters(maintained).also { rig.beginPhase() }
                 }
-                val ops = chunk.map(StreamOp::Add)
+                val ops = batch.ops
                 streams.apply(ops)
                 val quiescence = rig.completePhase("insert-$phaseIndex")
                 measuredNanos = Math.addExact(measuredNanos, durationNanos(quiescence))
@@ -190,13 +202,16 @@ object NexmarkRun {
                 )
 
                 stateBoundAt(globalBatchIndex)?.let { return it }
-                if (phaseIndex % compareEvery == 0 || phaseIndex == insertChunks.size) {
+                if (phaseIndex % compareEvery == 0 || phaseIndex == insertBatches.size) {
                     failedAt(globalBatchIndex, streamingReference)?.let { return it }
                 }
             }
 
+            val retractionCandidates = events ?: insertBatches.flatMap { batch ->
+                batch.ops.mapNotNull { op -> (op as? StreamOp.Add)?.event }
+            }
             val removals = selectRetractions(
-                generated,
+                retractionCandidates,
                 query.drivingRelation,
                 retraction,
                 runSeed = seed,
