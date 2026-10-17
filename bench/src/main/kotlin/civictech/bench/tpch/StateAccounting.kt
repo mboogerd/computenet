@@ -66,6 +66,20 @@ object StateAccounting {
         return GrowthNote.Flat
     }
 
+    /**
+     * True when [refreshes] is a strictly alternating RF1, RF2, RF1, RF2... stream in which each
+     * RF2 deletes exactly the order keys of the RF1 just before it. Key equality implies the
+     * pair is outlet-balanced for every query: [RefreshBatch.Rf1] requires every lineitem to
+     * belong to an order of the same batch, and RF2 removes an order together with all of its
+     * lineitems, so the pair restores the pre-RF1 population. An empty stream is not balanced.
+     */
+    fun isOutletBalanced(refreshes: List<RefreshBatch>): Boolean =
+        refreshes.isNotEmpty() && refreshes.size % 2 == 0 &&
+            refreshes.chunked(2).all { (insert, delete) ->
+                insert is RefreshBatch.Rf1 && delete is RefreshBatch.Rf2 &&
+                    insert.orders.map { it.orderKey }.sorted() == delete.orderKeys
+            }
+
     /** Put one stream-level verdict on every sample so no detached sample loses it. */
     fun withGrowth(
         series: List<RetainedState>,

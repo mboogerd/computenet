@@ -16,12 +16,6 @@ class TpchRunHooks(
         TpchReferenceEvaluator(TpchReference::evaluate)
     },
     val refreshFactory: (RefreshPlan, TpchTables) -> List<RefreshBatch> = RefreshStream::generate,
-    /**
-     * True when [refreshFactory] pairs each RF1 with an RF2 that removes exactly those rows,
-     * so the stream is outlet-balanced and monotone growth is genuine state-reclamation evidence.
-     * The default stream applies D7's RF2 semantics, which shift the query population.
-     */
-    val outletBalancedStream: Boolean = false,
     val comparisonObserved: (Int, Comparison) -> Unit = { _, _ -> },
     /** Cumulative applied-element counters that form the reported SIM maintenance work. */
     val emissionCounters: (MaintainedQuery) -> Map<String, Long> = MaintainedQuery::emissionCounters,
@@ -100,6 +94,9 @@ object TpchRun {
             )
         val baseTables = TpchGenerator.generate(seed = seed, sf = sf)
         val refreshes = hooks.refreshFactory(plan, baseTables)
+        // Derived from the generated stream, never declared by a caller: a declaration the
+        // stream contradicts would silently change the per-record GrowthNote.
+        val outletBalancedStream = StateAccounting.isOutletBalanced(refreshes)
         require(refreshes.size == plan.batchCount) {
             "refresh factory returned ${refreshes.size} batches for plan count ${plan.batchCount}"
         }
@@ -126,7 +123,7 @@ object TpchRun {
 
             fun header(): RunHeader {
                 val completedPlan = plan.copy(batches = plan.batches.take(rawStateSeries.size - 1))
-                val stateSeries = StateAccounting.withGrowth(rawStateSeries, completedPlan, hooks.outletBalancedStream)
+                val stateSeries = StateAccounting.withGrowth(rawStateSeries, completedPlan, outletBalancedStream)
                 return RunHeader(
                     seed = seed,
                     sf = sf,

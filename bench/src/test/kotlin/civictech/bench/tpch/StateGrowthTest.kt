@@ -19,7 +19,7 @@ class StateGrowthTest {
                 plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 20),
                 drive = Drive.SIM,
                 env = tpchTestEnvironment(),
-                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes, outletBalancedStream = true),
+                hooks = TpchRunHooks(refreshFactory = ::pairedRefreshes),
             ),
         )
 
@@ -97,6 +97,22 @@ class StateGrowthTest {
             GrowthNote.Growing("b"),
             StateAccounting.growthNote(series, plan, outletBalancedStream = true),
         )
+    }
+
+    @Test
+    fun `outlet balance is derived from the refresh batches`() {
+        val plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 4)
+        val base = TpchGenerator.generate(seed = 7L, sf = 0.001)
+
+        assertTrue(StateAccounting.isOutletBalanced(pairedRefreshes(plan, base)))
+        // The default stream's RF2 deletes the lowest live keys, not the RF1's.
+        assertFalse(StateAccounting.isOutletBalanced(RefreshStream.generate(plan, base)))
+        assertFalse(StateAccounting.isOutletBalanced(emptyList()))
+        val paired = pairedRefreshes(plan, base)
+        assertFalse(StateAccounting.isOutletBalanced(paired.take(3)), "odd stream")
+        assertFalse(StateAccounting.isOutletBalanced(paired.drop(1)), "misaligned stream")
+        val shortRf2 = RefreshBatch.Rf2((paired[1] as RefreshBatch.Rf2).orderKeys.drop(1))
+        assertFalse(StateAccounting.isOutletBalanced(listOf(paired[0], shortRf2)), "partial delete")
     }
 
     @Test
