@@ -171,6 +171,9 @@ val reportExpectedFailures = tasks.register("reportExpectedFailures") {
 //                                 (loader/fixtures/* included), plus
 //                                 kernel/src/test/resources/architecture/peerid-constructions.txt
 //   ModuleInventoryTest           settings.gradle.kts, doc/ARCHITECTURE.md
+//   DemoIsolationRatchetTest      settings.gradle.kts, demo/*/src/main/kotlin,
+//                                 demo/*/build.gradle.kts, and kernel/src/test/resources/
+//                                 architecture/demo-isolation-allowlist.txt
 //   ArchitectureRatchetTest       kernel/src/main/kotlin, and
 //                                 kernel/src/test/resources/architecture/package-edges.txt
 //   ExtractionFenceTest           kernel/src/main/kotlin/civictech/cell/host/InstanceIndex.kt
@@ -212,6 +215,7 @@ tasks.named<Test>("test") {
     inputs.files(
         fileTree(repoRootDir) {
             include("settings.gradle.kts")
+            include("demo/*/build.gradle.kts")
             include("doc/ARCHITECTURE.md")
             include("doc/evidence-lane-findings.md")
             include("doc/spec/CONCORDANCE.md")

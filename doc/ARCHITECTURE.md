@@ -335,7 +335,7 @@ Schema contracts live in `concord/schema/*.md` (single-writer,
 schema-change-gated). Cross-process driver (W5) is deferred until a second
 implementation exists.
 
-**Architecture ratchets (T10).** Four of this document's boundary claims are
+**Architecture ratchets (T10).** Five of this document's boundary claims are
 executable, not just prose, each wired into the normal test task so it gates
 `./gradlew test`/`check` the same way `concordanceGate` and `docLints` do:
 `NeutralityGateTest` (`concord/src/test/kotlin/civictech/concord/provenance/`)
@@ -345,7 +345,13 @@ imports `civictech.cell.*`, enforcing the L3 rule above; `DemoSurfaceAllowlistTe
 `src/main` and fails if it reaches past the allowed `civictech.cell` surface
 (root vocabulary, `.host`/`.port`/`.data*`/`.observe`/`.link`/`.wire`/`.proxy`/
 `.partition`/`.graph`/`.membrane`); demo modules may import any kernel package.
-The separate guardrail for demo-to-demo imports is tracked in computenet-yvzfh;
+`DemoIsolationRatchetTest` (same directory) derives the `:demo:*` module list
+from `settings.gradle.kts` and package ownership from each module's main sources,
+then fails if an application imports another application's package or declares a
+cross-application `project()` dependency. `:demo:shell` is shared infrastructure;
+the intentional `:demo:deliberate`/`:demo:dialogue` -> `:demo:agora` edges are
+the only entries in its shrink-only baseline
+(`kernel/src/test/resources/architecture/demo-isolation-allowlist.txt`).
 `ArchitectureRatchetTest`
 (same directory) pins the current `civictech.cell` package→package edge set from
 imports and fully qualified code references against a checked-in baseline
@@ -356,12 +362,12 @@ edge no longer present in code is warn-only (delete the stale line by hand;
 the ratchet only ever tightens); `DemoBypassRatchetTest` (same directory) fails
 if any demo `src/main` file calls raw `.subscribe(`/`.streamTo(`/`.routeTo(`
 (outside comments) and is not on the checked-in allowlist
-(`kernel/src/test/resources/architecture/demo-bypass-allowlist.txt`) — unlike
-the other three, *both* directions fail here: an unlisted offender fails, and
+(`kernel/src/test/resources/architecture/demo-bypass-allowlist.txt`) — *both*
+directions fail here: an unlisted offender fails, and
 so does a listed path with no such call any more (stale) or that is not a
 file, so the allowlist can only shrink as each demo migrates onto the routed,
 glitch-free-admitted path (INT1 1.1) — its own allowlist has no widen path.
-To widen any of the other three deliberately, change the allowlist/baseline
+To widen any allowlist/baseline deliberately, change it
 in the same PR that adds the edge/import, citing why.
 
 ## 6. Demos

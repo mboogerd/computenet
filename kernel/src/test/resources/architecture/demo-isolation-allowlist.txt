@@ -1,0 +1,10 @@
+# Cross-application edges that are intentionally retained today.
+#
+# Each line is `kind|source-project|target-project`, where kind is `import` for
+# a main-source package import or `dependency` for a project() reference in a
+# demo build script. Lines may ONLY ever be REMOVED: this is a shrink-only
+# ratchet. The shared :demo:shell infrastructure is exempt and is not listed.
+import|:demo:deliberate|:demo:agora
+import|:demo:dialogue|:demo:agora
+dependency|:demo:deliberate|:demo:agora
+dependency|:demo:dialogue|:demo:agora
