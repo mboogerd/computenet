@@ -116,6 +116,37 @@ class StateGrowthTest {
     }
 
     @Test
+    fun `TpchRun classifies a paired stream as outlet-balanced and the default stream as not`() {
+        fun classifiedBalance(refreshFactory: (RefreshPlan, TpchTables) -> List<RefreshBatch>): List<Boolean> {
+            val seen = mutableListOf<Boolean>()
+            val classifier = { series: List<RetainedState>, plan: RefreshPlan, balanced: Boolean ->
+                seen += balanced
+                StateAccounting.withGrowth(series, plan, balanced)
+            }
+            assertInstanceOf(
+                TpchRecord.Verified::class.java,
+                TpchRun.run(
+                    query = TpchQuery.Q03,
+                    seed = 7L,
+                    sf = 0.001,
+                    plan = RefreshPlan.alternating(seed = 7L, sf = 0.001, batches = 4),
+                    drive = Drive.SIM,
+                    env = tpchTestEnvironment(),
+                    hooks = TpchRunHooks(refreshFactory = refreshFactory, growthClassifier = classifier),
+                ),
+            )
+            return seen
+        }
+
+        val paired = classifiedBalance(::pairedRefreshes)
+        assertFalse(paired.isEmpty(), "TpchRun never reached the growth classifier")
+        assertTrue(paired.all { it }, "paired stream classified as not outlet-balanced: $paired")
+        val default = classifiedBalance(RefreshStream::generate)
+        assertFalse(default.isEmpty(), "TpchRun never reached the growth classifier")
+        assertTrue(default.none { it }, "default stream classified as outlet-balanced: $default")
+    }
+
+    @Test
     fun `insert-only Q3 control grows at least one outlet`() {
         val plan = RefreshPlan(
             seed = 11L,

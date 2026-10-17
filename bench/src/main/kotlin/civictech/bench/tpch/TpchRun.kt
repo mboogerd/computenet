@@ -17,6 +17,9 @@ class TpchRunHooks(
     },
     val refreshFactory: (RefreshPlan, TpchTables) -> List<RefreshBatch> = RefreshStream::generate,
     val comparisonObserved: (Int, Comparison) -> Unit = { _, _ -> },
+    /** Stamps the stream-level GrowthNote; receives the outlet balance TpchRun derived. */
+    val growthClassifier: (List<RetainedState>, RefreshPlan, Boolean) -> List<RetainedState> =
+        StateAccounting::withGrowth,
     /** Cumulative applied-element counters that form the reported SIM maintenance work. */
     val emissionCounters: (MaintainedQuery) -> Map<String, Long> = MaintainedQuery::emissionCounters,
     val rigHooks: TpchRigHooks = TpchRigHooks(),
@@ -123,7 +126,7 @@ object TpchRun {
 
             fun header(): RunHeader {
                 val completedPlan = plan.copy(batches = plan.batches.take(rawStateSeries.size - 1))
-                val stateSeries = StateAccounting.withGrowth(rawStateSeries, completedPlan, outletBalancedStream)
+                val stateSeries = hooks.growthClassifier(rawStateSeries, completedPlan, outletBalancedStream)
                 return RunHeader(
                     seed = seed,
                     sf = sf,
