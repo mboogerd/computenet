@@ -437,6 +437,34 @@ class DemoIsolationRatchetTest {
         }
     }
 
+    @Test
+    fun `scratch comment and string mentions of another demo package are not edges`() {
+        val root = Files.createTempDirectory("demo-isolation-qualified-decoys").toFile()
+        try {
+            val producer = writeScratchModule(root, ":demo:producer", "civictech.producer")
+            val consumer = writeScratchModule(
+                root,
+                ":demo:consumer",
+                "civictech.consumer",
+                sourceBody = "/**\n * See [civictech.producer.KDocOnly].\n */\n" +
+                    "// civictech.producer.LineCommentOnly\n" +
+                    "/* civictech.producer.BlockCommentOnly */\n" +
+                    "val text = \"civictech.producer.StringOnly\"\n" +
+                    "val raw = \"\"\"civictech.producer.RawStringOnly\"\"\"\n" +
+                    "class Consumer",
+                buildBody = "// implementation(project(\":demo:producer\"))\n" +
+                    "val note = \"project(path = \\\":demo:producer\\\")\"\n" +
+                    "dependencies { }",
+            )
+
+            val violations = scan(root, listOf(producer, consumer), emptySet())
+
+            assertEquals(emptyList<String>(), violations)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun writeScratchModule(
         root: File,
         projectPath: String,
