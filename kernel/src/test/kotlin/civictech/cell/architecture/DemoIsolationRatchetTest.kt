@@ -33,15 +33,137 @@ class DemoIsolationRatchetTest {
     companion object {
         private const val SHARED_SHELL = ":demo:shell"
         private val demoInclude = Regex("""include\(\s*"(:demo:[^"]+)"\s*\)""")
-        private val projectDependency = Regex("""project\(\s*"(:demo:[^"]+)"\s*\)""")
+        private val projectInvocation = Regex("""(?s)\bproject\s*\((.*?)\)""")
+        private val positionalProjectPath = Regex("""^\s*"(:demo:[^"]+)"""")
+        private val namedProjectPath = Regex("""\bpath\s*=\s*"(:demo:[^"]+)"""")
         private val packageDeclaration = Regex("""(?m)^\s*package\s+(civictech(?:\.[A-Za-z_]\w*)+)""")
         private val importDeclaration = Regex("""(?m)^\s*import\s+(civictech(?:\.[A-Za-z_]\w*)+)""")
+        private val packageDirective = Regex("""(?m)^\s*(?:package|import)\b[^\r\n]*""")
+        private val qualifiedPackageReference = Regex(
+            """\bcivictech\s*\.\s*([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)""",
+        )
+        private val whitespace = Regex("""\s+""")
         private val blockComment = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
         private val lineComment = Regex("""//[^\n]*""")
 
-        /** Strip comments before reading declarations from Kotlin or Gradle source. */
+        /**
+         * Retain Kotlin code while blanking comments, character literals and string
+         * contents. Code inside `${'$'}{...}` string templates is retained: it is an
+         * executable reference even though the surrounding literal is not. Newlines
+         * stay in place so declaration-line filtering cannot join unrelated tokens.
+         */
+        private fun codeOnly(source: String): String {
+            val code = CharArray(source.length) { index -> if (source[index] == '\n') '\n' else ' ' }
+
+            fun scanCode(start: Int, stopAtTemplateEnd: Boolean): Int {
+                var index = start
+                var nestedBraces = 0
+
+                fun skipBlockComment(commentStart: Int): Int {
+                    var cursor = commentStart + 2
+                    var depth = 1
+                    while (cursor < source.length && depth > 0) {
+                        when {
+                            source.startsWith("/*", cursor) -> {
+                                depth++
+                                cursor += 2
+                            }
+                            source.startsWith("*/", cursor) -> {
+                                depth--
+                                cursor += 2
+                            }
+                            else -> cursor++
+                        }
+                    }
+                    return cursor
+                }
+
+                fun skipCharacter(characterStart: Int): Int {
+                    var cursor = characterStart + 1
+                    while (cursor < source.length) {
+                        when (source[cursor]) {
+                            '\\' -> cursor = (cursor + 2).coerceAtMost(source.length)
+                            '\'' -> return cursor + 1
+                            else -> cursor++
+                        }
+                    }
+                    return cursor
+                }
+
+                fun skipBacktickIdentifier(identifierStart: Int): Int {
+                    var cursor = identifierStart + 1
+                    while (cursor < source.length) {
+                        if (source[cursor] == '`') return cursor + 1
+                        cursor++
+                    }
+                    return cursor
+                }
+
+                fun skipString(stringStart: Int, raw: Boolean): Int {
+                    var cursor = stringStart + if (raw) 3 else 1
+                    while (cursor < source.length) {
+                        when {
+                            source.startsWith("${'$'}{", cursor) -> cursor = scanCode(cursor + 2, true)
+                            raw && source[cursor] == '"' -> {
+                                var quoteRunEnd = cursor
+                                while (quoteRunEnd < source.length && source[quoteRunEnd] == '"') quoteRunEnd++
+                                if (quoteRunEnd - cursor >= 3) return quoteRunEnd
+                                cursor = quoteRunEnd
+                            }
+                            !raw && source[cursor] == '\\' -> cursor = (cursor + 2).coerceAtMost(source.length)
+                            !raw && source[cursor] == '"' -> return cursor + 1
+                            else -> cursor++
+                        }
+                    }
+                    return cursor
+                }
+
+                while (index < source.length) {
+                    when {
+                        source.startsWith("//", index) -> {
+                            val newline = source.indexOf('\n', index + 2)
+                            index = if (newline == -1) source.length else newline
+                        }
+                        source.startsWith("/*", index) -> index = skipBlockComment(index)
+                        source.startsWith("\"\"\"", index) -> index = skipString(index, raw = true)
+                        source[index] == '"' -> index = skipString(index, raw = false)
+                        source[index] == '\'' -> index = skipCharacter(index)
+                        source[index] == '`' -> index = skipBacktickIdentifier(index)
+                        stopAtTemplateEnd && source[index] == '}' && nestedBraces == 0 -> return index + 1
+                        else -> {
+                            if (stopAtTemplateEnd) {
+                                when (source[index]) {
+                                    '{' -> nestedBraces++
+                                    '}' -> nestedBraces--
+                                }
+                            }
+                            code[index] = source[index]
+                            index++
+                        }
+                    }
+                }
+                return index
+            }
+
+            scanCode(0, stopAtTemplateEnd = false)
+            return code.concatToString()
+        }
+
+        /** Strip comments before reading Gradle settings declarations. */
         private fun stripComments(source: String): String =
             source.replace(blockComment, "").replace(lineComment, "")
+
+        private fun projectDependencies(source: String): List<String> {
+            val code = codeOnly(source)
+            return projectInvocation.findAll(code).flatMap { match ->
+                val invocation = source.substring(match.range)
+                val body = invocation.substringAfter('(').substringBeforeLast(')')
+                listOfNotNull(
+                    positionalProjectPath.find(body)?.groupValues?.get(1),
+                    namedProjectPath.find(body)?.groupValues?.get(1),
+                )
+            }.toList()
+        }
     }
 
     private fun repoRoot(): File {
@@ -59,7 +181,7 @@ class DemoIsolationRatchetTest {
 
     private fun packageDeclarations(files: List<File>): Set<String> =
         files.flatMap { file ->
-            packageDeclaration.findAll(stripComments(file.readText())).map { it.groupValues[1] }.toList()
+            packageDeclaration.findAll(codeOnly(file.readText())).map { it.groupValues[1] }.toList()
         }.toSet()
 
     private fun moduleFromDirectory(root: File, projectPath: String): DemoModule {
@@ -115,13 +237,21 @@ class DemoIsolationRatchetTest {
         modules.filterNot { it.projectPath == SHARED_SHELL }.forEach { module ->
             module.mainSources.forEach { source ->
                 val relativePath = source.relativeTo(root).invariantSeparatorsPath
-                importDeclaration.findAll(stripComments(source.readText())).forEach { match ->
-                    val importedPackage = match.groupValues[1]
+                val code = codeOnly(source.readText())
+                val codeWithoutDirectives = packageDirective.replace(code) { " ".repeat(it.value.length) }
+                val importedPackages = sequence {
+                    yieldAll(importDeclaration.findAll(code).map { it.groupValues[1] })
+                    yieldAll(
+                        qualifiedPackageReference.findAll(codeWithoutDirectives).map { match ->
+                            "civictech." + match.groupValues[1].replace(whitespace, "")
+                        },
+                    )
+                }.toSet()
+                importedPackages.forEach { importedPackage ->
                     val target = ownerOf(importedPackage, packageOwners)
                     if (target != null && target != module.projectPath && target != SHARED_SHELL) {
                         val edge = Edge("import", module.projectPath, target)
-                        observedEdges += edge
-                        if (edge !in allowlist) {
+                        if (observedEdges.add(edge) && edge !in allowlist) {
                             violations += "$relativePath: imports $importedPackage from $target, " +
                                 "but ${edge} is not on the shrink-only allowlist"
                         }
@@ -133,19 +263,19 @@ class DemoIsolationRatchetTest {
             if (!buildFile.isFile) {
                 violations += "${module.projectPath} has no build.gradle.kts to inspect"
             } else {
-                projectDependency.findAll(stripComments(buildFile.readText())).forEach { match ->
-                    val target = match.groupValues[1]
+                projectDependencies(buildFile.readText()).forEach { target ->
                     if (target == SHARED_SHELL) return@forEach
 
                     val edge = Edge("dependency", module.projectPath, target)
-                    observedEdges += edge
-                    if (target !in knownProjects) {
-                        violations += "${buildFile.relativeTo(root).invariantSeparatorsPath}: $edge names " +
-                            "a demo project not listed in settings.gradle.kts"
-                    }
-                    if (edge !in allowlist) {
-                        violations += "${buildFile.relativeTo(root).invariantSeparatorsPath}: $edge is not on " +
-                            "the shrink-only allowlist"
+                    if (observedEdges.add(edge)) {
+                        if (target !in knownProjects) {
+                            violations += "${buildFile.relativeTo(root).invariantSeparatorsPath}: $edge names " +
+                                "a demo project not listed in settings.gradle.kts"
+                        }
+                        if (edge !in allowlist) {
+                            violations += "${buildFile.relativeTo(root).invariantSeparatorsPath}: $edge is not on " +
+                                "the shrink-only allowlist"
+                        }
                     }
                 }
             }
@@ -228,6 +358,79 @@ class DemoIsolationRatchetTest {
             assertEquals(1, violations.size)
             assertTrue(violations.single().contains("dependency|:demo:consumer|:demo:producer")) {
                 "scratch project dependency did not produce the expected cross-demo violation: $violations"
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `scratch two argument project dependency on another demo is rejected`() {
+        val root = Files.createTempDirectory("demo-isolation-two-argument-dependency").toFile()
+        try {
+            val producer = writeScratchModule(root, ":demo:producer", "civictech.producer")
+            val consumer = writeScratchModule(
+                root,
+                ":demo:consumer",
+                "civictech.consumer",
+                buildBody = "dependencies { implementation(project(\":demo:producer\", \"default\")) }",
+            )
+
+            val violations = scan(root, listOf(producer, consumer), emptySet())
+
+            assertEquals(1, violations.size)
+            assertTrue(violations.single().contains("dependency|:demo:consumer|:demo:producer")) {
+                "scratch two-argument project dependency did not produce the expected cross-demo violation: $violations"
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `scratch named path project dependency on another demo is rejected`() {
+        val root = Files.createTempDirectory("demo-isolation-named-path-dependency").toFile()
+        try {
+            val producer = writeScratchModule(root, ":demo:producer", "civictech.producer")
+            val consumer = writeScratchModule(
+                root,
+                ":demo:consumer",
+                "civictech.consumer",
+                buildBody = "dependencies { implementation(project(path = \":demo:producer\")) }",
+            )
+
+            val violations = scan(root, listOf(producer, consumer), emptySet())
+
+            assertEquals(1, violations.size)
+            assertTrue(violations.single().contains("dependency|:demo:consumer|:demo:producer")) {
+                "scratch named-path project dependency did not produce the expected cross-demo violation: $violations"
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `scratch fully qualified reference to another demo package is rejected`() {
+        val root = Files.createTempDirectory("demo-isolation-qualified-reference").toFile()
+        try {
+            val producer = writeScratchModule(root, ":demo:producer", "civictech.producer")
+            val consumer = writeScratchModule(
+                root,
+                ":demo:consumer",
+                "civictech.consumer",
+                sourceBody = """
+                    // civictech.producer.CommentOnly
+                    val text = "civictech.producer.StringOnly"
+                    class Consumer { val secret = civictech.producer.Secret() }
+                """.trimIndent(),
+            )
+
+            val violations = scan(root, listOf(producer, consumer), emptySet())
+
+            assertEquals(1, violations.size)
+            assertTrue(violations.single().contains("import|:demo:consumer|:demo:producer")) {
+                "scratch fully qualified reference did not produce the expected cross-demo violation: $violations"
             }
         } finally {
             root.deleteRecursively()
