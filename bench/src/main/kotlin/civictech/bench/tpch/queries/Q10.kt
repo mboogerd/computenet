@@ -178,7 +178,7 @@ class Q10Builder(
                     },
                 )
             }
-            val revenueFold = spawn("q10-revenue") { ref ->
+            val revenueFold = spawnFold("q10-revenue", CustOrderLineNation::class) { ref ->
                 GroupByCell<CustOrderLineNation, Q10CustomerGroup, Long, Long>(
                     ref = ref,
                     keyFn = { row ->
@@ -195,7 +195,7 @@ class Q10Builder(
                     aggregator = Aggregators.sumOf(CustOrderLineNation::revenueS4),
                 )
             }
-            val topRowsFold = spawn("q10-top-rows") { ref ->
+            val topRowsFold = spawnFold("q10-top-rows", CustOrderLineNation::class) { ref ->
                 GroupByCell.global(
                     ref = ref,
                     aggregator = Aggregators.topKBy(

@@ -46,41 +46,41 @@ class Q01Builder(
 
             fun groupKey(line: Lineitem) = Q01Group(line.returnFlag, line.lineStatus)
 
-            val sumQty = spawn("q01-sum-qty") { ref ->
+            val sumQty = spawnFold("q01-sum-qty", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.sumOf(Lineitem::quantity))
             }
-            val sumBasePrice = spawn("q01-sum-base-price") { ref ->
+            val sumBasePrice = spawnFold("q01-sum-base-price", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.sumOf(Lineitem::extendedPrice))
             }
-            val sumDiscPrice = spawn("q01-sum-disc-price") { ref ->
+            val sumDiscPrice = spawnFold("q01-sum-disc-price", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.sumOf<Lineitem> {
                     TpchDecimal.revenueS4(it.extendedPrice, it.discount)
                 })
             }
-            val sumCharge = spawn("q01-sum-charge") { ref ->
+            val sumCharge = spawnFold("q01-sum-charge", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.sumOf<Lineitem> {
                     TpchDecimal.chargeS6(it.extendedPrice, it.discount, it.tax)
                 })
             }
-            val avgQtySum = spawn("q01-avg-qty-sum") { ref ->
+            val avgQtySum = spawnFold("q01-avg-qty-sum", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.sumOf(Lineitem::quantity))
             }
-            val avgQtyCount = spawn("q01-avg-qty-count") { ref ->
+            val avgQtyCount = spawnFold("q01-avg-qty-count", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.count<Lineitem>())
             }
-            val avgPriceSum = spawn("q01-avg-price-sum") { ref ->
+            val avgPriceSum = spawnFold("q01-avg-price-sum", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.sumOf(Lineitem::extendedPrice))
             }
-            val avgPriceCount = spawn("q01-avg-price-count") { ref ->
+            val avgPriceCount = spawnFold("q01-avg-price-count", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.count<Lineitem>())
             }
-            val avgDiscSum = spawn("q01-avg-disc-sum") { ref ->
+            val avgDiscSum = spawnFold("q01-avg-disc-sum", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.sumOf<Lineitem> { it.discount.toLong() })
             }
-            val avgDiscCount = spawn("q01-avg-disc-count") { ref ->
+            val avgDiscCount = spawnFold("q01-avg-disc-count", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.count<Lineitem>())
             }
-            val countOrder = spawn("q01-count-order") { ref ->
+            val countOrder = spawnFold("q01-count-order", Lineitem::class) { ref ->
                 GroupByCell(ref, ::groupKey, Aggregators.count<Lineitem>())
             }
 

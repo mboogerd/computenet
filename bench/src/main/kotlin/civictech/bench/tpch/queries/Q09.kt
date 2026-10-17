@@ -199,7 +199,7 @@ class Q09Builder(
                     },
                 )
             }
-            val profitFold = spawn("q09-profit") { ref ->
+            val profitFold = spawnFold("q09-profit", Q09Complete::class) { ref ->
                 GroupByCell<Q09Complete, Q09Group, Long, Long>(
                     ref = ref,
                     keyFn = { row ->

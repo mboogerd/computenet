@@ -99,7 +99,7 @@ class Q03Builder(
                     },
                 )
             }
-            val revenueFold = spawn("q03-revenue") { ref ->
+            val revenueFold = spawnFold("q03-revenue", Q03CustomerOrderLine::class) { ref ->
                 GroupByCell<Q03CustomerOrderLine, Q03Group, Long, Long>(
                     ref = ref,
                     keyFn = { row -> Q03Group(row.orderKey, row.orderDate, row.shipPriority) },

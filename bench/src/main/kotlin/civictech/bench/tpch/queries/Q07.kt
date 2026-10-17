@@ -207,7 +207,7 @@ class Q07Builder(
                     row.supplierNation to row.customerNation in allowed
                 }
             }
-            val revenueFold = spawn("q07-revenue") { ref ->
+            val revenueFold = spawnFold("q07-revenue", Q07Complete::class) { ref ->
                 GroupByCell<Q07Complete, Q07Group, Long, Long>(
                     ref = ref,
                     keyFn = { row ->

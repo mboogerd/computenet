@@ -228,7 +228,7 @@ class Q08Builder(
                     },
                 )
             }
-            val numeratorFold = spawn("q08-share-num") { ref ->
+            val numeratorFold = spawnFold("q08-share-num", Q08Complete::class) { ref ->
                 GroupByCell<Q08Complete, Int, Long, Long>(
                     ref = ref,
                     keyFn = { row -> LocalDate.ofEpochDay(row.orderDate.toLong()).year },
@@ -237,7 +237,7 @@ class Q08Builder(
                     },
                 )
             }
-            val denominatorFold = spawn("q08-share-den") { ref ->
+            val denominatorFold = spawnFold("q08-share-den", Q08Complete::class) { ref ->
                 GroupByCell<Q08Complete, Int, Long, Long>(
                     ref = ref,
                     keyFn = { row -> LocalDate.ofEpochDay(row.orderDate.toLong()).year },

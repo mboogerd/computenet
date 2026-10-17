@@ -68,7 +68,7 @@ class Q14Builder(
                     },
                 )
             }
-            val promoFold = spawn("q14-promo-revenue") { ref ->
+            val promoFold = spawnFold("q14-promo-revenue", Q14PartLine::class) { ref ->
                 GroupByCell.global(
                     ref = ref,
                     aggregator = Aggregators.sumOf<Q14PartLine> {
@@ -76,7 +76,7 @@ class Q14Builder(
                     },
                 )
             }
-            val totalFold = spawn("q14-total-revenue") { ref ->
+            val totalFold = spawnFold("q14-total-revenue", Q14PartLine::class) { ref ->
                 GroupByCell.global(
                     ref = ref,
                     aggregator = Aggregators.sumOf(Q14PartLine::revenueS4),

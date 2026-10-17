@@ -51,7 +51,7 @@ class Q04Builder(
                     negated = false,
                 )
             }
-            val countFold = spawn("q04-order-count") { ref ->
+            val countFold = spawnFold("q04-order-count", Orders::class) { ref ->
                 GroupByCell<Orders, String, Long, Long>(
                     ref = ref,
                     keyFn = Orders::orderPriority,

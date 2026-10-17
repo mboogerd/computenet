@@ -75,7 +75,7 @@ class Q16Builder(
                     negated = true,
                 )
             }
-            val supplierCountFold = spawn("q16-supplier-count") { ref ->
+            val supplierCountFold = spawnFold("q16-supplier-count", Q16PartSupply::class) { ref ->
                 GroupByCell<Q16PartSupply, Q16Group, Long, java.util.TreeMap<Long, Int>>(
                     ref = ref,
                     keyFn = { row -> Q16Group(row.brand, row.type, row.size) },
