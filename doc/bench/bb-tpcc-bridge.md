@@ -406,7 +406,7 @@ append.
 An aligned composite is internally consistent for some per-source vector
 frontier [22-OBS-01] and waits for every named view through that frontier
 [22-OBS-02]. That is not the one serial transaction snapshot required by
-Order-Status's Level 3 relation to the other interactive transactions in §2:
+Order-Status's Level 3 relation to New-Order, Payment, and Delivery in §2:
 the vector need not denote one scalar moment. A bounded walk is weaker still;
 it is explicitly a verifiable, potentially “smeared” read rather than a
 snapshot [21-PULL-03]. The missing guarantee is a cross-source Level 3
@@ -567,7 +567,7 @@ from several shards.
 [22-OBS-01] and [22-OBS-02] can produce an internally consistent composite for
 some per-source vector frontier. They do not establish a scalar transaction
 snapshot, and [21-PULL-03] says a paged walk may be smeared. Because §2 assigns
-Order-Status Level 3 relative to the other interactive transactions, “some
+Order-Status Level 3 relative to New-Order, Payment, and Delivery, “some
 per-source frontier” is strictly weaker than its required serialization point.
 The mechanism is useful read-side alignment, but it does not by itself meet the
 declared isolation level.
@@ -946,9 +946,10 @@ document neither assigns its id nor edits the gap table:
 The row would be cited from `21-propagation.md` §Push (default,
 implemented), `22-consistency.md` §Source identity: emission epochs and
 §Local glitch-freedom (opt-in), `23-ownership.md` §Recovery and dead letters,
-and `24-data-cells.md` §Durability spectrum. It deliberately stays inside one
-host: the single-host construction in S1/S3 shows the boundary, not that the
-missing tentative/abort semantics already exist.
+`24-data-cells.md` §Durability spectrum, and `31-hosts.md` §The host protocol
+(as implemented). It deliberately stays inside one host: the single-host
+construction in S1/S3 shows the boundary, not that the missing tentative/abort
+semantics already exist.
 
 The general primitive is refused. Section 6 Q3 engages the prior Candidate C
 directly: a cross-host all-participant decision needs the synchronous
