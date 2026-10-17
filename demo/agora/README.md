@@ -18,12 +18,16 @@ edge and its influence fades, recursively.
 
 ## Semantics
 
-`DfQuad` (DF-QuAD adapted to weighted edges, `semantics/Semantics.kt`):
-probabilistic-sum aggregation of attack/support energies, base score = the
-stance mean clamped into `[0.01, 0.99]`, and the winning side's surplus moves
-the base toward its extreme. Pure functions — the incremental cells and the
-batch reference solver in the exit test share them, so incremental == batch
-tests the propagation machinery, never parallel math.
+The gradual-semantics catalog lives in `semantics/Catalog.kt` and
+`semantics/LayerSet.kt`. Its ids and defaults are the ones in
+`demo/deliberate/SPEC.md` CRED-04, with `DfQuad` as the default. DF-QuAD
+(adapted to weighted edges) uses probabilistic-sum aggregation of
+attack/support energies, a stance-mean base clamped into `[0.01, 0.99]`, and
+the winning side's surplus moves the base toward its extreme. Agora's cells
+fold the product influence `s·c`; layers that separate strength and source
+credence (`jnb`, `glo`) are refused by `ClaimCell` until vector influences
+exist. The cycle-head proof and incremental == batch exit check apply to
+DF-QuAD only; non-DF-QuAD cycle behavior is not part of this demo's contract.
 
 ## Cycles (spec 21 §Cycles)
 

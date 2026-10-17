@@ -377,7 +377,10 @@ override, proposer, rewritten text, the Jev judgments (which are the `jev`
 stances), triage counts, rounds and errors. New topology deltas create no
 sensitivity cells. Journals written by the retired model-C build may contain
 `SensitivityFactory` spawns and links; those legacy types remain loadable, but
-their derivative output is ignored. Nothing derived is written: ordinary and
+their derivative output is ignored. A `--data` directory written by a build
+before the semantics moved to Agora does not load, because its journaled
+construction records name the old classes; start a fresh directory. Nothing
+derived is written: ordinary and
 arguments-first credence, influence and consensus are re-derived from the
 restored inputs, while exact value of information and signed sway are evaluated
 on demand and never journaled. Rebuilding the arguments-first view makes no
