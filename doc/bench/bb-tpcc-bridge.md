@@ -703,12 +703,17 @@ whether the primitive should exist.
   `Leased` payload it holds and SHALL discharge every `Owned` payload exactly
   once, never silently dropping an exclusive obligation (`23-ownership.md`
   §Taps: consumers vs observers and §Recovery and dead letters).
-- [BB-TPCC-30] IF a transaction scope aborts after a participant has consumed an
-  `Owned` payload, THEN the runtime SHALL move the consumed value exactly once
-  into the visible dead-letter boundary in R8's serialized `Frozen` form. This
-  is the sole disposition for this case and preserves the ownership accounting
-  defined by `23-ownership.md` §Recovery and dead letters (93 I-22 R6–R8;
-  implemented).
+- [BB-TPCC-30] WHILE an `Owned` payload remains live in an open transaction
+  scope, the runtime SHALL defer its participant's `take()` until the durable
+  scope-wide decision is commit. WHEN `take()` occurs after that decision,
+  THEN the scope SHALL be **unabortable-once-consumed**; an abort before
+  `take()` SHALL instead discharge the still-live payload exactly once under
+  [BB-TPCC-29]. Within this non-normative sketch, that is the sole disposition:
+  `23-ownership.md` §Recovery and dead letters makes consumed, discharged, and
+  dead-lettered mutually exclusive fates, R6 makes consumption terminal across
+  RESTART, and R8 can serialize only a live `Owned` wrapper at capture. The
+  hypothetical scope therefore forbids consumed-then-aborted rather than
+  assigning one item a second fate.
 - [BB-TPCC-31] IF a transaction scope exceeds its configured open-time bound,
   THEN the runtime SHALL abort it and publish a visible metadata-plane notice
   rather than stall its participants indefinitely, following the explicit
@@ -767,23 +772,28 @@ whether the primitive should exist.
   [24-DUR-04] and SHALL suppress an `Effectful` participant at or behind its
   processed frontier as required by [24-DUR-05], rather than re-drive the
   effect (`24-data-cells.md` §Durability spectrum).
-- [BB-TPCC-40] For a cross-host transaction scope, [BB-TPCC-37] is **not
-  satisfiable by today's model without the synchronous cross-peer reply and
-  atomic-commit mechanism already rejected in §6 Q3**
+- [BB-TPCC-40] WHERE a transaction scope is confined to one host, the runtime
+  SHALL satisfy [BB-TPCC-37] from a host-local durable scope-wide decision and
+  SHALL NOT require a cross-peer reply channel. IF a transaction scope spans
+  hosts, THEN its proposal SHALL either satisfy [BB-TPCC-37] without the
+  synchronous cross-peer reply channel and global barrier rejected in §6 Q3,
+  or explicitly justify amending P4 and the no-global-consensus principle
   (`93-feature-interactions.md` §I-11, Candidate C — Cross-host atomic
-  multi-link two-phase commit). Reintroducing that mechanism under different
-  terminology is therefore a decisive argument for out-of-scope-by-design
-  unless the project explicitly amends P4 and its no-global-consensus
-  principle.
+  multi-link two-phase commit). Section 6 Q3 identifies no current mechanism
+  for the cross-host case, but leaves room for an adjacent proposal that avoids
+  both rejected mechanisms.
 
 The breakdown's `C-11`/`C-9` parentheticals were rechecked: neither marker
-appears in generated `CONCORDANCE.md`; both remain as historical rows in
-`91-gap-analysis.md` §Conflicts. The current normative chapters say the
-discharging-sink conflict is resolved (`23-ownership.md` §Taps: consumers vs
-observers) and the effectful replay mechanism is resolved
-(`24-data-cells.md` §Durability spectrum), so [BB-TPCC-29] and [BB-TPCC-39]
-cite those current guarantees rather than presenting either as a live
-CONCORDANCE conflict.
+appears in generated `CONCORDANCE.md`, and both remain in
+`91-gap-analysis.md` §Conflicts, but those rows are not a uniformly current
+status account. C-9 still says “code diverges; fix pending” and is stale
+against `24-data-cells.md` §Durability spectrum, which records G-59's
+effectful-sink replay mechanism as resolved. C-11 marks its core conflict
+resolved but still lists `computenet-woto` and `computenet-h6sf` as residuals
+filed, not fixed; `23-ownership.md` §Taps: consumers vs observers now places
+both in its closed history, so the two sources disagree about residual status.
+Requirements [BB-TPCC-29] and [BB-TPCC-39] therefore cite the current chapter
+guarantees and do not present either marker as a live CONCORDANCE conflict.
 
 ### 5.6 What this sketch deliberately does not say
 
