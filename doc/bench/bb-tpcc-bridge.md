@@ -1,6 +1,6 @@
 # BB-TPCC — TPC-C bridge document
 
-> **Status**: BB-lane analysis artifact (non-normative). Decision: _pending (T6)_
+> **Status**: BB-lane analysis artifact (non-normative). Decision: hybrid — (B) general, (A) bounded host-local; see §7
 > **Sources**: `computenet-milestone-plan.md` §1 (BB-TPCC row), §3 (TPC-C row), §6; feature computenet-1ys
 > **Implementation**: none — this document proposes nothing that it builds
 
@@ -9,10 +9,9 @@
 This is a BB-lane analysis artifact. It is non-normative, and it proposes
 nothing that it builds: it changes neither ComputeNet's model nor its runtime.
 
-It answers “can ComputeNet do OLTP?” by forcing §7 to choose a named candidate
-gap, a research-gated entry, an out-of-scope-by-design decision, or an
-explicitly bounded hybrid of those outcomes. The pending status above records
-that this first assembly step has not made that decision for the later analysis.
+It answers “can ComputeNet do OLTP?” through the bounded hybrid decided in §7:
+the general cross-host primitive is out of scope by design, while a strictly
+host-local transaction scope remains a candidate gap.
 
 Every claim about ComputeNet's present model cites a full requirement id, an
 exact spec section, or a repository-root-relative path. The scenarios in §4
@@ -66,7 +65,7 @@ per New-Order and one each of the other three transactions per ten New-Orders
   uses an invalid final item id, and the resulting error must roll back the
   update transaction (TPC-C §§2.4.1.3–2.4.1.4, 2.4.2.1–2.4.2.2).
 
-**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+**Isolation requirement**: Level 3 among New-Order, Payment, Order-Status, and Delivery, and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
 
 #### Payment
 
@@ -79,7 +78,7 @@ per New-Order and one each of the other three transactions per ten New-Orders
   may be remote from the warehouse where the payment is entered (TPC-C
   §§2.5.1.2, 2.5.1.5–2.5.1.6, 2.5.2.1–2.5.2.2).
 
-**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+**Isolation requirement**: Level 3 among New-Order, Payment, Order-Status, and Delivery, and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
 
 #### Order-Status
 
@@ -92,7 +91,7 @@ per New-Order and one each of the other three transactions per ten New-Orders
   selection by number or by last name, followed by the latest-order and
   order-line reads (TPC-C §§2.6.1.2, 2.6.2.1–2.6.2.2).
 
-**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+**Isolation requirement**: Level 3 among New-Order, Payment, Order-Status, and Delivery, and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
 
 #### Delivery
 
@@ -109,7 +108,7 @@ per New-Order and one each of the other three transactions per ten New-Orders
   execution rather than completed interactively (TPC-C §§2.7, 2.7.2.1–2.7.2.2,
   2.7.4).
 
-**Isolation requirement**: Level 3 among the four interactive transaction types and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
+**Isolation requirement**: Level 3 among New-Order, Payment, Order-Status, and Delivery, and Level 2 relative to an arbitrary transaction (TPC-C §3.4.1)
 
 #### Stock-Level
 
@@ -392,13 +391,15 @@ atomic visibility and abort without an observable partial effect.
 #### Payment
 
 Payment is Level 3 across warehouse, district, customer, and `HISTORY` state.
-It is partially representable only if all four logical changes are deliberately
-encoded as keys of one family, on one host and one shard, and derived from one
-input delta: [24-OP-GROUPBY-03] then supplies one operator emission and
-[24-PART-03] supplies one key owner. The ordinary multi-cell representation
-has independent sources, for which [22-SRC-01] promises convergence rather
-than simultaneity. The missing guarantee is one atomic commit covering the
-three updates and the history append.
+It is partially representable by either of the constructions established in
+S3: one `GroupByCell` can encode all four logical changes in one multi-key
+`MapDelta` [24-OP-GROUPBY-03], or one linked ingress can fan out synchronously
+to several keyed cells on one host and an aligned observer can publish them at
+one wave position [22-OBS-01] [22-OBS-02]. Neither construction supplies a
+general commit over independently sourced cells or a cross-host fan-out;
+[22-SRC-01] promises convergence rather than simultaneity there. The missing
+guarantee is one atomic commit covering the three updates and the history
+append.
 
 #### Order-Status
 
@@ -705,7 +706,7 @@ whether the primitive should exist.
   §Taps: consumers vs observers and §Recovery and dead letters).
 - [BB-TPCC-30] WHILE an `Owned` payload remains live in an open transaction
   scope, the runtime SHALL defer its participant's `take()` until the durable
-  scope-wide decision is commit. WHEN `take()` occurs after that decision,
+  scope-wide decision is commit. IF `take()` occurs after that decision,
   THEN the scope SHALL be **unabortable-once-consumed**; an abort before
   `take()` SHALL instead discharge the still-live payload exactly once under
   [BB-TPCC-29]. Within this non-normative sketch, that is the sole disposition:
@@ -919,8 +920,92 @@ fails [BB-TPCC-22] before its protocol details matter.
 
 ## 7. Decision
 
-_Pending: owned by task T6._
+**Decision**: Hybrid: (B) general + (A) bounded single-host transaction
+
+The candidate case comes first because S1 and S3 establish a real local
+foothold rather than a disguised refusal: one linked ingress can preserve one
+wave across same-frame fan-out on one host, and [22-OBS-01]/[22-OBS-02] can
+publish the resulting keyed views together. S5 adds a strong application fit —
+Delivery is already deferred dataflow — and S7 credits the per-key
+single-writer serialization point. Those mechanisms still stop short of
+all-or-nothing execution. Section 6 Q1's `**First step with no mechanism**` is
+staging a participant change as tentative, durable, and invisible before
+effective-only emission; S2 has no abort and S8 has no scope-wide recovery
+decision. That is a narrow, decidable host-local gap worth preserving without
+turning it into a cross-peer protocol.
+
+A future integration pass may consider this quoted gap-table row; this
+document neither assigns its id nor edits the gap table:
+
+```text
+| ID | Gap | Proposal | Where |
+|---|---|---|---|
+| G-NN (unassigned) | No bounded host-local transaction scope can stage changes in several participant cells, publish all of them together, and abort before any effective emission. | Specify an opt-in scope confined to one host and one ingress wave, with explicit participants, tentative invisible state, a host-local durable outcome, commit-only publication, abort accounting for `Owned`/`Leased`, and no cross-host form. | 20/21, 20/22, 20/23, 20/24, 30/31 |
+```
+
+The row would be cited from `21-propagation.md` §Push (default,
+implemented), `22-consistency.md` §Source identity: emission epochs and
+§Local glitch-freedom (opt-in), `23-ownership.md` §Recovery and dead letters,
+and `24-data-cells.md` §Durability spectrum. It deliberately stays inside one
+host: the single-host construction in S1/S3 shows the boundary, not that the
+missing tentative/abort semantics already exist.
+
+The general primitive is refused. Section 6 Q3 engages the prior Candidate C
+directly: a cross-host all-participant decision needs the synchronous
+cross-peer reply channel that Candidate C rejected and recreates the global
+barrier forbidden by `02-design-principles.md` §P4 — Local, compositional
+consistency. `42-replication.md` §Principles (fixed) instead commits to **No
+global consensus**, while [53-STATE-04] keeps even promotion atomicity local
+and says a whole-composite transaction would be that forbidden barrier. This
+is not a judgment that transactions are unimportant; it follows the model's
+stated boundary that “transactions are not the framework's core (dataflow
+is)” (`14-invocations.md` §The core move (ADR 3)).
+
+A future integration pass could add this sentence to
+`42-replication.md` §Principles (fixed):
+
+```text
+Interactive cross-host, cross-cell transactions with abort are outside ComputeNet's core model: their durable all-participant decision and terminating recovery require the cross-peer reply barrier that P4 and the no-global-consensus principle refuse; applications that require that contract use a transactional database at the boundary and feed its committed changes into ComputeNet.
+```
+
+What the model offers instead is useful but transaction-specific, and its
+weaker points remain explicit:
+
+| TPC-C transaction | ComputeNet offers instead | Where it is genuinely weaker |
+|---|---|---|
+| New-Order | One-input `GroupByCell` emission or the one-host, same-frame, aligned-observer construction from S1; S7 also gives a per-key single-writer counter [24-OP-GROUPBY-03] [22-OBS-01] [22-OBS-02] [24-PART-03]. | S2 has no abort that preserves never-observed, and S8 has no durable cross-cell outcome; cross-host fan-out has only [22-SRC-01] convergence. |
+| Payment | The same one-input or one-host aligned construction from S3 [24-OP-GROUPBY-03] [22-OBS-01] [22-OBS-02]. | Independent cells have no atomic commit, and the construction does not extend to cross-host participants [22-SRC-01]. |
+| Order-Status | A per-source vector-frontier composite plus a bounded read [22-OBS-01] [22-OBS-02] [21-PULL-03]. | It is not the Level 3 scalar serialization point that S4 requires; a bounded walk may be smeared. |
+| Delivery | Deferred execution is native dataflow, and one district-scoped transition can have one disjoint owner [24-PART-03] (S5). | Separate order, line, and customer cells still lack per-district atomic commit. |
+| Stock-Level | Wave-neutral bounded reads and aligned maintained views [21-PULL-02] [21-PULL-03] [22-OBS-01] [22-OBS-02] (S6). | This is sufficient for the stated Level 1 shape, but it offers no stronger snapshot guarantee. |
+
+A user who needs full TPC-C semantics should therefore use a transactional
+database and consume its committed CDC stream through a connector ingress.
+The connector part is the CON1 boundary: `24-data-cells.md` §Durability
+spectrum assigns minting and persistence of stable external actor identity to
+that ingress, while the kernel supplies the stamping and replay rules.
 
 ## 8. What this document does not do
 
-_Pending: owned by task T6._
+This document is a non-normative analysis artifact. It does not implement a
+transaction scope, specify message rounds or a coordinator state machine,
+modify any file under `doc/spec/`, mint a `G-*` id or a normative requirement
+id, add a concord scenario, implement TPC-C, or report a `tpmC` figure. The
+candidate row and principle sentence in §7 are quoted proposals for a future
+integration pass; neither changes ComputeNet's model today. No source module
+or benchmark module is modified by this study. [BB-TPCC-08]
+
+The boundary is also substantive: the narrow candidate ends at one host and
+one ingress wave, while the general cross-host transaction is refused. Nothing
+in the local candidate should be read as a back door to the cross-peer barrier
+rejected in §6 Q3.
+
+### 8.1 Unverified assertions
+
+The audit command is `grep -n 'unverified' doc/bench/bb-tpcc-bridge.md`.
+Outside §8, its sole result is in §4 S2: that paragraph says the rollback claim
+uses TPC-C clauses “rather than an `unverified` tag.” It records verification,
+not an unverified assertion. The document therefore contains no assertion
+tagged `unverified`; its TPC-C claims cite the clauses read in §2, and its
+ComputeNet claims cite requirement ids, named spec sections, or repository
+paths.
