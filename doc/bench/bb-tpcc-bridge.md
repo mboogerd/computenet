@@ -1,6 +1,6 @@
 # BB-TPCC — TPC-C bridge document
 
-> **Status**: BB-lane analysis artifact (non-normative). Decision: hybrid — (B) general, (A) bounded host-local; see §7
+> **Status**: BB-lane analysis artifact (non-normative). Decision: hybrid — (B) general, (A) bounded host-local; grounded at `f6fc66bf9688559a7d9d43b6a0b1b1d486c383a9`; see §7 [BB-TPCC-15]
 > **Sources**: `computenet-milestone-plan.md` §1 (BB-TPCC row), §3 (TPC-C row), §6; feature computenet-1ys
 > **Implementation**: none — this document proposes nothing that it builds
 
@@ -8,6 +8,8 @@
 
 This is a BB-lane analysis artifact. It is non-normative, and it proposes
 nothing that it builds: it changes neither ComputeNet's model nor its runtime.
+The bridge document lives at `doc/bench/bb-tpcc-bridge.md` [BB-TPCC-01] and
+uses the eight required sections in their prescribed order [BB-TPCC-02].
 
 It answers “can ComputeNet do OLTP?” through the bounded hybrid decided in §7:
 the general cross-host primitive is out of scope by design, while a strictly
@@ -17,6 +19,26 @@ Every claim about ComputeNet's present model cites a full requirement id, an
 exact spec section, or a repository-root-relative path. The scenarios in §4
 are analysis scenarios, not executable tests; they are a way to expose the
 first missing guarantee, not a substitute for a conformance corpus.
+[BB-TPCC-04]
+
+**GFR caveat (owner decision `computenet-nogtk`).** This document deliberately
+remains grounded at `f6fc66bf9688559a7d9d43b6a0b1b1d486c383a9`; it is not
+re-grounded on the removal work. The owner decision in epic `computenet-nogtk`,
+also recorded in the 2026-10-17T08:15Z comment on feature `computenet-1ys`,
+will retire [22-GF-01], [22-GF-02], [22-GF-03], [22-LIVE-01], [22-OBS-01],
+and [22-OBS-02], together with glitch-free frontier completeness, aligned
+observation, and absorb-acks. References to those ids or mechanisms below
+describe the pinned base only. Without them, buffer/absorb-ack/frontier claims
+are not available mechanisms; S1 and S3 retain only the one-`MapDelta` case,
+not the aligned multi-cell publication case; S4 becomes MISSING rather than
+PARTIAL; S6 remains COVERED only by its Level 1 bounded-read allowance; and
+§7's (A) half loses its existing publish-together foothold while remaining a
+candidate statement of missing tentative/abort semantics. Each dependent
+verdict and decision paragraph repeats its particular consequence.
+
+The completed analysis also has one append-only companion entry in
+`doc/bench/findings.md`, which records the decision and points back here.
+[BB-TPCC-16]
 
 ## 2. What TPC-C measures
 
@@ -169,7 +191,9 @@ post-wave inputs [22-GF-01]. The guarantee composes across a chain of declaring
 cells [22-GF-02], and the completeness condition is required to be identical
 when a frontier edge crosses a host boundary [22-GF-03]. Non-declaring cells
 remain eager (`22-consistency.md` §Local glitch-freedom (opt-in);
-`22-consistency.md` §Bridged frontier (location transparency)).
+`22-consistency.md` §Bridged frontier (location transparency)). This is
+pinned-base behavior under the §1 GFR caveat; `computenet-nogtk` retires all
+three guarantees, after which this paragraph supplies no current mechanism.
 
 **One input delta can be atomic as an operator emission.** `GroupByCell` emits
 all groups touched by one input delta as one `MapDelta` under that input's wave
@@ -184,14 +208,18 @@ from indefinitely blocking another source at quiescence [22-LIVE-01]. Together
 these rules deliberately refuse an implicit transaction boundary across roots
 (`22-consistency.md` §Topology versioning; `22-consistency.md` §Completeness
 over silent or stuck edges (decided in 93 I-18; implemented — in-process
-CP-A3/CP-A4, bridged CP-A2)).
+CP-A3/CP-A4, bridged CP-A2)). Under the §1 GFR caveat, the [22-LIVE-01]
+completeness mechanism is pinned-base behavior and disappears; [22-SRC-01]'s
+convergence-without-simultaneity boundary remains the independent argument.
 
 **Read-side alignment exists.** A composite observation may emit only a result
 that is correct for some per-source vector frontier of the replica's inputs
 [22-OBS-01], and its named views must all settle through the shared frontier
 before assembly [22-OBS-02]. This is internal consistency without a scalar
 global time or a timestamp oracle (`22-consistency.md` §The observation
-frontier).
+frontier). This is pinned-base behavior under the §1 GFR caveat; after
+`computenet-nogtk` retires those ids, the model has no aligned composite-read
+guarantee to substitute here.
 
 The balanced-transfer benchmark is specifically an **observation** guarantee.
 It drives paired debit and credit changes in one wave through joins and grouped
@@ -200,7 +228,9 @@ that an aligned observer need not see a partly propagated transfer; it does not
 establish that the debit and credit were atomically executed, nor that either
 could be aborted before observation (`22-consistency.md` §Acceptance benchmark:
 the balanced-transfer suite; [22-OBS-01]; [22-OBS-02]). This distinction is the
-spine of the bridge analysis.
+spine of the bridge analysis at the pinned base. Under the §1 GFR caveat the
+aligned benchmark guarantee is retired, so it supplies neither execution nor
+observation support after GFR.
 
 **Mergeable replication is consensus-free CRDT gossip.** Replication is opt-in,
 and the fixed principle is “no global consensus”; replicas converge by declared
@@ -269,26 +299,31 @@ The central finding is negative: `doc/spec/20-dataflow-semantics/` and
 already-emitted data delta. Effective-only emission means the emitted delta
 describes an actual state change (`21-propagation.md` §Incremental vs complete).
 The model can delay, account for, supersede, or later counteract data; none of
-those makes an already-observed change never have happened.
+those makes an already-observed change never have happened. [BB-TPCC-05]
 
 The admissible dispositions of an in-flight delta are:
 
 - **buffer** — a glitch-free cell holds a partial wave until its local
-  completeness condition is met [22-GF-01];
+  completeness condition is met [22-GF-01]. This is pinned-base behavior under
+  the §1 GFR caveat; after GFR it is not an available disposition;
 - **park** — an exclusive payload refused by saturation remains owned by the
   sender's link and is replayed later (`23-ownership.md` §The SPSC link rule
   (normative));
 - **absorb-ack** — an operator that has no effective output advances the
   downstream watermark with `Progress` rather than inventing an output
   [22-LIVE-01] (`22-consistency.md` §Completeness over silent or stuck edges
-  (decided in 93 I-18; implemented — in-process CP-A3/CP-A4, bridged CP-A2));
+  (decided in 93 I-18; implemented — in-process CP-A3/CP-A4, bridged CP-A2)).
+  This is pinned-base behavior under the §1 GFR caveat; `computenet-nogtk`
+  retires absorb-acks, so no corresponding disposition remains after GFR;
 - **dead-letter** — an undeliverable exclusive crosses a visible boundary that
   freezes or redacts it while discharging ownership (`23-ownership.md`
   §Recovery and dead letters (93 I-22 R6–R8; implemented));
 - **degrade** — a recoverable stalled edge may be excluded under the explicit
   DEGRADE policy, with the shrunken condition disclosed [22-LIVE-01]
   (`22-consistency.md` §Completeness over silent or stuck edges (decided in
-  93 I-18; implemented — in-process CP-A3/CP-A4, bridged CP-A2)); or
+  93 I-18; implemented — in-process CP-A3/CP-A4, bridged CP-A2)). The cited
+  wave-completeness form is pinned-base behavior under the §1 GFR caveat and
+  supplies no post-GFR abort alternative; or
 - **retract-as-data** — a later remove retracts the tags it observed
   [24-SET-03], which can restore a value-level condition but cannot erase an
   earlier observation (`24-data-cells.md` §Established pattern (normative
@@ -329,6 +364,9 @@ observed (`21-propagation.md` §Pull).
 
 ### 3.3 The three unbuilt placeholders
 
+These are the three existing placeholders required by [BB-TPCC-13]; none
+provides transaction abort.
+
 **Explicit coordinator cell.** Rule S5 says that completeness quantifies over
 physical outlet-epoch sources; a logical upstream with several instances gives
 convergence rather than the diamond guarantee unless the consumer subscribes
@@ -365,10 +403,10 @@ cell or retract effects already observed downstream.
 | `14-invocations.md` says “transactions are not the framework's core.” | The actual sentence is “transactions are not the framework's core (dataflow is)” in `14-invocations.md` §The core move (ADR 3). | Quote the full sentence and its contrast with dataflow. |
 | Single-writer replication is decided but unbuilt, and automatic election is wholly absent. | `42-replication.md` still labels §Single-writer replication “not built,” but `kernel/src/main/kotlin/civictech/cell/replication/SingleWriterReplication.kt` implements the leader/follower engine and `kernel/src/main/kotlin/civictech/cell/replication/LeaderElection.kt` implements default-manual plus opt-in observation-counted epoch claims; `kernel/src/test/kotlin/civictech/cell/replication/SingleWriterReplicationTest.kt` and `kernel/src/test/kotlin/civictech/cell/replication/LeaderElectionTest.kt` exercise them. | Inventory the implementation, while retaining its no-quorum, no-ack, asynchronous-loss boundary; do not repeat the stale “unbuilt” status as fact. |
 | Partitioned state is only decided design with no code. | `24-data-cells.md` §Partitioned state itself flags that status as stale, and the current tree contains `kernel/src/main/kotlin/civictech/cell/partition/PartitionedCell.kt`, `kernel/src/main/kotlin/civictech/cell/partition/PartitionedShardSet.kt`, and `kernel/src/main/kotlin/civictech/cell/partition/ShardCell.kt`. | Treat [24-PART-01], [24-PART-02], [24-PART-03], [24-PART-04], and [24-PART-05] as the model requirements, and do not infer non-existence from the stale status paragraph. |
-| G-39 still lacks a wire form for edge events, and bridged `Progress`/handshake parity remain unimplemented. | `91-gap-analysis.md` §Gaps — semantics (20), G-39 row, says the EdgeEvent wire sliver is built; `41-location-transparency.md` §Wire layer records C-13 as resolved and bridged `Progress` as implemented. Older sentences in `21-propagation.md` §Pull and `22-consistency.md` §Bridged frontier (location transparency) still describe those parts as absent, even though the latter file's status and completeness section say CP-A2 landed. | Keep only the floor/retention/source-set propagation/JoinBarrier part as the G-39 residual; do not weaken [22-GF-03] with the stale implementation labels. |
+| G-39 still lacks a wire form for edge events, and bridged `Progress`/handshake parity remain unimplemented. | `91-gap-analysis.md` §Gaps — semantics (20), G-39 row, says the EdgeEvent wire sliver is built; `41-location-transparency.md` §Wire layer records C-13 as resolved and bridged `Progress` as implemented. Older sentences in `21-propagation.md` §Pull and `22-consistency.md` §Bridged frontier (location transparency) still describe those parts as absent, even though the latter file's status and completeness section say CP-A2 landed. | At the pinned base, keep only the floor/retention/source-set propagation/JoinBarrier part as the G-39 residual and do not weaken [22-GF-03] with stale implementation labels. Under the §1 GFR caveat, that [22-GF-03] correction itself retires with the guarantee. |
 
 No further drift was found in the §3.1–§3.3 grounding owned here at
-`f6fc66bf9688559a7d9d43b6a0b1b1d486c383a9`.
+`f6fc66bf9688559a7d9d43b6a0b1b1d486c383a9`. [BB-TPCC-18]
 
 ## 4. The five transactions, walked
 
@@ -399,7 +437,9 @@ one wave position [22-OBS-01] [22-OBS-02]. Neither construction supplies a
 general commit over independently sourced cells or a cross-host fan-out;
 [22-SRC-01] promises convergence rather than simultaneity there. The missing
 guarantee is one atomic commit covering the three updates and the history
-append.
+append. Under the §1 GFR caveat the aligned-observer construction disappears;
+only the one-`MapDelta` representation remains as pinned evidence, not a
+multi-cell publication guarantee.
 
 #### Order-Status
 
@@ -411,7 +451,9 @@ the vector need not denote one scalar moment. A bounded walk is weaker still;
 it is explicitly a verifiable, potentially “smeared” read rather than a
 snapshot [21-PULL-03]. The missing guarantee is a cross-source Level 3
 snapshot/serialization point, although the observation frontier supplies a
-useful, strictly weaker read-side alignment mechanism.
+useful, strictly weaker read-side alignment mechanism at the pinned base.
+Under the §1 GFR caveat that weaker mechanism also disappears, leaving only
+the smeared bounded read and no cross-source coverage.
 
 #### Delivery
 
@@ -434,7 +476,8 @@ isolation rather than a hidden claim of snapshot isolation. A maintained
 multi-view result can additionally use the per-source observation frontier
 [22-OBS-01] [22-OBS-02]. Thus the isolation shape is covered, while callers
 must not promote either mechanism into a Level 3 or single-global-moment claim.
-[BB-TPCC-03]
+Under the §1 GFR caveat the maintained-view alignment disappears, but the
+Level 1 bounded-read argument and COVERED result remain. [BB-TPCC-03]
 
 ### 4.2 Scenarios S1–S8
 
@@ -465,7 +508,9 @@ aligned observer. It does not establish partitioned-shard publication,
 cross-host fan-out, or visibility to unaligned observers; [22-SRC-01] still
 promises convergence rather than simultaneity outside that construction, and
 the scatter-gather contract has no joint cut (`42-replication.md`
-§Scatter-gather pull over an instance set (PN-5)).
+§Scatter-gather pull over an instance set (PN-5)). Under the §1 GFR caveat,
+`computenet-nogtk` removes this aligned-observer branch; S1 retains only the
+one-`MapDelta` representation and no multi-cell publish-together mechanism.
 
 Files read for this finding:
 `kernel/src/main/kotlin/civictech/cell/data/op/GroupByCell.kt`,
@@ -491,9 +536,10 @@ shards, cross-host fan-out, or unaligned observers. `PartitionedCellTest`,
 `ShardCellBoundedReadTest`, and `ExchangeCompositionExitTest` cover functional
 shard equivalence, bounded-read/repartition behavior, and eventual
 batch-equivalent composition respectively, not joint publication of the
-separate outputs from several shards.
+separate outputs from several shards. The `observeAligned` evidence is
+pinned-base-only under the §1 GFR caveat and supplies no post-GFR mechanism.
 
-**Verdict**: PARTIAL — [24-OP-GROUPBY-03] or same-frame keyed fan-out, restricted to one host, one linked ingress delta, and [22-OBS-01]/[22-OBS-02] aligned observation
+**Verdict**: PARTIAL — at the pinned base, [24-OP-GROUPBY-03] or same-frame keyed fan-out restricted to one host, one linked ingress delta, and [22-OBS-01]/[22-OBS-02] aligned observation; under the §1 GFR caveat the aligned branch retires and PARTIAL rests only on the one-`MapDelta` representation, not multi-cell publication
 
 ### S2 — New-Order 1% rollback
 
@@ -529,7 +575,9 @@ commit spanning the emissions. The tested broader case is a deliberate
 one-host construction in which all four changes derive from one linked ingress
 delta, fan out synchronously in the same frame to keyed cells, and are read
 through an aligned observer. The ordinary multi-cell shape, cross-host fan-out,
-and unaligned observation are not covered.
+and unaligned observation are not covered. Under the §1 GFR caveat,
+`computenet-nogtk` removes the aligned-observer construction; S3 retains only
+the one-`MapDelta` representation and no multi-cell publish-together mechanism.
 
 Files read for this finding:
 `kernel/src/main/kotlin/civictech/cell/data/op/GroupByCell.kt`,
@@ -554,9 +602,10 @@ the joint result read through `observeAligned`. It does not pin partitioned
 shards, cross-host fan-out, or unaligned observers. The partitioned tests and
 exchange exit test pin functional shard behavior, bounded reads, and eventual
 batch-equivalent composition, not joint publication of the separate outputs
-from several shards.
+from several shards. The `observeAligned` evidence is pinned-base-only under
+the §1 GFR caveat and supplies no post-GFR mechanism.
 
-**Verdict**: PARTIAL — [24-OP-GROUPBY-03] or same-frame keyed fan-out, restricted to one host, one linked ingress delta, and [22-OBS-01]/[22-OBS-02] aligned observation
+**Verdict**: PARTIAL — at the pinned base, [24-OP-GROUPBY-03] or same-frame keyed fan-out restricted to one host, one linked ingress delta, and [22-OBS-01]/[22-OBS-02] aligned observation; under the §1 GFR caveat the aligned branch retires and PARTIAL rests only on the one-`MapDelta` representation, not multi-cell publication
 
 ### S4 — Order-Status coherent read
 
@@ -570,9 +619,11 @@ snapshot, and [21-PULL-03] says a paged walk may be smeared. Because §2 assigns
 Order-Status Level 3 relative to New-Order, Payment, and Delivery, “some
 per-source frontier” is strictly weaker than its required serialization point.
 The mechanism is useful read-side alignment, but it does not by itself meet the
-declared isolation level.
+declared isolation level. Under the §1 GFR caveat `computenet-nogtk` removes
+even that weaker alignment, so S4 becomes MISSING with only the smeared bounded
+read left.
 
-**Verdict**: PARTIAL — [22-OBS-01] and [22-OBS-02] align named views, but no cross-source Level 3 snapshot exists
+**Verdict**: PARTIAL — at the pinned base, [22-OBS-01] and [22-OBS-02] align named views but no cross-source Level 3 snapshot exists; under the §1 GFR caveat the alignment retires and this verdict becomes MISSING
 
 ### S5 — Delivery deferred batch
 
@@ -602,9 +653,11 @@ but §2 states Level 1 and explicitly allows non-repeatable reads for
 Stock-Level. A maintained result may additionally align its named views at a
 per-source vector frontier [22-OBS-01] [22-OBS-02]. For this transaction's
 actual isolation level, the weaker read shape is sufficient; it is not evidence
-for any stronger transaction.
+for any stronger transaction. Under the §1 GFR caveat the aligned maintained
+view retires, but Level 1 still permits the bounded read, so S6 stays COVERED on
+that mechanism alone.
 
-**Verdict**: COVERED — [21-PULL-02] bounded reads and [22-OBS-01] vector-frontier observation meet Stock-Level's stated Level 1 shape
+**Verdict**: COVERED — [21-PULL-02] bounded reads meet Stock-Level's stated Level 1 shape; [22-OBS-01] vector-frontier observation is pinned-base-only and its GFR retirement does not change this verdict
 
 ### S7 — Concurrent New-Orders on one district
 
@@ -651,6 +704,13 @@ reading rule for what would have to be true inside ComputeNet's model; they
 specify observable guarantees, not a coordination protocol, and do not decide
 whether the primitive should exist.
 
+For this whole section, references to [22-GF-01], glitch-free/frontier-complete
+delivery, or an aligned observer are subject to the §1 GFR caveat: they describe
+the pinned base, and `computenet-nogtk` removes them. The hypothetical
+transaction requirements can survive as statements of a gap, but after GFR
+they cannot present those mechanisms as an existing analogue or implementation
+option.
+
 ### 5.1 Structure and identity
 
 - [BB-TPCC-20] WHEN a transaction scope is formed, the runtime SHALL assign it
@@ -663,7 +723,9 @@ whether the primitive should exist.
 - [BB-TPCC-22] WHERE no transaction scope is declared on a link or cell, the
   runtime SHALL add no transaction metadata, lookup, buffering, or decision
   check to that path, preserving P2 and the opt-in discipline of [22-GF-01]
-  (`02-design-principles.md` §P2 — Near-zero-cost fast path).
+  (`02-design-principles.md` §P2 — Near-zero-cost fast path). Under the §1 GFR
+  caveat that comparison retires with [22-GF-01]; P2 independently retains the
+  no-unused-path-cost requirement.
 
 ### 5.2 Atomicity across cells
 
@@ -676,7 +738,8 @@ whether the primitive should exist.
   participant's state change observable such that no observer can see a proper
   non-empty subset of those changes. This is the multi-cell analogue of
   [22-GF-01] and is stronger than the convergence-without-simultaneity promised
-  by [22-SRC-01].
+  by [22-SRC-01]. Under the §1 GFR caveat the analogy retires, while the
+  hypothetical no-proper-subset requirement remains the gap being stated.
 - [BB-TPCC-25] WHEN a transaction scope commits, every participant SHALL emit
   its resulting deltas downstream. **OPEN DESIGN POINT**: whether those
   emissions carry the transaction identity, one shared wave identity, or each
@@ -686,7 +749,9 @@ whether the primitive should exist.
   participant in the same transaction scope, THEN the runtime SHALL deliver
   that scope's contributions as one frontier-complete unit or SHALL refuse the
   composition at link time; today's frontier is complete per source and does
-  not align independent sources ([22-GF-01], [22-SRC-01]).
+  not align independent sources ([22-GF-01], [22-SRC-01]). Under the §1 GFR
+  caveat the glitch-free/frontier option retires, so a post-GFR proposal would
+  have to replace this clause or retain only explicit refusal at link time.
 
 ### 5.3 Abort
 
@@ -727,7 +792,9 @@ whether the primitive should exist.
   sources that touch no participant SHALL continue to flow; a graph-wide
   propagation lock is rejected because it serializes the graph
   (`22-consistency.md` §Local glitch-freedom (opt-in);
-  `02-design-principles.md` §P4 — Local, compositional consistency).
+  `02-design-principles.md` §P4 — Local, compositional consistency). Under the
+  §1 GFR caveat the glitch-freedom citation retires; P4 independently preserves
+  the rejection of a graph-wide lock.
 - [BB-TPCC-33] IF two open transaction scopes name overlapping participant
   sets, THEN the runtime SHALL define their interleaving. **OPEN DESIGN POINT**:
   serialize them at the shared participant, refuse the second scope at
@@ -748,10 +815,15 @@ whether the primitive should exist.
   multi-cell atomicity. Sections 4 S1 and S3 find only a restricted one-host,
   one-ingress, aligned-observer construction, and a scope spanning shards still
   requires a joint cut that does not exist (`42-replication.md`
-  §Scatter-gather pull over an instance set (PN-5)).
+  §Scatter-gather pull over an instance set (PN-5)). Under the §1 GFR caveat
+  the aligned-observer construction disappears, leaving only the single-state-
+  transition case and the same absent joint cut.
 - [BB-TPCC-36] The runtime SHALL declare whether a transaction scope may span
-  hosts. **OPEN DESIGN POINT**: cross-host scope remains undecided; if admitted,
-  it must be stated as an explicit exception or amendment to
+  hosts. **OPEN DESIGN POINT in this hypothetical sketch**: §7 answers for this
+  document by refusing a cross-host form under the current principles, without
+  claiming every possible cross-host design necessarily takes Candidate C's
+  shape. Any adjacent proposal must avoid Candidate C's refused reply channel
+  and barrier or state an explicit exception or amendment to
   `42-replication.md` §Principles (fixed), which says **No global consensus**,
   and to `02-design-principles.md` §P4 — Local, compositional consistency.
 
@@ -777,8 +849,9 @@ whether the primitive should exist.
   SHALL satisfy [BB-TPCC-37] from a host-local durable scope-wide decision and
   SHALL NOT require a cross-peer reply channel. IF a transaction scope spans
   hosts, THEN its proposal SHALL either satisfy [BB-TPCC-37] without the
-  synchronous cross-peer reply channel and global barrier rejected in §6 Q3,
-  or explicitly justify amending P4 and the no-global-consensus principle
+  synchronous cross-peer reply channel and global barrier used by the Candidate
+  C shape discussed in §6 Q3, or explicitly justify amending P4 and the
+  no-global-consensus principle
   (`93-feature-interactions.md` §I-11, Candidate C — Cross-host atomic
   multi-link two-phase commit). Section 6 Q3 identifies no current mechanism
   for the cross-host case, but leaves room for an adjacent proposal that avoids
@@ -808,6 +881,12 @@ remain explicit open points; this section does not resolve them by implication.
 
 ### Q1 — Two-phase commit from QuorumSetCell + a glitch-free frontier
 
+Under the §1 GFR caveat, this evaluates a pinned-base candidate whose
+glitch-free frontier is being removed by `computenet-nogtk`. Without that
+frontier the answer remains “No”: the candidate loses even its local delivery
+gate, while the first missing transaction mechanism remains tentative, durable,
+invisible participant state.
+
 No. `QuorumSetCell` is useful evidence because its name sounds closer to an
 agreement mechanism than its contract is. Its KDoc says it emits elements
 “whose presence count (distinct live source links asserting them) meets
@@ -826,7 +905,9 @@ handler changes owned state, but the participant surface has no transaction-
 scoped, tentative state: `21-propagation.md` §Push (default, implemented) says
 the ordinary path updates state and emits the actual, effective-only change.
 Thus neither a quorum element nor the glitch-free frontier can carry a vote
-with transaction semantics. [BB-TPCC-10]
+with transaction semantics. Under the §1 GFR caveat both the frontier and this
+[22-GF-01] analogy retire; the missing tentative-state conclusion does not.
+[BB-TPCC-10]
 
 The remaining failure points are independently missing. Section 4 S7 finds no
 interleaving rule for overlapping counter-plus-stock participant sets. A
@@ -903,7 +984,9 @@ matching or settlement transaction. Its
 asserts over 100 seeds that, through repartition, shard migration, peer
 partition/recovery, and a late joiner, each converged board equals a batch
 group-by over the converged order set. That is strong convergence evidence and
-explicitly not an atomicity result. [BB-TPCC-10]
+explicitly not an atomicity result. The glitch-free board is pinned-base-only
+under the §1 GFR caveat; removing it supplies no transaction mechanism and does
+not change the negative atomicity conclusion. [BB-TPCC-10]
 
 ### Q4 — Cost when unused
 
@@ -916,23 +999,30 @@ non-declaring cells process eagerly with zero coordination cost, and
 `QuorumSetCell`'s `emitOnFrontier` flag in
 `kernel/src/main/kotlin/civictech/cell/data/op/QuorumSetCell.kt` defaults to
 `false`. Any future primitive that cannot preserve that unused-path shape
-fails [BB-TPCC-22] before its protocol details matter.
+fails [BB-TPCC-22] before its protocol details matter. Under the §1 GFR caveat
+the [22-GF-01]/frontier example retires, but P2 and [BB-TPCC-22] preserve the
+same no-cost-when-unused requirement independently.
 
 ## 7. Decision
 
 **Decision**: Hybrid: (B) general + (A) bounded single-host transaction
+[BB-TPCC-06]
 
-The candidate case comes first because S1 and S3 establish a real local
-foothold rather than a disguised refusal: one linked ingress can preserve one
-wave across same-frame fan-out on one host, and [22-OBS-01]/[22-OBS-02] can
-publish the resulting keyed views together. S5 adds a strong application fit —
-Delivery is already deferred dataflow — and S7 credits the per-key
-single-writer serialization point. Those mechanisms still stop short of
-all-or-nothing execution. Section 6 Q1's `**First step with no mechanism**` is
-staging a participant change as tentative, durable, and invisible before
-effective-only emission; S2 has no abort and S8 has no scope-wide recovery
-decision. That is a narrow, decidable host-local gap worth preserving without
-turning it into a cross-peer protocol.
+At the pinned base, the candidate case has a local foothold rather than being a
+disguised refusal: S1 and S3 show that one linked ingress can preserve one wave
+across same-frame fan-out on one host, and [22-OBS-01]/[22-OBS-02] can publish
+the resulting keyed views together. Under the §1 GFR caveat,
+`computenet-nogtk` retires that aligned publication mechanism. Without it, S1
+and S3 retain only their one-`MapDelta` representation, and the (A) half is no
+longer evidence that present multi-cell views can publish together; it becomes
+a candidate statement of the still-missing host-local guarantee. S5 continues
+to add a strong application fit — Delivery is already deferred dataflow — and
+S7 continues to credit the per-key single-writer serialization point. Section
+6 Q1's `**First step with no mechanism**` remains staging a participant change
+as tentative, durable, and invisible before effective-only emission; S2 still
+has no abort and S8 still has no scope-wide recovery decision. That is a
+narrow, decidable host-local gap worth preserving without turning it into a
+cross-peer protocol.
 
 A future integration pass may consider this quoted gap-table row; this
 document neither assigns its id nor edits the gap table:
@@ -943,30 +1033,41 @@ document neither assigns its id nor edits the gap table:
 | G-NN (unassigned) | No bounded host-local transaction scope can stage changes in several participant cells, publish all of them together, and abort before any effective emission. | Specify an opt-in scope confined to one host and one ingress wave, with explicit participants, tentative invisible state, a host-local durable outcome, commit-only publication, abort accounting for `Owned`/`Leased`, and no cross-host form. | 20/21, 20/22, 20/23, 20/24, 30/31 |
 ```
 
+This is the quoted, unassigned candidate row required by [BB-TPCC-07].
+
 The row would be cited from `21-propagation.md` §Push (default,
 implemented), `22-consistency.md` §Source identity: emission epochs and
 §Local glitch-freedom (opt-in), `23-ownership.md` §Recovery and dead letters,
 `24-data-cells.md` §Durability spectrum, and `31-hosts.md` §The host protocol
 (as implemented). It deliberately stays inside one host: the single-host
 construction in S1/S3 shows the boundary, not that the missing tentative/abort
-semantics already exist.
+semantics already exist. Under the §1 GFR caveat, the local-glitch-freedom
+citation and aligned S1/S3 construction retire; a future integration pass would
+have to omit that citation and treat publish-together as wholly missing rather
+than partially grounded.
 
-The general primitive is refused. Section 6 Q3 engages the prior Candidate C
-directly: a cross-host all-participant decision needs the synchronous
-cross-peer reply channel that Candidate C rejected and recreates the global
-barrier forbidden by `02-design-principles.md` §P4 — Local, compositional
-consistency. `42-replication.md` §Principles (fixed) instead commits to **No
-global consensus**, while [53-STATE-04] keeps even promotion atomicity local
-and says a whole-composite transaction would be that forbidden barrier. This
-is not a judgment that transactions are unimportant; it follows the model's
-stated boundary that “transactions are not the framework's core (dataflow
-is)” (`14-invocations.md` §The core move (ADR 3)).
+The general primitive is refused under the present model. Section 6 Q3 engages
+the prior Candidate C directly: that candidate's vote-collecting shape would
+use the synchronous cross-peer reply channel it did not build and would
+recreate the global barrier forbidden by `02-design-principles.md` §P4 — Local,
+compositional consistency. `42-replication.md` §Principles (fixed) instead
+commits to **No global consensus**, while [53-STATE-04] keeps even promotion
+atomicity local and says a whole-composite transaction would be that forbidden
+barrier. No admitted cross-host mechanism currently satisfies [BB-TPCC-37],
+and this study proposes none, so it refuses the known Candidate C shape on
+those principles. This is not a necessity claim about every possible
+cross-host design: consistently with §5 [BB-TPCC-36]/[BB-TPCC-40] and §6 Q3,
+an adjacent proposal remains possible only if it avoids both the refused reply
+channel and barrier or explicitly justifies amending the principles. The
+refusal is also consistent with the stated boundary that “transactions are not
+the framework's core (dataflow is)” (`14-invocations.md` §The core move (ADR
+3)).
 
 A future integration pass could add this sentence to
 `42-replication.md` §Principles (fixed):
 
 ```text
-Interactive cross-host, cross-cell transactions with abort are outside ComputeNet's core model: their durable all-participant decision and terminating recovery require the cross-peer reply barrier that P4 and the no-global-consensus principle refuse; applications that require that contract use a transactional database at the boundary and feed its committed changes into ComputeNet.
+Interactive cross-host, cross-cell transactions with abort are outside ComputeNet's core model: no admitted mechanism supplies their durable all-participant decision and terminating recovery, while Candidate C's known vote-collecting form would use the cross-peer reply channel and barrier that P4 and the no-global-consensus principle refuse. An adjacent proposal would have to avoid both refused mechanisms or justify amending those principles; applications that require the contract today use a transactional database at the boundary and feed its committed changes into ComputeNet.
 ```
 
 What the model offers instead is useful but transaction-specific, and its
@@ -974,11 +1075,13 @@ weaker points remain explicit:
 
 | TPC-C transaction | ComputeNet offers instead | Where it is genuinely weaker |
 |---|---|---|
-| New-Order | One-input `GroupByCell` emission or the one-host, same-frame, aligned-observer construction from S1; S7 also gives a per-key single-writer counter [24-OP-GROUPBY-03] [22-OBS-01] [22-OBS-02] [24-PART-03]. | S2 has no abort that preserves never-observed, and S8 has no durable cross-cell outcome; cross-host fan-out has only [22-SRC-01] convergence. |
-| Payment | The same one-input or one-host aligned construction from S3 [24-OP-GROUPBY-03] [22-OBS-01] [22-OBS-02]. | Independent cells have no atomic commit, and the construction does not extend to cross-host participants [22-SRC-01]. |
-| Order-Status | A per-source vector-frontier composite plus a bounded read [22-OBS-01] [22-OBS-02] [21-PULL-03]. | It is not the Level 3 scalar serialization point that S4 requires; a bounded walk may be smeared. |
+| New-Order | At the pinned base, one-input `GroupByCell` emission or the one-host, same-frame, aligned-observer construction from S1; S7 also gives a per-key single-writer counter [24-OP-GROUPBY-03] [22-OBS-01] [22-OBS-02] [24-PART-03]. Under the §1 GFR caveat, the aligned construction retires and only the one-input emission plus counter remain. | S2 has no abort that preserves never-observed, and S8 has no durable cross-cell outcome; cross-host fan-out has only [22-SRC-01] convergence. |
+| Payment | At the pinned base, the same one-input or one-host aligned construction from S3 [24-OP-GROUPBY-03] [22-OBS-01] [22-OBS-02]. Under the §1 GFR caveat, only the one-input representation remains. | Independent cells have no atomic commit, and the construction does not extend to cross-host participants [22-SRC-01]. |
+| Order-Status | At the pinned base, a per-source vector-frontier composite plus a bounded read [22-OBS-01] [22-OBS-02] [21-PULL-03]. Under the §1 GFR caveat, the composite retires and only the smeared bounded read remains. | It is not the Level 3 scalar serialization point that S4 requires; after GFR, S4 is MISSING rather than PARTIAL. |
 | Delivery | Deferred execution is native dataflow, and one district-scoped transition can have one disjoint owner [24-PART-03] (S5). | Separate order, line, and customer cells still lack per-district atomic commit. |
-| Stock-Level | Wave-neutral bounded reads and aligned maintained views [21-PULL-02] [21-PULL-03] [22-OBS-01] [22-OBS-02] (S6). | This is sufficient for the stated Level 1 shape, but it offers no stronger snapshot guarantee. |
+| Stock-Level | Wave-neutral bounded reads and, at the pinned base, aligned maintained views [21-PULL-02] [21-PULL-03] [22-OBS-01] [22-OBS-02] (S6). Under the §1 GFR caveat, the aligned view retires but the bounded read remains. | The bounded read is sufficient for the stated Level 1 shape, but it offers no stronger snapshot guarantee. |
+
+This principles-and-offers decision satisfies [BB-TPCC-09].
 
 A user who needs full TPC-C semantics should therefore use a transactional
 database and consume its committed CDC stream through a connector ingress.
@@ -1009,4 +1112,4 @@ uses TPC-C clauses “rather than an `unverified` tag.” It records verificatio
 not an unverified assertion. The document therefore contains no assertion
 tagged `unverified`; its TPC-C claims cite the clauses read in §2, and its
 ComputeNet claims cite requirement ids, named spec sections, or repository
-paths.
+paths. [BB-TPCC-19]
