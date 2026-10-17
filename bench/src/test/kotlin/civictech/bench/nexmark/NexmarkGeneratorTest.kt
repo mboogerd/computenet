@@ -27,10 +27,25 @@ class NexmarkGeneratorTest {
         assertTrue(NexmarkGenerator.deviations.any { it.contains("synthetic-bid-id") })
     }
 
+    /**
+     * Beam's literal hot-seller draw is `Random(eventId).nextInt(hotSellersRatio) > 0`, the first
+     * draw of a freshly seeded java.util.Random. For nearby seeds that first power-of-two draw is
+     * nearly constant, so over the 2 000-event default slice every auction is hot; only at the
+     * 100 000-event measurement scale does the share approach 1 - 1/4. Expected values come from an
+     * independent emulation of java.util.Random's specified LCG (seed 7: 120/120 hot at 2 000
+     * events, 4 529/6 000 = 0.7548 at 100 000).
+     */
     @Test
-    fun `hot sellers follow the configured three quarters ratio`() {
-        val auctions = NexmarkGenerator.generate(7L, NexmarkScale(2_000, 50)).filterIsInstance<Auction>()
-        val hotShare = auctions.count { it.seller == NexmarkSpec.FIRST_PERSON_ID }.toDouble() / auctions.size
-        assertTrue(hotShare in 0.65..0.85, "hot seller share was $hotShare")
+    fun `hot sellers follow Beam's literal draw including its low-seed artifact`() {
+        fun hotShare(events: Int): Double {
+            val auctions = NexmarkGenerator.generate(7L, NexmarkScale(events, 1_000)).filterIsInstance<Auction>()
+            return auctions.count { a ->
+                val lastPerson = (7L + a.eventNumber) / NexmarkSpec.PROPORTION_DENOMINATOR
+                a.seller == (lastPerson / 100L) * 100L + NexmarkSpec.FIRST_PERSON_ID
+            }.toDouble() / auctions.size
+        }
+        assertEquals(1.0, hotShare(2_000))
+        val large = hotShare(100_000)
+        assertTrue(large in 0.65..0.85, "hot seller share at 100 000 events was $large")
     }
 }

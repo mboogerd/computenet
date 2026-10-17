@@ -47,8 +47,6 @@ object NexmarkGenerator {
             "without a source-side event wrapper",
         "rate shape: only the deterministic constant-rate path is transcribed; Beam's wall-clock " +
             "rate-shape scheduler is outside this benchmark",
-        "hot-key sampling: a stable event-id mix avoids Beam's low-id Random(nextInt) artifact " +
-            "at the 2 000-event default scale while retaining the configured ratio",
     )
 
     private const val AUCTION_ID_LEAD = 10L
@@ -151,7 +149,7 @@ object NexmarkGenerator {
         config: GeneratorConfig,
     ): Auction {
         val id = lastBase0AuctionId(eventId) + NexmarkSpec.FIRST_AUCTION_ID
-        val sellerBase = if (isHot(eventId, config.hotSellersRatio, random, 0x51L)) {
+        val sellerBase = if (random.nextInt(config.hotSellersRatio) > 0) {
             (lastBase0PersonId(eventId) / HOT_SELLER_RATIO) * HOT_SELLER_RATIO
         } else {
             nextBase0PersonId(eventId, random, config)
@@ -159,9 +157,10 @@ object NexmarkGenerator {
         val seller = sellerBase + NexmarkSpec.FIRST_PERSON_ID
         val category = NexmarkSpec.FIRST_CATEGORY_ID + random.nextInt(NUM_CATEGORIES)
         val initialBid = nextPrice(random)
+        // Beam draws expires before name and description; the draw order fixes every later field.
+        val expires = timestamp + nextAuctionLengthMs(eventNumber, timestamp, eventsPerSecond, random, config)
         val name = nextString(random, 20)
         val description = nextString(random, 100)
-        val expires = timestamp + nextAuctionLengthMs(eventNumber, timestamp, eventsPerSecond, random, config)
         val reserve = initialBid + nextPrice(random)
         val currentSize = 8 + name.length + description.length + 8 + 8 + 8 + 8 + 8
         return Auction(
@@ -177,12 +176,12 @@ object NexmarkGenerator {
         random: Random,
         config: GeneratorConfig,
     ): Bid {
-        val auctionBase = if (isHot(eventId, config.hotAuctionRatio, random, 0x71L)) {
+        val auctionBase = if (random.nextInt(config.hotAuctionRatio) > 0) {
             (lastBase0AuctionId(eventId) / HOT_AUCTION_RATIO) * HOT_AUCTION_RATIO
         } else {
             nextBase0AuctionId(eventId, random, config)
         }
-        val bidderBase = if (isHot(eventId, config.hotBiddersRatio, random, 0x91L)) {
+        val bidderBase = if (random.nextInt(config.hotBiddersRatio) > 0) {
             (lastBase0PersonId(eventId) / HOT_BIDDER_RATIO) * HOT_BIDDER_RATIO + 1L
         } else {
             nextBase0PersonId(eventId, random, config)
@@ -252,18 +251,6 @@ object NexmarkGenerator {
         else Math.floorMod(random.nextLong(), bound)
     }
 
-    private fun isHot(eventId: Long, ratio: Int, random: Random, salt: Long): Boolean {
-        // Consume the same random draw Beam uses before generating the rest of the row. The
-        // mixed selector makes the configured ratio observable even when the small event-id
-        // range happens to alias the low bits of java.util.Random's first draw.
-        random.nextInt(ratio)
-        var value = eventId + salt - 0x61C8864680B583EBL
-        value = (value xor (value ushr 30)) * -4658895280553007687L
-        value = (value xor (value ushr 27)) * -7723592293110705685L
-        value = value xor (value ushr 31)
-        return Math.floorMod(value, ratio.toLong()) != 0L
-    }
-
     private fun nextString(random: Random, maxLength: Int): String {
         val length = 3 + random.nextInt(maxLength - 3)
         return buildString(length) {
@@ -286,7 +273,8 @@ object NexmarkGenerator {
                     randomBits = random.nextInt()
                     remainingCharacters = 6
                 }
-                append(('a'.code + Math.floorMod(randomBits, 26)).toChar())
+                // Java's truncating % as in Beam: a negative draw yields a character below 'a'.
+                append(('a'.code + randomBits % 26).toChar())
                 randomBits /= 26
                 remainingCharacters--
             }
