@@ -643,7 +643,155 @@ contract is [BB-TPCC-37].
 
 ## 5. The gap, stated precisely
 
-_Pending: owned by task T5._
+The hypothetical primitive is a **transaction scope** with a **coordinator**
+and explicit **participant cells**. Those names deliberately imply neither the
+promotion swap nor classical distributed commit. The requirements below are a
+reading rule for what would have to be true inside ComputeNet's model; they
+specify observable guarantees, not a coordination protocol, and do not decide
+whether the primitive should exist.
+
+### 5.1 Structure and identity
+
+- [BB-TPCC-20] WHEN a transaction scope is formed, the runtime SHALL assign it
+  an identity distinct from every wave `Timestamp`, because a wave identifies
+  one outlet during one emission epoch while a transaction may span independent
+  sources (`22-consistency.md` §Source identity: emission epochs).
+- [BB-TPCC-21] WHEN a transaction scope is formed, it SHALL name its participant
+  cells explicitly and SHALL NOT acquire participants implicitly through
+  propagation reach (`02-design-principles.md` §P3 — Explicit topology).
+- [BB-TPCC-22] WHERE no transaction scope is declared on a link or cell, the
+  runtime SHALL add no transaction metadata, lookup, buffering, or decision
+  check to that path, preserving P2 and the opt-in discipline of [22-GF-01]
+  (`02-design-principles.md` §P2 — Near-zero-cost fast path).
+
+### 5.2 Atomicity across cells
+
+- [BB-TPCC-23] WHILE a transaction scope is open, the runtime SHALL keep every
+  participant's transaction-local state tentative and invisible to every
+  non-participant reader; ordinary state cannot supply this guarantee because
+  its emitted changes are already effective (`21-propagation.md` §Push
+  (default, implemented)).
+- [BB-TPCC-24] WHEN a transaction scope commits, the runtime SHALL make every
+  participant's state change observable such that no observer can see a proper
+  non-empty subset of those changes. This is the multi-cell analogue of
+  [22-GF-01] and is stronger than the convergence-without-simultaneity promised
+  by [22-SRC-01].
+- [BB-TPCC-25] WHEN a transaction scope commits, every participant SHALL emit
+  its resulting deltas downstream. **OPEN DESIGN POINT**: whether those
+  emissions carry the transaction identity, one shared wave identity, or each
+  participant outlet's own wave identity; waves currently belong to outlet
+  emission epochs (`22-consistency.md` §Source identity: emission epochs).
+- [BB-TPCC-26] IF a glitch-free downstream cell subscribes to more than one
+  participant in the same transaction scope, THEN the runtime SHALL deliver
+  that scope's contributions as one frontier-complete unit or SHALL refuse the
+  composition at link time; today's frontier is complete per source and does
+  not align independent sources ([22-GF-01], [22-SRC-01]).
+
+### 5.3 Abort
+
+- [BB-TPCC-27] WHEN a transaction scope aborts, the runtime SHALL leave every
+  participant's state unchanged and SHALL make no participant delta observable
+  downstream. The first missing mechanism is the one named in §6 Q1's
+  `**First step with no mechanism**`: staging a participant change as tentative,
+  durable, and invisible before ordinary effective-only emission
+  (`21-propagation.md` §Push (default, implemented)).
+- [BB-TPCC-28] WHEN a transaction scope aborts, the runtime SHALL NOT use a
+  downstream retraction as its undo. Retraction is a later observable change,
+  and [24-OP-OUTERJOIN-02] expressly permits transient effects; §4 S2 therefore
+  shows that compensation cannot restore never-having-been-observed.
+- [BB-TPCC-29] WHEN a transaction scope aborts, the runtime SHALL release every
+  `Leased` payload it holds and SHALL discharge every `Owned` payload exactly
+  once, never silently dropping an exclusive obligation (`23-ownership.md`
+  §Taps: consumers vs observers and §Recovery and dead letters).
+- [BB-TPCC-30] IF a transaction scope aborts after a participant has consumed an
+  `Owned` payload, THEN the runtime SHALL move the consumed value exactly once
+  into the visible dead-letter boundary in R8's serialized `Frozen` form. This
+  is the sole disposition for this case and preserves the ownership accounting
+  defined by `23-ownership.md` §Recovery and dead letters (93 I-22 R6–R8;
+  implemented).
+- [BB-TPCC-31] IF a transaction scope exceeds its configured open-time bound,
+  THEN the runtime SHALL abort it and publish a visible metadata-plane notice
+  rather than stall its participants indefinitely, following the explicit
+  no-loss/degrade shape of `95-research-plan.md` §R3 — Coupling liveness
+  (G-53), including its `CouplingAborted` notice.
+
+### 5.4 Interaction with waves, glitch-freedom, and replication
+
+- [BB-TPCC-32] WHILE a transaction scope is open, waves from independent
+  sources that touch no participant SHALL continue to flow; a graph-wide
+  propagation lock is rejected because it serializes the graph
+  (`22-consistency.md` §Local glitch-freedom (opt-in);
+  `02-design-principles.md` §P4 — Local, compositional consistency).
+- [BB-TPCC-33] IF two open transaction scopes name overlapping participant
+  sets, THEN the runtime SHALL define their interleaving. **OPEN DESIGN POINT**:
+  serialize them at the shared participant, refuse the second scope at
+  formation, or admit both under a declared merge rule. Section 4 S7 shows why
+  the existing single-writer counter serialization point does not order each
+  counter change jointly with its scope's stock changes
+  (`42-replication.md` §Single-writer replication (decided in 93 I-25, not
+  built)).
+- [BB-TPCC-34] WHERE a participant is a replica of a `Replicable` cell, the
+  runtime SHALL define transaction visibility without weakening the rule that
+  every replica converges to an equal fold at quiescence regardless of which
+  replica accepted a write [42-REPL-04]. A scope-wide decided outcome and a
+  mergeable outcome are different guarantees, and their tension SHALL remain
+  explicit (`42-replication.md` §Principles (fixed)).
+- [BB-TPCC-35] WHERE every logical change can be represented as one state
+  transition on one shard, the runtime MAY use disjoint ownership as the
+  single-key safety proof [24-PART-03]; it SHALL NOT treat disjointness alone as
+  multi-cell atomicity. Sections 4 S1 and S3 find only a restricted one-host,
+  one-ingress, aligned-observer construction, and a scope spanning shards still
+  requires a joint cut that does not exist (`42-replication.md`
+  §Scatter-gather pull over an instance set (PN-5)).
+- [BB-TPCC-36] The runtime SHALL declare whether a transaction scope may span
+  hosts. **OPEN DESIGN POINT**: cross-host scope remains undecided; if admitted,
+  it must be stated as an explicit exception or amendment to
+  `42-replication.md` §Principles (fixed), which says **No global consensus**,
+  and to `02-design-principles.md` §P4 — Local, compositional consistency.
+
+### 5.5 Failure during commit
+
+- [BB-TPCC-37] IF the coordinator fails after any participant commits but
+  before every participant commits, THEN recovery SHALL terminate with every
+  participant at the same outcome. The decision SHALL live in a durable,
+  transaction-scope-wide record, and every recovering participant SHALL be
+  able to resolve from that record; today's [24-DUR-01], [24-DUR-02],
+  [24-DUR-03], [24-DUR-04], and [24-DUR-05] provide per-cell recovery but no
+  scope-wide decision, as §4 S8 and §6 Q1 establish.
+- [BB-TPCC-38] IF a participant fails while a transaction scope is open, THEN
+  the runtime SHALL abort the scope with the disposition in §5.3; RESTART alone
+  cannot perform that abort because it is restore plus re-baseline, never local
+  rollback ([21-REBASE-01]; `21-propagation.md` §Pull).
+- [BB-TPCC-39] WHEN a transaction commit decision is replayed during recovery,
+  the runtime SHALL preserve replay-stable identities as required by
+  [24-DUR-04] and SHALL suppress an `Effectful` participant at or behind its
+  processed frontier as required by [24-DUR-05], rather than re-drive the
+  effect (`24-data-cells.md` §Durability spectrum).
+- [BB-TPCC-40] For a cross-host transaction scope, [BB-TPCC-37] is **not
+  satisfiable by today's model without the synchronous cross-peer reply and
+  atomic-commit mechanism already rejected in §6 Q3**
+  (`93-feature-interactions.md` §I-11, Candidate C — Cross-host atomic
+  multi-link two-phase commit). Reintroducing that mechanism under different
+  terminology is therefore a decisive argument for out-of-scope-by-design
+  unless the project explicitly amends P4 and its no-global-consensus
+  principle.
+
+The breakdown's `C-11`/`C-9` parentheticals were rechecked: neither marker
+appears in generated `CONCORDANCE.md`; both remain as historical rows in
+`91-gap-analysis.md` §Conflicts. The current normative chapters say the
+discharging-sink conflict is resolved (`23-ownership.md` §Taps: consumers vs
+observers) and the effectful replay mechanism is resolved
+(`24-data-cells.md` §Durability spectrum), so [BB-TPCC-29] and [BB-TPCC-39]
+cite those current guarantees rather than presenting either as a live
+CONCORDANCE conflict.
+
+### 5.6 What this sketch deliberately does not say
+
+This sketch does not select a coordination protocol, a wire exchange, a
+journal format, or a coordinator lifecycle. It states only the guarantees that
+an adopted primitive would owe. The emission identity in [BB-TPCC-25], the
+overlap policy in [BB-TPCC-33], and cross-host admission in [BB-TPCC-36]
+remain explicit open points; this section does not resolve them by implication.
 
 ## 6. Candidate evaluation
 
