@@ -647,7 +647,117 @@ _Pending: owned by task T5._
 
 ## 6. Candidate evaluation
 
-_Pending: owned by task T4._
+### Q1 — Two-phase commit from QuorumSetCell + a glitch-free frontier
+
+No. `QuorumSetCell` is useful evidence because its name sounds closer to an
+agreement mechanism than its contract is. Its KDoc says it emits elements
+“whose presence count (distinct live source links asserting them) meets
+threshold” (`kernel/src/main/kotlin/civictech/cell/data/op/QuorumSetCell.kt`,
+lines 166–169). A source retraction lowers that count, and closing a link
+removes its lane and re-evaluates membership (lines 185–187 and 264–275). The
+majority and k-of-n factories are therefore views over current assertions, not
+votes or irrevocable decisions. `SetDelta` membership can leave the quorum;
+there is no proposal whose acceptance becomes durable. [BB-TPCC-11]
+
+The optional frontier gate in that same file can delay one `QuorumSetCell`
+fold until every open input edge has settled the wave. That is the local
+delivery-completeness guarantee of [22-GF-01], not a commit decision. A
+PREPARE would instead have to live at each participant before its normal inlet
+handler changes owned state, but the participant surface has no transaction-
+scoped, tentative state: `21-propagation.md` §Push (default, implemented) says
+the ordinary path updates state and emits the actual, effective-only change.
+Thus neither a quorum element nor the glitch-free frontier can carry a vote
+with transaction semantics. [BB-TPCC-10]
+
+The remaining failure points are independently missing. Section 4 S7 finds no
+interleaving rule for overlapping counter-plus-stock participant sets. A
+coordinator crash has no durable scope-wide decision to recover: [24-DUR-01],
+[24-DUR-02], [24-DUR-03], [24-DUR-04], and [24-DUR-05] journal, restore, and
+suppress replay per cell, which is why S8 remains MISSING. If a participant
+has already emitted, ABORT has nothing to invoke: S2 and §3.2 establish that a
+later retraction can restore values but cannot restore
+never-having-been-observed. Counting more assertions cannot supply any of
+those three guarantees.
+
+**First step with no mechanism**: staging a participant's change as tentative,
+durable, and invisible before its ordinary effective-only emission.
+
+### Q2 — What participants would need
+
+Participants would need capabilities that are absent from today's cell
+contract, rather than a different composition of existing operators:
+
+- **Tentative state** scoped to the transaction and invisible to every
+  non-participant until the outcome is known ([BB-TPCC-23]). Ordinary cell
+  state and ordinary emitted deltas are already effective.
+- **Transaction custody for exclusive payloads.** The existing hold is park,
+  not prepare: `23-ownership.md` §The SPSC link rule (normative) and
+  `doc/spec/90-roadmap/93-feature-interactions.md` §I-12 keep a refused
+  `Owned` payload at the sender's link and transfer it exactly once on replay.
+  A transaction would need an explicit disposition that is neither that
+  sender-owned park nor completed ownership transfer, while still discharging
+  exactly once on abort ([BB-TPCC-29], [BB-TPCC-30]).
+- **Retractable-before-effective emission.** `21-propagation.md` §Push
+  (default, implemented) makes output effective-only. Retract-as-data is a new
+  observable change, not erasure of the old one; [24-OP-OUTERJOIN-02] even
+  permits the transient overlap that an eager observer can see. S2 therefore
+  requires the stronger no-observable-effect abort of [BB-TPCC-27] and
+  [BB-TPCC-28], not compensation after publication.
+
+These are requirements on a future participant abstraction, not protocol
+steps; §5 records the open choices rather than resolving them here.
+
+### Q3 — Does the promotion two-phase swap generalize?
+
+No. `53-evolution.md` §The promotion swap (decided in 93 I-11, implemented)
+defines a local, membrane-scoped code-version swap of one incumbent cell for
+one pre-validated candidate. [53-SWAP-01] checks compatibility before the
+window, [53-SWAP-02] buffers and drains that one swap set, and [53-SWAP-05]
+makes the atomicity local to the membrane's host. It does not stage business
+state in several independently live participants. The chapter draws the
+boundary itself in [53-STATE-04]: “a whole-composite atomic transaction would
+be the distributed barrier P4 forbids.”
+
+That boundary is also the prior answer in
+`doc/spec/90-roadmap/93-feature-interactions.md` §I-11, Candidate C —
+“Cross-host atomic multi-link two-phase commit.” Candidate C was rejected
+because M5.4 did not build the synchronous cross-peer reply channel needed to
+collect remote votes, while a vote-collecting coordinator would recreate the
+global barrier forbidden by P4 and G-20. Any adjacent proposal must answer
+differently: it must avoid both that reply channel and cross-peer barrier, or
+explicitly justify amending those principles, while still satisfying the
+durable-decision and terminating-recovery questions in [BB-TPCC-37] and
+[BB-TPCC-40]. Renaming the coordinator or its inputs is not a different
+answer. [BB-TPCC-12]
+
+The two nearby implementations do not close the gap. `ReplicaQuorum` in
+`kernel/src/main/kotlin/civictech/cell/consistency/ReplicaQuorum.kt` supplies
+the PN-7 covering-subset settlement predicate consumed through
+`ReplicaFrontier.completeAt` in
+`kernel/src/main/kotlin/civictech/cell/consistency/WaveFrontier.kt`: it asks
+whether the covering replicas delivered an origin wave for a read, not whether
+participants agreed to a write. Likewise `demo/exchange/` wires per-peer order
+sets through union, partitioned aggregation, and a glitch-free board in
+`demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt`; it contains no
+matching or settlement transaction. Its
+`demo/exchange/src/test/kotlin/civictech/demo/exchange/ExchangeCompositionExitTest.kt`
+asserts over 100 seeds that, through repartition, shard migration, peer
+partition/recovery, and a late joiner, each converged board equals a batch
+group-by over the converged order set. That is strong convergence evidence and
+explicitly not an atomicity result. [BB-TPCC-10]
+
+### Q4 — Cost when unused
+
+P2 permits expense on rare operations but not on steady-state message flow
+(`doc/spec/00-foundations/02-design-principles.md` §P2 — Near-zero-cost fast
+path). The viable shape is therefore opt-in per participating link or cell,
+with no transaction metadata, lookup, buffering, or decision check on an
+undeclared path. This is the discipline already used by [22-GF-01]:
+non-declaring cells process eagerly with zero coordination cost, and
+`QuorumSetCell`'s `emitOnFrontier` flag in
+`kernel/src/main/kotlin/civictech/cell/data/op/QuorumSetCell.kt` defaults to
+`false`. Any future primitive that cannot preserve that unused-path shape
+fails [BB-TPCC-22] before its protocol details matter.
 
 ## 7. Decision
 
