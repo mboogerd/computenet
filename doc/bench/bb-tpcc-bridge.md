@@ -373,7 +373,245 @@ No further drift was found in the §3.1–§3.3 grounding owned here at
 
 ## 4. The five transactions, walked
 
-_Pending: owned by task T3._
+These are analysis scenarios, not executable tests; no concord scenario, JUnit
+test, or corpus YAML is produced. [BB-TPCC-14]
+
+### 4.1 Transaction by transaction
+
+#### New-Order
+
+New-Order needs one Level 3 read-modify-write across a district counter, an
+order and its lines, and five to fifteen stock entries, plus the declared abort
+path in §2. `GroupByCell` can make every group touched by one input delta one
+operator emission [24-OP-GROUPBY-03], and a one-shard partition has a
+conflict-free single owner [24-PART-03]. Those mechanisms do not turn the
+native multi-cell shape into one commit, and §3.2 establishes that there is no
+undo of an emitted delta. The specific missing guarantees are multi-cell
+atomic visibility and abort without an observable partial effect.
+
+#### Payment
+
+Payment is Level 3 across warehouse, district, customer, and `HISTORY` state.
+It is partially representable only if all four logical changes are deliberately
+encoded as keys of one family, on one host and one shard, and derived from one
+input delta: [24-OP-GROUPBY-03] then supplies one operator emission and
+[24-PART-03] supplies one key owner. The ordinary multi-cell representation
+has independent sources, for which [22-SRC-01] promises convergence rather
+than simultaneity. The missing guarantee is one atomic commit covering the
+three updates and the history append.
+
+#### Order-Status
+
+An aligned composite is internally consistent for some per-source vector
+frontier [22-OBS-01] and waits for every named view through that frontier
+[22-OBS-02]. That is not the one serial transaction snapshot required by
+Order-Status's Level 3 relation to the other interactive transactions in §2:
+the vector need not denote one scalar moment. A bounded walk is weaker still;
+it is explicitly a verifiable, potentially “smeared” read rather than a
+snapshot [21-PULL-03]. The missing guarantee is a cross-source Level 3
+snapshot/serialization point, although the observation frontier supplies a
+useful, strictly weaker read-side alignment mechanism.
+
+#### Delivery
+
+Delivery is the best fit of the five transactions. Its deferred batch is
+native dataflow work rather than an interactive request that must wait, and
+TPC-C permits the ten districts to be separate database transactions. If
+district is the partition key, each district has one disjoint owner under
+[24-PART-03]; if the order, lines, and customer update are represented as one
+district-scoped state transition, the per-district unit stays single-key. What
+is not covered is the ordinary representation in which those records are
+separate cells: the missing guarantee there is per-district multi-cell atomic
+commit.
+
+#### Stock-Level
+
+Stock-Level's Level 1 requirement in §2 expressly admits non-repeatable reads.
+A bounded read is wave-neutral [21-PULL-02] and may smear concurrent mutations
+across pages [21-PULL-03]; that weaker behavior is within the stated Level 1
+isolation rather than a hidden claim of snapshot isolation. A maintained
+multi-view result can additionally use the per-source observation frontier
+[22-OBS-01] [22-OBS-02]. Thus the isolation shape is covered, while callers
+must not promote either mechanism into a Level 3 or single-global-moment claim.
+[BB-TPCC-03]
+
+### 4.2 Scenarios S1–S8
+
+### S1 — New-Order happy path
+
+**Given** a warehouse, district, and ten stock entries with current values.
+**When** one New-Order input names all ten items.
+**Then** the district counter and all stock quantities change once, and no
+observer sees the order while a required stock change is outstanding.
+
+`GroupByCell` emits all keys touched by one input delta as one `MapDelta`
+[24-OP-GROUPBY-03]. The partitioned implementation first splits that delta by
+shard, however, invokes each shard separately, and forwards each shard's output
+without coalescing it. A reactive forward preserves the incoming timestamp,
+but it does not turn several shard emissions into one operator emission, and a
+context-free call causes each shard outlet to originate independently. The
+covered construction is therefore exactly one host, one shard, and one ingress
+delta, with a glitch-free downstream under [22-GF-01]; several shards or cells
+have no joint visibility guarantee under [22-SRC-01] and the scatter-gather
+contract has no joint cut (`42-replication.md` §Scatter-gather pull over an
+instance set (PN-5)).
+
+Files read for this finding:
+`kernel/src/main/kotlin/civictech/cell/data/op/GroupByCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/data/op/MergeableGroupByCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/Partitioned.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/PartitionedCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/PartitionedShardSet.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/ShardCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/RoutedCommand.kt`,
+`kernel/src/main/kotlin/civictech/cell/port/FanOutlet.kt`,
+`kernel/src/main/kotlin/civictech/cell/consistency/WaveFrontier.kt`,
+`kernel/src/test/kotlin/civictech/cell/partition/ShardCellBoundedReadTest.kt`,
+and
+`demo/exchange/src/test/kotlin/civictech/demo/exchange/ExchangeCompositionExitTest.kt`.
+No existing test pins “one ingress delta → one wave across several keyed
+entries.” `ShardCellBoundedReadTest` pins bounded-read and repartition
+inertness; `ExchangeCompositionExitTest` pins convergence to a batch group-by
+and selected frontier behavior, not atomic visibility of every key in one
+multi-key input.
+
+**Verdict**: PARTIAL — [24-OP-GROUPBY-03] plus [24-PART-03] only for one host, one shard, and one ingress delta
+
+### S2 — New-Order 1% rollback
+
+**Given** the same New-Order state.
+**When** the final item id is invalid after earlier changes have been applied.
+**Then** every change is absent and no downstream observer ever sees a partial
+order.
+
+Retract-as-data restores the value but does not restore
+never-having-been-observed. The operator contract permits a transient outer-join
+overlap [24-OP-OUTERJOIN-02], and even antijoin sealing is opt-in while the
+default remains ungated [24-OP-SEMIJOIN-04]. Section 2.3 states the TPC-C
+requirement as rollback leaving no partial effects, with TPC-C clauses rather
+than an `unverified` tag. A transiently visible effect followed by compensation
+therefore does not meet that requirement. The missing mechanism is the §3.2
+absence: no undo of an emitted delta.
+
+**Verdict**: MISSING — no abort that restores never-having-been-observed; §3.2
+
+### S3 — Payment derived update
+
+**Given** warehouse, district, and customer totals plus a history collection.
+**When** one payment updates the three totals and appends its history row.
+**Then** all four changes become visible together and record the same amount.
+
+The source reading has the same result as S1. One `GroupByCell` input can emit
+one multi-key `MapDelta` [24-OP-GROUPBY-03], but `PartitionedCell` splits an
+input across shards and forwards the resulting shard emissions rather than
+coalescing them. [24-PART-03] proves disjoint union and convergence, not a
+commit spanning those emissions. Payment is therefore covered only under the
+deliberate encoding in which every logical record is in one family, on one
+host and one shard, and all four changes derive from one ingress delta; the
+ordinary multi-cell shape is not.
+
+Files read for this finding:
+`kernel/src/main/kotlin/civictech/cell/data/op/GroupByCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/data/op/MergeableGroupByCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/Partitioned.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/PartitionedCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/PartitionedShardSet.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/ShardCell.kt`,
+`kernel/src/main/kotlin/civictech/cell/partition/RoutedCommand.kt`,
+`kernel/src/main/kotlin/civictech/cell/port/FanOutlet.kt`,
+`kernel/src/main/kotlin/civictech/cell/consistency/WaveFrontier.kt`,
+`kernel/src/test/kotlin/civictech/cell/partition/ShardCellBoundedReadTest.kt`,
+and
+`demo/exchange/src/test/kotlin/civictech/demo/exchange/ExchangeCompositionExitTest.kt`.
+No existing test pins the multi-key one-ingress/one-wave property; the two test
+files above cover bounded reads and eventual/batch-equivalent composition,
+respectively.
+
+**Verdict**: PARTIAL — [24-OP-GROUPBY-03] plus [24-PART-03] only for one host, one shard, and one ingress delta
+
+### S4 — Order-Status coherent read
+
+**Given** a customer and the lines of that customer's latest order.
+**When** Order-Status reads both views.
+**Then** the lines belong to that order and reflect one coherent read.
+
+[22-OBS-01] and [22-OBS-02] can produce an internally consistent composite for
+some per-source vector frontier. They do not establish a scalar transaction
+snapshot, and [21-PULL-03] says a paged walk may be smeared. Because §2 assigns
+Order-Status Level 3 relative to the other interactive transactions, “some
+per-source frontier” is strictly weaker than its required serialization point.
+The mechanism is useful read-side alignment, but it does not by itself meet the
+declared isolation level.
+
+**Verdict**: PARTIAL — [22-OBS-01] and [22-OBS-02] align named views, but no cross-source Level 3 snapshot exists
+
+### S5 — Delivery deferred batch
+
+**Given** ten districts, each with an oldest undelivered order.
+**When** the deferred Delivery batch runs.
+**Then** each district's order and customer state change atomically, while the
+ten-district batch may finish asynchronously.
+
+This is the benchmark's best fit: deferred batch execution is native dataflow,
+and the standard permits one database transaction per district. With district
+as the partition key, each district is a single-key scope with one disjoint
+owner [24-PART-03]. The remaining restriction is representational: the order,
+lines, and customer change must be one district-scoped state transition on one
+shard. Separate cells still lack per-district atomic commit.
+
+**Verdict**: PARTIAL — best fit via deferred dataflow and [24-PART-03], restricted to one district key on one shard
+
+### S6 — Stock-Level relaxed read
+
+**Given** a district's last twenty orders and the corresponding stock entries.
+**When** Stock-Level counts the entries below its threshold.
+**Then** it returns a count under the transaction's declared Level 1 isolation.
+
+The bounded-read contract is non-invasive [21-PULL-02] and openly permits a
+smeared multi-page walk [21-PULL-03]. That does not meet snapshot isolation,
+but §2 states Level 1 and explicitly allows non-repeatable reads for
+Stock-Level. A maintained result may additionally align its named views at a
+per-source vector frontier [22-OBS-01] [22-OBS-02]. For this transaction's
+actual isolation level, the weaker read shape is sufficient; it is not evidence
+for any stronger transaction.
+
+**Verdict**: COVERED — [21-PULL-02] bounded reads and [22-OBS-01] vector-frontier observation meet Stock-Level's stated Level 1 shape
+
+### S7 — Concurrent New-Orders on one district
+
+**Given** two New-Orders arriving concurrently for the same district.
+**When** both allocate the next district order id and update their stock rows.
+**Then** the counter yields distinct ids and each allocation remains joined to
+its own stock changes.
+
+The counter itself has a real single-writer serialization point. A partition
+routes a key to its one disjoint owner [24-PART-03], while
+`42-replication.md` §Single-writer replication makes the leader the one
+applying instance and its queue the serialization point (implemented in
+`kernel/src/main/kotlin/civictech/cell/replication/SingleWriterReplication.kt`,
+as corrected in §3.4). That covers distinct counter values. It does not define
+how two scopes whose participant sets overlap interleave the counter with their
+stock changes. That missing joint guarantee is [BB-TPCC-33].
+
+**Verdict**: MISSING — [BB-TPCC-33] overlapping-participant serialization for the counter-plus-stock case
+
+### S8 — Crash during New-Order
+
+**Given** a New-Order whose district or stock changes have partly applied.
+**When** its host crashes and recovers from journals.
+**Then** the whole transaction is either present or absent.
+
+[24-DUR-01] selects a journal per cell (or makes that cell volatile).
+[24-DUR-02] rebuilds the graph, restores the latest cell snapshots, and replays
+each frame tail. [24-DUR-03] deliberately scopes each journal to its own cells.
+[24-DUR-04] preserves identities so replay neither resurrects removals nor
+double-counts, and [24-DUR-05] suppresses an already-processed effect at that
+inlet's frontier. These are strong per-cell recovery rules. None records one
+commit decision spanning the district, stock, order, and order-line cells, so
+recovery may faithfully restore a partial transaction. The missing recovery
+contract is [BB-TPCC-37].
+
+**Verdict**: MISSING — [BB-TPCC-37] durable cross-cell commit decision and terminating recovery
 
 ## 5. The gap, stated precisely
 
