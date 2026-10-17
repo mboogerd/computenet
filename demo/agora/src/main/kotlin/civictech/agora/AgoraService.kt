@@ -156,6 +156,8 @@ private class RemovalIntentCell(override val ref: CellRef) : Cell
  * the topology records the same links the kernel admits for cycle safety. Hops
  * into a `ClaimCell` or `EdgeCell` use their registered port-name strings; the
  * app-local credence source keeps the reified string form.
+ * The semantics must keep the product energy (`separatesCredence == false`);
+ * the cells refuse the others.
  */
 class AgoraService(
     private val host: ManagedHost,
