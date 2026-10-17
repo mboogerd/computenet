@@ -172,7 +172,7 @@ class Q05Builder(
                     },
                 )
             }
-            val revenueFold = spawn("q05-revenue") { ref ->
+            val revenueFold = spawnFold("q05-revenue", Q05LocalSale::class) { ref ->
                 GroupByCell<Q05LocalSale, String, Long, Long>(
                     ref = ref,
                     keyFn = Q05LocalSale::nationName,

@@ -3,6 +3,10 @@ package civictech.bench.tpch
 import civictech.bench.tpch.queries.MaintainedQuery
 import civictech.bench.tpch.queries.Queries
 import civictech.bench.tpch.queries.QueryGraphBuilder
+import civictech.cell.data.Aggregators
+import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.graph.graph
 import civictech.cell.host.HostManagementApi
 import civictech.cell.port.Use
 import kotlin.reflect.KClass
@@ -25,20 +29,24 @@ class KeyCarryingRowsTest {
 
     @Test
     fun `every registered fold input carries a key of its joined row`() {
-        val failures = TpchQuery.entries.mapNotNull { query ->
-            val builder = Queries.builderFor(query) ?: return@mapNotNull null
-            when (val rule = FOLD_INPUT_RULES.getValue(query)) {
-                is FoldInputRule.JoinedRowKey -> {
-                    val missing = missingKeys(builder.foldInputTypes(), rule.requiredKeys)
-                    missing.takeIf { it.isNotEmpty() }?.let {
-                        MissingJoinedRowKey(query.name, rule.keySource, it)
+        TpchRig.open(drive = Drive.SIM, seed = 1L).use { rig ->
+            val base = BaseRelations.spawn(rig)
+            val failures = TpchQuery.entries.mapNotNull { query ->
+                val builder = Queries.builderFor(query) ?: return@mapNotNull null
+                builder.attach(rig.host.managementInlet, base)
+                when (val rule = FOLD_INPUT_RULES.getValue(query)) {
+                    is FoldInputRule.JoinedRowKey -> {
+                        val missing = missingKeys(builder.foldInputTypes(), rule.requiredKeys)
+                        missing.takeIf { it.isNotEmpty() }?.let {
+                            MissingJoinedRowKey(query.name, rule.keySource, it)
+                        }
                     }
+                    is FoldInputRule.DuplicateInsensitive -> null
                 }
-                is FoldInputRule.DuplicateInsensitive -> null
             }
-        }
 
-        assertEquals(emptyList<MissingJoinedRowKey>(), failures)
+            assertEquals(emptyList<MissingJoinedRowKey>(), failures)
+        }
     }
 
     @Test
@@ -55,12 +63,22 @@ class KeyCarryingRowsTest {
 
     @Test
     fun `guard rejects a fold input that drops line number`() {
-        val missing = missingKeys(
-            FakeKeyDroppingBuilder().foldInputTypes(),
-            LINEITEM_KEY,
+        assertEquals(
+            emptySet<String>(),
+            missingKeys(listOf(Lineitem::class), LINEITEM_KEY),
+            "the declared key-carrying payload is the control that the old guard inspected",
         )
 
-        assertEquals(setOf("LINEITEM.linenumber"), missing)
+        TpchRig.open(drive = Drive.SIM, seed = 1L).use { rig ->
+            val base = BaseRelations.spawn(rig)
+            val builder = FakeKeyDroppingBuilder()
+            builder.attach(rig.host.managementInlet, base)
+
+            assertEquals(
+                setOf("LINEITEM.linenumber"),
+                missingKeys(builder.foldInputTypes(), LINEITEM_KEY),
+            )
+        }
     }
 
     private fun missingKeys(
@@ -97,12 +115,36 @@ class KeyCarryingRowsTest {
 
     private data class KeyDroppingFoldRow(val orderKey: Long)
 
-    private class FakeKeyDroppingBuilder : QueryGraphBuilder(KeyDroppingFoldRow::class.java) {
+    private class FakeKeyDroppingBuilder : QueryGraphBuilder(Lineitem::class.java) {
         override val query: TpchQuery = TpchQuery.Q01
         override val referenceParams: Any = Q1Params()
 
-        override fun attach(host: Use<HostManagementApi>, base: BaseRelations): MaintainedQuery =
-            error("the reflection guard never attaches its fake graph")
+        override fun attach(host: Use<HostManagementApi>, base: BaseRelations): MaintainedQuery {
+            graph(host) {
+                adopt(base.lineitem)
+                val projected = spawn("fake-key-dropping-projection") { ref ->
+                    FlatMapSetCell<Lineitem, KeyDroppingFoldRow>(ref) { line ->
+                        listOf(KeyDroppingFoldRow(line.orderKey))
+                    }
+                }
+                val fold = spawnFold("fake-key-dropping-fold", KeyDroppingFoldRow::class) { ref ->
+                    GroupByCell.global(
+                        ref = ref,
+                        aggregator = Aggregators.count<KeyDroppingFoldRow>(),
+                    )
+                }
+
+                link(base.lineitem.outlet, projected.cell.inlet)
+                link(projected.cell.outlet, fold.cell.inlet)
+            }
+            return object : MaintainedQuery {
+                override val query: TpchQuery = TpchQuery.Q01
+                override fun read(): ViewResult = ViewResult(listOf("unused"), emptyMap())
+                override fun liveRows(): Map<String, Long> = emptyMap()
+                override fun emissionCounters(): Map<String, Long> = emptyMap()
+                override fun rowsReferencing(orderKey: Long): List<Pair<String, Any>> = emptyList()
+            }
+        }
     }
 
     companion object {

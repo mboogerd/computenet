@@ -12,13 +12,18 @@ import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
+import civictech.cell.graph.GraphBuilder
+import civictech.cell.graph.TypedCellFactory
+import civictech.cell.graph.TypedCellHandle
 import civictech.cell.host.HostManagementApi
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import java.io.Serializable
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.reflect.KClass
@@ -52,6 +57,8 @@ interface OrderKeyCarrier {
 abstract class QueryGraphBuilder(
     private val rowPayload: Class<*>,
 ) {
+    private val foldInputTypesByName = linkedMapOf<String, KClass<*>>()
+
     init {
         require(
             !Owned::class.java.isAssignableFrom(rowPayload) &&
@@ -67,18 +74,32 @@ abstract class QueryGraphBuilder(
     internal abstract val referenceParams: Any
 
     /**
-     * Runtime row types entering this graph's folds. Repeated entries represent
-     * independent folds over the same row type (3xi.3-D4 / BS-11).
+     * Runtime row types entering the folds spawned by [attach]. Repeated entries
+     * represent independent folds over the same row type (3xi.3-D4 / BS-11).
      */
-    fun foldInputTypes(): List<KClass<*>> = List(foldCount(query)) { rowPayload.kotlin }
+    fun foldInputTypes(): List<KClass<*>> {
+        check(foldInputTypesByName.isNotEmpty()) {
+            "attach must spawn this query's folds before foldInputTypes() is inspected"
+        }
+        return foldInputTypesByName.values.toList()
+    }
+
+    /** The input type and the `GroupByCell` spawn share this one typed call site. */
+    protected fun <E : Any, K, A, ACC : Serializable> GraphBuilder.spawnFold(
+        name: String,
+        inputType: KClass<E>,
+        factory: TypedCellFactory<GroupByCell<E, K, A, ACC>>,
+    ): TypedCellHandle<GroupByCell<E, K, A, ACC>> {
+        val previous = foldInputTypesByName[name]
+        require(previous == null || previous == inputType) {
+            "fold '$name' changed input type from $previous to $inputType"
+        }
+        return spawn(name, factory = factory).also {
+            foldInputTypesByName.putIfAbsent(name, inputType)
+        }
+    }
 
     abstract fun attach(host: Use<HostManagementApi>, base: BaseRelations): MaintainedQuery
-
-    private fun foldCount(query: TpchQuery): Int = when (query) {
-        TpchQuery.Q01 -> 11
-        TpchQuery.Q08, TpchQuery.Q10, TpchQuery.Q12, TpchQuery.Q14 -> 2
-        else -> 1
-    }
 }
 
 /** Accounting and deletion-scan surface shared by materialized operator outlets. */

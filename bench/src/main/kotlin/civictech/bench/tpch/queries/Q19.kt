@@ -73,7 +73,7 @@ class Q19Builder(
             val selected = spawn("q19-selected") { ref ->
                 FilterCell(ref = ref) { row: Q19PartLine -> row.matches(params) }
             }
-            val revenueFold = spawn("q19-revenue") { ref ->
+            val revenueFold = spawnFold("q19-revenue", Q19PartLine::class) { ref ->
                 GroupByCell.global(
                     ref = ref,
                     aggregator = Aggregators.sumOf(Q19PartLine::revenueS4),

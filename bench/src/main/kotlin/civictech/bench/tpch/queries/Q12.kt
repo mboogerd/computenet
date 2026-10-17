@@ -68,14 +68,14 @@ class Q12Builder(
                     },
                 )
             }
-            val highFold = spawn("q12-high-line-count") { ref ->
+            val highFold = spawnFold("q12-high-line-count", Q12OrderLine::class) { ref ->
                 GroupByCell<Q12OrderLine, String, Long, Long>(
                     ref = ref,
                     keyFn = Q12OrderLine::shipMode,
                     aggregator = Aggregators.sumOf { row -> if (row.isHighPriority()) 1L else 0L },
                 )
             }
-            val lowFold = spawn("q12-low-line-count") { ref ->
+            val lowFold = spawnFold("q12-low-line-count", Q12OrderLine::class) { ref ->
                 GroupByCell<Q12OrderLine, String, Long, Long>(
                     ref = ref,
                     keyFn = Q12OrderLine::shipMode,

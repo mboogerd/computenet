@@ -37,7 +37,7 @@ class Q06Builder(
                         line.quantity < params.quantity
                 }
             }
-            val revenueFold = spawn("q06-revenue") { ref ->
+            val revenueFold = spawnFold("q06-revenue", Lineitem::class) { ref ->
                 GroupByCell.global(
                     ref = ref,
                     aggregator = Aggregators.sumOf<Lineitem> {
