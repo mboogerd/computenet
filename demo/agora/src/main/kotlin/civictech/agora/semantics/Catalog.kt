@@ -6,9 +6,11 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * The gradual semantics catalog specified by `demo/deliberate/SPEC.md`
- * CRED-03/04. Each rule keeps Agora's clamped mean stance base; the
- * deliberate `NodeDto.credence` is a consumer-facing projection of the result.
+ * The gradual semantics a deliberation can be propagated under
+ * (`demo/deliberate/SPEC.md` CRED-03, §2 "Credence layers and consensus"),
+ * ported from the deliberate semantics prototype (`semantics.js`); every
+ * candidate keeps agora's base, the clamped mean of the stances (the
+ * prototype's `shrunkBase` at its default root-prior weight 1).
  */
 object SemanticsCatalog {
     /** Every semantics the app can run, in display order. `dfquad` always runs. */

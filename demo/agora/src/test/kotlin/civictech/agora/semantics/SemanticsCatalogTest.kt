@@ -11,9 +11,12 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * Reference and invariant tests for the gradual-semantics catalog. The
- * reference values were computed with the prototype `semantics.js` under node
+ * The credence layers (`demo/deliberate/SPEC.md` §2 "Credence layers and
+ * consensus"). Reference values were computed with the prototype
+ * `semantics.js` under node
  * (`combine_<id>(base, attacks.map(energy_<id>(c, s)), …)` at the defaults).
+ * The energy-only cases below use arguments of credence 1 and strength e,
+ * so every layer's energy is e — except jnb's, which is `energy_jnb(1, e)`.
  */
 class SemanticsCatalogTest {
 
@@ -59,8 +62,11 @@ class SemanticsCatalogTest {
     @Test
     fun `weighted log-odds reference behaviour`() {
         val wlo = WeightedLogOdds()
+        // prior 0.8 with one attack of energy 0.95 x 0.9 falls below one half
         assertTrue(wlo.combine(0.8, listOf(0.95 * 0.9), emptyList()) < 0.5)
+        // prior 0.5, four supports of 0.6 against four attacks of 0.4 reaches 0.6
         assertTrue(wlo.combine(0.5, List(4) { 0.4 }, List(4) { 0.6 }) >= 0.6)
+        // the parameters are the formula's: sigmoid(a*logit(b) + k*(|S^g|_p - |A^g|_p))
         val custom = WeightedLogOdds(alpha = 0.5, k = 1.0, p = 1.0, gamma = 1.0)
         val z = 0.5 * ln(0.7 / 0.3) + (0.5 + 0.25) - 0.4
         assertEquals(1 / (1 + exp(-z)), custom.combine(0.7, listOf(0.4), listOf(0.5, 0.25)), 1e-12)
@@ -77,13 +83,16 @@ class SemanticsCatalogTest {
                 for (x in grid) for (y in grid) {
                     val v = s.at(b, listOf(x), listOf(y))
                     assertTrue(v in 0.0..1.0, "$id($b, $x, $y) = $v")
+                    // more support never lowers, more attack never raises
                     if (y < 1.0) assertTrue(s.at(b, listOf(x), listOf(y, 0.3)) >= v - 1e-12, "$id support monotone")
                     if (x < 1.0) assertTrue(s.at(b, listOf(x, 0.3), listOf(y)) <= v + 1e-12, "$id attack monotone")
+                    // a more credible source never weakens its argument
                     for (c in grid) {
                         val sup = s.evaluate(b, emptyList(), listOf(Arg(y, c)))
                         assertTrue(s.evaluate(b, emptyList(), listOf(Arg(y, minOf(c + 0.1, 1.0)))) >= sup - 1e-12, "$id credence monotone")
                     }
                 }
+                // a higher base never lowers the result
                 assertTrue(s.at(minOf(b + 0.05, 0.99), listOf(0.4), listOf(0.3)) >= s.at(b, listOf(0.4), listOf(0.3)) - 1e-12, id)
             }
         }
@@ -91,6 +100,7 @@ class SemanticsCatalogTest {
 
     @Test
     fun `symmetric layers treat attack as mirrored support`() {
+        // Euler-based semantics is not symmetric by design and is left out.
         for (id in listOf("dfquad", "wlo", "jnb", "woe", "qe", "mlp", "glo")) {
             val s = SemanticsCatalog.of(id)
             for (b in listOf(0.2, 0.5, 0.7)) {
@@ -101,9 +111,16 @@ class SemanticsCatalogTest {
         }
     }
 
+    /**
+     * jnb is exact: the edge's strength and its source's credence reach the
+     * layer separately, and Jeffrey conditioning is applied to them as the
+     * prototype does (`energy_jnb(c, s)` = ln(c·LR(s) + (1−c)·LR(s)^−r)),
+     * not to their product. Reference values: node, prototype `semantics.js`.
+     */
     @Test
     fun `jnb matches the prototype's Jeffrey conditioning exactly`() {
         data class J(val base: Double, val attacks: List<Arg>, val supports: List<Arg>)
+        // Arg(strength, credence) = the prototype's energy_jnb(credence, strength).
         val js = listOf(
             J(0.8, listOf(Arg(0.95, 0.9)), emptyList()),
             J(0.5, listOf(Arg(0.6, 0.3), Arg(0.2, 0.7)), listOf(Arg(0.9, 0.4), Arg(0.5, 1.0))),
@@ -114,11 +131,17 @@ class SemanticsCatalogTest {
         val r1 = listOf(0.48712392335374854, 0.70629345097282104, 0.43986176237851315, 0.75527207436080979)
         js.zip(r0).forEach { (j, want) -> assertEquals(want, JeffreyNaiveBayes().evaluate(j.base, j.attacks, j.supports), 1e-12, "$j") }
         js.zip(r1).forEach { (j, want) -> assertEquals(want, JeffreyNaiveBayes(r = 1.0).evaluate(j.base, j.attacks, j.supports), 1e-12, "r=1 $j") }
+        // The product reading the agora port used is not the same thing.
         val doubted = listOf(Arg(0.9, 0.5))
         assertTrue(abs(JeffreyNaiveBayes().evaluate(0.5, emptyList(), doubted) -
             JeffreyNaiveBayes().evaluate(0.5, emptyList(), listOf(Arg(0.45, 1.0)))) > 1e-3)
     }
 
+    /**
+     * The Tier 4 properties the credence benchmark selected glo on
+     * (doc/research/deliberate-credence-bench/tier4.py): what a rule used for a
+     * collective bet must do even where no answer can be scored.
+     */
     @Test
     fun `glo - a refuted or unknown source is inert`() {
         val glo = GatedLogOdds()
@@ -167,9 +190,12 @@ class SemanticsCatalogTest {
     @Test
     fun `consensus is the geometric mean of the members' odds`() {
         val credences = mapOf("dfquad" to 0.1, "wlo" to 0.2, "jnb" to 0.5, "woe" to 0.9, "mlp" to 0.99)
+        // recorded with node: sigmoid(mean(logit([0.2, 0.5, 0.9])))
         assertEquals(0.56716902562290783, Consensus.of(credences, listOf("wlo", "jnb", "woe")), 1e-12)
+        // clamped to [0.001, 0.999] before the logit: a 0 cannot veto
         assertEquals(0.037303723009214855, Consensus.of(mapOf("a" to 0.0, "b" to 0.6), listOf("a", "b")), 1e-12)
         assertEquals(0.7, Consensus.of(mapOf("wlo" to 0.7), listOf("wlo", "jnb")), 1e-12)
+        // no member running: every layer counts
         assertEquals(0.3, Consensus.of(mapOf("dfquad" to 0.3), listOf("wlo")), 1e-12)
         assertEquals(0.5, Consensus.of(emptyMap(), listOf("wlo")))
     }
@@ -179,8 +205,10 @@ class SemanticsCatalogTest {
         val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
         val attacks = listOf(List(all.ids.size) { Arg(strength = 0.5, credence = 0.8) })
         val neutral = all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = LayerSet.WEAK_PRIOR_WEIGHT)
+        // With the default weight 0 the first impression drops out entirely: it is the verdict from ½.
         assertEquals(0.0, LayerSet.WEAK_PRIOR_WEIGHT)
         assertEquals(all.evaluate(listOf(LayerSet.NEUTRAL_PRIOR), attacks, emptyList()), neutral)
+        // Weight 1 is the ordinary credence; a weight in between shrinks the prior towards ½.
         assertEquals(all.evaluate(listOf(0.9), attacks, emptyList()), all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = 1.0))
         all.evaluate(listOf(0.7), attacks, emptyList())
             .zip(all.evaluate(listOf(0.9), attacks, emptyList(), priorWeight = 0.5))
@@ -192,6 +220,10 @@ class SemanticsCatalogTest {
 
     @Test
     fun `arguments first outweighs the retained prior for a strong unrebutted support and attack in every active layer`() {
+        // CALIBRATION.md "Prior dominance": for a standing v, prior share is
+        // |v - local-neutral-prior| against argument share |v - arguments-removed|.
+        // Every parent prior on both sides of ½, so a prior that already agrees
+        // with the argument cannot hide a view that still carries it.
         val all = LayerSet.of(SemanticsCatalog.IDS, headline = LayerSet.CONSENSUS)
         val argument = List(all.ids.size) { Arg(strength = 0.8, credence = 0.8) }
 
