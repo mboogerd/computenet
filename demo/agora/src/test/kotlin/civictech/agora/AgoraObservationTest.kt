@@ -1,8 +1,10 @@
 package civictech.agora
 
+import civictech.cell.CellRef
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import java.util.UUID
 
 class AgoraObservationTest {
 
@@ -11,6 +13,10 @@ class AgoraObservationTest {
         val h = Harness(seed = 29L)
 
         assertEquals(setOf("credences"), h.service.observationViews)
+        assertEquals(
+            CellRef(UUID.nameUUIDFromBytes("agora:observation".toByteArray())),
+            h.service.observationSinkRef,
+        )
         assertTrue(h.service.cells().any { it.ref == h.service.observationSinkRef })
 
         val claim = h.service.createClaim("canonical observation")

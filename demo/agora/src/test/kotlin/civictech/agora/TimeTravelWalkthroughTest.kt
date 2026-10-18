@@ -109,9 +109,11 @@ class TimeTravelWalkthroughTest {
         val journal = json.decodeFromString<InspectReport>(result.out.trim()).journals.single()
 
         val refsInJournal = journal.records.mapNotNull { it.cellRef }.toSet()
-        val observationRef = service.observationSinkRef.id.toString()
+        val expectedObservationRef = CellRef(UUID.nameUUIDFromBytes("agora:observation".toByteArray()))
+        service.observationSinkRef shouldBe expectedObservationRef
+        val observationRef = expectedObservationRef.id.toString()
         refsInJournal shouldContainAll service.cells()
-            .filterNot { it.ref == service.observationSinkRef }
+            .filterNot { it.ref == expectedObservationRef }
             .map { it.ref.id.toString() }
         refsInJournal shouldNotContain observationRef
 
