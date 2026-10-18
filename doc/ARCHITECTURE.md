@@ -155,11 +155,10 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   letters (sanitized — no live `Owned`/`Leased` escapes), `CellError`,
   remoting proxies (`HostProxy`, `HostedCellProxy`, `RoutedInlet`), `TypedLink`.
 - `.observe` — app-facing reads: `Observation` (`observation {}` is the one
-  app-edge API; `current()`, `onChange` with late-join catch-up, grouped
-  views, and `crossRoot` disclosure), `ObservationSink`,
+  app-edge API; `current()`, `onChange` with late-join catch-up, one
+  `ObserveCell` per view, point-consistent per view), `ObservationSink`,
   `View.set()/map()/count()`, and the `host.observe` / `host.observeAll`
-  specialisations. Caveat: `observeAll` is point-consistent per outlet, not
-  wave-aligned across outlets (G-13).
+  specialisations.
 - `.durability` — `Journal` (`append`/`replay`/`reset`), `InMemoryJournal`,
   `FileJournal`. Records are opaque bytes; the host writes `WireCodec` frames —
   "a journal is a bridge to disk".
@@ -379,7 +378,8 @@ else `$PORT`, else 8080. See the README for run commands.
   demo (`--listen`/`--peer` over `:wire`), host-WAL journaling, kill-9-safe.
 - `:demo:exchange` — **the composition probe**: two symmetric peers,
   region-keyed orders, per-cell journaling for writers, volatile aggregates
-  recomputed from replay, glitch-free board. `ExchangeCompositionExitTest` is
+  recomputed from replay, board observed straight off the replicated partitioned
+  cell. `ExchangeCompositionExitTest` is
   the repo's toughest gate (100-seed sweeps through repartition, migration,
   recovery, late join — each paired with a deliberate failing control).
 - `:demo:agora` — argumentation graph (claims/edges with `DfQuad` gradual
