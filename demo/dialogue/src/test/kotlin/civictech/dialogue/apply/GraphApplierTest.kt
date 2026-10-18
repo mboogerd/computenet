@@ -641,11 +641,11 @@ class GraphApplierTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `aligned observation groups preserve the deterministic sink ref`() {
+    fun `observation views preserve the deterministic sink ref`() {
         val rig = Rig()
         assertEquals(
-            mapOf("claims" to "claims", "relations" to "relations", "stances" to "stances"),
-            rig.applier.observationGroups,
+            setOf("claims", "relations", "stances"),
+            rig.applier.observationViews,
         )
         assertEquals(
             mapOf(
@@ -653,7 +653,7 @@ class GraphApplierTest {
                 "relations" to DialogueRuntime.sinkRef("relations"),
                 "stances" to DialogueRuntime.sinkRef("stances"),
             ),
-            rig.applier.observationGroupRefs,
+            rig.applier.observationSinkRefs,
         )
     }
 
@@ -667,32 +667,32 @@ class GraphApplierTest {
      * these sinks durable and routing `MapDelta` payloads over a
      * non-`@Serializable` vocabulary through the journal.
      *
-     * Each view retains its independent observation group, matching the old
-     * independent sinks. A cell is planted at the claims ref *before*
-     * [GraphApplier] is constructed, so if the applier's [groupRef] disagreed
+     * Each view retains its independent observation sink. A cell is planted at
+     * the claims ref *before*
+     * [GraphApplier] is constructed, so if the applier's [sinkRef] disagreed
      * by even one character it would spawn at a different, unoccupied ref and
      * this collision would never fire.
      */
     @Test
-    fun `aligned sink group uses exactly DialogueRuntime's own sinkRef`() {
+    fun `observation sink uses exactly DialogueRuntime's own sinkRef`() {
         val world = SimWorld(seed = 1L)
         val built = DialoguePipeline.build(world.host, cassette(), namespace = "applier-test")
         val context = ApplyContext(world.host)
         val service = AgoraService(world.host, world.registry, context = context)
         val bindings = BindingTable(context)
-        val groupId = "claims"
-        val groupRef = DialogueRuntime.sinkRef(groupId)
+        val viewName = "claims"
+        val sinkRef = DialogueRuntime.sinkRef(viewName)
 
-        val conflict = ObserveCell(View.map<ClaimKey, ClaimAggregate>(), groupRef)
+        val conflict = ObserveCell(View.map<ClaimKey, ClaimAggregate>(), sinkRef)
         world.host.managementInlet.call.spawn(conflict)
 
         val failure = assertFailsWith<IllegalArgumentException> {
             GraphApplier(world.host, built.refs, service, bindings)
         }
         assertTrue(
-            failure.message?.contains(groupRef.toString()) == true,
-            "GraphApplier's aligned sink group must collide with a cell planted at " +
-                "DialogueRuntime.sinkRef(\"$groupId\") — got: ${failure.message}",
+            failure.message?.contains(sinkRef.toString()) == true,
+            "GraphApplier's observation sink must collide with a cell planted at " +
+                "DialogueRuntime.sinkRef(\"$viewName\") — got: ${failure.message}",
         )
     }
 

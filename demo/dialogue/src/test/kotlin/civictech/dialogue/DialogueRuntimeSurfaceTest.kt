@@ -181,12 +181,12 @@ class DialogueRuntimeSurfaceTest {
         // still compiles and behaves identically: this world names no hook.
         val world = World()
         assertEquals(
-            mapOf(
-                "utterances" to "utterances",
-                "claimProvenance" to "claimProvenance",
-                "relationProvenance" to "relationProvenance",
+            setOf(
+                "utterances",
+                "claimProvenance",
+                "relationProvenance",
             ),
-            world.runtime.observationGroups,
+            world.runtime.observationViews,
         )
         assertEquals(
             mapOf(
@@ -194,7 +194,7 @@ class DialogueRuntimeSurfaceTest {
                 "claimProvenance" to DialogueRuntime.sinkRef("claimProvenance"),
                 "relationProvenance" to DialogueRuntime.sinkRef("relationProvenance"),
             ),
-            world.runtime.observationGroupRefs,
+            world.runtime.observationSinkRefs,
         )
         world.admit(through = 3)
 
@@ -263,14 +263,14 @@ class DialogueRuntimeSurfaceTest {
     ) {
         // The provenance views are derived read state, and their entry types
         // have no polymorphic WireCodec registration. If the deterministic
-        // observation group were treated as durable, the world would fail
+        // observation sink were treated as durable, the world would fail
         // while writing its first derived frame rather than reach these checks.
         val world = World(dir = dir).admit(through = 3)
 
         assertEquals(setOf("u1", "u2"), world.runtime.claimProvenance(keyOne))
         assertEquals(setOf("u3"), world.runtime.relationProvenance(relationKey))
 
-        // …and neither observation group's ref appears in the WAL. WireCodec encodes a
+        // …and neither observation sink's ref appears in the WAL. WireCodec encodes a
         // frame as JSON (`json.encodeToString(WireFrame.serializer(), …)`)
         // and a frame names its target cell by ref, so a journaled sink would
         // be visible as its UUID in the journal bytes.
@@ -292,10 +292,10 @@ class DialogueRuntimeSurfaceTest {
         // staying non-journaling.
         val journalText = File(dir, "host.journal").readBytes().toString(Charsets.ISO_8859_1)
         listOf("claimProvenance", "relationProvenance").forEach { name ->
-            val ref = world.runtime.observationGroupRefs.getValue(name)
+            val ref = world.runtime.observationSinkRefs.getValue(name)
             assertFalse(
                 journalText.contains(ref.id.toString()),
-                "no journal frame names the $name observation group ($ref)",
+                "no journal frame names the $name observation sink ($ref)",
             )
         }
         // Positive control for the instrument: the ingress cell IS durable, so

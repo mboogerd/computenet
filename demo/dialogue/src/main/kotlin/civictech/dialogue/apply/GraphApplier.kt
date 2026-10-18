@@ -153,37 +153,32 @@ class GraphApplier(
      */
     private val appliedStances = mutableMapOf<Pair<String, ClaimKey>, Double>()
 
-    // Three separate one-view observations, not one: the builder would join
-    // these folds into a single group (they share the extraction root through
-    // pure hops), and that joined group holds waves at rest. The split is the
-    // disclosed interim for computenet-6ovpx, as in DialogueRuntime.
-    private val claimsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+    // Each canonical fold has its own one-view observation, so the app-facing
+    // sinks remain independently addressable.
+    private val claimsObservation: Observation = host.observation(sinkRef = DialogueRuntime::sinkRef) {
         map("claims", refs.canonicalClaims.ref)
     }
 
-    private val relationsObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
+    private val relationsObservation: Observation = host.observation(sinkRef = DialogueRuntime::sinkRef) {
         map("relations", refs.canonicalRelations.ref)
     }
 
-    private val stancesObservation: Observation = host.observation(groupRef = DialogueRuntime::sinkRef) {
-        // projectedStances has an ungated JoinSetCell upstream. Admission
-        // must therefore be explicit at this app edge (computenet-axcyk.5).
-        unchecked("stances")
+    private val stancesObservation: Observation = host.observation(sinkRef = DialogueRuntime::sinkRef) {
         map("stances", refs.projectedStances.ref)
     }
 
-    internal val observationGroups: Map<String, String>
-        get() = mapOf(
-            "claims" to claimsObservation.groups.single(),
-            "relations" to relationsObservation.groups.single(),
-            "stances" to stancesObservation.groups.single(),
+    internal val observationViews: Set<String>
+        get() = setOf(
+            claimsObservation.views.single(),
+            relationsObservation.views.single(),
+            stancesObservation.views.single(),
         )
 
-    internal val observationGroupRefs: Map<String, CellRef>
+    internal val observationSinkRefs: Map<String, CellRef>
         get() = mapOf(
-            "claims" to claimsObservation.group("claims").ref,
-            "relations" to relationsObservation.group("relations").ref,
-            "stances" to stancesObservation.group("stances").ref,
+            "claims" to claimsObservation.sink("claims").ref,
+            "relations" to relationsObservation.sink("relations").ref,
+            "stances" to stancesObservation.sink("stances").ref,
         )
 
     /** The claim keys currently bound — [AGO1-APPLY-07]'s "bound" half. */
