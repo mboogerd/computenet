@@ -46,7 +46,7 @@ object NatureNegotiation {
         NatureAxis.OWNERSHIP,
         NatureAxis.MERGE_IDEMPOTENCE,
         NatureAxis.MONOTONICITY,
-        // The remaining refusing axis is a genuine link-flow property: a
+        // The remaining refusing axes are genuine link-flow properties: a
         // partial-interest inlet must refuse a non-scoped delta, rather than
         // over-delivering unseen. Structural CellManifest natures remain out of
         // this set because a volatile consumer of a durable producer is normal.

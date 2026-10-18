@@ -76,10 +76,11 @@ enum class NatureAxis {
 }
 
 /**
- * One level on one [NatureAxis]. The per-axis enums are the only inhabitants;
- * the first constant of each is the axis DEFAULT (absent axis ⇒ this level ⇒
- * today's behavior), and later constants are *stronger* — offering a stronger
- * level satisfies a weaker requirement (see `NatureNegotiation.reconcile`).
+ * One level on one live [NatureAxis]. The per-axis enums are the only
+ * inhabitants; the first constant of each live axis is the axis DEFAULT
+ * (absent axis ⇒ this level ⇒ today's behavior), and later constants are
+ * *stronger* — offering a stronger level satisfies a weaker requirement (see
+ * `NatureNegotiation.reconcile`).
  */
 sealed interface NatureLevel {
     val axis: NatureAxis
@@ -198,7 +199,7 @@ value class NatureVector(val levels: Map<NatureAxis, NatureLevel>) {
         fun of(vararg levels: NatureLevel): NatureVector =
             if (levels.isEmpty()) DEFAULT else NatureVector(levels.associateBy { it.axis })
 
-        /** The DEFAULT (first-constant) level of each axis — "absent ⇒ today". */
+        /** The DEFAULT (first-constant) level of each live axis — "absent ⇒ today". */
         fun defaultOf(axis: NatureAxis): NatureLevel = when (axis) {
             NatureAxis.OWNERSHIP -> Ownership.SHARED
             NatureAxis.MERGE_IDEMPOTENCE -> MergeClass.NON_IDEMPOTENT
