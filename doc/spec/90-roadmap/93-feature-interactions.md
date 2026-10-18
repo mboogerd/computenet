@@ -8681,7 +8681,7 @@ could turn the best-effort case into a link-time contract.
 > Existing gaps touched: G-13, G-9, G-10 · Confidence: medium
 > Spec drift (judged at `a69186a`): 2/4 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The whole traversal protocol: DescribeFrontier/FrontierReport on the I-1 metadata plane (unbuilt), epoch + visited-set edge-once termination with CYCLIC flagging (G-19 fixpoint stays open, now with marked back-edges as input), source-and-guarantee vocabular…
-> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the resolution is withdrawn with glitch-freedom; the FRONTIER traversal protocol is no longer specified.
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the glitch-freedom-dependent resolution is withdrawn with glitch-freedom; the FRONTIER traversal protocol is no longer specified. The shared upstream termination discipline in R6 — a per-traversal epoch plus visited-edge set, with per-protocol terminal predicates — stands for STATE_REQUEST and multi-hop ATTENTION.
 
 #### 1. Challenge restatement
 
