@@ -8,7 +8,6 @@ import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.Aggregators
-import civictech.cell.data.op.CoalescingCombineCell
 import civictech.cell.data.op.CombineLatestCell
 import civictech.cell.data.op.CountCell
 import civictech.cell.data.op.FilterCell
@@ -136,7 +135,7 @@ enum class Family {
     /** Grouped aggregation: `GroupByCell` x `Aggregators` (see the named omission on `MergeableGroupByCell`). */
     GROUPED,
 
-    /** Keyed / counter combines: `CombineLatestCell`, `CoalescingCombineCell`. */
+    /** Keyed combines: `CombineLatestCell`. */
     COMBINE,
 }
 
@@ -145,7 +144,7 @@ enum class Family {
  *
  * The sibling extension task adds the join/group-by/combine subjects
  * (`JoinSetCell`, `LookupJoinCell`, `SemiJoinCell`, `GroupByCell`,
- * `MergeableGroupByCell`, `CombineLatestCell`, `CoalescingCombineCell` and the
+ * `MergeableGroupByCell`, `CombineLatestCell` and the
  * `Aggregator` variants) as further constants here. Two seams make that an
  * extension rather than a reshape:
  *
@@ -278,17 +277,6 @@ enum class Subject(val sources: Int, val readout: Readout, val family: Family) {
     /** `CombineLatestCell` (ungated default) over two map streams; `combine` drops keys held by only one side. */
     COMBINE_LATEST(sources = 2, readout = Readout.LONG_MAP, family = Family.COMBINE),
 
-    /**
-     * `CoalescingCombineCell` over a single counter arm.
-     *
-     * One source, not two, and deliberately: this cell coalesces the arms *of one wave*
-     * and gates on the expected-sibling set of that wave. Two independent source cells
-     * are two independent roots minting two unrelated waves, which is the phantom-
-     * expected-edge topology its own KDoc warns against rather than the fork it is built
-     * for. A single arm keeps the subject honest — it measures the fold and the flush,
-     * not a fan-in this fixture cannot construct legitimately.
-     */
-    COALESCING_COMBINE(sources = 1, readout = Readout.COUNTER, family = Family.COMBINE),
     ;
 
     /**
@@ -313,8 +301,6 @@ enum class Subject(val sources: Int, val readout: Readout, val family: Family) {
         GROUP_BY_COUNT, GROUP_BY_SUM, GROUP_BY_MIN, GROUP_BY_MAX, GROUP_BY_TOP_K,
         -> elements.mapTo(HashSet()) { groupKey(it, groups) }.size
 
-        // One counter arm, one +1 per inserted element.
-        COALESCING_COMBINE -> elements.size
     }
 
     /**
@@ -454,20 +440,6 @@ class MapSourceCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Ce
 
     init {
         inlet.onEach { delta -> outlet.originate { propagate(Deltas.asMap(delta)) } }
-    }
-}
-
-/**
- * Source cell for [Subject.COALESCING_COMBINE]: the same batch, re-originated as the
- * `CounterDelta` that cell's arms carry, through [Deltas.asCounter]. See [MapSourceCell]
- * for why the adaptation lives in a source cell rather than in a second batch type.
- */
-class CounterSourceCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Int>>>())
-    val outlet = registerPort("outlet", FanOutlet.create<Propagate<CounterDelta>>())
-
-    init {
-        inlet.onEach { delta -> outlet.originate { propagate(Deltas.asCounter(delta)) } }
     }
 }
 
@@ -659,13 +631,13 @@ class MicroGraph internal constructor(
  * Which payload a subject's source cells originate.
  *
  * Every source *inlet* takes the same `SetDelta<Int>` batch — that is what keeps
- * [MicroGraph.applyBatch] one method across every subject — but the map- and
- * counter-shaped operators serve a different payload, so their sources re-originate the
- * batch through [Deltas.asMap] / [Deltas.asCounter]. [sourceShape] is an exhaustive
+ * [MicroGraph.applyBatch] one method across every subject — but the map-shaped operators
+ * serve a different payload, so their sources re-originate the batch through [Deltas.asMap].
+ * [sourceShape] is an exhaustive
  * `when`, so a newly declared subject has to state its shape or the file does not
  * compile.
  */
-internal enum class SourceShape { SET, MAP, COUNTER }
+internal enum class SourceShape { SET, MAP }
 
 internal fun sourceShape(subject: Subject): SourceShape = when (subject) {
     Subject.TAGGED_SET, Subject.FILTER, Subject.UNION, Subject.INTERSECT, Subject.COUNT,
@@ -677,7 +649,6 @@ internal fun sourceShape(subject: Subject): SourceShape = when (subject) {
 
     Subject.LOOKUP_JOIN, Subject.COMBINE_LATEST -> SourceShape.MAP
 
-    Subject.COALESCING_COMBINE -> SourceShape.COUNTER
 }
 
 /** Builders for the subject graphs [BEN1-17]. */
@@ -729,12 +700,12 @@ object Graphs {
                 if (wiring == Wiring.LINKED) link(out, inn)
             }
 
-            // Exactly one of the three lists is non-empty — `sourceShape` is an
+            // Exactly one of the two lists is non-empty — `sourceShape` is an
             // exhaustive `when` over the enum, so a new subject must say which payload
             // its sources originate or the file does not compile. Whichever list is
             // built assigns `sourceRefs`, and those are the inlets `applyBatch` drives;
             // every shape's inlet takes the same `SetDelta<Int>` batch, which is what
-            // keeps one batch type and one apply call across all 18 subjects.
+            // keeps one batch type and one apply call across all 17 subjects.
             val shape = sourceShape(subject)
             fun <C : Cell> sources(make: (CellRef) -> C) =
                 (0 until subject.sources)
@@ -743,7 +714,6 @@ object Graphs {
 
             val srcs = if (shape == SourceShape.SET) sources { DeltaSourceCell(it) } else emptyList()
             val mapSrcs = if (shape == SourceShape.MAP) sources { MapSourceCell(it) } else emptyList()
-            val counterSrcs = if (shape == SourceShape.COUNTER) sources { CounterSourceCell(it) } else emptyList()
 
             // A `when` EXPRESSION over the enum: the extension task cannot add a subject
             // without adding its branch here, because the compiler will not let it.
@@ -965,13 +935,6 @@ object Graphs {
                     out.cell
                 }
 
-                Subject.COALESCING_COMBINE -> {
-                    val op = spawn("op") { ref -> CoalescingCombineCell(ref) }
-                    val out = spawn("collector") { ref -> CounterCollectorCell(ref) }
-                    wire(counterSrcs[0].cell.outlet, op.cell.inlet)
-                    wire(op.cell.outlet, out.cell.inlet)
-                    out.cell
-                }
             }
         }
 

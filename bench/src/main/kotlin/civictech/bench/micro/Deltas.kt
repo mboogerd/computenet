@@ -137,10 +137,9 @@ object Deltas {
     // Payload adaptation [BEN1-18] — the keyed and counter shapes.
     //
     // The join/group-by/combine subjects do not all serve `SetDelta`: `LookupJoinCell`
-    // and `CombineLatestCell` serve `MapDelta`, `CoalescingCombineCell` serves
-    // `CounterDelta`. Rather than a second generator family per shape, one seeded
-    // `SetDelta` stream feeds every subject and its source cell re-originates the batch
-    // in the shape the operator serves (`MapSourceCell`, `CounterSourceCell`).
+    // and `CombineLatestCell` serve `MapDelta`. Rather than a second generator family
+    // per shape, one seeded `SetDelta` stream feeds every subject and its map source cell
+    // re-originates the batch in the shape the operator serves (`MapSourceCell`).
     //
     // Two reasons, both about what the numbers mean. A keyed subject's input is then
     // provably the same stream as a set-shaped subject's — same seed, same elements,
