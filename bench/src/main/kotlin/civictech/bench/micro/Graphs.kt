@@ -300,7 +300,6 @@ enum class Subject(val sources: Int, val readout: Readout, val family: Family) {
         // distinct keys the elements fall into — not how many elements there are.
         GROUP_BY_COUNT, GROUP_BY_SUM, GROUP_BY_MIN, GROUP_BY_MAX, GROUP_BY_TOP_K,
         -> elements.mapTo(HashSet()) { groupKey(it, groups) }.size
-
     }
 
     /**
@@ -648,7 +647,6 @@ internal fun sourceShape(subject: Subject): SourceShape = when (subject) {
     -> SourceShape.SET
 
     Subject.LOOKUP_JOIN, Subject.COMBINE_LATEST -> SourceShape.MAP
-
 }
 
 /** Builders for the subject graphs [BEN1-17]. */
@@ -934,7 +932,6 @@ object Graphs {
                     wire(op.cell.outlet, out.cell.inlet)
                     out.cell
                 }
-
             }
         }
 
