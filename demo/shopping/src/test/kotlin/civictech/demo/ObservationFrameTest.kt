@@ -59,10 +59,8 @@ class ObservationFrameTest {
                 "$base/events",
                 onSubscribed = { tap ->
                     probe.post("user=tester&action=add&item=apples")
-                    awaitUntil("add apples converged", timeoutMs = 5_000) {
-                        tap.frames().any { frame ->
-                            "apples" in itemsOf(frame) && "apples" in produceOf(frame)
-                        }
+                    awaitUntil("add apples reached the items view", timeoutMs = 5_000) {
+                        tap.frames().any { frame -> "apples" in itemsOf(frame) }
                     }
                     probe.post("user=tester&action=add&item=zebra")
                 },

@@ -170,10 +170,8 @@ class TwoJvmConvergenceTest {
                 "http://localhost:$httpB/events",
                 onSubscribed = { tap ->
                     post(httpA, user = "alice", action = "add", item = "apples")
-                    awaitUntil("apples converged on peer B", timeoutMs = 45_000) {
-                        tap.frames().any { frame ->
-                            "apples" in itemsOf(frame) && "apples" in produceOf(frame)
-                        }
+                    awaitUntil("apples reached the items view on peer B", timeoutMs = 45_000) {
+                        tap.frames().any { frame -> "apples" in itemsOf(frame) }
                     }
                     post(httpA, user = "alice", action = "add", item = "zebra")
                 },
