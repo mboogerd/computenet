@@ -75,8 +75,7 @@ import civictech.query.schema.Catalog
  * refusal at its own locus. A non-root `GroupAggregate` never takes a memo hit, because it
  * refuses where the same node at a root lowers. Fan-out from a shared cell reconverges only
  * in the cells this lowering already emits — `UnionSetCell` (one link per distinct branch
- * handle), `JoinSetCell`, `SemiJoinCell` — never in a duplicate-blind merge. Gating
- * ([Gating.decide]) reads plan-node provenance, which sharing does not change.
+ * handle), `JoinSetCell`, `SemiJoinCell` — never in a duplicate-blind merge.
  *
  * **Rules:** every [PlanNode] kind — Scan, Select, Project, Join, SemiJoin, AntiJoin, Union
  * (computenet-cab.4.2); Intersect, Difference, OuterJoin (a mirror of the `RelationalGraphs`
@@ -93,8 +92,6 @@ object Lowering {
 
     fun lower(plan: LogicalPlan, catalog: Catalog): LoweringResult {
         val refusals = mutableListOf<LoweringRefusal>()
-        val diagnostics = mutableListOf<LoweringDiagnostic>()
-
         val relations = plan.roots.values
             .flatMap { PlanOrder.allNodes(it) }
             .filterIsInstance<Scan>()
@@ -115,14 +112,14 @@ object Lowering {
         // Looked up, never iterated: its hash order cannot reach the step list.
         val memo = HashMap<PlanNode, LoweredNode>()
         for (rootName in plan.roots.keys.sorted()) {
-            val walk = RootWalk(rootName, catalog, steps, refusals, diagnostics, memo)
+            val walk = RootWalk(rootName, catalog, steps, refusals, memo)
             walk.lower(plan.roots.getValue(rootName), isRoot = true)?.let { outputHandles[rootName] = it.handle }
         }
 
         return if (refusals.isNotEmpty()) {
             LoweringResult.Refused(refusals.toList())
         } else {
-            LoweringResult.Lowered(GraphSpec(steps.toList()), sourceHandles, outputHandles, diagnostics.toList())
+            LoweringResult.Lowered(GraphSpec(steps.toList()), sourceHandles, outputHandles)
         }
     }
 
@@ -159,7 +156,6 @@ private class RootWalk(
     private val catalog: Catalog,
     private val steps: MutableList<GraphStep>,
     private val refusals: MutableList<LoweringRefusal>,
-    private val diagnostics: MutableList<LoweringDiagnostic>,
     private val memo: MutableMap<PlanNode, LoweredNode>,
 ) {
     private var counter = 0
@@ -254,11 +250,11 @@ private class RootWalk(
             }
 
             is SemiJoin -> lowerSemiJoin(
-                node, node.input, node.witness, node.keys, negated = false, handle, locus, ::refuse,
+                node, node.input, node.witness, node.keys, negated = false, handle, ::refuse,
             )
 
             is AntiJoin -> lowerSemiJoin(
-                node, node.input, node.witness, node.keys, negated = true, handle, locus, ::refuse,
+                node, node.input, node.witness, node.keys, negated = true, handle, ::refuse,
             )
 
             is Union -> {
@@ -311,7 +307,6 @@ private class RootWalk(
                         leftKey = RowKey(left.columns, left.columns),
                         rightKey = RowKey(right.columns, right.columns),
                         negated = true,
-                        emitOnFrontier = gate(node.left, node.right, locus, handle),
                     ),
                 )
                 addConnect(left, handle, "left")
@@ -331,7 +326,7 @@ private class RootWalk(
                 when (derived) {
                     is ColumnTypes.Derived.Failure -> refuse("outer join: ${derived.reason}")
                     is ColumnTypes.Derived.Types -> {
-                        lowerOuterJoin(node, left, right, handle, locus)
+                        lowerOuterJoin(node, left, right, handle)
                         LoweredNode(handle, node.outputColumns, derived.types)
                     }
                 }
@@ -344,16 +339,15 @@ private class RootWalk(
      * same cells under the same handle suffixes (`<h>-matched`, `<h>-unmatched`, `<h>-null`,
      * or FULL's `<h>-left-only`/`<h>-left-null`/`<h>-right-only`/`<h>-right-null`), the union
      * under the node's own handle `<h>`, and the same connects in the same order. RIGHT is LEFT
-     * with the plan's inputs and key lists swapped, exactly as `rightJoin` delegates. Each
-     * antijoin is gated by [Gating.decide] on the node's two inputs; the join and union never gate.
+     * with the plan's inputs and key lists swapped, exactly as `rightJoin` delegates.
      */
-    private fun lowerOuterJoin(node: OuterJoin, left: LoweredNode, right: LoweredNode, handle: String, locus: Locus.PlanNode) {
+    private fun lowerOuterJoin(node: OuterJoin, left: LoweredNode, right: LoweredNode, handle: String) {
         val out = node.outputColumns
         val leftKey = RowKey(left.columns, node.keys.map { it.left })
         val rightKey = RowKey(right.columns, node.keys.map { it.right })
         when (node.side) {
-            OuterJoinSide.LEFT -> mirrorLeftJoin(handle, locus, node.left, node.right, left, right, leftKey, rightKey, out)
-            OuterJoinSide.RIGHT -> mirrorLeftJoin(handle, locus, node.right, node.left, right, left, rightKey, leftKey, out)
+            OuterJoinSide.LEFT -> mirrorLeftJoin(handle, left, right, leftKey, rightKey, out)
+            OuterJoinSide.RIGHT -> mirrorLeftJoin(handle, right, left, rightKey, leftKey, out)
             OuterJoinSide.FULL -> {
                 val matched = "$handle-matched"
                 val leftOnly = "$handle-left-only"
@@ -361,9 +355,9 @@ private class RootWalk(
                 val rightOnly = "$handle-right-only"
                 val rightNull = "$handle-right-null"
                 addSpawn(matched, JoinFactory(leftKey, rightKey, RowCombine(left.columns, right.columns, out)))
-                addSpawn(leftOnly, SemiJoinFactory(leftKey, rightKey, true, gate(node.left, node.right, locus, leftOnly)))
+                addSpawn(leftOnly, SemiJoinFactory(leftKey, rightKey, true))
                 addSpawn(leftNull, PadFactory(RowPad(left.columns, out)))
-                addSpawn(rightOnly, SemiJoinFactory(rightKey, leftKey, true, gate(node.right, node.left, locus, rightOnly)))
+                addSpawn(rightOnly, SemiJoinFactory(rightKey, leftKey, true))
                 addSpawn(rightNull, PadFactory(RowPad(right.columns, out)))
                 addSpawn(handle, UnionFactory(out))
                 addConnect(left, matched, "left")
@@ -384,9 +378,6 @@ private class RootWalk(
     /** `RelationalGraphs.leftJoin` with [preserved] the side whose unmatched rows are null-padded. */
     private fun mirrorLeftJoin(
         handle: String,
-        locus: Locus.PlanNode,
-        preservedNode: PlanNode,
-        otherNode: PlanNode,
         preserved: LoweredNode,
         other: LoweredNode,
         preservedKey: RowKey,
@@ -397,7 +388,7 @@ private class RootWalk(
         val unmatched = "$handle-unmatched"
         val nullCompleted = "$handle-null"
         addSpawn(matched, JoinFactory(preservedKey, otherKey, RowCombine(preserved.columns, other.columns, out)))
-        addSpawn(unmatched, SemiJoinFactory(preservedKey, otherKey, true, gate(preservedNode, otherNode, locus, unmatched)))
+        addSpawn(unmatched, SemiJoinFactory(preservedKey, otherKey, true))
         addSpawn(nullCompleted, PadFactory(RowPad(preserved.columns, out)))
         addSpawn(handle, UnionFactory(out))
         addConnect(preserved, matched, "left")
@@ -468,13 +459,6 @@ private class RootWalk(
         return LoweredNode(handle, node.outputColumns, emptyList())
     }
 
-    /** [Gating.decide] for one absence-based cell [handle], recording its diagnostic. */
-    private fun gate(left: PlanNode, right: PlanNode, locus: Locus.PlanNode, handle: String): Boolean {
-        val decision = Gating.decide(left, right, locus, handle)
-        decision.diagnostic?.let { diagnostics += it }
-        return decision.emitOnFrontier
-    }
-
     /** Why [left] and [right] cannot be operands of a set operation producing [columns], or `null`. */
     private fun setOperandProblem(columns: List<String>, left: LoweredNode, right: LoweredNode): String? = when {
         left.columns != columns || right.columns != columns ->
@@ -491,7 +475,6 @@ private class RootWalk(
         keys: List<JoinKey>,
         negated: Boolean,
         handle: String,
-        locus: Locus.PlanNode,
         refuse: (String) -> LoweredNode?,
     ): LoweredNode? {
         val input = lower(inputNode, isRoot = false)
@@ -501,14 +484,12 @@ private class RootWalk(
             return refuse("output columns ${node.outputColumns} differ from its input's ${input.columns}")
         }
         keyProblem(keys, input, witness)?.let { return refuse(it) }
-        val emitOnFrontier = if (negated) gate(inputNode, witnessNode, locus, handle) else false
         addSpawn(
             handle,
             SemiJoinFactory(
                 leftKey = RowKey(input.columns, keys.map { it.left }),
                 rightKey = RowKey(witness.columns, keys.map { it.right }),
                 negated = negated,
-                emitOnFrontier = emitOnFrontier,
             ),
         )
         addConnect(input, handle, "left")

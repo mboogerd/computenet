@@ -8,11 +8,9 @@ import civictech.cell.graph.TypedRef
 import civictech.cell.graph.lookup
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
-import civictech.query.lower.LoweringDiagnostic
 import civictech.query.lower.Lowering
 import civictech.query.lower.LoweringResult
 import civictech.query.lower.PlanFixtures
-import civictech.query.lower.SemiJoinFactory
 import civictech.query.parse.ParseResult
 import civictech.query.parse.QueryParser
 import civictech.query.plan.Planner
@@ -118,24 +116,10 @@ class DefinitionsEndToEndTest {
         ) shouldBe setOf(row(30))
     }
 
-    /**
-     * A definition's planned provenance reaches `Gating.decide`: an outer join of `a` with itself
-     * is gated with no diagnostic, one of `a` with `b` is ungated with an `EventuallyConsistent`
-     * diagnostic — and the gated one answers correctly through adds and a retraction on every seed.
-     */
+    /** An outer join definition stays correct through adds and a retraction on every seed. */
     @Test
-    fun `an outer join definition over one relation is gated and stays correct through retraction`() {
-        withClue("independent operands: ungated, EventuallyConsistent") {
-            val independent = compile("define h(X, Y, Z) := a(X, Y) left outer join b(P, Z) on X = P.")
-            unmatchedGate(independent) shouldBe false
-            independent.diagnostics.single().shouldBeInstanceOf<LoweringDiagnostic.EventuallyConsistent>()
-        }
-
+    fun `an outer join definition over one relation stays correct through retraction`() {
         val selfJoin = compile("define h(X, Y, Z) := a(X, Y) left outer join a(P, Z) on Y = P.")
-        withClue("shared single-scan operands: gated, no diagnostic") {
-            unmatchedGate(selfJoin) shouldBe true
-            selfJoin.diagnostics shouldBe emptyList()
-        }
         for (seed in 0L..30L) {
             val live = apply(selfJoin, "h", seed)
             val a = live.writer("a")
@@ -157,8 +141,4 @@ class DefinitionsEndToEndTest {
         }
     }
 
-    private fun unmatchedGate(compiled: CompiledQuery): Boolean =
-        compiled.spec.steps.filterIsInstance<civictech.cell.graph.SpawnStep>()
-            .single { it.handle == "h/0:outerjoin-unmatched" }
-            .factory.shouldBeInstanceOf<SemiJoinFactory>().emitOnFrontier
 }
