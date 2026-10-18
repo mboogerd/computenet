@@ -20,7 +20,6 @@ import civictech.query.plan.PlanNode
 import civictech.query.schema.Row
 import civictech.testkit.SimWorld
 import io.kotest.assertions.withClue
-import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
@@ -145,47 +144,6 @@ class OuterJoinFidelityTest {
     }
 
     @Test
-    fun `QRY1 §LOWER-08 §LOWER-09 each antijoin in the composition is gated by Gating-decide, the join and union never`() {
-        // Disjoint sources: every antijoin ungated with an EventuallyConsistent diagnostic of its own handle.
-        val disjoint = f.lowered(LogicalPlan(mapOf("q" to outerJoin(OuterJoinSide.FULL))), f.catalog("l" to 2, "r" to 2))
-        disjoint.diagnostics.map { it.shouldBeInstanceOf<LoweringDiagnostic.EventuallyConsistent>().handle } shouldContainExactly
-            listOf("$nodeHandle-left-only", "$nodeHandle-right-only")
-        f.spawns(disjoint.spec.steps).mapNotNull { it.factory as? SemiJoinFactory }.map { it.emitOnFrontier } shouldContainExactly
-            listOf(false, false)
-
-        // A shared, shallow source: both antijoins gated, no diagnostic.
-        val shared = outerJoin(
-            OuterJoinSide.FULL,
-            left = f.scan("e", "k", "a"),
-            right = f.select(f.scan("e", "k", "b"), f.v("b"), civictech.query.ast.ComparisonOp.GT, f.int(0)),
-        )
-        val sharedResult = f.lowered(LogicalPlan(mapOf("q" to shared)), f.catalog("e" to 2))
-        sharedResult.diagnostics.shouldBeEmpty()
-        val semis = f.spawns(sharedResult.spec.steps).mapNotNull { it.factory as? SemiJoinFactory }
-        semis.map { it.emitOnFrontier to it.negated } shouldContainExactly listOf(true to true, true to true)
-
-        // Shared but unequal provenance (computenet-cab.4.8): `s` feeds only the right input, so
-        // each antijoin has a phantom expected edge — both ungated, each with GateNotProvable.
-        val unequal = outerJoin(
-            OuterJoinSide.FULL,
-            left = f.scan("e", "k", "a"),
-            right = f.join(f.scan("e", "k", "b"), f.scan("s", "b"), "b"),
-        )
-        val unequalResult = f.lowered(LogicalPlan(mapOf("q" to unequal)), f.catalog("e" to 2, "s" to 1))
-        unequalResult.diagnostics.map { it.shouldBeInstanceOf<LoweringDiagnostic.GateNotProvable>().handle } shouldContainExactly
-            listOf("$nodeHandle-left-only", "$nodeHandle-right-only")
-        f.spawns(unequalResult.spec.steps).mapNotNull { it.factory as? SemiJoinFactory }.map { it.emitOnFrontier } shouldContainExactly
-            listOf(false, false)
-
-        // LEFT, disjoint: its one antijoin carries the AntiJoin rule's diagnostic.
-        val left = f.lowered(LogicalPlan(mapOf("q" to outerJoin(OuterJoinSide.LEFT))), f.catalog("l" to 2, "r" to 2))
-        left.diagnostics shouldContainExactly listOf(
-            Gating.decide(outerJoin(OuterJoinSide.LEFT).left, outerJoin(OuterJoinSide.LEFT).right,
-                civictech.query.diag.Locus.PlanNode(nodeHandle), "$nodeHandle-unmatched").diagnostic!!,
-        )
-    }
-
-    @Test
     fun `each keyed cell reads its own inlet's key position - RIGHT and FULL swap keys exactly as RelationalGraphs does`() {
         // The key column sits at a DIFFERENT index on each side, so a RowKey handed to the wrong
         // inlet is a different data value (the fidelity test above cannot see this: its fixture
@@ -203,19 +161,18 @@ class OuterJoinFidelityTest {
                 .filter { it.factory is JoinFactory || it.factory is SemiJoinFactory }
                 .associate { it.handle.removePrefix(nodeHandle) to it.factory }
         }
-        // Disjoint sources: every antijoin is ungated (emitOnFrontier = false).
         keyed(OuterJoinSide.LEFT) shouldBe mapOf(
             "-matched" to JoinFactory(lKey, rKey, civictech.query.expr.RowCombine(l, r, outColumns)),
-            "-unmatched" to SemiJoinFactory(lKey, rKey, true, false),
+            "-unmatched" to SemiJoinFactory(lKey, rKey, true),
         )
         keyed(OuterJoinSide.RIGHT) shouldBe mapOf(
             "-matched" to JoinFactory(rKey, lKey, civictech.query.expr.RowCombine(r, l, outColumns)),
-            "-unmatched" to SemiJoinFactory(rKey, lKey, true, false),
+            "-unmatched" to SemiJoinFactory(rKey, lKey, true),
         )
         keyed(OuterJoinSide.FULL) shouldBe mapOf(
             "-matched" to JoinFactory(lKey, rKey, civictech.query.expr.RowCombine(l, r, outColumns)),
-            "-left-only" to SemiJoinFactory(lKey, rKey, true, false),
-            "-right-only" to SemiJoinFactory(rKey, lKey, true, false),
+            "-left-only" to SemiJoinFactory(lKey, rKey, true),
+            "-right-only" to SemiJoinFactory(rKey, lKey, true),
         )
     }
 

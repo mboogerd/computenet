@@ -17,14 +17,12 @@ sealed interface LoweringResult : Serializable {
      * lowered is emitted only there, under the earlier root, `[QRY1-LOWER-11]`);
      * [sourceHandles] maps each EDB relation scanned by the plan to its `src:<relation>` spawn
      * handle; [outputHandles] maps each root name to the handle of the cell producing that
-     * root's rows, which for a shared subtree may lie under another root's prefix. [diagnostics] records
-     * non-fatal facts about the lowering, such as a gate that could not be proven.
+     * root's rows, which for a shared subtree may lie under another root's prefix.
      */
     data class Lowered(
         val spec: GraphSpec,
         val sourceHandles: Map<String, String>,
         val outputHandles: Map<String, String>,
-        val diagnostics: List<LoweringDiagnostic>,
     ) : LoweringResult
 
     /** The plan has no lowering; every reason is collected, not only the first. */

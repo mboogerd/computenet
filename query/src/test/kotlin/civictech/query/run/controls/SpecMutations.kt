@@ -9,7 +9,7 @@ import civictech.query.run.CompiledQuery
 
 /*
  * Post-lowering rewrites that swap ONE spawn of a compiled spec for a deliberately wrong
- * test-scope cell (cab.6-D7, the `GatingEvidenceTest.withCapturedAntijoin` precedent). The
+ * test-scope cell (cab.6-D7, following the captured-antijoin test precedent). The
  * production `Lowering` grows no hook and no "wrong mode" flag (cab.6-D3): every rewrite
  * builds a NEW `GraphSpec` and a `CompiledQuery.copy`, leaving the receiver untouched.
  */

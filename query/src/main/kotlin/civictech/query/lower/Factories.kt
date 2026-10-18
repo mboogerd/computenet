@@ -58,22 +58,17 @@ data class JoinFactory(
         JoinSetCell(ref = ref, leftKey = leftKey, rightKey = rightKey, combine = combine)
 }
 
-/**
- * A `SemiJoin` ([negated] `false`) or `AntiJoin` ([negated] `true`) node
- * (`[24-OP-SEMIJOIN-01..02]`); [emitOnFrontier] is decided by [Gating.decide].
- */
+/** A `SemiJoin` ([negated] `false`) or `AntiJoin` ([negated] `true`) node (`[24-OP-SEMIJOIN-01..02]`). */
 data class SemiJoinFactory(
     val leftKey: RowKey,
     val rightKey: RowKey,
     val negated: Boolean,
-    val emitOnFrontier: Boolean,
 ) : TypedCellFactory<SemiJoinCell<Row, Row, Row>> {
     override fun create(ref: CellRef): SemiJoinCell<Row, Row, Row> = SemiJoinCell(
         ref = ref,
         leftKey = leftKey,
         rightKey = rightKey,
         negated = negated,
-        emitOnFrontier = emitOnFrontier,
     )
 }
 
