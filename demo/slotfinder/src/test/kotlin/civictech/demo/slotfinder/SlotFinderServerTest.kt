@@ -27,13 +27,11 @@ class SlotFinderServerTest {
                 }
             }
 
-            // ops flow writer → quorum chain → observation asynchronously; poll /state.
-            // Await the JOINT condition, never one arm of it (computenet-i6vx). The
-            // canonical observation aligns the equal-root derived views
-            // (`nearMiss`, `common`, `filtered`, `byDay`, and `late`) in one group;
-            // the participant source views remain independent root groups, as exposed
-            // by `ObservationFrame.groupOf`. The old gate — `byDay` reaching {"Tue":1}
-            // — carried *zero* information about
+            // Ops flow writer → quorum chain → observation asynchronously; poll /state.
+            // Await the asserted state, never a prefix of it (computenet-i6vx). Each
+            // observation view is its own point-consistent sink, so this gate carries
+            // information about every derived value asserted below. The old gate —
+            // `byDay` reaching {"Tue":1} — carried *zero* information about
             // the Tue-19 half of the assertion below: `byDay` counts the business-hours
             // FILTERED set, which admits Tue-14 only, so it reads {"Tue":1} whether
             // Tue-19 has propagated or not (measured: it holds identically when Tue-19

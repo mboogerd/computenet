@@ -240,31 +240,19 @@ class SkillMatchApp(port: Int = 8080) {
     private val candOps = host.lookup(refs.candSkills)!!.inlet.call
     private val jobOps = host.lookup(refs.jobSkills)!!.inlet.call
 
-    // The raw inputs have different root sets, so they stay in separate groups.
-    // These four views sit over ungated JoinSetCell/SemiJoinCell/LookupJoinCell/
-    // CombineLatestCell instances, which [KE2-09] (computenet-lw0mv) rejects at
-    // build. Opting out per view preserves this demo's observable behaviour;
-    // the known intra-wave tear remains visible through bufferedWaves.
-    // Gating these cells with emitOnFrontier would change the frame shape and
-    // belongs to the separate operator follow-up.
+    // Each registered view is its own point-consistent sink; multi-input derived
+    // state converges independently as its operators publish.
     private val observation: Observation = host.observation {
         set("candSkills", refs.candSkills.ref)
         set("jobSkills", refs.jobSkills.ref)
-        unchecked("matches")
-        unchecked("gap")
-        unchecked("qualification")
-        unchecked("market")
         set("matches", refs.matches.ref)
         set("gap", refs.gap.ref)
         map("qualification", refs.qualification.ref)
         map("market", refs.market.ref)
     }
 
-    /** Diagnostic for the frame-level contract: no same-root wave remains held at idle. */
-    internal val alignedBufferedWaves: Int get() = observation.bufferedWaves
-
-    internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf
+    internal val observationViews: Set<String>
+        get() = observation.views
 
     private val shell = DemoShell(port)
     private var inspector: InspectorServer? = null
