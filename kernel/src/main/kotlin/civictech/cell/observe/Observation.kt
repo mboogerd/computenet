@@ -1,8 +1,6 @@
 package civictech.cell.observe
 
 import civictech.cell.CellRef
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.GlitchViolation
 import civictech.cell.data.MapApi
 import civictech.cell.data.OrMapApi
 import civictech.cell.data.SetApi
@@ -10,12 +8,10 @@ import civictech.cell.data.op.FilterSetApi
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.op.QuorumSetApi
 import civictech.cell.graph.TypedRef
+import civictech.cell.host.DeclaredWrite
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.ManagedHost
-import civictech.cell.host.DeclaredWrite
-import civictech.cell.host.UpstreamAncestry
 import civictech.cell.link.LinkResult
-import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import java.util.UUID
 import java.util.concurrent.ExecutorService
@@ -24,41 +20,38 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 
 /**
- * One app-edge observation over one or more internally aligned [groups].
+ * One app-edge observation over one or more independently published [views].
  *
- * Each group contains exactly the registered views with the same structural
- * root set and is served by one [AlignedCompositeCell]. Different groups never
- * wait on one another: [ObservationFrame.crossRoot] discloses the frontier lag
- * that is actually comparable between them instead.
+ * Every view is point-consistent: its value is a complete publication from one
+ * [ObserveCell]. A frame may pair view A at wave `t` with view B at wave `t-1`;
+ * no alignment between views is promised. Once the graph is idle, every view
+ * converges to its sink's current value.
  */
 interface Observation {
-    /** The latest point-consistent assembly of the independently published groups. */
+    /** The latest point-consistent assembly of all independently published views. */
     fun current(): ObservationFrame
 
     /**
-     * Registers a listener with late-join catch-up. A one-group observation
-     * forwards through that group's dispatcher; a multi-group observation uses
-     * one observation-owned dispatcher for all group publications.
+     * Registers a listener with late-join catch-up. A one-view observation
+     * forwards through that sink's dispatcher; a multi-view observation uses
+     * one observation-owned dispatcher for all view publications.
      */
     fun onChange(listener: (ObservationFrame) -> Unit)
 
-    /** The aligned sink serving [id]. */
-    fun group(id: String): AlignedCompositeCell
+    /** The sink serving [view]. */
+    fun sink(view: String): ObserveCell<*, *>
 
     /** The declared multi-cell write registered under [name]. */
     fun write(name: String): DeclaredWrite
 
-    /** Group ids, in builder registration order. */
-    val groups: Set<String>
+    /** View names, in builder registration order. */
+    val views: Set<String>
 
-    /** Waves currently held inside all aligned groups. */
-    val bufferedWaves: Int
-
-    /** Closes every aligned group and the multi-group dispatcher, if one was minted. */
+    /** Closes every view sink and the multi-view dispatcher, if one was minted. */
     fun close()
 
     /**
-     * Waits for every group listener queue and the multi-group dispatcher to
+     * Waits for every sink listener queue and the multi-view dispatcher to
      * terminate within one shared timeout budget.
      *
      * @throws IllegalStateException if [close] has not happened.
@@ -80,66 +73,24 @@ inline fun <reified T> Observation.get(view: String): T {
     )
 }
 
-/**
- * One point-consistent assembly of the latest publication from every aligned
- * root group. The groups are each wave-aligned; values across different groups
- * are deliberately not claimed to share a frontier.
- */
-data class ObservationFrame(
-    val views: Map<String, Any?>,
-    val groups: Map<String, AlignedComposite>,
-    val groupOf: Map<String, String>,
-    val crossRoot: Map<GroupPair, CrossRootStaleness>,
-)
+/** One point-consistent assembly of the latest publication from every view. */
+data class ObservationFrame(val views: Map<String, Any?>)
 
-/** One unordered pair of distinct observation groups, stored in lexical order. */
-data class GroupPair(val a: String, val b: String) {
-    init {
-        require(a < b) { "group pair must be distinct and ordered (was '$a', '$b')" }
-    }
-
-    internal companion object {
-        fun of(left: String, right: String): GroupPair =
-            if (left < right) GroupPair(left, right) else GroupPair(right, left)
-    }
-}
-
-/**
- * Signed frontier lag for the sources two groups can actually compare.
- * An empty map means the latest group publications have no shared source.
- */
-data class CrossRootStaleness(val lagBySource: Map<UUID, Long>) {
-    val independent: Boolean get() = lagBySource.isEmpty()
-}
-
-/**
- * The canonical app-edge builder. It offers the same set/map/count folds as
- * [AlignedObserveBuilder], plus the tagged-map fold used by [ObserveAllBuilder].
- * Views with equal structural root sets become one aligned group; unequal sets
- * become independent groups whose latest publications are assembled together.
- */
+/** The canonical app-edge builder for named set, map, count, and tagged-map views. */
 class ObservationBuilder internal constructor() {
-    private val aligned = AlignedObserveBuilder()
+    internal class Spec(
+        val source: CellRef,
+        val outletName: String,
+        val view: View<*, *>,
+        val kind: String,
+    )
 
-    internal val specs: Map<String, AlignedObserveBuilder.Spec> get() = aligned.specs
-    internal val unchecked: Set<String> get() = aligned.unchecked
+    internal val specs = LinkedHashMap<String, Spec>()
     internal val writes = linkedMapOf<String, Set<CellRef>>()
-    internal val declaredOpaqueRoots = linkedMapOf<CellRef, LinkedHashSet<PortRef>>()
 
-    /**
-     * Declares the stable structural [root] of an unmanaged feed into [target].
-     *
-     * A live `streamTo` whose destination names a hosted port is discovered
-     * automatically. So is a `RoutedPropagate` attached to an outlet hosted by
-     * the observing host: its target cell and port identify a stable opaque
-     * ingress family even when `streamTo` generated an anonymous attachment ref.
-     * This declaration remains necessary for a bare anonymous endpoint, a feed
-     * produced outside the observing host, or a feed that may be linked only
-     * after this observation is built. Descendant views inherit the root through
-     * the ordinary managed ancestry walk.
-     */
-    fun unmanagedFeed(target: CellRef, root: PortRef) {
-        declaredOpaqueRoots.getOrPut(target) { linkedSetOf() } += root
+    private fun add(name: String, source: CellRef, outletName: String, view: View<*, *>, kind: String) {
+        require(name !in specs) { "duplicate observe name '$name'" }
+        specs[name] = Spec(source, outletName, view, kind)
     }
 
     /** Declares one named multi-cell write alongside this observation. */
@@ -151,190 +102,118 @@ class ObservationBuilder internal constructor() {
         }
     }
 
-    /** Skip ungated-ancestor admission for the registered view [name] only. */
-    fun unchecked(name: String) = aligned.unchecked(name)
-
     /** Fold a `SetDelta` outlet into a `Set` under [name]. */
     fun set(name: String, source: CellRef, outletName: String = "outlet") =
-        aligned.set(name, source, outletName)
+        add(name, source, outletName, View.set<Any?>(), "set")
 
     /** Fold a `MapDelta` outlet into a `Map` under [name]. */
     fun map(name: String, source: CellRef, outletName: String = "outlet") =
-        aligned.map(name, source, outletName)
+        add(name, source, outletName, View.map<Any?, Any?>(), "map")
 
     /** Fold a per-key count `MapDelta` outlet into counts under [name]. */
     fun count(name: String, source: CellRef, outletName: String = "outlet") =
-        aligned.count(name, source, outletName)
+        add(name, source, outletName, View.count<Any?>(), "count")
 
     /** Fold a tagged-map outlet into a `Map` under [name]. */
     fun taggedMap(name: String, source: CellRef, outletName: String = "outlet") =
-        aligned.add(name, source, outletName, View.taggedMap<Any?, Any?>(), "taggedMap")
+        add(name, source, outletName, View.taggedMap<Any?, Any?>(), "taggedMap")
 
     /** Typed [set] for a `SetApi<E>` source. */
     @JvmName("setFromSetApi")
     fun <E> set(name: String, source: TypedRef<out SetApi<E>>, outletName: String = "outlet") =
-        aligned.set(name, source, outletName)
+        add(name, source.ref, outletName, View.set<E>(), "set")
 
     /** Typed [set] for a `QuorumSetApi<E>` source. */
     @JvmName("setFromQuorumSetApi")
     fun <E> set(name: String, source: TypedRef<out QuorumSetApi<E>>, outletName: String = "outlet") =
-        aligned.set(name, source, outletName)
+        add(name, source.ref, outletName, View.set<E>(), "set")
 
     /** Typed [set] for a `FilterSetApi<E>` source. */
     @JvmName("setFromFilterSetApi")
     fun <E> set(name: String, source: TypedRef<out FilterSetApi<E>>, outletName: String = "outlet") =
-        aligned.set(name, source, outletName)
+        add(name, source.ref, outletName, View.set<E>(), "set")
 
     /** Typed [map] for a `MapApi<K, V>` source. */
     @JvmName("mapFromMapApi")
     fun <K, V> map(name: String, source: TypedRef<out MapApi<K, V>>, outletName: String = "outlet") =
-        aligned.map(name, source, outletName)
+        add(name, source.ref, outletName, View.map<K, V>(), "map")
 
     /** Typed [count] for the shipped `GroupByApi<E, K, Long>` count shape. */
     @JvmName("countFromGroupByApi")
     fun <E, K> count(name: String, source: TypedRef<out GroupByApi<E, K, Long>>, outletName: String = "outlet") =
-        aligned.count(name, source, outletName)
+        add(name, source.ref, outletName, View.count<K>(), "count")
 
     /** Typed [taggedMap] for an `OrMapApi<K, V>` source. */
     @JvmName("taggedMapFromOrMapApi")
     fun <K, V> taggedMap(name: String, source: TypedRef<out OrMapApi<K, V>>, outletName: String = "outlet") =
-        aligned.add(name, source.ref, outletName, View.taggedMap<K, V>(), "taggedMap")
-}
-
-private data class RootSet(val local: Set<CellRef>, val opaque: Set<PortRef>)
-
-private data class GroupDefinition(
-    val id: String,
-    val specs: LinkedHashMap<String, AlignedObserveBuilder.Spec>,
-)
-
-/**
- * Build the structural roots from the same live Consume-link walk admission
- * uses. A local root is an inclusive ancestor with no inbound Consume ancestry;
- * opaque producer ports are roots in their own right.
- */
-private fun rootsOf(
-    api: HostManagementApi,
-    spec: AlignedObserveBuilder.Spec,
-    walks: MutableMap<CellRef, UpstreamAncestry>,
-    declaredOpaqueRoots: Map<CellRef, Set<PortRef>>,
-): RootSet {
-    val ancestry = walks.getOrPut(spec.source) { api.upstreamConsumeAncestors(spec.source) }
-    val candidates = linkedSetOf<CellRef>()
-    if (ancestry.self != null) candidates += spec.source
-    candidates += ancestry.local.keys
-    val declared = candidates.flatMapTo(linkedSetOf()) { declaredOpaqueRoots[it].orEmpty() }
-    val localRoots = candidates.filterTo(linkedSetOf()) { candidate ->
-        val candidateAncestry = walks.getOrPut(candidate) { api.upstreamConsumeAncestors(candidate) }
-        candidateAncestry.self != null &&
-            candidateAncestry.local.isEmpty() &&
-            candidateAncestry.opaque.isEmpty() &&
-            declaredOpaqueRoots[candidate].isNullOrEmpty()
-    }
-    return RootSet(localRoots, ancestry.opaque + declared)
+        add(name, source.ref, outletName, View.taggedMap<K, V>(), "taggedMap")
 }
 
 private class ObservationCoordinator(
-    private val groupCells: LinkedHashMap<String, AlignedCompositeCell>,
-    private val groupOfView: LinkedHashMap<String, String>,
+    private val sinks: LinkedHashMap<String, ObserveCell<*, *>>,
     private val declaredWrites: LinkedHashMap<String, DeclaredWrite>,
 ) : Observation {
     private val lock = Any()
     private val listeners = mutableListOf<(ObservationFrame) -> Unit>()
-    private val groupSnapshots = groupCells.mapValuesTo(LinkedHashMap()) { it.value.composite() }
-    private val singleGroup = groupCells.entries.singleOrNull()
+    private val snapshots = sinks.mapValuesTo(linkedMapOf()) { it.value.current() }
+    private val singleView = sinks.entries.singleOrNull()
     private var dispatcher: ExecutorService? = null
     private var closed = false
 
     @Volatile
-    private var latest: ObservationFrame = assemble(groupSnapshots)
+    private var latest = ObservationFrame(LinkedHashMap(snapshots))
 
     init {
-        // A one-group observation reads that group directly and forwards
-        // listeners to it below. Registering this coordinator as a second
-        // listener would eagerly mint the group's dispatcher even when the
-        // app only calls current(), defeating the one-group/no-extra-thread
-        // contract used by per-key observations.
-        if (singleGroup == null) {
-            groupCells.forEach { (id, cell) ->
-                cell.onComposite { composite -> onGroup(id, composite) }
+        // A one-view observation forwards listeners directly to its sink below.
+        // Registering the coordinator as another listener would eagerly mint the
+        // sink dispatcher even when the app only calls current().
+        if (singleView == null) {
+            sinks.forEach { (name, sink) ->
+                sink.onChange { value -> onView(name, value) }
             }
         }
     }
 
-    override fun current(): ObservationFrame = synchronized(lock) {
-        // A group's published composite advances on the host path, before its
-        // listener callback reaches this coordinator's dispatcher. Synchronous
-        // reads therefore assemble from those authoritative publications rather
-        // than from the callback cache used to preserve listener delivery order.
-        assemble(groupCells.mapValuesTo(LinkedHashMap()) { it.value.composite() })
-    }
+    override fun current(): ObservationFrame = ObservationFrame(
+        sinks.mapValuesTo(linkedMapOf()) { it.value.current() },
+    )
 
     override fun onChange(listener: (ObservationFrame) -> Unit) {
-        val one = singleGroup
+        val one = singleView
         if (one != null) {
             synchronized(lock) { if (closed) return }
-            one.value.onComposite { composite ->
-                listener(assemble(linkedMapOf(one.key to composite)))
+            one.value.onChange { value ->
+                listener(ObservationFrame(linkedMapOf(one.key to value)))
             }
             return
         }
         synchronized(lock) {
+            if (closed) return
             listeners += listener
             val snapshot = latest
             dispatchIfOpen { listener(snapshot) }
         }
     }
 
-    override fun group(id: String): AlignedCompositeCell =
-        requireNotNull(groupCells[id]) { "no observation group '$id' (available: ${groupCells.keys})" }
+    override fun sink(view: String): ObserveCell<*, *> =
+        requireNotNull(sinks[view]) { "no observation view '$view' (available: ${sinks.keys})" }
 
     override fun write(name: String): DeclaredWrite =
         requireNotNull(declaredWrites[name]) {
             "no observation write '$name' (available: ${declaredWrites.keys})"
         }
 
-    override val groups: Set<String> = groupCells.keys.toCollection(LinkedHashSet())
+    override val views: Set<String> = sinks.keys.toCollection(LinkedHashSet())
 
-    override val bufferedWaves: Int get() = groupCells.values.sumOf { it.bufferedWaves }
-
-    private fun onGroup(id: String, composite: AlignedComposite) {
+    private fun onView(name: String, value: Any?) {
         synchronized(lock) {
-            if (closed || groupSnapshots[id] == composite) return
-            groupSnapshots[id] = composite
-            latest = assemble(groupSnapshots)
-            if (singleGroup != null) return
+            if (closed || snapshots[name] == value) return
+            snapshots[name] = value
+            latest = ObservationFrame(LinkedHashMap(snapshots))
             val snapshot = latest
             val fired = listeners.toList()
             if (fired.isNotEmpty()) dispatchIfOpen { fired.forEach { it(snapshot) } }
         }
-    }
-
-    private fun assemble(snapshots: Map<String, AlignedComposite>): ObservationFrame {
-        val copiedGroups = LinkedHashMap(snapshots)
-        val views = linkedMapOf<String, Any?>()
-        groupCells.keys.forEach { group ->
-            copiedGroups.getValue(group).views.forEach { (name, value) -> views[name] = value }
-        }
-        val crossRoot = linkedMapOf<GroupPair, CrossRootStaleness>()
-        val ids = groupCells.keys.toList()
-        for (leftIndex in ids.indices) {
-            for (rightIndex in leftIndex + 1 until ids.size) {
-                val pair = GroupPair.of(ids[leftIndex], ids[rightIndex])
-                val left = copiedGroups.getValue(pair.a).frontier
-                val right = copiedGroups.getValue(pair.b).frontier
-                val lag = left.keys.intersect(right.keys).associateWithTo(linkedMapOf()) { source ->
-                    left.getValue(source) - right.getValue(source)
-                }
-                crossRoot[pair] = CrossRootStaleness(lag)
-            }
-        }
-        return ObservationFrame(
-            views = views,
-            groups = copiedGroups,
-            groupOf = LinkedHashMap(groupOfView),
-            crossRoot = crossRoot,
-        )
     }
 
     private fun dispatchIfOpen(block: () -> Unit) {
@@ -357,7 +236,7 @@ private class ObservationCoordinator(
             dispatcher
         }
         doomed?.shutdown()
-        groupCells.values.forEach(AlignedCompositeCell::close)
+        sinks.values.forEach(ObserveCell<*, *>::close)
     }
 
     override fun awaitTermination(timeoutMillis: Long): Boolean {
@@ -374,124 +253,56 @@ private class ObservationCoordinator(
             return if (remaining <= 0L) 0L else TimeUnit.NANOSECONDS.toMillis(remaining)
         }
 
-        for (group in groupCells.values) {
-            if (!group.awaitTermination(remainingMillis())) return false
+        for (sink in sinks.values) {
+            if (!sink.awaitTermination(remainingMillis())) return false
         }
         return awaitExecutorsTermination(listOf(ownDispatcher), remainingMillis())
     }
 }
 
+@Suppress("UNCHECKED_CAST")
+private fun observeCell(spec: ObservationBuilder.Spec, ref: CellRef): ObserveCell<*, *> =
+    ObserveCell(spec.view as View<Any, Any?>, ref)
+
 /**
  * Canonical app-edge observation entry point.
  *
- * Registered views are partitioned by **equal** structural root sets, never by
- * root overlap. Each partition is admitted and served by one
- * [AlignedCompositeCell], preserving `[22-OBS-01]`/`[22-OBS-02]` within the
- * group while `[22-LIVE-01]` forbids waiting across groups. [groupRef] can give
- * each group a stable sink identity; its argument is the group's registered
- * view names, in order, joined by `+`.
+ * Each registered view is folded by its own [ObserveCell]. Every view is
+ * point-consistent, but a frame may pair view A at wave `t` with view B at wave
+ * `t-1`; no alignment between views is promised. Applications that need one
+ * atomic multi-input value keep that joined state in one cell.
  *
- * **Unmanaged-inbound decision (computenet-b7c8t, computenet-5rb3a).** A
- * `streamTo`/routed feed remains a supported kernel path, so observation does
- * not reject a view merely because the feed was not host-admitted. When the
- * source-side link names a hosted destination port, its producer [PortRef] is
- * retained as an opaque root. When `streamTo` instead uses its default anonymous
- * attachment ref, an attached `RoutedPropagate` resolves the destination
- * cell/port; observation derives a replay-stable opaque ingress-family root
- * from that pair. Discovery scans only current Consume attachments on producer
- * outlets hosted by the observing host. A never-linked or unlinked handle is
- * therefore not topology, and an equal [CellRef] on another host cannot leak a
- * root into this host's partition. A bare anonymous endpoint, a feed from a
- * non-hosted producer, or a feed linked only after construction must still be
- * represented up front with [ObservationBuilder.unmanagedFeed].
- *
- * **Hosted bypass producers stay opaque; they are not traversed.** A bypass has
- * no target-side admitted topology record, so discovering that its producer is
- * hosted is insufficient evidence to merge its managed ancestry into the
- * target's structural roots. Consequently, in a managed `S -> W` plus bypass
- * `W -> U` plus managed `S -> U` diamond, `U` has roots `{S, W.outlet}` while
- * `S` has `{S}`: they form separate groups even when one carried wave reaches
- * both. This intentional under-alignment can publish the groups at different
- * frontiers, but cannot make an independent feed hold another view; traversing
- * the bypass would risk the silent over-alignment `[22-LIVE-01]` forbids.
- *
- * Admission for every group completes before any group cell is spawned. The
- * topology read has [observeAligned]'s live-link caveat: later managed links and
- * undeclared later unmanaged feeds are not rechecked, and graph construction
- * must not mutate the link set concurrently.
+ * [sinkRef] is called once per registered view, in registration order, with
+ * that view's name.
  */
 fun Use<HostManagementApi>.observation(
-    mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
-    onViolation: (GlitchViolation) -> Unit = {},
-    groupRef: (groupId: String) -> CellRef = { CellRef(UUID.randomUUID()) },
+    sinkRef: (view: String) -> CellRef = { CellRef(UUID.randomUUID()) },
     block: ObservationBuilder.() -> Unit,
 ): Observation {
     val builder = ObservationBuilder().apply(block)
     require(builder.specs.isNotEmpty()) { "observation requires at least one registered view" }
-    require(builder.unchecked.all { it in builder.specs }) {
-        "observation: unchecked views must be registered: " +
-            builder.unchecked.filterNot { it in builder.specs }
-    }
-
-    val walks = mutableMapOf<CellRef, UpstreamAncestry>()
-    val byRoots = LinkedHashMap<RootSet, LinkedHashMap<String, AlignedObserveBuilder.Spec>>()
-    builder.specs.forEach { (name, spec) ->
-        byRoots.getOrPut(rootsOf(call, spec, walks, builder.declaredOpaqueRoots)) { linkedMapOf() }[name] = spec
-    }
-    val observedAncestry = builder.specs.values.flatMapTo(linkedSetOf()) { spec ->
-        val ancestry = walks.getValue(spec.source)
-        buildList {
-            if (ancestry.self != null) add(spec.source)
-            addAll(ancestry.local.keys)
-        }
-    }
-    val unusedDeclarations = builder.declaredOpaqueRoots.keys - observedAncestry
-    require(unusedDeclarations.isEmpty()) {
-        "observation: unmanaged feed targets must be a registered view or its managed ancestor: $unusedDeclarations"
-    }
-    val definitions = byRoots.values.map { specs -> GroupDefinition(specs.keys.joinToString("+"), specs) }
-
-    // All rejection paths precede every constructor/spawn/groupRef call.
-    definitions.forEach { definition ->
-        val unchecked = builder.unchecked.filterTo(linkedSetOf()) { it in definition.specs }
-        when (val verdict = admitAligned(call, definition.specs, unchecked)) {
-            is AdmissionVerdict.Rejected -> throw AlignedAdmissionException(verdict)
-            is AdmissionVerdict.Admitted -> Unit
-        }
-    }
 
     val declaredWrites = builder.writes.mapValuesTo(linkedMapOf()) { (name, cells) ->
         call.declareWrite(name, cells)
     }
 
-    val groups = linkedMapOf<String, AlignedCompositeCell>()
-    val groupOf = linkedMapOf<String, String>()
-    definitions.forEach { definition ->
-        val cell = AlignedCompositeCell(
-            views = definition.specs.mapValues { it.value.view },
-            registeredAs = definition.specs.mapValues { it.value.kind },
-            ref = groupRef(definition.id),
-            mode = mode,
-            onViolation = onViolation,
-        )
+    val sinks = linkedMapOf<String, ObserveCell<*, *>>()
+    builder.specs.forEach { (name, spec) ->
+        val cell = observeCell(spec, sinkRef(name))
         call.spawn(cell)
-        definition.specs.forEach { (name, spec) ->
-            val result = call.connect(spec.source, spec.outletName, cell.ref, name)
-            check(result !is LinkResult.Rejected) {
-                "observation: link ${spec.source}.${spec.outletName} -> '$name' rejected: " +
-                    (result as LinkResult.Rejected).reason
-            }
-            groupOf[name] = definition.id
+        val result = call.connect(spec.source, spec.outletName, cell.ref, "inlet")
+        if (result is LinkResult.Rejected) {
+            throw IllegalStateException(
+                "observation: link ${spec.source}.${spec.outletName} -> view '$name' rejected: ${result.reason}",
+            )
         }
-        groups[definition.id] = cell
+        sinks[name] = cell
     }
-    return ObservationCoordinator(groups, groupOf, declaredWrites)
+    return ObservationCoordinator(sinks, declaredWrites)
 }
 
 /** Convenience for observing cells on this [ManagedHost]. */
 fun ManagedHost.observation(
-    mode: GlitchFreeCell.WaveMode = GlitchFreeCell.WaveMode.WAIT,
-    onViolation: (GlitchViolation) -> Unit = {},
-    groupRef: (groupId: String) -> CellRef = { CellRef(UUID.randomUUID()) },
+    sinkRef: (view: String) -> CellRef = { CellRef(UUID.randomUUID()) },
     block: ObservationBuilder.() -> Unit,
-): Observation = managementInlet.observation(mode, onViolation, groupRef, block)
+): Observation = managementInlet.observation(sinkRef, block)
