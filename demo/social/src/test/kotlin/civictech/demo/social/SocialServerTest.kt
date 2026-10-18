@@ -378,7 +378,7 @@ class SocialServerTest {
     }
 
     // computenet-axcyk.6 review: a one-view Observation must not register the
-    // coordinator as a listener on its only group (Observation.kt init), or
+    // coordinator as a listener on its only sink (Observation.kt init), or
     // every per-key observation of a graph nobody listens to mints a
     // dispatcher thread (computenet-v10ou.1). The post-close test below cannot
     // see that: its thread is minted and torn down before the check.
