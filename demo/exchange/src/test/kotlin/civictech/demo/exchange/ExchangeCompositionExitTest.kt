@@ -37,10 +37,9 @@ import civictech.cell.partition.PartitionedShardSet
  * cross-peer-replicated order stream, deterministically over a
  * [SimulationController] (100 seeds), and asserts the composed board equals a
  * batch recompute on every seed through a **repartition**, a **shard
- * migration**, a **peer partition/recover**, and a **late joiner** — plus the
- * two mandated diverging controls.
+ * migration**, a **peer partition/recover**, and a **late joiner**.
  *
- * The five natures, in one graph, per peer:
+ * The four natures, in one graph, per peer:
  *  - **[F] wire**: two symmetric peers' order replicas gossip over a
  *    [Peering.loopback] bridge (the same M5 frame path a socket carries), and
  *    each peer's partitioned shards live on their own hosts reached over bridges.
@@ -395,8 +394,7 @@ class ExchangeCompositionExitTest {
     // ==================================================================
     // PN-15 — the evidence join. The per-node combinations, brought into the
     // one graph that IS the composition evidence, so the run's claim is not
-    // unit-test-deep. Three arms, one manifest assertion, three diverging
-    // controls (torn / stall / wedge — one per failure mode of one arm).
+    // unit-test-deep.
     // ==================================================================
 
     // ------------------------------------------------------------------

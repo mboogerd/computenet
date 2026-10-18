@@ -282,6 +282,7 @@ object ExchangeCompositionDstGraph {
         CrashFault.midDrain("crash-peer0-writer", CRASH_HOST, atStep = 15, journal = JOURNAL),
     )
 }
+
 /**
  * Stable message per computenet-umx.3.11's AMENDS: the top-line [message] never embeds a
  * run-varying count or set, so [civictech.testkit.dst.PlanShrinker]'s same-failure predicate
