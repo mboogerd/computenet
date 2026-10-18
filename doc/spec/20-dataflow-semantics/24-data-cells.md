@@ -278,8 +278,8 @@ semantics only — neither is a convergent merge under concurrent writers
     reintroducing arrival-order bias. Effective-only: one `MapDelta` per
     input delta, a put for a key whose exposed value changed, a removal only
     when the key's last live dot dies, never a removal followed by a put for
-    the same delta. Rides the arriving wave rather than originating one
-    (single-inlet, so no completeness gate is needed). `Stateful`, snapshotting
+    the same delta. Rides the arriving wave rather than originating one.
+    `Stateful`, snapshotting
     the exposed-value map it diffs against so a restored instance does not
     replay the whole map as novelty. *(Implemented.)*
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
@@ -1187,8 +1187,7 @@ OR-set/PN source columns and frontier entries for vanished epochs are never
 reclaimed, and
 counter/generation continuity across migration and host failure is
 unpinned. Proposal: safe reclamation of provably-superseded epochs
-(compaction riding G-25 checkpoints), frontier GC for orphaned partial
-waves triggered by relink-driven recompute, a concrete migration-payload
+(compaction riding G-25 checkpoints), a concrete migration-payload
 field carrying the outlet counter high-water, durable-counter batching kept
 off the emission hot path, and generation derivation from the journal
 high-water (fresh high base on non-durable hosts) so post-restart tags

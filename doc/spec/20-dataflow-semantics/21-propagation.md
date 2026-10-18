@@ -116,9 +116,7 @@ merge-tag frontier for dedup and incremental pull, never a wave position
 anchored at the stamped link-install event (20/22 §Topology versioning),
 and remains outside the live data stream. A subscriber installs the baseline
 as state (deduping by tag union, 24) and continues with subsequent live
-delivery. *(`MessageContext.baseline`/`TagFrontier` (`civictech.cell`)
-are forwarded immediately, bypassing floors/watermark/pending — never
-buffered.)*
+delivery.
 
 **In-band edge markers** *(built, W3.2)*: `EdgeOpen`/`EdgeClose` markers are
 injected into the affected link's own FIFO, with `EdgeOpen` ahead of data and
