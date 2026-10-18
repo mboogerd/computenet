@@ -250,8 +250,8 @@ class SocialServerTest {
             // view sink's dispatcher; stop() must await both layers.
             app.staticObservation.onChange { }
             assertEquals(
-                setOf("tags", "tagClasses", "places", "organisations"),
-                app.staticObservation.views,
+                listOf("tags", "tagClasses", "places", "organisations"),
+                app.staticObservation.views.toList(),
             )
             assertFailsWith<IllegalStateException> {
                 app.staticObservation.awaitTermination(0)
