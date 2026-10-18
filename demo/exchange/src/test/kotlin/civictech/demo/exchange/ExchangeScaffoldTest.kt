@@ -11,12 +11,12 @@ import java.nio.file.Files
 /**
  * CP-E1 composition probe. The `:demo:exchange` scaffold — two symmetric JVM
  * peers, region-keyed order writers → mesh-chained union → per-region
- * GroupBy(sum) → glitch-free board → SSE — exercises the Phase-1 kernel features
+ * GroupBy(sum) → partitioned board observation → SSE — exercises the Phase-1 kernel features
  * together:
  *
  *  - per-cell journaling (CP-C1): only the writer SetCells are journaled;
- *  - the glitch-free board (CP-A4): the board reads the GroupBy behind a
- *    `GlitchFreeCell` whose inlet carries the WaveFrontier(WAIT) policy;
+ *  - the board observed off the replicated partitioned cell: the point-consistent
+ *    view may show a half-applied shard update;
  *  - replication over the existing mesh: the order unions are chained peer↔peer.
  *
  * Mirrors `demo/shopping`'s `TwoJvmConvergenceTest` + `CrashRestartConvergenceTest`
@@ -25,10 +25,10 @@ import java.nio.file.Files
 class ExchangeScaffoldTest {
 
     @Test
-    fun `board observation is one group`() {
+    fun `board observation registers one view`() {
         val app = ExchangeApp(port = 0).start()
         try {
-            kotlin.test.assertEquals(mapOf("board" to "board"), app.observationGroups)
+            kotlin.test.assertEquals(setOf("board"), app.observationViews)
         } finally {
             app.stop()
         }
