@@ -66,7 +66,8 @@ import kotlin.test.assertTrue
  * *drop*, and a reorder test that silently became a drop test would prove the wrong thing. The
  * former intra-link composite-tearing control was retired with the composite consumer. Its
  * replacement is an existential ordering control over the same cross-link fault and seed range:
- * at least one run must deliver a later source wave before an earlier one from the other arm.
+ * at least one run must invert two recorded arm deliveries relative to the same seed's fault-free
+ * order.
  *
  * ## Failure messages are deliberately count-free
  *
@@ -314,10 +315,13 @@ class ReorderFaultTest {
     private fun intraLink(edge: String) =
         ReorderFault.intraLink("reorder-$edge", edge, window = WINDOW, from = 0, until = REORDER_UNTIL)
 
-    private fun deliveredOutOfEmissionOrder(graph: BridgedDiamond): Boolean {
-        val emissionIndex = graph.emitted.withIndex().associate { (index, timestamp) -> timestamp to index }
-        return graph.observed
-            .map { emissionIndex.getValue(it.ts) }
+    private fun deliveredOutOfOrder(expected: BridgedDiamond, actual: BridgedDiamond): Boolean {
+        fun Obs.key(): Pair<String, Long> = label to ts.counter
+        val expectedIndex = expected.observed
+            .withIndex()
+            .associate { (index, observation) -> observation.key() to index }
+        return actual.observed
+            .map { expectedIndex.getValue(it.key()) }
             .zipWithNext()
             .any { (previous, next) -> previous > next }
     }
@@ -438,15 +442,17 @@ class ReorderFaultTest {
     }
 
     @Test
-    fun `BS-7 - cross-host reorder delivers a later wave before an earlier one on at least one seed`() {
+    fun `BS-7 - cross-host reorder inverts the recorded arm order on at least one seed`() {
         // [CHA1-63]: a control that cannot find a delivery-order witness certifies nothing about
         // the loss/duplication sweep above. Stop at the first witness; the claim is existential.
         for (seed in SWEEP) {
+            val (plainReport, plainGraph) = run(seed)
             val (report, graph) = run(seed, crossLink(ARM_B), crossLink(ARM_C))
+            assertEquals(DstOutcome.PASSED, plainReport.outcome, "baseline failed: ${plainReport.summary()}")
             assertEquals(DstOutcome.PASSED, report.outcome, "an arm delivery diverged: ${report.summary()}")
-            if (deliveredOutOfEmissionOrder(graph)) return
+            if (deliveredOutOfOrder(plainGraph, graph)) return
         }
-        throw AssertionError("no seed delivered a later source wave before an earlier one")
+        throw AssertionError("no seed inverted the fault-free arm delivery order")
     }
 
     @Test
