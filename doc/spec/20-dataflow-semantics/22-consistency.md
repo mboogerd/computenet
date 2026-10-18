@@ -1,6 +1,6 @@
 # 22 — Consistency: Context, Source Identity, Topology Versioning
 
-> **Status**: Partial; context machinery, emission epochs, and the recovery-baseline rule are implemented; the cycle-head and edge-marker rules below are decided design (93), unimplemented
+> **Status**: Partial; context machinery, emission epochs, the recovery-baseline rule, and in-band `EdgeOpen`/`EdgeClose` marker emission and its wire transport are implemented (local close ordering is pinned by `StagedLinkCloseOrderTest`; bridge transport by `ProtocolBridgeTest`); the marker rule's topology-interest gate holds in-process only, and its no-`EdgeEvent` clause for migration/re-resolution/swaps is unpinned (§Topology versioning); the cycle-head rules below are decided design (93), unimplemented
 > **Sources**: ADR — Task Connectivity (§2, MessageContext), 93 (feature-interaction resolutions I-1/4/5/11/13/14/24)
 > **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.FanOutlet`
 
@@ -176,20 +176,32 @@ Structural changes must be causally consistent with value updates:
   semantics are decided in 93 I-5 — see Cycles below; fixpoint semantics stay
   open with G-19.)*
 
-In-band edge markers (decided in 93 I-13, unimplemented): the stamp lives on
-the *effect*, not the invocation. Link/unlink stays a null-context
+In-band edge markers (decided in 93 I-13; marker emission and transport are
+implemented, qualified below): the stamp lives on the *effect*, not the invocation.
+Link/unlink stays a null-context
 management op (§MessageContext); its effect emits a per-link
 `EdgeOpen`/`EdgeClose` marker riding the affected link's own FIFO —
 `EdgeOpen` ahead of any data, `EdgeClose` after the last. The marker carries
 no wave id of its own. The marker frame forms cross a wire bridge today as
 ordinary `PORT_PROTOCOL` frames on the `topology-order` protocol, preserving
-that per-link FIFO ordering (W3.2; 40/41 point 4).
+that per-link FIFO ordering (W3.2; 40/41 point 4; `ProtocolBridgeTest`).
+Local close ordering is pinned by `StagedLinkCloseOrderTest`.
 Emission is gated on a downstream having expressed topology-order interest;
-eager and mergeable consumers ignore EdgeEvents entirely. Migration, wire
+eager and mergeable consumers ignore EdgeEvents entirely. *(Implemented
+in-process only: a local link delivers a marker only to an inlet whose
+`ProtocolSupport` handles `topology-order` (`cell.link.handshake`). A bridged
+producer sends both markers across the wire unconditionally
+(`Protocols.sendDownstream`, `unlinkBridge`), and a receiving inlet with no
+handler drops them. No test pins the gate.)* Migration, wire
 re-resolution, and instance swaps emit NO EdgeEvent — versioning operates on
 the logical edge set, which they leave intact — qualified by the epoch
 guard: a fresh-epoch succession is still not an edge event but is
 wave-observable via `ReBaseline` (§Source identity above; 93 I-14/I-22).
+*(Unpinned: a promotion relink registers its links without either marker
+(`cell.evolve.Promotion.rebind`), and a recovered bridged producer half suppresses its
+`EdgeOpen` (`WireEdgeLink.suppressEdgeOpen`), while the rebuilt consumer half
+receives a local, non-wire `EdgeOpen`. No test asserts any of these, and
+the edge-event requirement (13 §Edge events) has no concord scenario.)*
 
 
 ## Interaction with other parts
