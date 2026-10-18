@@ -169,7 +169,8 @@ object Shrinker {
      * on to single steps. Every retained deletion restarts the scan at the same offset, because
      * the next chunk has shifted into it.
      *
-     * Barriers are never in a chunk — see the object KDoc's "Glitch discipline".
+     * Barriers are never in a chunk, so the quiesce points a case was generated with (and the
+     * late-joiner terminal linked behind one) survive every reduction.
      */
     private fun deleteScriptSteps(session: Session) {
         var chunk = maxOf(1, opIndices(session.best.case.script).size / 2)
