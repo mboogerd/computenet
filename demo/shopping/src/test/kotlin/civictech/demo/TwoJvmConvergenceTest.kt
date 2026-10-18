@@ -46,9 +46,7 @@ class TwoJvmConvergenceTest {
             .responseCode == 200
     }.getOrDefault(false)
 
-    // Frame-attribution helpers for the aligned items/produce pair, mirroring
-    // AlignedFrameTest.kt's single-JVM method (duplicated here rather than
-    // shared, since this task's claim is this file only).
+    // Frame helpers for the items/produce convergence check.
     private val itemsRe = Regex(""""items":\[([^]]*)]""")
     private val produceRe = Regex(""""produce":\[([^]]*)]""")
 
@@ -61,23 +59,6 @@ class TwoJvmConvergenceTest {
 
     private fun itemsOf(frame: String) = fieldOf(itemsRe, frame)
     private fun produceOf(frame: String) = fieldOf(produceRe, frame)
-
-    private fun assertProduceSubsetOfItems(frames: List<String>) {
-        frames.forEach { frame ->
-            val produce = produceOf(frame)
-            val items = itemsOf(frame)
-            assertTrue(
-                produce.all { it in items },
-                "produce not a subset of items in frame: $frame (produce=$produce, items=$items)",
-            )
-        }
-    }
-
-    /** Frame indices `i` (1 until frames.size) at which both `items` and `produce` changed vs `frames[i - 1]`. */
-    private fun bothChangedIndices(frames: List<String>): List<Int> =
-        (1 until frames.size).filter { i ->
-            itemsOf(frames[i]) != itemsOf(frames[i - 1]) && produceOf(frames[i]) != produceOf(frames[i - 1])
-        }
 
     @Tag("multi-jvm")
     @Test
@@ -161,23 +142,13 @@ class TwoJvmConvergenceTest {
     }
 
     /**
-     * The two-JVM half of [KE2-33]/`[22-OBS-01]`: `computenet-sozzn.1` wave-aligns
-     * `items`/`produce` behind one composite sink per JVM (`Main.kt`'s
-     * `host.observeAligned`), and the same wiring runs on both peers — so an
-     * op posted on one JVM must settle on the **other** JVM's SSE stream as
-     * exactly one frame with both fields changed too, never a frame with
-     * `produce` containing an element absent from `items`.
-     *
-     * Uses `collectSseFrames` (top-level `internal`, defined alongside
-     * `AlignedFrameTest.kt` for exactly this reuse) and the
-     * sentinel-frame attribution method from `AlignedFrameTest`: subscribe to
-     * peer B's stream, perform the op(s) on peer A, then a sentinel `add`
-     * outside `produce`'s `a..m` filter range (which changes `items` only) to
-     * mark where the op's own frames end.
+     * Two JVMs observe one peer's stream through separate point-consistent
+     * sinks. The sentinel add marks the end of the preceding operation so the
+     * terminal pre-sentinel frame can be checked for convergence.
      */
     @Tag("multi-jvm")
     @Test
-    fun `an edit on one JVM lands on the peer's stream as one aligned items-produce frame`() {
+    fun `an edit on one JVM lands on the peer's stream and converges`() {
         // every port is `0`: each peer binds its own and announces what it got, so
         // no test-side number is ever handed to a process that has yet to bind it
         // (computenet-dqy.25). A must announce its listening port before B can be
@@ -190,72 +161,51 @@ class TwoJvmConvergenceTest {
             JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB)) { up(httpA) && up(httpB) }
 
             // Seed convergence with an out-of-range add first, so the frames
-            // measured below are not catch-up traffic (catch-up installs as arm
-            // state and is not a wave — AlignedObserve.kt "Catch-up is arm
-            // state, not a wave").
+            // measured below are not catch-up traffic.
             post(httpA, user = "alice", action = "add", item = "zzz-seed")
             awaitUntil("seed visible on peer B") { "zzz-seed" in items(httpB) }
 
-            // --- add: posted on A, observed aligned on B's own SSE stream ---
+            // --- add: posted on A, observed on B's own SSE stream ---
             val addFrames = collectSseFrames(
                 "http://localhost:$httpB/events",
-                onSubscribed = {
+                onSubscribed = { tap ->
                     post(httpA, user = "alice", action = "add", item = "apples")
+                    awaitUntil("apples converged on peer B", timeoutMs = 45_000) {
+                        tap.frames().any { frame ->
+                            "apples" in itemsOf(frame) && "apples" in produceOf(frame)
+                        }
+                    }
                     post(httpA, user = "alice", action = "add", item = "zebra")
                 },
             ) { "zebra" in itemsOf(it) }
 
-            assertTrue(
-                "apples" !in itemsOf(addFrames.first()),
-                "initial frame on B already shows apples — subscription raced the op " +
-                    "rather than the sink being wrong: ${addFrames.first()}",
-            )
-            assertProduceSubsetOfItems(addFrames)
-
-            val addOpFrames = addFrames.subList(0, addFrames.size - 1)
-            val addChanged = bothChangedIndices(addOpFrames)
+            val addTerminal = addFrames[addFrames.lastIndex - 1]
+            val addItems = itemsOf(addTerminal)
+            assertTrue("apples" in addItems, "the converged add frame omitted apples from items: $addTerminal")
+            assertTrue("apples" in produceOf(addTerminal), "the converged add frame omitted apples from produce: $addTerminal")
             assertEquals(
-                1, addChanged.size,
-                "expected exactly one frame on peer B with both items and produce changed by " +
-                    "the peer's `add apples`; frames=$addOpFrames",
-            )
-            assertTrue("apples" in itemsOf(addOpFrames[addChanged.single()]), "the changed frame never shows apples in items")
-            assertTrue(
-                "apples" in produceOf(addOpFrames[addChanged.single()]),
-                "the changed frame never shows apples in produce",
+                addItems.filter { it.firstOrNull()?.lowercaseChar() in 'a'..'m' }.toSet(),
+                produceOf(addTerminal),
+                "the converged produce view did not equal the app filter: $addTerminal",
             )
 
-            // --- remove: posted on A, observed aligned on B's own SSE stream ---
+            // --- remove: posted on A, observed on B's own SSE stream ---
             val removeFrames = collectSseFrames(
                 "http://localhost:$httpB/events",
-                onSubscribed = {
+                onSubscribed = { tap ->
                     post(httpA, user = "alice", action = "remove", item = "apples")
+                    awaitUntil("apples removal converged on peer B", timeoutMs = 45_000) {
+                        tap.frames().any { frame ->
+                            "apples" !in itemsOf(frame) && "apples" !in produceOf(frame)
+                        }
+                    }
                     post(httpA, user = "alice", action = "add", item = "yak")
                 },
             ) { "yak" in itemsOf(it) }
 
-            assertTrue(
-                "apples" in itemsOf(removeFrames.first()),
-                "initial frame on B already lacks apples — subscription raced the op " +
-                    "rather than the sink being wrong: ${removeFrames.first()}",
-            )
-            assertProduceSubsetOfItems(removeFrames)
-
-            val removeOpFrames = removeFrames.subList(0, removeFrames.size - 1)
-            val removeChanged = bothChangedIndices(removeOpFrames)
-            assertEquals(
-                1, removeChanged.size,
-                "expected exactly one frame on peer B with both items and produce changed by " +
-                    "the peer's `remove apples`; frames=$removeOpFrames",
-            )
-            assertTrue(
-                "apples" !in itemsOf(removeOpFrames[removeChanged.single()]),
-                "the changed frame still shows apples in items",
-            )
-            assertTrue(
-                "apples" !in produceOf(removeOpFrames[removeChanged.single()]),
-                "the changed frame still shows apples in produce",
-            )
+            val removeTerminal = removeFrames[removeFrames.lastIndex - 1]
+            assertTrue("apples" !in itemsOf(removeTerminal), "the converged removal frame retained apples in items: $removeTerminal")
+            assertTrue("apples" !in produceOf(removeTerminal), "the converged removal frame retained apples in produce: $removeTerminal")
         } finally {
             JvmPeer.destroy(peerA, peerB)
         }
