@@ -2,7 +2,6 @@ package civictech.cell.nature
 
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
-import civictech.cell.consistency.GlitchFree
 import civictech.cell.data.Gossiping
 import civictech.cell.partition.Partitioned
 import civictech.nature.Manifest
@@ -14,7 +13,6 @@ import civictech.nature.Manifest
  * on every registered cell — `ManifestDriftTest` pins that (declared == installed).
  *
  * The marker → tag mapping (all *existing* markers, no new annotation):
- * - [GlitchFree]  → [Manifest.GLITCH_FREE]
  * - [Stateful]    → [Manifest.DURABLE]
  * - [Gossiping] or [ReBaselineEmitting] → [Manifest.REPLICATED]
  * - [Partitioned] → [Manifest.PARTITIONED]
@@ -26,7 +24,6 @@ import civictech.nature.Manifest
  * their first real consumer.
  */
 fun manifestOf(clazz: Class<*>): Set<Manifest> = buildSet {
-    if (GlitchFree::class.java.isAssignableFrom(clazz)) add(Manifest.GLITCH_FREE)
     if (Stateful::class.java.isAssignableFrom(clazz)) add(Manifest.DURABLE)
     if (Gossiping::class.java.isAssignableFrom(clazz) ||
         ReBaselineEmitting::class.java.isAssignableFrom(clazz)

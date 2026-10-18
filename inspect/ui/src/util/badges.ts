@@ -1,7 +1,7 @@
 /** Node card decorations (10-target-v3.md node card spec):
  *   - color chip: P/B/S letter glyph (never color alone)
- *   - manifest badges: short letters, D/GF/R/PT named explicitly by the
- *     M0-FE ticket for the four manifests it calls out; any other manifest
+ *   - manifest badges: short letters, D/R/PT named explicitly by the
+ *     M0-FE ticket for the three manifests it calls out; any other manifest
  *     (PULL_SERVING, GATED, or a future addition) still renders — via
  *     initials for underscore_separated names, else its first two
  *     characters — rather than being silently dropped. */
@@ -18,7 +18,6 @@ export function colorGlyph(color: string | null): string {
 
 const MANIFEST_BADGE: Record<string, string> = {
   DURABLE: 'D',
-  GLITCH_FREE: 'GF',
   REPLICATED: 'R',
   PARTITIONED: 'PT',
 };

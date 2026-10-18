@@ -46,13 +46,10 @@ object NatureNegotiation {
         NatureAxis.OWNERSHIP,
         NatureAxis.MERGE_IDEMPOTENCE,
         NatureAxis.MONOTONICITY,
-        // PN-12: the two axes carrying today's *silent* mismatch drops. Unlike the
-        // structural CellManifest natures (GLITCH_FREE/DURABLE/…, deliberately kept
-        // OUT of this set — a volatile consumer of a durable producer is normal),
-        // these are genuine link-flow properties: an ALIGN inlet must refuse an
-        // unwaved producer, and a partial-interest inlet must refuse a non-scoped
-        // delta, rather than dropping/over-delivering unseen.
-        NatureAxis.WAVE_PARTICIPATION,
+        // The remaining refusing axis is a genuine link-flow property: a
+        // partial-interest inlet must refuse a non-scoped delta, rather than
+        // over-delivering unseen. Structural CellManifest natures remain out of
+        // this set because a volatile consumer of a durable producer is normal.
         NatureAxis.INSTANCE_SCOPING,
         // FU-5: a pull-on-open consumer requires a pull-serving producer. Wired
         // onto a non-serving producer its StateRequest is answered by no one and
@@ -67,8 +64,7 @@ object NatureNegotiation {
      * Test/control seam: reconcile against an explicit [linkFlowAxes] set. The
      * PN-12 controls call it to *move axes in or out* of the refusing set —
      * demonstrating that structural (CellManifest) natures moved in wrongly refuse
-     * the demo's durable→volatile link, and that removing `WAVE_PARTICIPATION`
-     * reverts the unwaved-producer drop to silent (today's F1).
+     * the demo's durable→volatile link.
      */
     internal fun reconcile(
         offered: NatureVector,

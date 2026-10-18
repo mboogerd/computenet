@@ -17,6 +17,8 @@ import civictech.nature.NatureAxis
 import civictech.nature.NatureMismatch
 import civictech.nature.NatureVector
 import civictech.nature.Ownership
+import civictech.nature.InstanceScoping
+import civictech.nature.PullService
 import civictech.nature.natureVectorFromWire
 import civictech.nature.toWire
 import io.kotest.matchers.shouldBe
@@ -182,5 +184,10 @@ class BridgedNatureRefusalTest {
         // build cannot resolve — it is ignored, never a refusal; known axes stay.
         val fromNewerPeer = listOf(99, 0) + NatureVector.of(MergeClass.IDEMPOTENT).toWire()
         natureVectorFromWire(fromNewerPeer) shouldBe NatureVector.of(MergeClass.IDEMPOTENT)
+
+        // The retired axis remains reserved so later ordinals stay wire-compatible.
+        NatureVector.of(InstanceScoping.INTEREST_SCOPED).toWire() shouldBe listOf(5, 1)
+        NatureVector.of(PullService.BASELINE_SERVING).toWire() shouldBe listOf(6, 1)
+        natureVectorFromWire(listOf(4, 1)) shouldBe NatureVector.DEFAULT
     }
 }

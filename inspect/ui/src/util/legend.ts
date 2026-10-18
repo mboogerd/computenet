@@ -29,7 +29,7 @@ const CELL_COLOR: LegendEntry = {
 const MANIFEST_BADGE: LegendEntry = {
   id: 'manifest-badge',
   label: 'Manifest badges',
-  detail: 'D durable · GF glitch-free · R replicated · PT partitioned (other manifests still render, as initials)',
+  detail: 'D durable · R replicated · PT partitioned (other manifests still render, as initials)',
 };
 
 const EDGE_ROLE: LegendEntry = {
