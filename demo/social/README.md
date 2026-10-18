@@ -81,8 +81,8 @@ whether every `[SOC1-*]` id has a named test or a recorded justification.
 Every seed-sweep call site under `demo/social/src/test` (6 total), each a
 contiguous `LongRange` starting at 0:
 
-- `SocialAtomicityTest.kt:212` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 F-22 one addPost lands as three waves, one per contributing outlet`)
-- `SocialAtomicityTest.kt:230` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 the same addPost under ActorIngress drive lands as one wave`)
+- `SocialAtomicityTest.kt:213` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 F-22 one addPost lands as three waves, one per contributing outlet`)
+- `SocialAtomicityTest.kt:231` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 the same addPost under ActorIngress drive lands as one wave`)
 - `SocialPipelineTest.kt:52` — `forEachSeed(0L until 20L)` (`SOC1-UPD-02 cells equal the batch fold after every event over a 20-seed sweep`)
 - `SocialPipelineTest.kt:83` — `forEachSeed(0L until 20L)` (`SOC1-UPD-03 every IU7 comment's parent is created by the slice or an earlier event`)
 - `SocialPipelineTest.kt:113` — `forEachSeed(0L until 20L)` (`SOC1-UPD-04 replaying an applied event leaves state and applied unchanged`)
