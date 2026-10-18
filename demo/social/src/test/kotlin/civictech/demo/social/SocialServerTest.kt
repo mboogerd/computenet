@@ -243,20 +243,15 @@ class SocialServerTest {
     }
 
     @Test
-    fun `static dimensions are one observation partitioned into four independent groups`() {
+    fun `static dimensions are one observation with four independent views`() {
         val app = SocialApp(port = 0)
         try {
-            // Exercise the multi-group coordinator dispatcher as well as each
-            // aligned group's dispatcher; stop() must await both layers.
+            // Exercise the multi-view observation dispatcher as well as each
+            // view sink's dispatcher; stop() must await both layers.
             app.staticObservation.onChange { }
             assertEquals(
-                linkedMapOf(
-                    "tags" to "tags",
-                    "tagClasses" to "tagClasses",
-                    "places" to "places",
-                    "organisations" to "organisations",
-                ),
-                app.staticObservation.current().groupOf,
+                setOf("tags", "tagClasses", "places", "organisations"),
+                app.staticObservation.views,
             )
             assertFailsWith<IllegalStateException> {
                 app.staticObservation.awaitTermination(0)
@@ -314,20 +309,21 @@ class SocialServerTest {
 
     // --- computenet-a77tu: stop() releases every observe-sink thread --------
     // computenet-f0v6m: rewritten to track this app's OWN minted dispatcher
-    // threads BY NAME rather than a process-wide COUNT. `aligned-observe-`
-    // names embed a per-instance UUID, so the exact set this app minted can be
+    // threads BY NAME rather than a process-wide COUNT. `observe-cell-` names
+    // identify one-view sinks and `observation-` names identify multi-view
+    // dispatchers, so the exact set this app minted can be
     // captured at mint time and diffed against later, independent of any
     // unrelated observation thread that happens to be alive in the same JVM
     // (another test class's dispatcher still winding down) — a false
     // positive/negative the old raw-count comparison could not tell apart
     // from a real leak.
 
-    /** Live threads belonging to the observation API's group/coordinator dispatchers. */
+    /** Live threads belonging to observation sinks and multi-view dispatchers. */
     private fun observationThreadNames(): Set<String> {
         val threads = arrayOfNulls<Thread>(Thread.activeCount() * 2 + 64)
         val n = Thread.enumerate(threads)
         return threads.take(n).mapNotNull { it?.name }
-            .filter { it.startsWith("aligned-observe-") || it.startsWith("observation-") }
+            .filter { it.startsWith("observe-cell-") || it.startsWith("observation-") }
             .toSet()
     }
 

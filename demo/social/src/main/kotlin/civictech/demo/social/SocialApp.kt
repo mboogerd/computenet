@@ -162,8 +162,8 @@ class SocialApp(
     private val feedSessions = ConcurrentHashMap<Long, FeedSession>()
 
     // One canonical observation for all four static dimensions (axcyk-D13).
-    // Their independent roots become four one-view aligned groups; the test
-    // pins that partition so a future topology change cannot silently alter it.
+    // Their independent roots become four one-view sinks; the test pins those
+    // registrations so a future topology change cannot silently alter them.
     internal val staticObservation: Observation = host.observation {
         set("tags", pipeline.statics.tags.ref)
         set("tagClasses", pipeline.statics.tagClasses.ref)

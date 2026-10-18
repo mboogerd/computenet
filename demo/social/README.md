@@ -39,7 +39,6 @@ whether every `[SOC1-*]` id has a named test or a recorded justification.
 | `[SOC1-UPD-04]` | `SocialPipelineTest` | `SOC1-UPD-04 replaying an applied event leaves state and applied unchanged` | |
 | `[SOC1-ATOM-01]` | `SocialAtomicityTest` | `SOC1-ATOM-01 F-22 one addPost lands as three waves, one per contributing outlet` | the OR-branch fired: the three writes carry three distinct wave ids on every one of the 20 swept seeds; also `SOC1-ATOM-01 the same addPost under ActorIngress drive lands as one wave` (the reactive-branch counter-experiment) |
 | `[SOC1-ATOM-02]` | `SocialAtomicityTest` | `SOC1-ATOM-01 F-22 one addPost lands as three waves, one per contributing outlet` | same test: it is the finding-writing act this requirement calls for — the class KDoc records the divergence as finding `F-22` in `doc/demo-findings.md`, and no kernel wave-stamping change was made |
-| `[SOC1-ATOM-03]` | `SocialAtomicityTest` | `SOC1-ATOM-03 a Consume-linked GlitchFreeCell releases nothing under plain ingress and one contiguous wave under drive` | checked on a test-side `GlitchFreeCell` per the class KDoc's "Limit of this file" note; the assertion is contiguity of the release, not "no torn state" in general |
 | `[SOC1-SREAD-01]` | `SocialShortReadTest` | `SOC1-SREAD-01 IS1 to IS7 answer the example graph` | plus three sibling methods in the same class and two HTTP-half methods |
 | `[SOC1-SREAD-02]` | `SocialShortReadTest` | `SOC1-SREAD-02 IS1 IS4 and IS5 each cost exactly one read of the owning cell` | plus three sibling methods in the same class |
 | `[SOC1-SREAD-03]` | `SocialShortReadTest` | `SOC1-SREAD-03 an unknown id is Empty, costs no read and spawns no cell` | also the HTTP-half `SOC1-SREAD-03 HTTP half an unknown id is 200 found false and leaves state byte-identical` |
@@ -79,12 +78,11 @@ whether every `[SOC1-*]` id has a named test or a recorded justification.
 
 ## `[SOC1-VER-03]` seed sweeps
 
-Every seed-sweep call site under `demo/social/src/test` (7 total), each a
+Every seed-sweep call site under `demo/social/src/test` (6 total), each a
 contiguous `LongRange` starting at 0:
 
-- `SocialAtomicityTest.kt:225` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 F-22 one addPost lands as three waves, one per contributing outlet`)
-- `SocialAtomicityTest.kt:243` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 the same addPost under ActorIngress drive lands as one wave`)
-- `SocialAtomicityTest.kt:264` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-03 a Consume-linked GlitchFreeCell releases nothing under plain ingress and one contiguous wave under drive`)
+- `SocialAtomicityTest.kt:212` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 F-22 one addPost lands as three waves, one per contributing outlet`)
+- `SocialAtomicityTest.kt:230` — `forEachSeed(0L until 20L)` (`SOC1-ATOM-01 the same addPost under ActorIngress drive lands as one wave`)
 - `SocialPipelineTest.kt:52` — `forEachSeed(0L until 20L)` (`SOC1-UPD-02 cells equal the batch fold after every event over a 20-seed sweep`)
 - `SocialPipelineTest.kt:83` — `forEachSeed(0L until 20L)` (`SOC1-UPD-03 every IU7 comment's parent is created by the slice or an earlier event`)
 - `SocialPipelineTest.kt:113` — `forEachSeed(0L until 20L)` (`SOC1-UPD-04 replaying an applied event leaves state and applied unchanged`)
@@ -97,9 +95,8 @@ seeds (`0` through `19`) is a *failing* seed distinguished from a passing
 majority. Per the class KDoc, the `[SOC1-ATOM-01]` divergence (one `addPost`
 lands as three distinct wave ids under plain ingress) is structural and holds
 **uniformly on every one of the 20 seeds tested**, and the class documents
-seed 0's timestamps verbatim as the representative case. `SOC1-ATOM-03`'s
-release-contiguity property likewise holds across the same 20-seed sweep with
-no exception recorded. `SocialPipelineTest`'s sweeps (`[SOC1-UPD-02..04]`,
+seed 0's timestamps verbatim as the representative case. `SocialPipelineTest`'s
+sweeps (`[SOC1-UPD-02..04]`,
 `[SOC1-CREAD-04]`) record no failing seed either — its KDoc states the
 standing policy ("a failing seed is a finding, never filtered") but no seed
 has yet triggered it.
