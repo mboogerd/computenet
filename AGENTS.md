@@ -180,6 +180,14 @@ for documentation maintenance.
     and the same cells score them as a separate AI score (`RaterClass`); the only demo that
     defines its own KSP cell (backlog-triage consumes `:demograph`'s
     `RatingCell`/`MetaRankCell`, computenet-drz8.2).
+  - `demo/studio/` (`:demo:studio`): local dataflow graph editing studio — each
+    canvas cell is a kernel cell on one live `ManagedHost`, and each wire is a
+    kernel link made/unlinked at runtime (cycle refusal comes from link admission).
+    Cells: git source, text source, exec (custom command / claude / codex presets,
+    read-only agents), and programmable (LLM-generated Python, runs only the
+    approved hash). Plain-file persistence (no journal). Depends on `:kernel`,
+    `:demo:shell`. Its SolidJS/Vite frontend lives in `demo/studio/ui/` (npm,
+    not Gradle). Not wired to `--inspect`.
   - `demo/allocator-observe/` (`:demo:allocator-observe`): spend-log
     observability for the socaity allocator MVP (ALOB, epic
     `computenet-fpml`) — ingests a JSONL spend log via a total per-line
@@ -190,7 +198,7 @@ for documentation maintenance.
   flag (`civictech.inspect.InspectorFlag`) wired into ten demos: agora,
   alignment, backlog-triage, deliberate, dialogue, exchange, shopping,
   skillmatch, slotfinder, tiering. Not wired: `allocator-observe` (no hosted
-  graph yet), `beadsmirror` (not wired to `--inspect`) and
+  graph yet), `beadsmirror` and `studio` (not wired to `--inspect`), and
   `social` (excluded by its own module gate, `[SOC1-MOD-01]`). Its SolidJS/Vite
   frontend lives in `inspect/ui/` (npm, not Gradle), same as `demo/agora/ui`.
 - `doc/spec/`: the normative design — foundations (`00`), programming model

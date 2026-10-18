@@ -1973,3 +1973,33 @@ floor at −14: carol, idle since, freezes eviction until her wave carries a lat
 slot. In the demo this reads as "a day closes only once everyone who has ever completed
 a common slot has moved past it" — correct per spec, and worth knowing before reading
 the `byDay` bars.
+
+## F-29 — Studio: managed ingress, dynamic wiring and shell friction
+
+**Observation and workarounds** (`:demo:studio`):
+
+- Managed ingress needs its inlet declared as `Use<Propagate<T>>`: a `Serve`
+  port exposes no `.call` through `host.lookup(TypedRef)`. The studio uses
+  `Use<Propagate<StudioMsg>>` for its managed inlet.
+- A second canvas edge between an already-linked (A, B) pair shares the one
+  kernel link, so the new port gets no link catch-up. The studio replays A's
+  latest output through A's own inlet; every other downstream ignores the
+  equal value.
+- `DemoShell.sse` has no request-guard hook. To validate `Host` on the SSE
+  stream, the studio re-implements the subscriber loop using `beginSse` and
+  `sseFrame`.
+- `demoPort` defaults to 8080, which other demos also use. The studio supplies
+  its own default, 18440.
+- The kernel correctly refuses a feedback wire with `CycleWithoutHead`. The
+  studio surfaces the kernel diagnostic verbatim apart from replacing studio
+  cell references with quoted titles, preserving its spec reference. The
+  current workaround is to leave the feedback wire disconnected.
+
+**Why it's friction**: managed ingress requires the right port declaration;
+canvas ports share pair-level links; guarded SSE and a distinct default port
+need demo-local glue. Cycle admission itself is working as specified.
+
+**Proposed shape**: a request-guard hook for shell SSE could remove the custom
+subscriber loop. A studio-level way to declare a `CycleHead` (for example, a
+"loop" cell with a damping witness) is future work; this demo adds no such
+declaration.
