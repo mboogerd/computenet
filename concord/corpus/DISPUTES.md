@@ -3332,30 +3332,32 @@ possible in either direction.
 
 Filed 2026-09-27 by `computenet-t4od7.9` (feature `computenet-t4od7` = KE4.7,
 epic `computenet-lxo` = KE4), over `feature/computenet-t4od7` at `15fd3e46`.
-Every other `[24-WL-nn]` id reads `covered` in `doc/spec/CONCORDANCE.md`
-(the `24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
-`[24-WL-11]`). `24-WL-04` now reads covered (only its structural residual stays disputed below), and so does `24-WL-09` (covered by the narrower implemented rule; its general `[KE4-30]` residual is disputed below); the other ids below stay `gap` rows, and the last entry
-records a scenario that was designed and deliberately not authored. Kernel
-test names below were checked with `git grep -n` at that commit.
+Most `[24-WL-nn]` ids read `covered` in `doc/spec/CONCORDANCE.md` (the
+`24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
+`[24-WL-11]`). The retirement of `24-WL-SETTLE-01` left `[24-WL-04]`
+uncovered; its surviving structural requirement stays disputed below.
+`[24-WL-09]` remains covered by the narrower implemented rule while its
+general `[KE4-30]` residual is disputed below; the other ids below stay `gap`
+rows, and the last entry records a scenario that was designed and deliberately
+not authored. Kernel test names below were checked with `git grep -n` at that
+commit.
 
-## `24-WL-04` (residual) — the floor is not a wave position and is in no completeness set: no neutral observable (`check-vocabulary-gap`)
+## `24-WL-04` — the floor is not a wave position: no neutral observable (`check-vocabulary-gap`)
 
 - **Requirement**: `[24-WL-04]` (`20-dataflow-semantics/24-data-cells.md`
   §Lateness and waterlines; stated in `22-consistency.md` §Interaction with
-  other parts): the floor SHALL NOT be a wave position and SHALL NOT be a
-  member of any completeness set or glitch-free frontier.
-- **Covered half.** The settlement consequence — a waterline wave that does not
-  move the floor emits nothing and is absorb-acked — is pinned by
-  `WaterlineCellTest` (`kernel/.../data/Waterline.kt`, the `outlet.absorbAck()`
-  after a failed `raiseTo`).
-- **Missing capability (the half that stays disputed)**: the literal
-  statement, that the floor is not a wave position and is in no completeness
-  set, has no neutral observable. No check reads a cell's completeness set or
-  a frontier's members. A broken implementation that made the floor a
-  frontier member but still acked every no-rise wave would pass every check
-  this vocabulary can state.
-- **Revisit trigger**: a check that can read frontier or completeness-set
-  membership.
+  other parts): "The floor SHALL be a value, not a wave: it SHALL NOT be a
+  wave position (Ubiquitous)."
+- **Coverage status**: uncovered. Its former scenario asserted a settlement
+  consequence that was retired with its consumer; it did not provide a
+  neutral observable for the surviving value-versus-wave distinction.
+- **Missing capability**: the literal statement that the floor is a payload
+  value rather than a wave position has no neutral observable. No existing
+  check can distinguish a floor interpreted as data from one incorrectly
+  interpreted as a `MessageContext.timestamp` position while all emitted
+  values remain equal.
+- **Revisit trigger**: a check that can distinguish the `WaterlineDelta` value
+  from the invocation's wave position.
 
 ## `24-WL-09` (residual) — `[KE4-30]`'s general safety condition has no clean formulation; the implemented rule is narrower (`proof-gap`)
 
