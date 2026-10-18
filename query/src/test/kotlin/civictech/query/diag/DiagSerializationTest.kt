@@ -76,7 +76,6 @@ class DiagSerializationTest {
                 sourceHandles = emptyMap(),
                 outputHandles = emptyMap(),
                 outputShapes = emptyMap(),
-                diagnostics = emptyList(),
             ),
         )
         roundTrip(original) shouldBe original
