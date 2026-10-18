@@ -5043,6 +5043,7 @@ Open questions lowering confidence to medium: (1) the reinterpretation of ADR-2'
 > Spec drift (judged at `a69186a`): 2/10 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The whole mechanism: in-band EdgeOpen/EdgeClose markers on the link's own FIFO channel, the consumer-computed per-source floor completeness rule (prospective floors, pre-join discard, EdgeClose unblocking waiting waves), the rule that migration/re-resolutio…
 > Reconciled after cross-check: swap invisibility qualified by the epoch guard: preserved-epoch relocations invariant; fresh-epoch successions wave-observable via the ReBaseline notice.
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the edge-set-completeness half — per-source floors, pre-join discard, `EdgeClose` unblocking a waiting wave, and the `JoinBarrier` coordinator — is withdrawn with glitch-freedom; the in-band `EdgeOpen`/`EdgeClose` marker rule (`[13-EDGE-01]`) and the swap-invisibility / `ReBaseline` qualification stand.
 
 #### 1. Challenge restatement
 
@@ -6608,6 +6609,7 @@ ShadowSpec(
 > Existing gaps touched: G-6, G-26 · Confidence: high
 > Spec drift (judged at `a69186a`): 2/5 member pairs largely addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **PARTIAL** — The other four causes and the unifying protocol: the Progress watermark (an absorbed-then-quiet arm still stalls a WAITing join — effective-only silence has no positive completeness signal), the typed Stall/Resume family with RESTARTING/DEAD_LETTERED/LOST a…
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the `Stall`/`Resume` family, `Progress` absorb-acks and WAIT/DEGRADE/RE-SCOPE are removed from spec and code.
 
 #### 1. Challenge restatement
 
@@ -8679,6 +8681,7 @@ could turn the best-effort case into a link-time contract.
 > Existing gaps touched: G-13, G-9, G-10 · Confidence: medium
 > Spec drift (judged at `a69186a`): 2/4 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The whole traversal protocol: DescribeFrontier/FrontierReport on the I-1 metadata plane (unbuilt), epoch + visited-set edge-once termination with CYCLIC flagging (G-19 fixpoint stays open, now with marked back-edges as input), source-and-guarantee vocabular…
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the resolution is withdrawn with glitch-freedom; the FRONTIER traversal protocol is no longer specified.
 
 #### 1. Challenge restatement
 
@@ -9116,6 +9119,7 @@ single initiator.
 > Existing gaps touched: G-18, G-20 · Confidence: high
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The whole alignment design: the nullable baseline: TagFrontier? on MessageContext, the baseline-is-never-a-wave-join-input rule, causal anchoring at the link-install topology event, glitch-freedom resuming at the first complete post-install wave, and the re…
 > ⚠ Divergence with landed code: Spec 22 §Interaction still asserts 'catch-up snapshots are stamped with the wave they represent, so a glitch-free consumer can align them with live deltas' — the resolution explicitly retracts this (a multi-source fold has no representable wave), and the cl…
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the baseline marker on catch-up (`MessageContext.baseline`) survives for dedup and late join (20/22 §Pull/late-join).
 
 #### 1. Challenge restatement
 
