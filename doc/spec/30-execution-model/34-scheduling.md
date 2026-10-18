@@ -12,7 +12,7 @@
 > (opt-in via `AttentionPolicy.magnitudeBands`, M17);
 > interest scatter in `AttentionSupport.scatter`. Verified:
 > `AttentionGenerativeTest` (100 seeds + starvation control),
-> `PartitionedAttentionTest` (scatter park/replay across 100 seeds), and
+> `PartitionedAttentionTest` (scatter park/replay), and
 > `MagnitudeSchedulingTest`. Remaining: attention and state-request notices are
 > single-hop (G-36 below). Attention crossing the wire is resolved (G-35, W3.2,
 > see below and 41 point 4).
