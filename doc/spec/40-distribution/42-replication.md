@@ -222,19 +222,16 @@ Three properties the linker and the wire depend on, made true of the code:
 
 ## Delivered watermarks and causal stability
 
-A replica set converges (§Design as implemented), but convergence alone answers
-neither of the two questions a settling consumer actually asks: *has this wave
-reached every replica that could hold a key it touches* (the **frontier read**,
-used by the cross-replica completeness gate in 22), and *can no concurrent
-operation for this timestamp still arrive anywhere* (the **stability read**, the
-compaction/GC trigger — causal stability in the sense of research 03 §3 Def 5.1).
-Both are answered off one gossiped substrate: a **delivered-watermark companion**
-riding the ordinary replica mesh, with no second protocol, no consensus and no
-total order. This section states that substrate and the two reads over it. It is
-built for the frontier read (96 E3.2–E3.4, `cell.data.WatermarkCell`,
-`cell.data.delta.WatermarkDelta`, `cell.data.delta.DeliveredFrontier`,
-`cell.consistency.ReplicaQuorum`); the stability read, the heartbeat and the
-departure notice are decided design, labelled below where they are not code.
+A replica set converges (§Design as implemented), but convergence alone does not
+answer *can any concurrent operation for this timestamp still arrive anywhere?*
+The **stability read** answers that question as the compaction/GC trigger —
+causal stability in the sense of research 03 §3 Def 5.1. Its gossiped substrate
+is a **delivered-watermark companion** riding the ordinary replica mesh, with no
+second protocol, no consensus and no total order. The companion is built (96
+E3.2–E3.4, `cell.data.WatermarkCell`, `cell.data.delta.WatermarkDelta`,
+`cell.data.delta.DeliveredFrontier`); the stability read, the heartbeat and the
+local departure diagnostic are decided design, labelled below where they are
+not code.
 
 **The companion.** Each data replica of a logical id gets one companion
 `cell.data.WatermarkCell`, itself `Replicable` and itself replicated, so the
@@ -293,74 +290,53 @@ a fixpoint (anchor `echo terminates here`). Effective-only re-emission (21) is
 what makes the mesh quiesce.
 
 **What is carried from Naiad, and what is given up (research 02 §2–3).** The
-safety property is Naiad's, verbatim in sense: *no local frontier ever moves ahead
-of the global frontier*, so a notification released locally is always safe. What
-is **not** carried is Naiad's mechanism. Its progress protocol broadcasts signed
+safety property is Naiad's in spirit: a stability point never moves ahead of
+any open member's delivered prefix, so reclamation behind it is safe. What is
+**not** carried is Naiad's mechanism. Its progress protocol broadcasts signed
 `(pointstamp, delta)` occurrence counts and accumulates them by addition, which is
 **not idempotent**: over a gossip mesh with redelivery and multi-path arrival it
 double-counts, and recovering it would demand exactly-once FIFO per peer pair —
 precisely the channel assumption (fixed, fully-known worker set; reliable FIFO;
 fault tolerance by checkpoint/restore rather than membership change) that a
 membership-changing replica mesh cannot supply. The reformulation to a
-join-semilattice of per-source low-watermarks merged by pointwise max (research 05
-gap 7; the same shape as `PnCounterDelta`) buys idempotence and costs precision in
+join-semilattice of per-source low-watermarks merged by pointwise max (the same
+shape as `PnCounterDelta`) buys idempotence and costs precision in
 two places, both named honestly here: a row can only **rise**, so there is no
 retraction of progress and no downward correction of an over-eager advance; and
 liveness degrades exactly where the lattice cannot distinguish "silent" from
 "gone" — an idle replica (answered by the heartbeat, [42-WM-06]) and a replica
 that departs without closing its row (frozen stability, [42-WM-08]). Causal
 stability itself and its idle-replica caveat are research 03 §3 (S3/S6, Bauwens &
-Gonzalez Boix); the layering of the cross-replica frontier (gap 7) over
-compaction/GC (gap 6) is research 05 gaps 6–7.
+Gonzalez Boix); its compaction/GC use is research 05 gap 6.
 
 ### The four lanes, and the rule for a fifth
 
 `cell.data.WatermarkCell` carries exactly **four independent lattices**, each
-grow-only or pointwise-monotone in its own right, and `ReplicaQuorum.frontier`
-reads all four independently:
+grow-only or pointwise-monotone in its own right. A stability evaluation
+observes them without mutating them:
 
 1. **`rows`** — the base per-`(replicaSlot, sourceId)` delivered-counter map
    ([42-WM-01]–[42-WM-03]); `advance`/`applyRemote` merge it.
-2. **`closed`** (PN-0c) — the grow-only set of cleanly departed slots, so a read
-   stops waiting on a row that provably can never advance again ([42-WM-08]).
-3. **`suspendEpoch`** (PN-19, 34 decision 3) — the per-slot suspend epoch, odd =
-   suspended: the resumable analogue of `closed` for a member that may return.
-   Only a slot's own owner writes it (single-writer, alternating), so max-merge is
-   a genuine monotone join.
-4. **`members`** (FU-2) — the grow-only set of covering member slots that have
-   announced their existence, converging membership itself faster than the
-   point-to-point topology announcements `instancesOf` feeds off ([42-WM-07]).
+2. **`closed`** (PN-0c) — the grow-only set of cleanly departed slots, so the
+   stability read stops waiting on a row that provably can never advance again
+   ([42-WM-08]).
+3. **`suspendEpoch`** (PN-19) — the per-slot suspend epoch, odd = suspended:
+   the resumable analogue of `closed` for a member that may return. Suspension
+   does not exclude the row from stability; it records why the row is currently
+   frozen. Only a slot's own owner writes it (single-writer, alternating), so
+   max-merge is a genuine monotone join.
+4. **`members`** (FU-2) — the grow-only set of member slots that have announced
+   their existence. The stability read uses it to avoid omitting a member that
+   the point-to-point `instancesOf` view has not learned yet ([42-WM-07]); the
+   sufficiency of this membership announcement is R13's territory (95).
 
 The cell SHALL NOT gain a fifth lane. Each lane above answers a different "what do
-I know about this replica slot" question; a fifth per-slot settlement concern
+I know about this replica slot" question; a fifth per-slot stability concern
 unrelated to delivery, departure, suspension or membership is the signal that this
 cell is doing more than one job, and is a **sibling-cell** design question (epic
 [KE3-07]), not a fifth `Mutable*` field. Note what this rule does *not* forbid:
 both the heartbeat ([42-WM-06]) and the stability read ([42-WM-05]) are behaviour
 **over** lanes 1–4, not new state, and neither needs a fifth lane to be built.
-
-### The frontier read (decided in 96 E3.1, built in E3.4)
-
-[42-WM-04] A wave `(s, t)` touching key `k` SHALL be treated as replica-complete
-only when every **open covering member** — a live member whose `Interest` admits
-`k`, whose slot is not `closed`, and, under a DEGRADE settlement policy, whose
-slot is not `suspended` — satisfies `row[s] >= t`; a covering member with no row
-for `s` SHALL read as bottom and hold the wave; an empty covering subset SHALL
-hold rather than release vacuously; and WHILE the companion names a member slot
-the local membership view has not accounted for, every keyed wave SHALL hold.
-
-`cell.consistency.ReplicaQuorum.frontier` is the implementation and its KDoc the
-detailed truth; the four policy switches (`creationFence`, `degrade`,
-`membershipBarrier`, and the unfiltered `key == null` path) are documented there
-and their rationale in 22, which this rule restates rather than extends. Read it
-against 22 §Interest-scoped settlement (PN-7) for the covering-subset quorum, 22
-§R13 creation fence for the rowless-member hold, and 22 §Converged-membership
-barrier (FU-2) for the unaccounted-slot hold. The two conservative asymmetries are
-the same asymmetry twice: a *known* covering member with no row holds on bottom,
-and an *unknown* one — announced on the companion CRDT but absent from this node's
-`instancesOf` view — holds every keyed wave. Both release the moment the view
-converges; an unkeyed wave (no covering quorum) is never held, so default
-settlement is unchanged.
 
 ### The stability read (decided in 96 E3.1, unbuilt — E3.5, `computenet-9sm.3`)
 
@@ -369,18 +345,14 @@ over every open membership row of `row[s]`, with an absent row reading as bottom
 such that at all times `stableFrontier[s] <= row[slot][s]` for every open slot and
 `stableFrontier[s]` is monotone non-decreasing.
 
-"Open" here is the same predicate the frontier read uses: a member, not `closed`,
-and — under DEGRADE — not `suspended`. Reading an absent row as bottom **freezes**
-the minimum, which is the conservative direction and is the point: it is the same
-Naiad safety property in its terminal form — no local read may run ahead of the
-true global frontier. A timestamp `τ` is causally stable once no concurrent
-operation for it can still arrive anywhere, i.e. once the frontier read has
-terminated for it everywhere (research 03 §3 Def 5.1); it is the trigger a
-compaction or GC pass waits on. The frontier read and the stability read are the
-*same primitive at two freshness levels* — one wave, all covering members, versus
-all sources, all open members — which is why research 05 gaps 6 and 7 fold into
-one substrate rather than two. Nothing in `kernel/` computes `stableFrontier`
-today; this paragraph is design.
+"Open" means announced as a member and not `closed`; a suspended member remains
+open, so its last delivered prefix continues to constrain the minimum. Reading
+an absent row as bottom **freezes** the minimum, which is the conservative
+direction and is the point: no local read may run ahead of the true global
+frontier. A timestamp `τ` is causally stable once no concurrent operation for
+it can still arrive at any open member (research 03 §3 Def 5.1); it is the
+trigger a compaction or GC pass waits on. Nothing in `kernel/` computes
+`stableFrontier` today; this paragraph is design.
 
 ### Idle liveness: heartbeat rows (decided in 96 E3.1, unbuilt — E3.3(c), `computenet-9sm.2`)
 
@@ -398,26 +370,24 @@ one. It is behaviour over lane 1, not a fifth lane. No heartbeat exists in
 
 ### Membership is one snapshot per read
 
-[42-WM-07] Each evaluation of the frontier read or the stability read SHALL take
-**one** membership snapshot — the `instancesOf` fold for the logical id together
+[42-WM-07] Each evaluation of the stability read SHALL take **one** membership
+snapshot — the `instancesOf` fold for the logical id together
 with the companion's announced `members` set — and SHALL evaluate every member
 against that one snapshot; and because the `instancesOf` fold is only eventually
-consistent (R13), a covering member the local view has not yet learned of SHALL be
-waited on only through the announced `members` set, never conjured by the fold.
+consistent (R13), a member the local view has not yet learned of SHALL still be
+included when the announced `members` set names its slot.
 
-`ReplicaQuorum.frontier` reads `membersOf(logicalId)` once per predicate call;
 `Replication.trackDeliveries` calls `WatermarkCell.announceMember()` on join, and
-`WatermarkCell.members()` is what the barrier reads. The announced set is the more
-complete of the two because it rides the *transitively* gossiped companion CRDT,
-whereas `instancesOf` mirrors only direct peers — which is exactly why it can name
-a slot the fold has not accounted for, and why that discrepancy is a hold rather
-than a bug.
+`WatermarkCell.members()` exposes the announced set. That set is the more complete
+of the two because it rides the *transitively* gossiped companion CRDT, whereas
+`instancesOf` mirrors only direct peers. A named slot with no row reads as bottom,
+so the discrepancy conservatively freezes stability rather than omitting a member.
 
 ### Departure: closed, suspended, or frozen
 
 [42-WM-08] IF a replica departs, THEN its slot SHALL be marked `closed` — and its
-row SHALL thereafter constrain neither read — only where the departure was clean
-(the last local replica of the id drained and despawned through
+row SHALL thereafter no longer constrain the stability read — only where the
+departure was clean (the last local replica of the id drained and despawned through
 `Replication.evict`); an unreachable-but-possibly-alive replica SHALL be
 *suspended* rather than closed; an unclean departure SHALL leave the row in place,
 freezing the stability read at it; and a frozen row SHALL NOT be released by
@@ -432,14 +402,14 @@ be unsound in a different direction each time.
   `closed` marker rides the same idempotent watermark mesh as the data, so it
   converges even where a topology unpublish is lost. [42-REPL-06] is the
   convergence half of orderly departure (the departed replica's frozen final
-  stream is not a divergence); this rule is the settlement half, and the two are
+  stream is not a divergence); this rule is the stability half, and the two are
   complementary, not duplicates.
 - **Suspended, not closed.** A replica with no reachable peer is partitioned as
   far as the local view can tell, so `evict` parks it (a `managementInlet` suspend plus
   `watermarks[id]?.suspend()`) instead of departing it. Closing
   would be a lie: the replica may still hold unique state, and its frozen row is
-  the *correct* answer for as long as it is unreachable. A WAIT read still holds
-  on it; only a DEGRADE read drops it. `Replication.linkOut` (anchor
+  the *correct* answer for as long as it is unreachable, so the stability read
+  remains frozen there. `Replication.linkOut` (anchor
   `heal (G-45)`, reached from the `registry.onPublish` hook when a peer becomes
   visible again) and `supersedeLocalInstance` call `resume()`, and the
   post-resume catch-up advances the row that froze while parked. `close`,
@@ -448,10 +418,11 @@ be unsound in a different direction each time.
 - **Unclean.** A crash without `evict`, or churn, leaves the row present and never
   closed, so the pointwise minimum of [42-WM-05] freezes at it. This is the decided
   disposition, not an oversight: a rebuilt replica at the same instance id reuses
-  the memoised companion, so the row it froze at crash time is what a frontier read
-  still sees (`Replication.rehomeCompanion`'s KDoc states this; only the
-  companion's *residency* is re-established). It is surfaced to the application as
-  a `Stall`-family notice — decided, unbuilt (96 E3.6(c), `computenet-9sm.5`).
+  the memoised companion, so the row it froze at crash time is what the stability
+  read still sees (`Replication.rehomeCompanion`'s KDoc states this; only the
+  companion's *residency* is re-established). `StabilityFreezeDetector` may
+  report the frozen row to an in-process diagnostic listener; it emits no
+  downstream protocol notice.
   Lease- or timeout-based row eviction is explicitly **out of scope** and is
   research R13: a lease races a partitioned-but-alive replica, and losing that race
   releases a wave the survivor never delivered, which is the one failure the whole
@@ -462,19 +433,18 @@ be unsound in a different direction each time.
 Each of the three costs 96 E3.1 point 3 names is accepted with a stated
 disposition; none is silently absent.
 
-1. **Membership completeness.** The reads are gated on the `replicasOf`/
-   `instancesOf` announcement fold, which is eventually consistent. Disposition:
-   conservative holds on both halves ([42-WM-04], [42-WM-07]) — a known rowless
-   member holds on bottom, an announced-but-unaccounted member holds every keyed
-   wave. Whether the fold is *sufficient* under join and churn is open, and is 95
-   §R13; do not read this section as resolving it.
+1. **Membership completeness.** The stability read uses one snapshot of the
+   `replicasOf`/`instancesOf` announcement fold and the companion's announced
+   members ([42-WM-07]). A member with no row reads as bottom and freezes the
+   minimum. Whether the fold is *sufficient* under join and churn is open, and
+   is 95 §R13; do not read this section as resolving it.
 2. **Idle-replica liveness.** A replica that delivers nothing publishes nothing,
    and the stability minimum never advances. Disposition: heartbeat rows
    ([42-WM-06]), safe by idempotence — decided, unbuilt.
 3. **Frozen stability on unclean departure.** A row nobody closes freezes the
-   stability read indefinitely. Disposition: freeze and notify ([42-WM-08]); never
-   unfreeze by timeout. The alternative — lease-fenced eviction — is 95 §R13, named
-   only, not adopted here.
+   stability read indefinitely. Disposition: freeze and diagnose locally
+   ([42-WM-08]); never unfreeze by timeout. The alternative — lease-fenced
+   eviction — is 95 §R13, named only, not adopted here.
 
 The epoch-hygiene question (when a `ReBaseline`-superseded source's watermark
 column may be dropped) is 95 §R14, likewise named and not resolved.
@@ -482,8 +452,7 @@ column may be dropped) is 95 §R14, likewise named and not resolved.
 ### Wire compatibility of additive fields (KE3-39)
 
 `civictech.cell.wire.WireCodec` documents payload versioning as additive: a
-new nullable field on a `@Serializable` payload — e.g.
-`StallNotice.Stall.slot` (9sm.5-D5, `computenet-9sm.5`) — needs no `VERSION`
+new nullable field on a `@Serializable` payload — e.g. `slot` — needs no `VERSION`
 bump because it defaults to `null`, and `WireCodec`'s `Json` never sets
 `encodeDefaults` so kotlinx.serialization's default (`false`) omits an unset
 field entirely. That claim is true, but **only in the direction it is usually
@@ -493,23 +462,20 @@ the field unset.
 **The reverse is not safe.** `WireCodec.build` never sets
 `ignoreUnknownKeys` either, so it stands on kotlinx.serialization's default of
 `false`. Once an upgraded peer emits a frame that actually populates a field
-an older peer's build predates — e.g. a `STABILITY_FROZEN` `Stall` carrying a
-non-null `slot` — the older peer's decode throws
+an older peer's build predates — e.g. a control payload carrying a non-null
+`slot` — the older peer's decode throws
 `kotlinx.serialization.SerializationException` on the unknown key rather than
-ignoring it. Pinned concretely in
-`kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`.
+ignoring it. Pinned concretely in the wire-compatibility tests.
 
 **Consequence: a mixed-version mesh must not populate a newly-added optional
 field until every peer has upgraded past the version that introduced it.**
-During a rolling upgrade of a replica set, an upgraded peer emitting a
-`STABILITY_FROZEN` `Stall` with `slot` set to a not-yet-upgraded peer breaks
-that peer's decode of the whole frame, not just the new field. (That example
-understates the damage: a *genuinely* pre-KE3 peer fails on the frame's
-`STABILITY_FROZEN` reason before it reaches `slot` at all — the second hazard
-below. The unknown-*key* failure described here is the one that fires whenever
-the reason is a constant the older peer already knows.) This is a property of
-the wire codec's configuration, not of any one field's KDoc, so it governs
-every future additive field the same way until decided otherwise.
+During a rolling upgrade of a replica set, an upgraded peer emitting a payload
+with `slot` set to a not-yet-upgraded peer breaks that peer's decode of the whole
+frame, not just the new field. The unknown-*key* failure described here fires
+whenever the other field values are constants the older peer already knows.
+This is a property of the wire codec's configuration, not of any one field's
+KDoc, so it governs every future additive field the same way until decided
+otherwise.
 Setting `ignoreUnknownKeys = true` would close **this** asymmetry — the
 unknown-*key* one — but not the second, distinct hazard below; it is not a
 general fix for mixed-version safety, and is not adopted here.
@@ -518,26 +484,18 @@ general fix for mixed-version safety, and is not adopted here.
 an existing `@Serializable` enum is exactly as much a wire change as adding a
 field, and `ignoreUnknownKeys` does **not** cover it — that setting governs
 unrecognised JSON object keys, not unrecognised values of a key the reader
-already knows. `StallReason.STABILITY_FROZEN` is again the concrete case: it
-was added by the same change that added `slot` (9sm.5-D5,
-`computenet-9sm.5`), so at `ea84150f5` — one commit before that change —
-`StallReason` held only `SUSPENDED` / `RESTARTING` / `DEAD_LETTERED`. A
-genuinely pre-KE3 peer decoding a `Stall(STABILITY_FROZEN)` frame throws on
-the unrecognised `"reason":"STABILITY_FROZEN"` value *before it ever reaches
-the `slot` key* — the failure fires even when `slot` is left `null` and is
-therefore altogether absent from the encoded object, so this hazard exists
-independently of the additive-field one above. Pinned concretely in
-`kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`'s
-"unknown enum constant hazard" test, which also shows the same real frame
-decodes cleanly against a pre-KE3 reader when the reason is one it already
-knows (`SUSPENDED`) — isolating the failure to the unrecognised constant, not
-some other mismatch in the reconstructed legacy shape.
+already knows. A pre-upgrade peer decoding a payload carrying a newly added
+enum constant throws on that unrecognised value *before it ever reaches* a
+later optional key. The failure therefore fires even when every new optional
+field is left `null` and absent from the encoded object, independently of the
+additive-field hazard above. The compatibility tests pin both that failure and
+the control where the same payload uses a constant the older reader knows.
 
 Closing this hole would need either `coerceInputValues = true` **plus a
 change at the use site** — that setting substitutes the *declaring
 property's* default value (or `null`, for a nullable property), not anything
-belonging to the enum, so on its own it is inert here: `Stall.reason` is
-neither nullable nor default-valued, and a decode of this frame under
+belonging to the enum, so on its own it is inert when the declaring property is
+neither nullable nor default-valued, and a decode of such a frame under
 `coerceInputValues = true` still throws (measured 2026-09-06; the same decode
 against a `reason` that carries a default, or a nullable one, does coerce) —
 or a dedicated `UNKNOWN`/fallback constant on the enum with a custom
@@ -595,9 +553,8 @@ Each candidate mechanism was eliminated on its own merits, in this order:
    `ignoreUnknownKeys = true` rescues the unknown *key* and throws on the
    unknown *constant* (a value of a key the reader already knows);
    `coerceInputValues = true` substitutes the **declaring property's** default
-   or `null`, and `Stall.reason` is neither default-valued nor nullable, so
-   the same bytes that throw for `Stall` do coerce for a legacy shape whose
-   `reason` carries a default.
+   or `null`; a non-nullable, default-less property still throws, while the
+   same bytes do coerce for a legacy shape whose property carries a default.
 4. **Negotiation is the only mechanism that would actually work, and it is not
    this bead's size.** `WireCodec` is a stateless per-frame codec with no
    handshake surface; version/capability negotiation is a wire-protocol
@@ -617,11 +574,11 @@ Each candidate mechanism was eliminated on its own merits, in this order:
 **The position that survives — deliberately — is that failing loudly is
 better.** Both remaining "fixes" (a fallback constant with a custom
 serializer, or coercion at the use site) buy continuity by letting a peer keep
-running while misreading a control-plane notice. A `Stall` whose reason is
-silently read as something other than what the writer meant is a false
-statement about a replica's liveness, on the very plane the watermark machinery
-exists to keep honest; a `SerializationException` naming the unrecognised
-constant is a worse outage and a better failure.
+running while misreading a control-plane notice. Silently substituting a
+different reason would be a false statement about replica liveness, on the very
+plane the watermark machinery exists to keep honest; a
+`SerializationException` naming the unrecognised constant is a worse outage and
+a better failure.
 
 **Cost of the decision, stated plainly:** a mixed-version mesh is unprotected
 by anything but this paragraph, and a future change that violates the
@@ -703,9 +660,8 @@ equality.
 
 ### Open interactions
 
-The R14 superseded-source-column rule and the FRM1/G-36 two-hop-cut interaction
-with this section are recorded here. Both are recorded open: neither is
-resolved by anything in this section.
+The R14 superseded-source-column rule is recorded open; nothing in this section
+resolves it.
 
 **R14 — superseded columns and the stability MIN.** Whether a `ReBaseline`-
 superseded source's column is excluded from the pointwise minimum of [42-WM-05]
@@ -739,30 +695,6 @@ at all: its rows are grow-only in every lane and no column is ever removed.
 The practical consequence for the reclamation work is a precondition, not a
 rule: stability-scoped reclamation (96 E3.7) ships gated on **no superseded
 column present** for the id being reclaimed.
-
-**FRM1 BS-7 — the two-hop upstream cut (G-36).** FRM1's BS-7 configuration is
-`A → M → D` with `M` absorbing and `D` also fed by `B`; the link `A → M` is cut
-while `D` waits on the `M` arm for wave `t`. It expects a **counterexample**,
-because every metadata-plane notice is single-hop (91 §G-36) and so no notice
-of the cut reaches `D` through `M`.
-
-The delivered-watermark lattice **does not currently carry transitive progress
-for the wave plane** and is not offered here as G-36's missing channel. A
-`WatermarkCell` row advances only from its own replica's `DeliveredFrontier` /
-outlet tap; nothing writes a row on behalf of an upstream hop, and the mesh
-carries per-replica delivery, not per-hop wave progress. The open question this
-section records, and does not answer, is whether the two-hop cut leaves a
-`deliveredThru` column pinned forever, and if so whether that freezes the
-stability read the way an unclean departure does ([42-WM-08]) — because if it
-does, the `Stall`-family notice named there must cover that cause too, and the
-notice is currently specified for departure only.
-
-This paragraph is a **stated unknown**, not a finding: FRM1 (`computenet-7fe`)
-is open at the time of writing and its BS-7 trace has not been produced. When
-it closes, the recorded trace in `doc/formal/findings.md` replaces the
-prediction above; it does not by itself resolve the interaction, which stays
-open until either G-36 gains a transitive channel or [42-WM-08]'s notice is
-widened. Neither disposition adopts this lattice as that channel.
 
 ## Decided in 93, not yet built
 
@@ -953,10 +885,7 @@ and may reflect different moments, and a shard that is unreachable (mid-
 migration, its ref held on the funnel) simply defers its leg to a later pull.
 This is honest and sufficient because **a baseline is never a wave**: a leg
 carries `MessageContext.baseline` (a catch-up frontier), not a live wave, so it
-is excluded from wave-completeness and imposes no cross-shard ordering
-obligation the union could violate. Glitch-freedom is a within-source property
-(spec 20/22); a scatter-gather board, assembled from disjoint sources, never
-promises a single global wave and so cannot be torn by the absence of one.
+imposes no cross-shard ordering obligation on the assembled board (20/22).
 
 **Per-instance retained currency.** The requester retains the frontier it has
 caught up to **per instance** it pulls from (`RetainedFrontiers`), never one

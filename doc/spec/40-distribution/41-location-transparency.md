@@ -167,8 +167,8 @@ local and remote links negotiated differently — a location-transparency bug
    **On-demand pull** *(implemented, W2.2 — closes the G-18 residual)*:
    `StateRequest(replyTo, since)` on the metadata plane (`civictech.cell.port`)
    answered by an ordinary state-as-delta single wave, issued by the
-   subscriber (`GlitchFreeCell`) on every fresh `EdgeOpen`. Buffer-survival
-   detection, pull-storm coalescing on mesh heal, a per-link liveness epoch
+   subscribing inlet's `PullOnOpen` policy on every fresh `EdgeOpen`.
+   Buffer-survival detection, pull-storm coalescing on mesh heal, a per-link liveness epoch
    distinguishing a fresh link from a dropped-and-re-resolved one (today's
    implementation always pulls full state on reconnect rather than
    incrementally), and a pull-serves-copy-only rule for non-idempotent
@@ -189,7 +189,7 @@ local and remote links negotiated differently — a location-transparency bug
    `PORT_PROTOCOL` invocation encodes additively onto `WireFrame`
    (`protocolId`/`protocolMessage`/`edge`, no version bump) and decodes into
    a `WireEdgeLink` (`cell.wire`) carrying stable per-side link identity, so
-   `Attention.linkLevels`/`GlitchFreeCell.edges` bookkeeping behaves as it
+   `Attention.linkLevels` bookkeeping behaves as it
    would for an in-process link; `ManagedHost` overlays the delivery's real
    local `Port` onto the reconstructed link so identity-gated handlers see
    it exactly as they would in-process. Upstream protocols travel the
@@ -215,30 +215,17 @@ local and remote links negotiated differently — a location-transparency bug
    identically local or remote). Closed by CP-A2 (composition plan):
    `bridgeTo`/`bridgeFrom` now route through a `handshake()` overload taking the
    remote-resolved counterpart (`WireEdgeLink.kt:137-140,184`) — policies,
-   allowlist, and EdgeEvent emission run on the bridged edge — and `Progress`
-   absorb-acks forward over the frame path as additive `WireFrame` fields so the
-   bridged observation frontier settles (20/22 §Bridged frontier).
+   allowlist, and EdgeEvent emission run on the bridged edge.
    Topology edge events cross the bridge likewise (decided in 93 I-13):
    `EdgeOpen`/`EdgeClose` (20/22) travel as ordinary `PORT_PROTOCOL` frames
    on the `topology-order` protocol (now contract-backed, `TopologyOrderProtocol`,
    so `ProtocolRegistry`/host dispatch treat it uniformly with
    attention/suspension/etc.), inheriting per-link FIFO ordering against
    data frames over the same bridge channel — no synchronous handshake
-   reply is required (10/13). The floor/retention/JoinBarrier residual of
-   G-39 (below) is unaffected by this phase.
-   ⚠ GAP (G-39): link/unlink are null-context management ops with no stamp
-   in the wave domain — glitch-free consumers cannot know from which wave a
-   new/removed edge counts, source-set changes do not propagate downstream.
-   *(the wire-crossing sliver — bridged EdgeEvent frame types ordered
-   against data across disconnect/park/replay — is resolved, W3.2, per the
-   paragraph above)*. Proposal: in-band EdgeOpen/EdgeClose markers injected
-   into the affected link's own FIFO carrying a per-source flushed-high-water
-   floor; design the floor representation and retention/compaction horizon,
-   hop-by-hop downstream source-set delta propagation with a liveness proof
-   (an upstream cut must not strand a waiting join), the floors×cycles×merge-tag
-   interaction, and the explicit topology-serializing coordinator
-   (JoinBarrier) cell that doubles as the diamond-over-replica escape hatch
-   (93 I-13/I-14).
+   reply is required (10/13).
+   ⚠ GAP (G-39): the in-band `EdgeOpen`/`EdgeClose` markers and their wire
+   crossing are built (W3.2); the former completeness-floor, source-set
+   propagation, and topology-serializing coordinator residuals are retired.
 5. **Failure semantics**: remote sends inherit the closable/fail-fast +
    re-resolve + park contract (33). Request/response-style management calls
    over the wire get `Deferred`/`CompletableFuture` wrapping with timeouts

@@ -3,23 +3,19 @@
 > **Status**: Implemented (M6): decisions 1–4 below are code; decision 7 is code
 > (M17); decisions 5–6 and additions marked "(decided in 93 I-n)" are decided
 > design, unimplemented
-> **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol); 93 (I-4, I-6, I-9, I-16, I-18, I-28)
+> **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol); 93 (I-4, I-6, I-9, I-16, I-28)
 > **Implementation**: `cell.control.AttentionSupport`/`AttentionBand`/`AttentionScheduler`
 > over generic-protocol sub-channels (`cell.protocol.Protocols`, G-13 minimal); host
 > mapping in `ManagedHost` + `cell.control.AttentionPolicy` (band dispatch, stride floor,
 > NONE-window park/replay); magnitude-band dispatch in `ManagedHost.stage/dispatchOne`
 > over `cell.control.Magnitude`
 > (opt-in via `AttentionPolicy.magnitudeBands`, M17);
-> `GlitchFreeCell.WaveMode` WAIT/DEGRADE; interest scatter in
-> `AttentionSupport.scatter`; the covering-quorum DEGRADE shrink on the
-> delivered-watermark lattice (`WatermarkCell.suspend`/`resume`,
-> `Replication.replicaFrontier(degrade)`, PN-19). Verified: `AttentionGenerativeTest`
-> (100 seeds + starvation control), `GlitchFreeSuspensionTest`,
-> `PartitionedAttentionTest` (scatter park + DEGRADE covering-quorum shrink across
-> park/resume, 100 seeds, both controls diverging), `MagnitudeSchedulingTest`.
-> Remaining: notices are single-hop (a join sees only direct upstream
-> parks, not transitive ones — G-36 below). Attention crossing the wire is
-> resolved (G-35, W3.2, see below and 41 point 4).
+> interest scatter in `AttentionSupport.scatter`. Verified:
+> `AttentionGenerativeTest` (100 seeds + starvation control),
+> `PartitionedAttentionTest` (scatter park/replay across 100 seeds), and
+> `MagnitudeSchedulingTest`. Remaining: attention and state-request notices are
+> single-hop (G-36 below). Attention crossing the wire is resolved (G-35, W3.2,
+> see below and 41 point 4).
 
 ## Principle
 
@@ -120,8 +116,7 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    Retraction is slot removal: `onUnlink` drops that link's slot and
    re-folds the remainder, and an in-flight update for a removed link is
    dropped (no slot to key it) — the attention frontier is the current
-   downstream link set, topology part of the aggregate exactly as in the
-   glitch-free frontier (22).
+   downstream link set, so topology is part of the aggregate.
 
    *(G-58 core resolved, W4.5)*: the per-emitter monotonic `version`
    (`AttentionSupport.VersionMinter`) is minted once per outgoing update and
@@ -135,12 +130,12 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    research, 95 §R6 — the knob itself is not).
 
    ⚠ GAP (G-58, residual): frontier state across migrate/relink,
-   deadlineHint folding, retraction racing suspension-region atomicity,
+   deadlineHint folding, retraction racing a per-cell park,
    policy-window calibration, and band pinning for hard monitors remain
    open. Proposal: decide frontier-as-migratable-snapshot-state vs
    rebuild-by-re-announce and its trigger boundary; a min/earliest fold for
-   deadlineHint distinct from the level fold; settle the retraction × atomic-
-   park race via the veto/NonSuspendable contagion; calibrate
+   deadlineHint distinct from the level fold; settle the retraction × park
+   race under the cell's `NonSuspendable` veto; calibrate
    policyWindowSteps against graph depth; and decide whether hard real-time
    monitors may pin above LOW composing with the stride floor (93 I-4/I-9).
 2. **Fairness floor = park-not-drop + a deterministic service stride.**
@@ -160,44 +155,15 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
      task (by sequence number). `stride` is host policy (default 16;
      `∞` disables). This bounds starvation at `stride × task-time` without
      timers or randomness.
-3. **Glitch-freedom × suspension: the region is the unit; WAIT/DEGRADE is
-   the cross-host fallback.** The **suspension region** — a glitch-free join
-   plus its transitive upstream contributors, bounded by further glitch-free
-   cells (the frontier, 22) — suspends **atomically**: a host parking a
-   starved cell first resolves the cell's local region, and either the whole
-   region parks together (a partial-diamond stall cannot exist by
-   construction) or nothing parks. Any member that is still attended, or is
-   marked **non-suspendable** (`NonSuspendable` — the veto is contagious to
-   the whole region), vetoes suspension and the region keeps running. Region
-   *resume* is emergent, not orchestrated: renewed interest at any member
-   propagates upstream over the attention protocol and every member's own
-   band listener unparks it. Region resolution is local to the host —
-   **cross-host branches fall back to WAIT/DEGRADE**: because suspension
-   parks rather than drops, a glitch-free join above a remotely suspended
-   branch sees an incomplete wave and holds the group — correct,
-   latency-unbounded (**WAIT**, the default). A glitch-free cell MAY opt
-   into **DEGRADE**: hosts publish suspended/resumed notices for cells they
-   park, the notice travels *downstream* (with data, against attention), and
-   a degrading join removes the suspended link from its wave frontier —
-   reusing the frontier-shrink semantics unlink already has (22) — and
-   restores it on resume, treating post-resume replayed waves as late-join
-   catch-up (21). No new kernel mechanism: regions are a link-graph walk,
-   the veto is a marker interface, and a notice is an ordinary
-   generic-protocol message.
+3. **Attention-driven suspension parks per cell.** A host parks a cell after
+   that cell remains at band NONE for its policy window; the cell's inlets then
+   buffer at the boundary (33). `NonSuspendable` vetoes automatic suspension
+   for that cell only. The host does not walk the graph, a neighbouring cell's
+   veto does not spread, and no suspended/resumed notice travels downstream.
+   Renewed interest reaches that cell's band listener and unparks it; buffered
+   invocations replay in order.
 
-   The notice generalizes (decided in 93 I-18, **implemented** — the
-   direct-edge family in `WaveFrontier`, the covering-quorum extension in
-   PN-19): the shipped suspended/resumed pair is a typed `Stall(reason,
-   recoverable)` / `Resume` frontier-event family covering suspension,
-   supervision RESTART, dead-letter, and exactly-once loss; a join disposes
-   per edge keyed on recoverability — **WAIT** (the default, park-not-drop)
-   or **DEGRADE** for recoverable stalls (suspended, restarting), and
-   **RE-SCOPE** (advance past the lost wave, evaluate over the reduced set,
-   and surface a `GlitchViolation`) as the only admissible disposition for
-   terminal ones (dead-lettered, lost).
-
-   **PN-19 — interest scatter, per-instance park, and the covering-quorum
-   `Stall` shrink** (plan §3b; closes PN-7's documented DEGRADE gap):
+   **PN-19 — interest scatter and per-instance park** (plan §3b):
    - **(a) attention scatters by interest.** Attention travelling upstream
      through a partitioned/replicated node reaches only the instances whose
      interest overlaps the attending consumer's scope — the metadata plane
@@ -208,40 +174,17 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    - **(b) an unattended instance parks like any cell.** A shard/replica with
      no covering consumer falls to band NONE and parks through the ordinary
      NONE-window suspension gate — the router/mesh treat a parked peer as
-     *stalled, not dead* (its intake parks, never drops; resume replays it).
-   - **(c) the covering-quorum DEGRADE shrink.** Under sharded replication a
-     wave settles on the *covering subset* of the delivered-watermark lattice
-     (PN-7). A suspended or departing covering instance publishes the
-     recoverable `Stall` on that lattice as a resumable per-slot suspend epoch
-     (`WatermarkCell.suspend`/`resume`, the analogue of the grow-only `closed`
-     marker); a **WAIT** consumer holds on it (today's behaviour), a
-     **DEGRADE** consumer drops it from the covering quorum
-     (`Replication.replicaFrontier(degrade = true)`) and restores it on
-     `Resume`, its frozen row catching up as a PN-2 baseline. **PN-0c's
-     `WatermarkCell.close()` is the degenerate terminal case** of this family —
-     a suspension whose epoch never turns even again.
-
-   ⚠ GAP (G-40): a glitch-free join cannot distinguish an
-   effective-only-silent arm from a dead one — wave completeness blocks
-   forever on absorbing, suspended, restarting, or dead-lettered frontier
-   edges. Proposal: per-source per-edge watermarks advanced by real deltas,
-   by metadata-plane Progress absorb-acks emitted at a precisely defined
-   quiescence boundary, or by later waves (monotone close); typed
-   Stall(reason, recoverable) markers with per-edge WAIT | DEGRADE |
-   RE-SCOPE policies keyed on recoverability; pin the DEGRADE correctness
-   contract (how downstream distinguishes a degraded emission), calibrate
-   the backstop deadline against frontier depth, and build the generative
-   completeness harness (93 I-18).
+     temporarily unavailable, not dead (its intake parks, never drops; renewed
+     interest replays it).
 
    ⚠ GAP (G-36): all metadata-plane notices are single-hop (M6) — attention
-   retraction, upstream disinterest, Stall/Progress, and state-request pulls
-   do not propagate through absorbing or stateless intermediaries to distant
-   joins or remote producers. Proposal: one hop-by-hop re-emission rule for
-   metadata-plane notices with loop prevention and the band-quantization
-   interaction pinned per protocol — attention levels and transitive
-   retraction across damped hops, disinterest quiescing remote producer
-   cones, stall/progress watermarks reaching deep joins, and requestState
-   forwarding through stateless cells (93 I-1/I-4/I-9/I-16/I-18).
+   retraction, upstream disinterest, and state-request pulls do not propagate
+   through absorbing or stateless intermediaries to remote producers. Proposal:
+   one hop-by-hop re-emission rule for metadata-plane notices with loop
+   prevention and the band-quantization interaction pinned per protocol —
+   attention levels and transitive retraction across damped hops, disinterest
+   quiescing remote producer cones, and requestState forwarding through
+   stateless cells (93 I-1/I-4/I-9/I-16).
 4. **Economic layer** (peers advertising willingness to compute for others'
    interest) — still deferred to 40/42; the band protocol above is
    forward-compatible (levels are floats, bands are a local mapping).
@@ -274,11 +217,11 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    suspend-eligibility); the host *disposes*, honoring the higher
    authorities first — enforcement stays strictly local per host (P4). The
    suspension window is a state machine, **edge-triggered on the NONE
-   transition**: a never-attended region starts no window (a subgraph under
+   transition**: a never-attended cell starts no window (a subgraph under
    construction is held by a builder lease until its spec completes);
    renewed attention *during* the window cancels the pending suspend
    (hysteresis); renewal *after* the drain commits does not tear the drain —
-   the region parks, then resume is emergent exactly as decision 3 states.
+   the cell parks, then resume is emergent exactly as decision 3 states.
    And every keep-awake duty MUST be expressed as `setSelf` attention or a
    veto (`NonSuspendable`, held lease, construction lease, management
    activity) — never a bespoke scheduler exception; an active invariant
