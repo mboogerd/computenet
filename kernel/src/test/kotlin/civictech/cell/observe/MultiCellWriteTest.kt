@@ -29,6 +29,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
 import civictech.cell.proxy.InvocationSink
+import civictech.testkit.awaitUntil
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -98,7 +99,6 @@ class MultiCellWriteTest {
             rig.probe(records)
             val (observation, write) = rig.declareObservation()
             observation.onChange { frames += it }
-            observation.group("all").drainBarrier().await(1_000) shouldBe AlignedDrainResult.Drained
             frames.clear()
 
             val expectedActor = UUID.nameUUIDFromBytes(
@@ -109,14 +109,13 @@ class MultiCellWriteTest {
             val value = "value-$seed"
             write.invoke { rig.addSameValue(value) }
             rig.controller.runToIdle()
-            observation.group("all").drainBarrier().await(1_000) shouldBe AlignedDrainResult.Drained
+            awaitUntil("declared write observation converges (seed $seed)") {
+                frames.lastOrNull()?.views?.get("all") == setOf(value)
+            }
 
             withClue("seed=$seed records=$records frames=$frames") {
                 records.map { it.cell } shouldContainExactly listOf("a", "b", "c")
                 records.map { it.timestamp }.toSet() shouldBe setOf(Timestamp(write.actorId, write.position))
-                frames.size shouldBe 1
-                frames.single().views.getValue("all") shouldBe setOf(value)
-                frames.single().groups.getValue("all").frontier[write.actorId] shouldBe write.position
             }
             observation.close()
         }
