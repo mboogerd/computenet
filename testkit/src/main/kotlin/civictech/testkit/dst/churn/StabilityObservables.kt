@@ -23,12 +23,13 @@ import java.util.WeakHashMap
  *
  * That is the SAME accessor `MemberDepartureFrontierTest` and `DeliveredWatermarkTest` read the
  * lattice through (`kernel/src/test/kotlin/civictech/cell/replication/`), and the coverage rule
- * [stabilityCovers] mirrors `MemberDepartureFrontierTest`'s `ReplicaFrontier` lambda
- * byte-for-byte: `slot in closed || rows[slot]?.get(source) >= counter`, read off the same
- * `WatermarkCell.rows()`/`closed()`. That test IS the PN-0c control seam BS-11 reaches through
- * ([CHA3-72]); a second, independently-derived implementation of its rule would be free to
- * disagree with it silently, which would make a green [stabilityCovers] read prove nothing about
- * the kernel behaviour it is supposed to be reading.
+ * [stabilityCovers] mirrors the departed-row part of
+ * `CausalStability.stableFrontier`'s open-set rule: a closed departed slot no longer holds the
+ * result down, while every remaining row must cover the source counter. Both read the same
+ * `WatermarkCell.rows()`/`closed()` state. That test IS the PN-0c control seam BS-11 reaches
+ * through ([CHA3-72]); a second, independently-derived implementation of its rule would be free
+ * to disagree with it silently, which would make a green [stabilityCovers] read prove nothing
+ * about the kernel behaviour it is supposed to be reading.
  *
  * A [WatermarkCell] is keyed per **replica slot**, not per peer name — [WatermarkCell.slotId] of
  * a [MeshPeer]'s own `ref` is the key every lane below is read by, exactly as the kernel test
