@@ -42,5 +42,5 @@ Parameterised ids carry their arg(s) in the id: `gt(3)`, `mod-eq(2,0)`, `concat(
 - `key-of` is deliberately generic: a join over `set-source` of pairs extracts the
   first component; over a scalar stream it is `identity`. The concrete extraction
   a scenario needs is expressed by the source's element shape, not by a new fn.
-- `sum` doubles as the `combine-latest` combiner in the glitch-free diamond
-  (`22-GF-DIAMOND-01`) and as a `group-by` aggregator — one semantic, two uses.
+- `sum` doubles as the `combine-latest` combiner and as a `group-by` aggregator —
+  one semantic, two uses.

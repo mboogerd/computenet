@@ -98,68 +98,6 @@ data class EffectCount(
 ) : Check
 
 /**
- * The **set-shaped** glitch-freedom check (spec 22 `22-GF-01`/`22-GF-02`;
- * DISPUTES.md `22-GF-DIAMOND-01`/`22-GF-NESTED-01`/`22-WAVE-FANIN-01`):
- * [view]'s observation stream must never expose a torn fork-join delivery — a
- * state where one arm of a wave has landed and its sibling has not.
- * `observations-all-satisfy` cannot express this: its `fn` is drawn from the
- * frozen (scalar) function catalog, and every scalar predicate (`even`,
- * `mod-eq`, …) trivially fails a set-valued (`ListVal`) observation, so there
- * is no way to assert wave-completeness over a SET stream with the existing
- * vocabulary.
- *
- * Semantics: every value on [view]'s stream must equal the [source]
- * set-source cell's own fold at *some* whole prefix of its accepted
- * `add`/`remove` op sequence (script order, `times` expanded) — i.e. the
- * observation is exactly what the source looked like after 0..N whole
- * completed ops, never a state that could only arise from part of one op's
- * fork-join delivery. The evaluator (`civictech.concord.check.Checks`) computes
- * these prefixes itself (harness-only, `add`/`remove` semantics), so this check
- * stays kernel-free and driver-neutral like the rest of the vocabulary — it
- * does not reuse the batch oracle (which only knows the *final* fold) or the
- * function catalog (which is scalar-shaped).
- */
-@Serializable
-@SerialName("observations-whole-waves")
-data class ObservationsWholeWaves(
-    val view: String,
-    val source: String,
-) : Check
-
-/**
- * The **composite** whole-wave check (spec 22 §The observation frontier,
- * `[22-OBS-01]`/`[22-OBS-02]`; computenet-5ubdv 5ubdv-D3): every composite on
- * the `aligned-view` [view]'s observation stream must be one whose checked
- * members all equal their expected folds **at one common op prefix** of
- * [source]'s accepted `add`/`remove` script — never a composite whose members
- * reflect different waves.
- *
- * `observations-whole-waves` cannot express this: it reads one set-valued
- * stream against one source and asks whether each state is *some* prefix. A
- * composite is a map of member streams, and the property is their *joint*
- * prefix — `{items: [1, 2], evens: []}` has each member at a valid prefix on
- * its own (2 and 1 respectively) and is still torn.
- *
- * [members] names the member names checked (default: every name of the view's
- * `views:` map, in declaration order). Each member's expected fold is derived
- * per arm — the chain of cells from [source] to the link `{to: view, inlet:
- * member}` — through `map fn: identity` (no-op) and `filter fn: <predicate>`
- * cells only, each with exactly one inbound link, applied in chain order. A
- * `group-by` (or any other) arm cell, a non-`set-view` member, an inlet with
- * zero or several inbound links, a fan-in on the chain, a chain that does not
- * end at [source], or a source op other than `add`/`remove` is a **loud
- * failure** naming the member and the unmodelable cell or id, never a pass.
- * An empty observation stream fails, as for `observations-whole-waves`.
- */
-@Serializable
-@SerialName("composite-whole-waves")
-data class CompositeWholeWaves(
-    val view: String,
-    val source: String,
-    val members: List<String>? = null,
-) : Check
-
-/**
  * **A bounded read perturbs nothing** (spec 21 §Pull, `[21-PULL-02]`): across
  * every `read-state` walk this scenario performed on [cell], that cell's wave
  * plane did not advance.
