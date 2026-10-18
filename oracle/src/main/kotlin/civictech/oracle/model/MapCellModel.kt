@@ -191,7 +191,7 @@ import java.io.Serializable
  *   eviction is deferred — it now reads *"Watermark-driven eviction below the waterline floor
  *   is opt-in per inlet — declare it with `Windows.Lateness`"* — and `GroupByCell`/join-family
  *   eviction is built and tested (`WaterlineCellTest`, `WaterlineChurnTest`,
- *   `GroupByEvictionTest`, `JoinFamilyEvictionTest`, `GroupByEvictionGlitchFreeTest`). This
+ *   `GroupByEvictionTest`, `JoinFamilyEvictionTest`). This
  *   bullet is therefore **excluded**, not unbuilt: the reason is the same one `WaterlineCell`'s
  *   own entry below gives — a batch script reference has no expression for the live-wave
  *   `sourceId`/timestamp the floor is folded from — but `BatchOracle` (the *concord* batch
@@ -206,9 +206,8 @@ import java.io.Serializable
  *   or completeness-set member) remains disputed, while `[24-WL-15]` (a schema gap: no script
  *   verb reaches `retire(sourceId)`), `[24-WL-17]` and `[24-WL-18]` (driver-binding gaps: no
  *   catalog id emits an `Owned`/`Replicable` set stream into an evicting cell) remain open `gap`
- *   rows for reasons unrelated to this exclusion — plus a fifth, undropped, B16 entry recording
- *   a glitch-free-wrap scenario that was designed and deliberately not authored. None of the
- *   five concludes eviction itself goes unchecked; each names the kernel test that checks it
+ *   rows for reasons unrelated to this exclusion. None of them concludes eviction itself goes
+ *   unchecked; each names the kernel test that checks it
  *   directly instead (for example `[24-WL-04]`'s `WaterlineCellTest` pin, `[24-WL-15]`'s
  *   `WaterlineChurnTest` pins).
  *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
@@ -222,9 +221,9 @@ import java.io.Serializable
  *   `Consume` edges, per-edge per-source watermarks, and per-source flushed high-water marks —
  *   none of which the reference model's script vocabulary ([Script], [ScriptEvent]) can even
  *   *name*: there is no edge, no wave, no link-open/close event a script can carry. That is
- *   not merely "the model ignores WHEN, same as `emitOnFrontier`" (the reasoning
- *   `CoreOperators` gives for `SemiJoinCell`/`CombineLatestCell`, where WHEN and WHAT are
- *   genuinely independent): here WHETHER a contribution is ever counted depends on completion
+ *   not merely "the model ignores WHEN" (the reasoning for ordinary incremental operators,
+ *   where WHEN and WHAT are genuinely independent): here WHETHER a contribution is ever counted
+ *   depends on completion
  *   the model has no way to verify, and the cell's own KDoc documents a case where completion
  *   never happens for a given contribution — `onDeactivate` "drops" the transient version
  *   buffer on restart, so *"a partially collected wave was never observed downstream"*. A
@@ -232,11 +231,8 @@ import java.io.Serializable
  *   whether a given contribution's wave ever completes, so it cannot honestly certify what
  *   this cell's quiescent total is — approximating it as a plain sum-of-contributions would be
  *   silently assuming the very completeness condition the model cannot check.
- *   *DISPUTES audit: no filing.* The cell's wave-completion behaviour is checked where waves
- *   exist — `concord/corpus`'s `24-OP-COMBINE-02` asserts scalar glitch-freedom positively over
- *   the real `CoalescingCombineCell` (see the `24-OP-COMBINE-01`/`CTL-GF-01` entry in
- *   `DISPUTES.md`, resolved). What is absent here is a *batch* check of it, which is this
- *   ledger's subject and not a gap in the requirement's coverage.
+ *   *DISPUTES audit: no filing.* What is absent here is a *batch* check of this retired-by-GFR.3
+ *   wave-completion behavior, which is this ledger's subject rather than an open runtime gap.
  *
  * - **`WatermarkCell`.** (computenet-fx5b, resolving the pointer this bullet used to be.)
  *   Verified against its own KDoc

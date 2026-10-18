@@ -471,11 +471,8 @@ object CoreOperators {
          * semijoin and antijoin separately while the kernel is one cell with a `negated` flag,
          * so they are two entries over one class.
          *
-         * `emitOnFrontier` ([24-OP-SEMIJOIN-04]) is deliberately left at its default and has
-         * no model counterpart: the gate changes WHEN the cell emits — coalescing a wave to
-         * its net enter/exit set so a transient enter-then-exit is never observed — not what is
-         * observable once both inputs are idle, which is the only thing a batch reference
-         * states ([24-OP-SEMIJOIN-03]). A gated and an ungated cell agree at quiescence. */
+         * The cell runs ungated. The batch model states only what is observable once both inputs
+         * are idle ([24-OP-SEMIJOIN-03]). */
         OperatorCatalog.register(
             id = Ids.SEMI_JOIN,
             shape = ShapeRule.binary(PAIR_SET, PAIR_SET, PAIR_SET),
@@ -538,9 +535,8 @@ object CoreOperators {
          * its KDoc is the contract, and the canonical combine below is total, so every key
          * either side holds appears in the output, null-extended on the absent side. A
          * `combine` returning null would drop the key — that filtering half of the contract is
-         * exercised by `JoinModelTest` rather than by this entry, which stays a plain outer
-         * combine. `emitOnFrontier` is left at its default for the reason the semijoin entries
-         * give. */
+         * exercised by `JoinModelTest` rather than by this entry, which stays a plain, ungated
+         * outer combine. */
         OperatorCatalog.register(
             id = Ids.COMBINE_LATEST,
             shape = ShapeRule.binary(SCALAR_MAP, SCALAR_MAP, SCALAR_MAP),

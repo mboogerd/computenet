@@ -598,8 +598,9 @@ class HonestyLedgerTest {
     /**
      * The BS-9 pin, inverted the same way the `ORA2 §DIFF-08` one above was, and for the same
      * reason: `computenet-0zbq` built the diamond that entry's own `Resolves` clause named — a
-     * tagged map reaching a fan-in through two paths, with the wave-prefix oracle observing that
-     * fan-in — so the entry had to go with it. What replaces the pin on its text is a pin on its
+     * tagged map reaching a fan-in through two paths, with the since-retired wave-prefix oracle
+     * (GFR.3; see git history) observing that fan-in — so the entry had to go with it. What
+     * replaces the pin on its text is a pin on its
      * **absence** plus a pin on the closure the ledger now carries, which is what stops the
      * deletion from being a silent one and stops the diamond from quietly disappearing again.
      *
@@ -648,7 +649,7 @@ class HonestyLedgerTest {
                 "can exhibit a tear the oracle rejects. Prose without them restates the claim the " +
                 "filing existed to refuse.",
         ) {
-            sweep.mustState("civictech.oracle.tagged.TaggedWavePrefixTest")
+            sweep.mustState("the since-retired `TaggedWavePrefixTest` (GFR.3; see git history before this change)")
             sweep.mustState("join")
             sweep.mustState("NO_MATCHING_PREFIX")
         }

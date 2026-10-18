@@ -48,12 +48,6 @@ import civictech.testkit.SimWorld
  *   live rows (`Membership.live` of its script slice). A throw is deliberately NOT caught here:
  *   the runner turns it into `RunOutcome.ModelEvaluationFailure`, which is `[QRY1-ORA-11]`'s
  *   reference-evaluation failure, distinct from a compilation defect.
- *
- * **No wave-prefix check (cab.6-D4, cab.6-D12).** The runner's BYO path does not prefix-check
- * — a `Script` carries no total drive order to take prefixes over — and this suite emulates
- * none. It asserts nothing about intermediate states: every verdict here is about quiescent
- * folds only. That is the deliberate reading of `[QRY1-ORA-01]`'s "SHALL NOT re-implement …
- * the wave-prefix check", not an omission.
  */
 data class QueryCase(val source: String, val catalog: Catalog, val compiled: CompiledQuery) {
 
@@ -184,7 +178,6 @@ fun RunOutcome.describe(case: QueryCase, script: Script? = null): String {
             "mismatch: seed=$seed terminal='$terminal' expected=$expected actual=$actual difference=$difference"
         is RunOutcome.NonQuiescence -> seed to "non-quiescence: seed=$seed stepBudget=$stepBudget"
         is RunOutcome.DeadLetterFailure -> seed to "dead-letter failure: seed=$seed deadLetters=$deadLetters"
-        is RunOutcome.WavePrefixViolation -> seed to "wave-prefix violation: seed=$seed terminal='$terminal' kind=$kind"
         is RunOutcome.ReplicaDivergence -> seed to "replica divergence: seed=$seed logicalId=$logicalId"
         is RunOutcome.ReplicasAgreeButWrong -> seed to "replicas agree but wrong: seed=$seed logicalId=$logicalId"
     }

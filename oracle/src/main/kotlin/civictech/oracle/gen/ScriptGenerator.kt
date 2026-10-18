@@ -126,7 +126,8 @@ import kotlin.random.Random
  *
  * What this does *not* claim to be is a cure for the underlying asymmetry: it removes the
  * generator's *manufactured* divergence only. The asymmetry itself is settled, and settled
- * against the model — see `WavePrefixTest`'s
+ * against the model — see the since-retired `WavePrefixTest` (GFR.3; git history before the
+ * retirement), whose
  * `a remove of an element another writer added is applied by the kernel and ignored by the model`
  * (`computenet-eeys`): `[24-SET-03]`'s observer is the CELL, and the generated drive path builds
  * one replica, so the model's per-writer rule is sound only for writers that are separate

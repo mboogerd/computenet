@@ -15,7 +15,6 @@ import civictech.oracle.model.WriterId
 import civictech.oracle.run.DifferentialRunner
 import civictech.oracle.run.Reference
 import civictech.oracle.run.RunOutcome
-import civictech.oracle.run.WavePrefixOption
 
 /**
  * Reduces a failing [GeneratedCase] to a smaller case that still fails the same way
@@ -104,21 +103,6 @@ import civictech.oracle.run.WavePrefixOption
  * charged to the budget and is never skipped: it is the difference between a reported
  * counterexample and a guess.
  *
- * ## Glitch discipline
- *
- * A [RunOutcome.WavePrefixViolation] exists only *while* a case is driven, so shrinking one must
- * preserve the intermediate driving. Re-execution through [DifferentialRunner.run] does that by
- * construction — it replays the total order with the same seed-derived partial drains — and this
- * class adds exactly one rule on top: **[CaseStep.Barrier] steps are never deleted.** Pass 1
- * deletes [CaseStep.Op] steps only, so the quiesce points a case was generated with (and the
- * late-joiner terminal linked behind one) survive every reduction. Nothing else is special-cased
- * by kind; a glitch shrinks by the same three passes, matched on
- * `WavePrefixViolation` + terminal.
- *
- * Note that a caller shrinking a glitch has to pass the [WavePrefixOption] that produced it:
- * [DifferentialRunner.run] defaults prefix checking OFF for a substituted reference, and a
- * candidate run without the check cannot report the violation it is being matched on.
- *
  * ## Non-goals
  *
  * Rendering a counterexample as pasteable Kotlin is `ORA1 §SHRINK-04`, a sibling item that
@@ -138,8 +122,6 @@ object Shrinker {
      *   because the resolved model then describes the *reduced* topology.
      * @param stepBudget each candidate's simulation-step budget, identical for every candidate so
      *   a `NonQuiescence` signature stays comparable.
-     * @param wavePrefix the wave-prefix knob, passed through unchanged. A glitch shrink needs the
-     *   option that produced the glitch — see this object's "Glitch discipline" KDoc.
      * @throws IllegalArgumentException if [case] does not fail — shrinking a passing case has no
      *   meaning, and answering it with "no reduction found" would read like a completed shrink.
      * @throws IllegalStateException if, at the end, neither the reduced case nor any case retained
@@ -150,9 +132,8 @@ object Shrinker {
         budget: ShrinkBudget = ShrinkBudget(),
         reference: Reference? = null,
         stepBudget: Int = DifferentialRunner.DEFAULT_STEP_BUDGET,
-        wavePrefix: WavePrefixOption? = null,
     ): Counterexample {
-        val session = Session(reference, stepBudget, wavePrefix, budget.meter())
+        val session = Session(reference, stepBudget, budget.meter())
         val first = session.execute(case)
         val signature = FailureSignature.of(first)
             ?: throw IllegalArgumentException(
@@ -682,7 +663,6 @@ object Shrinker {
     private class Session(
         private val reference: Reference?,
         private val stepBudget: Int,
-        private val wavePrefix: WavePrefixOption?,
         private val meter: ShrinkBudget.Meter,
     ) {
         lateinit var signature: FailureSignature
@@ -700,7 +680,6 @@ object Shrinker {
                 case = candidate,
                 reference = reference,
                 stepBudget = stepBudget,
-                wavePrefix = wavePrefix,
             )
 
         /**

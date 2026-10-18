@@ -125,9 +125,9 @@ import civictech.testkit.forEachSeed
  * That is not a theoretical caveat here: **computenet-eeys is a measured instance of the
  * reference model being the wrong side of a disagreement** (`civictech.oracle.model.Membership`
  * scopes observed-remove coverage to the removing *writer*, while `[24-SET-03]`'s observer is
- * the *cell* — see [WavePrefixOracle]'s verdict KDoc and the `ORA1 §DIFF-09` entry in
- * `concord/corpus/DISPUTES.md`). The reference was reviewed, tested and green on the sweep, and
- * still had it wrong.
+ * the *cell* — see the since-retired `WavePrefixOracle` (GFR.3; see git history before this
+ * change) and the `ORA1 §DIFF-09` entry in `concord/corpus/DISPUTES.md`). The reference was
+ * reviewed, tested and green on the sweep, and still had it wrong.
  *
  * What the reference's correctness actually rests on is **four defenses**. Each is a landed,
  * named, falsifiable test; none is a proof; and they are listed here with their weaknesses so
@@ -264,18 +264,19 @@ import civictech.testkit.forEachSeed
  *
  * - `ORA2 §DIFF-08` "at scale" — filed until computenet-9892 built the drive that closes it; its
  *   entry was deleted in the same change.
- * - BS-9 / `ORA2 §DIFF-07` — the two-path wave-prefix diamond, filed while it was
+ * - BS-9 / `ORA2 §DIFF-07` — the historical two-path wave-prefix diamond, filed while it was
  *   **unconstructible**: `OrMapCell`'s outlet is a `TaggedMapDelta` and every registered
  *   `MapOf`-consuming operator is typed to `MapDelta`, so no registered entry could sit downstream
- *   of a tagged terminal and `TaggedWavePrefixTest` exercised a bare `orMap` source instead.
+ *   of a tagged terminal and the earlier tagged test exercised a bare `orMap` source instead.
  *   computenet-pez3 registered `96 §E1.5`'s `UntagCell` under the catalog id `untag`
  *   (`ShapeRule.unary(TaggedMapOf -> MapOf)`, reference model `civictech.oracle.model.UntagModel`),
  *   which bridged the typing bound; computenet-0zbq then **built the diamond over that bridge** —
- *   `orMap` fanning out through two `untag` arms into a `join` fan-in, observed by
- *   [WavePrefixOracle] unchanged, in `civictech.oracle.tagged.TaggedWavePrefixTest`, with a
- *   discrimination control showing a torn composite at that fan-in is rejected as
- *   `NO_MATCHING_PREFIX`. That entry was deleted in the same change, as its own `Resolves` clause
- *   instructed. `TaggedMapView` stays available-and-unregistered (a read surface, not an outlet).
+ *   `orMap` fanning out through two `untag` arms into a `join` fan-in; the since-retired
+ *   `TaggedWavePrefixTest` (GFR.3; see git history before this change) used the now-retired
+ *   `WavePrefixOracle` unchanged and recorded that its discrimination control rejected a torn
+ *   composite at that fan-in as `NO_MATCHING_PREFIX`. That entry was deleted in the same change,
+ *   as its own `Resolves` clause instructed. `TaggedMapView` stays available-and-unregistered (a
+ *   read surface, not an outlet).
  *
  * The ORA1 half of the same rule is `ORA1 §DIFF-09`/BS-12, still filed in that file and pinned by
  * [civictech.oracle.HonestyLedgerTest], so it cannot be silently deleted — and neither deletion
@@ -296,9 +297,9 @@ import civictech.testkit.forEachSeed
  *
  * ## Non-goals
  *
- * The wave-prefix subset and its own knob, late-joiner and multi-host sweep configurations,
- * and divergence/mutation controls all belong to their own tasks. This object is the plain
- * "run the range and report the density" driver they can each reuse.
+ * Late-joiner and multi-host sweep configurations, and divergence/mutation controls all belong
+ * to their own tasks. This object is the plain "run the range and report the density" driver
+ * they can each reuse.
  */
 object OracleSweep {
 
@@ -431,29 +432,14 @@ object OracleSweep {
      * that say *what* disagreed — in kilobytes of replayable input. The script is recoverable
      * from the seed and the config, which is exactly why the seed is what a failure carries.
      *
-     * Four kinds carry one: [RunOutcome.Mismatch], [RunOutcome.WavePrefixViolation],
-     * [RunOutcome.ReplicaDivergence] and [RunOutcome.ReplicasAgreeButWrong] — the last two added
+     * Three kinds carry one: [RunOutcome.Mismatch], [RunOutcome.ReplicaDivergence] and
+     * [RunOutcome.ReplicasAgreeButWrong] — the last two added
      * by computenet-4ru.1.5 after 4ru.1.4's reviewer flagged that the `else` branch below used to
      * dump both mesh verdicts' whole `script` field via `toString()`, the exact kilobytes-of-
      * replayable-input problem this function otherwise exists to avoid. The remaining kinds
      * ([RunOutcome.NonQuiescence], [RunOutcome.DeadLetterFailure],
      * [RunOutcome.ModelEvaluationFailure]) hold no script, so `toString` is the honest rendering
      * for them — a new sealed kind that *does* carry one needs a branch here, not the `else`.
-     *
-     * Measured at feature-review time (2026-08-19, Darwin arm64) on the single-source config
-     * `WavePrefixTest.generatedSweepConfig` at `scriptLength = 30`, seeds `0 until 60`: the
-     * `else` branch rendered each of the five `WavePrefixViolation` seeds at ~1.9–2.0 kB with the
-     * whole `Script(...)` inline, against ~0.57 kB and no script for the `Mismatch` seeds through
-     * the branch above. Not reachable from the BS-1 sweep today, but not for a soundness reason
-     * — since computenet-2hur, [WavePrefixOracle.appliesTo] admits multi-source cases. `BS-1`'s
-     * `sourceCount = 4`, `scriptLength = 200` shape is refused because its frontier lattice —
-     * re-measured against this repo's `OracleSweepTest.baselineConfig()`, seeds `0 until 200`:
-     * every seed lands between 5,734,960 and 6,762,600 frontiers — sits far above
-     * [WavePrefixOracle.MAX_FRONTIER_LATTICE] (50,000), so all 200 seeds hit the **COST**
-     * refusal (`ORA1 §PERF-01`) in [WavePrefixOracle.notApplicableBecause], not the soundness
-     * exclusion this KDoc previously named — the 0-of-200 count is unchanged, only the reason is.
-     * The branch above is still reachable from any single-source sweep config, because [run]
-     * passes no [WavePrefixOption] and so inherits [WavePrefixOption.DEFAULT].
      *
      * `internal` rather than private so `OracleSweepTest` can assert the rendering directly,
      * without depending on which generated seeds happen to violate.
@@ -463,12 +449,6 @@ object OracleSweep {
             "Mismatch(terminal=${outcome.terminal}, difference=${outcome.difference}, " +
                 "expected=${outcome.expected}, actual=${outcome.actual}, " +
                 "spec=${outcome.renderedGraphSpec})"
-
-        is RunOutcome.WavePrefixViolation ->
-            "WavePrefixViolation(terminal=${outcome.terminal}, kind=${outcome.kind}, " +
-                "observationIndex=${outcome.observationIndex}, matchedFloor=${outcome.matchedFloor}, " +
-                "regressedTo=${outcome.regressedTo}, observed=${outcome.observed}, " +
-                "nearestPrefixes=${outcome.nearestPrefixes}, spec=${outcome.renderedGraphSpec})"
 
         is RunOutcome.ReplicaDivergence ->
             "ReplicaDivergence(logicalId=${outcome.logicalId}, caseMarker=${outcome.caseMarker}, " +

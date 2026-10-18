@@ -14,24 +14,20 @@ import org.junit.jupiter.api.Test
 
 /**
  * RunOutcome is a sealed hierarchy of exactly the kinds the feature designs name — ORA1's five
- * plus the glitch kind, plus ORA2's two mesh kinds (`ORA2 §CONV-03`) — each
+ * plus ORA2's two mesh kinds (`ORA2 §CONV-03`) — each
  * matchable on type rather than message text, and [StateDifference.between] computes
  * `ORA1 §DIFF-02`'s symmetric difference for each `ModelState` shape.
  */
 class RunOutcomeTest {
 
     /** Exhaustive `when` over every RunOutcome subtype - a branch for a removed kind fails to
-     * compile, and a missing branch fails to compile if a kind is added without extending it.
-     * [RunOutcome.WavePrefixViolation] is the glitch kind computenet-4ru.8.5 added
-     * (`ORA1 §DIFF-06`, design D5); extending this function is how that addition became
-     * visible here rather than silent. */
+     * compile, and a missing branch fails to compile if a kind is added without extending it. */
     private fun kindOf(outcome: RunOutcome): String = when (outcome) {
         is RunOutcome.Success -> "Success"
         is RunOutcome.Mismatch -> "Mismatch"
         is RunOutcome.DeadLetterFailure -> "DeadLetterFailure"
         is RunOutcome.NonQuiescence -> "NonQuiescence"
         is RunOutcome.ModelEvaluationFailure -> "ModelEvaluationFailure"
-        is RunOutcome.WavePrefixViolation -> "WavePrefixViolation"
         is RunOutcome.ReplicaDivergence -> "ReplicaDivergence"
         is RunOutcome.ReplicasAgreeButWrong -> "ReplicasAgreeButWrong"
     }
@@ -76,23 +72,6 @@ class RunOutcomeTest {
         )
     }
 
-    /** A [RunOutcome.WavePrefixViolation] with every field populated, for the kind assertions. */
-    private fun violation(kind: RunOutcome.WavePrefixViolation.Kind) = RunOutcome.WavePrefixViolation(
-        seed = 5L,
-        terminal = "t",
-        kind = kind,
-        renderedGraphSpec = "spec",
-        script = Script.EMPTY,
-        observed = ModelState.SetState(setOf("torn")),
-        observationIndex = 3,
-        matchedFloor = 1,
-        regressedTo = if (kind == RunOutcome.WavePrefixViolation.Kind.REGRESSED) 0 else null,
-        nearestPrefixes = mapOf(
-            1 to ModelState.SetState(setOf("a")),
-            2 to ModelState.SetState(setOf("a", "b")),
-        ),
-    )
-
     @Test
     fun `every kind is matchable on type`() {
         kindOf(RunOutcome.Success) shouldBe "Success"
@@ -111,8 +90,6 @@ class RunOutcomeTest {
         kindOf(RunOutcome.NonQuiescence(seed = 3L, stepBudget = 10)) shouldBe "NonQuiescence"
         kindOf(RunOutcome.ModelEvaluationFailure(seed = 4L, cause = IllegalStateException("boom"))) shouldBe
             "ModelEvaluationFailure"
-        kindOf(violation(RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX)) shouldBe "WavePrefixViolation"
-        kindOf(violation(RunOutcome.WavePrefixViolation.Kind.REGRESSED)) shouldBe "WavePrefixViolation"
         kindOf(divergence()) shouldBe "ReplicaDivergence"
         kindOf(agreeButWrong()) shouldBe "ReplicasAgreeButWrong"
     }
@@ -151,35 +128,6 @@ class RunOutcomeTest {
         diverged.keys[0].actualByReplica shouldBe mapOf("r0" to null, "r1" to "v1")
         // and a key the reference does not hold names no dot rather than inventing one
         KeyDivergence("gone", null, null, mapOf("r0" to "ghost")).winningDot shouldBe null
-    }
-
-    @Test
-    fun `WavePrefixViolation distinguishes a torn state from a regression by kind, not by message`() {
-        // Both halves of ORA1 §DIFF-06's property are matchable without reading a string: the
-        // bead's fifth acceptance clause ("matchable by kind from RunOutcome") is what this pins.
-        val torn = violation(RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX)
-        val regressed = violation(RunOutcome.WavePrefixViolation.Kind.REGRESSED)
-
-        torn.kind shouldBe RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX
-        torn.regressedTo shouldBe null
-        regressed.kind shouldBe RunOutcome.WavePrefixViolation.Kind.REGRESSED
-        regressed.regressedTo shouldBe 0
-        RunOutcome.WavePrefixViolation.Kind.entries.size shouldBe 2
-    }
-
-    @Test
-    fun `WavePrefixViolation carries the sequence position a glitch report needs`() {
-        // A glitch's evidence is a POSITION in a sequence, which is the whole reason it is not a
-        // field-extended Mismatch (see its KDoc). These are the fields that carry it.
-        val torn = violation(RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX)
-
-        torn.seed shouldBe 5L
-        torn.terminal shouldBe "t"
-        torn.observed shouldBe ModelState.SetState(setOf("torn"))
-        torn.observationIndex shouldBe 3
-        torn.matchedFloor shouldBe 1
-        torn.nearestPrefixes.keys.toList() shouldBe listOf(1, 2)
-        torn.renderedGraphSpec shouldBe "spec"
     }
 
     @Test
