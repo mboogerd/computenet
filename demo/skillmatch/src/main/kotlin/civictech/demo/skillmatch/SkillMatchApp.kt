@@ -326,8 +326,8 @@ class SkillMatchApp(port: Int = 8080) {
         shell.route("/op") { handleOp(it) }
         shell.sse("/events") { stateJson() }
 
-        // The observation publishes one point-consistent frame assembled from
-        // its independent root groups.
+        // The observation publishes a frame assembled from its per-view sinks
+        // whenever any view changes.
         observation.onChange { broadcast() }
     }
 
