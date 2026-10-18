@@ -11,23 +11,16 @@ import java.util.UUID
  *
  * ### Why this is a heuristic, stated once, here
  *
- * `doc/spec/20-dataflow-semantics/22-consistency.md` §"Completeness over silent
- * or stuck edges" decides the real rule ([22-LIVE-01]) and closes with
- * **⚠ GAP (G-40)**: a glitch-free join cannot distinguish an effective-only-
- * silent arm from a dead one, so wave completeness blocks forever on absorbing,
- * suspended, restarting or dead-lettered frontier edges. Closing that needs
- * per-source per-edge watermarks, metadata-plane `Progress` absorb-acks emitted
- * at a defined quiescence boundary, and typed `Stall(reason, recoverable)`
- * markers with per-edge WAIT | DEGRADE | RE-SCOPE policies — kernel work that
- * belongs with `civictech.cell.verify`, and is explicitly out of this plan's
- * scope.
+ * The accepted `doc/adr/ADR - Remove Glitch Freedom.md` retires the former
+ * wave-completeness guarantee. This heuristic is therefore the inspector's only
+ * wave-liveness signal: it reports a suspicious lag from data already held by
+ * the inspector, without claiming a definitive graph failure.
  *
  * What the inspector can honestly offer meanwhile is a **diagnostic**, computed
  * from outside the graph on data it already holds: "this looks stuck — go
  * look." Every row it produces carries [WaveHealthRow.heuristic] `= true` and
  * opens its description with the word "heuristic", in the data and not only in
- * the UI. No row asserts that a wave *is* lost, that a cell *is* stuck, or that
- * glitch-freedom *is* violated.
+ * the UI. No row asserts that a wave *is* lost or that a cell *is* stuck.
  *
  * ### The two inputs — both already held, neither newly subscribed (P2/P6)
  *
@@ -100,8 +93,8 @@ import java.util.UUID
  *    *producer* too: its last wave is frozen, so any lag against it is an
  *    artefact of the suspension the activity feed already reports).
  * 7. **Independent sources are allowed to be silent.**
- *    `22-consistency.md` [22-LIVE-01]: completeness is per-source and
- *    over-alignment across independent sources is forbidden. **No row is ever
+ *    The comparison is per-source and over-alignment across independent sources
+ *    is forbidden. **No row is ever
  *    derived from one source's silence relative to another's activity**: every
  *    row's substance — `wave`, `frontier`, `lagWaves` — is a single-source
  *    comparison, refused outright when the two stamps disagree on `sourceId`.

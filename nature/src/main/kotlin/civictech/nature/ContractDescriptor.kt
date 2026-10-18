@@ -52,12 +52,10 @@ enum class CellColor { PURE, BLOCKING, SUSPENDING }
 enum class NatureAxis {
     OWNERSHIP, MERGE_IDEMPOTENCE, COLOR, MONOTONICITY,
     /**
-     * PN-12 refusing axis. A producer participates in the wave protocol (stamps
-     * aligned waves) or does not. An ALIGN-tier (`WaveFrontier`) inlet requires
-     * WAVED — an UNWAVED producer streamed onto it is dropped *silently* today
-     * (plan §2 F1); as a link-flow axis it becomes a loud typed refusal.
+     * Retired by the ADR (GFR, 2026-10-17); ordinal reserved so
+     * `toWire()`/`natureVectorFromWire()` keep later axes' ordinals.
      */
-    WAVE_PARTICIPATION,
+    RESERVED_WAVE_PARTICIPATION,
     /**
      * PN-12 refusing axis. A delta is interest-scopable (`Scoped`) or not. A
      * partial-interest inlet requires INTEREST_SCOPED — a non-`Scoped` delta rides
@@ -78,10 +76,11 @@ enum class NatureAxis {
 }
 
 /**
- * One level on one [NatureAxis]. The per-axis enums are the only inhabitants;
- * the first constant of each is the axis DEFAULT (absent axis ⇒ this level ⇒
- * today's behavior), and later constants are *stronger* — offering a stronger
- * level satisfies a weaker requirement (see `NatureNegotiation.reconcile`).
+ * One level on one live [NatureAxis]. The per-axis enums are the only
+ * inhabitants; the first constant of each live axis is the axis DEFAULT
+ * (absent axis ⇒ this level ⇒ today's behavior), and later constants are
+ * *stronger* — offering a stronger level satisfies a weaker requirement (see
+ * `NatureNegotiation.reconcile`).
  */
 sealed interface NatureLevel {
     val axis: NatureAxis
@@ -133,17 +132,6 @@ enum class Monotonicity : NatureLevel {
     override val rank get() = ordinal
 }
 
-/** Whether a port participates in the wave protocol (PN-12, spec 20/21 §Waves). */
-enum class WaveParticipation : NatureLevel {
-    /** Emits plain, un-timestamped traffic — the DEFAULT (an ALIGN inlet drops it). */
-    UNWAVED,
-    /** Stamps aligned waves — satisfies an ALIGN-tier (`WaveFrontier`) inlet. */
-    WAVED;
-
-    override val axis get() = NatureAxis.WAVE_PARTICIPATION
-    override val rank get() = ordinal
-}
-
 /** Whether a delta can be restricted to an [Interest]'s slice (PN-12, spec 42). */
 enum class InstanceScoping : NatureLevel {
     /** Rides links whole (a non-`Scoped` delta over-delivers to a partial peer) — the DEFAULT. */
@@ -169,8 +157,8 @@ enum class PullService : NatureLevel {
 /**
  * PN-12 — the **structural** natures of a whole cell, sparse. Unlike a
  * [NatureAxis] (a *link-flow* property reconciled at a link), these describe
- * what a cell *is* (glitch-free board, durable writer, replicated union,
- * partitioned shard, …). They are **deliberately never consulted by
+ * what a cell *is* (durable writer, replicated union, partitioned shard, …).
+ * They are **deliberately never consulted by
  * [civictech.cell.port.NatureNegotiation.reconcile]**: a volatile consumer of a
  * durable producer is normal (the exchange demo is exactly that), so making them
  * refuse at links would repeat the COLOR mistake. They are consumed by spawn
@@ -181,7 +169,7 @@ enum class PullService : NatureLevel {
  * would-be source, the Gate policy, was deleted in T03). The spec keeps the
  * concepts; code re-adds the tags with their first real consumer.
  */
-enum class Manifest { GLITCH_FREE, DURABLE, REPLICATED, PARTITIONED }
+enum class Manifest { DURABLE, REPLICATED, PARTITIONED }
 
 /**
  * A **sparse** vector of declared natures. Absent axes read as their DEFAULT
@@ -211,13 +199,14 @@ value class NatureVector(val levels: Map<NatureAxis, NatureLevel>) {
         fun of(vararg levels: NatureLevel): NatureVector =
             if (levels.isEmpty()) DEFAULT else NatureVector(levels.associateBy { it.axis })
 
-        /** The DEFAULT (first-constant) level of each axis — "absent ⇒ today". */
+        /** The DEFAULT (first-constant) level of each live axis — "absent ⇒ today". */
         fun defaultOf(axis: NatureAxis): NatureLevel = when (axis) {
             NatureAxis.OWNERSHIP -> Ownership.SHARED
             NatureAxis.MERGE_IDEMPOTENCE -> MergeClass.NON_IDEMPOTENT
             NatureAxis.COLOR -> Color.PURE
             NatureAxis.MONOTONICITY -> Monotonicity.NON_MONOTONE
-            NatureAxis.WAVE_PARTICIPATION -> WaveParticipation.UNWAVED
+            NatureAxis.RESERVED_WAVE_PARTICIPATION ->
+                throw IllegalArgumentException("reserved axis has no levels")
             NatureAxis.INSTANCE_SCOPING -> InstanceScoping.SINGLETON
             NatureAxis.PULL_SERVICE -> PullService.NONE
         }
@@ -266,7 +255,7 @@ private fun natureLevelOf(axis: NatureAxis, rank: Int): NatureLevel? = when (axi
     NatureAxis.MERGE_IDEMPOTENCE -> MergeClass.entries.getOrNull(rank)
     NatureAxis.COLOR -> Color.entries.getOrNull(rank)
     NatureAxis.MONOTONICITY -> Monotonicity.entries.getOrNull(rank)
-    NatureAxis.WAVE_PARTICIPATION -> WaveParticipation.entries.getOrNull(rank)
+    NatureAxis.RESERVED_WAVE_PARTICIPATION -> null
     NatureAxis.INSTANCE_SCOPING -> InstanceScoping.entries.getOrNull(rank)
     NatureAxis.PULL_SERVICE -> PullService.entries.getOrNull(rank)
 }
