@@ -173,13 +173,6 @@ class CorpusCrossCheckTest {
                 "CoreOperators.Ids.ALL; modelling this scenario as CombineLatestModel would be " +
                 "checking the wrong cell, not the one this yaml actually drives."
             ),
-        "24-OP-COMBINE-02" to (
-            "The wave-coalescing `glitch-free: true` form binds to `CoalescingCombineCell`, which " +
-                "the ORA1 §HONEST-02 ledger in MapCellModel.kt excludes by name: its whole reason " +
-                "to exist is a wave-completion fold over open/closed edges, per-edge watermarks and " +
-                "a restart-observable dropped version buffer that Script/ScriptEvent has no way to " +
-                "name, so a batch reference cannot honestly certify its quiescent total."
-            ),
         "24-OP-LIST-01" to (
             "`ListCell`/`ListDelta` is excluded by the ORA1 §HONEST-02 ledger in MapCellModel.kt: " +
                 "its edits are index-addressed, not key-addressed, so even MapCell's single-writer " +
@@ -261,7 +254,7 @@ class CorpusCrossCheckTest {
             ?: error("listFiles returned null for $corpusDir — not a readable directory")
 
         withClue("non-vacuity: a broken directory listing would silently check nothing") {
-            ids.size shouldBe 44
+            ids.size shouldBe 43
         }
 
         val unaccounted = ids - CROSS_CHECKED - OUT_OF_VOCABULARY.keys
