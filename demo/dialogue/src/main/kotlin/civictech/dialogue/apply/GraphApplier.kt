@@ -42,15 +42,14 @@ import civictech.dialogue.mint.StanceAggregate
  * the write path**; it would silently reintroduce the defect the design
  * exists to exclude.
  *
- * The measured instance was the relation leg's semijoins (stages 5d/5e):
- * ungated, admitting the utterance that mints a relation's last endpoint
- * could flicker that relation into and *out of* the canonical fold **within
- * one wave**. computenet-13dby gated both (`emitOnFrontier = true`), and
- * `RelationMintTest` asserts the gated fold publishes no such transition, so
- * this boundary no longer compensates for 5d/5e. It still guards every other
- * fold: `projectedStances` has an ungated `JoinSetCell` upstream, and the
- * write path must not depend on every upstream operator being gated
- * (doc/demo-findings.md F-15).
+ * The measured instance is the relation leg's ungated semijoins (stages
+ * 5d/5e): admitting the utterance that mints a relation's last endpoint can
+ * flicker that relation into and *out of* the canonical fold **within one
+ * wave**. Amended P4 accepts that transient, and this quiescent pull keeps the
+ * net-neutral transition from becoming an agora operation. The boundary also
+ * guards every other fold: `projectedStances` has an ungated `JoinSetCell`
+ * upstream, and the write path must not depend on every upstream operator
+ * publishing only settled state (doc/demo-findings.md F-15).
  *
  * ### Never spawning ClaimCell/EdgeCell ([AGO1-APPLY-03], DESIGN D3)
  *

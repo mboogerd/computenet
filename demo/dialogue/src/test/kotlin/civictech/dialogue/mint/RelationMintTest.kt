@@ -1,10 +1,7 @@
 package civictech.dialogue.mint
 
 import civictech.agora.cell.Polarity
-import civictech.cell.CurrentContext
 import civictech.cell.Propagate
-import civictech.cell.Timestamp
-import civictech.cell.data.Replicable
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
@@ -31,7 +28,6 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.io.StringReader
-import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -131,25 +127,12 @@ class RelationMintTest {
         }
     }
 
-    private data class CanonicalEmission(
-        val timestamp: Timestamp,
-        val delta: MapDelta<RelationKey, RelationAggregate>,
-    )
-
-    private inner class Rig(seed: Long = 1L, relationGatingOverride: Boolean? = null) {
+    private inner class Rig(seed: Long = 1L) {
         val controller = SimulationController(seed)
         val host = ManagedHost(scheduler = controller.scheduler())
         val extractor = CountingExtractor(cassette())
-        private val built = if (relationGatingOverride == null) {
-            DialoguePipeline.build(host, extractor)
-        } else {
-            DialoguePipeline.buildWithRelationGatingForTest(host, extractor, relationGatingOverride)
-        }
+        private val built = DialoguePipeline.build(host, extractor)
         val refs = built.refs
-
-        @Suppress("UNCHECKED_CAST")
-        private val utteranceReplica =
-            host.lookup(refs.utterances.ref, Replicable::class.java) as Replicable<SetDelta<Utterance>>
 
         /** [AGO1-REL-04]'s key-level rejections, as a derived set. */
         val rejectedView = SetView<RelationCandidate>()
@@ -159,9 +142,6 @@ class RelationMintTest {
 
         /** The canonical fold's raw output: relation key -> aggregate. */
         val aggregateView = MapView<RelationKey, RelationAggregate>()
-
-        /** Every canonical-fold delta, retaining the ingress wave that caused it. */
-        val canonicalEmissions = mutableListOf<CanonicalEmission>()
 
         init {
             host.lookupOrThrow(refs.rejectedRelations).outlet.subscribe(
@@ -178,13 +158,7 @@ class RelationMintTest {
             )
             host.lookupOrThrow(refs.canonicalRelations).outlet.subscribe(
                 Use.fixed(
-                    Propagate<MapDelta<RelationKey, RelationAggregate>> { delta ->
-                        aggregateView.apply(delta)
-                        canonicalEmissions += CanonicalEmission(
-                            timestamp = requireNotNull(CurrentContext.get()).timestamp,
-                            delta = delta,
-                        )
-                    },
+                    Propagate<MapDelta<RelationKey, RelationAggregate>> { delta -> aggregateView.apply(delta) },
                     PortRef.generate(),
                 ),
             )
@@ -199,11 +173,6 @@ class RelationMintTest {
 
         fun retract(utterance: Utterance) {
             ops.remove(utterance)
-            controller.runToIdle()
-        }
-
-        fun applyTranscriptDelta(delta: SetDelta<Utterance>) {
-            utteranceReplica.deltaInlet.call.propagate(delta)
             controller.runToIdle()
         }
 
@@ -226,15 +195,6 @@ class RelationMintTest {
         target = claimKey(catsPurr),
         polarity = Polarity.SUPPORT,
     )
-
-    private fun List<CanonicalEmission>.putsThenRemoves(key: RelationKey): Boolean =
-        groupBy { it.timestamp }.any { (_, wave) ->
-            var put = false
-            wave.any { emission ->
-                if (key in emission.delta.puts) put = true
-                put && key in emission.delta.removals
-            }
-        }
 
     // ------------------------------------------------------------------
     // REL-01 — [AGO1-REL-01]
@@ -409,46 +369,5 @@ class RelationMintTest {
             "re-minting the endpoint must re-mint the relation, still without re-extraction",
         )
         assertEquals(3, rig.extractor.calls, "no re-extraction on either the retraction or the re-admission")
-    }
-
-    @Test
-    fun `relation semijoin gates suppress an ungated canonical-relation flicker within one wave`() {
-        val tagSource = UUID.fromString("00000000-0000-0000-0000-0000000013db")
-        val u1Tag = Timestamp(tagSource, 1L)
-        val u2Tag = Timestamp(tagSource, 2L)
-        val u3Tag = Timestamp(tagSource, 3L)
-
-        fun drive(rig: Rig): List<CanonicalEmission> {
-            // The relation begins pending: its target exists, its source does
-            // not. Applying one transcript delta then replaces that relation
-            // utterance with the missing source-endpoint claim.
-            rig.applyTranscriptDelta(SetDelta(adds = mapOf(u1 to setOf(u1Tag), u3 to setOf(u3Tag))))
-            assertTrue(rig.canonicalRelations().isEmpty(), "precondition: the relation is pending")
-            rig.canonicalEmissions.clear()
-
-            // Both changes are one SetDelta, hence one root wave. The claim leg
-            // can resolve the pending relation before the relation leg retracts
-            // it. Ungated, those two prefixes escape downstream separately.
-            rig.applyTranscriptDelta(
-                SetDelta(
-                    adds = mapOf(u2 to setOf(u2Tag)),
-                    dels = mapOf(u3 to setOf(u3Tag)),
-                ),
-            )
-            assertTrue(rig.canonicalRelations().isEmpty(), "the wave's settled relation set must be empty")
-            return rig.canonicalEmissions
-        }
-
-        val ungated = drive(Rig(relationGatingOverride = false))
-        assertTrue(
-            ungated.putsThenRemoves(expectedKey),
-            "control: the ungated pipeline must expose an add then a remove for the same relation in one wave: $ungated",
-        )
-
-        val gated = drive(Rig())
-        assertTrue(
-            gated.none { expectedKey in it.delta.puts || expectedKey in it.delta.removals },
-            "the production gates must emit no canonical transition for the net-neutral wave: $gated",
-        )
     }
 }

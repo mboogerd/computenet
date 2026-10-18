@@ -271,23 +271,12 @@ object DialoguePipeline {
      * Callers that never recover a journal (every test today) omit it.
      */
     fun build(host: ManagedHost, extractor: Extractor, namespace: String? = null): Built =
-        buildGraph(host, extractor, namespace, relationSemijoinsEmitOnFrontier = true)
-
-    /**
-     * Test control for the pre-computenet-13dby ungated relation leg. Production
-     * callers always use [build], whose two relation semijoins are gated.
-     */
-    internal fun buildWithRelationGatingForTest(
-        host: ManagedHost,
-        extractor: Extractor,
-        relationSemijoinsEmitOnFrontier: Boolean,
-    ): Built = buildGraph(host, extractor, namespace = null, relationSemijoinsEmitOnFrontier)
+        buildGraph(host, extractor, namespace)
 
     private fun buildGraph(
         host: ManagedHost,
         extractor: Extractor,
         namespace: String?,
-        relationSemijoinsEmitOnFrontier: Boolean,
     ): Built {
         val gate = ExtractionGate(extractor)
         // One seam for every spawn below: null namespace reproduces today's
@@ -394,27 +383,15 @@ object DialoguePipeline {
             // mints output tags per entry by design), so nothing re-invokes
             // extraction to resolve it.
             //
-            // Both semijoins reconcile on frontier completeness. Their inlets
-            // descend from the one `utterances` root, while computenet-6ovpx's
-            // single-input relay carries a structurally silent arm's absorb-ack
-            // through extractedClaims/extractedRelations and their unary hops.
-            // The pre-relay measurement at 915d574a9 therefore no longer
-            // describes this graph: at d1bb2291 the 170 dialogue tests that
-            // predated the flicker regression pass with both gates on and with
-            // either gate on alone; no canonical relation is withheld at
-            // quiescence. The later RelationMintTest flicker case independently
-            // discriminates only the source-endpoint gate (5d), because its
-            // missing endpoint is the relation source. It still pins the reason
-            // to keep frontier gating on: an ungated same-wave
-            // endpoint-add/relation-remove reaches the canonical fold as an add
-            // then a remove, whereas the gated graph coalesces that net-neutral
-            // transition before emission.
+            // Both semijoins are ungated. A same-wave endpoint-add/relation-remove
+            // may reach the canonical fold as an add then a remove before idle;
+            // amended P4 accepts that transient, and the net result at quiescence
+            // is unchanged.
             val sourceResolvedRelations = spawn("sourceResolvedRelations", identity = identityFor("sourceResolvedRelations")) { ref ->
                 SemiJoinCell<RelationCandidate, ClaimKey, ClaimKey>(
                     ref = ref,
                     leftKey = { it.sourceKey },
                     rightKey = { it },
-                    emitOnFrontier = relationSemijoinsEmitOnFrontier,
                 )
             }
             val resolvableRelations = spawn("resolvableRelations", identity = identityFor("resolvableRelations")) { ref ->
@@ -422,7 +399,6 @@ object DialoguePipeline {
                     ref = ref,
                     leftKey = { it.targetKey },
                     rightKey = { it },
-                    emitOnFrontier = relationSemijoinsEmitOnFrontier,
                 )
             }
             // Stage 5f (RelationMint fold): one aggregate per distinct
