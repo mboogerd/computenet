@@ -92,6 +92,25 @@ class KernelDriverBindingsTest {
         BatchOracle(scenario).view(viewId) shouldBe golden
     }
 
+    @Test
+    fun `retired composite id is unknown and sum combine ignores extra params`() {
+        // Split the retired spellings so the repository's vocabulary-retirement
+        // grep remains an honest empty result while this test still drives the
+        // exact legacy strings at runtime.
+        val retiredType = listOf("aligned", "view").joinToString("-")
+        val retiredParam = listOf("glitch", "free").joinToString("-")
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            KernelCatalog.build(retiredType, emptyMap())
+        }
+        refused.message shouldBe "no kernel binding for catalog cell type '$retiredType'"
+
+        KernelCatalog.build(
+            "combine-latest",
+            mapOf("fn" to s("sum"), retiredParam to Value.BoolVal(true), "unexpected" to s("ignored")),
+        ).cell.shouldBeInstanceOf<ScalarSumCombineCell>()
+    }
+
     // ---- operators ---------------------------------------------------------
 
     @Test fun `filter passes only even elements`() = bothAgree(

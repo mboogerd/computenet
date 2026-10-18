@@ -8,7 +8,6 @@ import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.Aggregator
 import civictech.cell.data.Replicable
 import civictech.cell.data.SetApi
@@ -131,11 +130,8 @@ import java.util.UUID
  *                           a name opts them into that journal (`24-DUR-01`/`24-DUR-03`).
  *  - `quorum-set`         — the lane-counting SET fan-in a journaled arm replays
  *                           into (`24-REPLAY-01`); volatile unless `journal:` is set;
- *                           the catalog id and its
- *                           `k` are the core profile's, only the dur binding is new.
- *                           With `glitch-free: true` it additionally carries the
- *                           core profile's wave-alignment wrapper (`DUR-GF-01`,
- *                           see [glitchFreeDelegate]).
+ *                           the catalog id and its `k` are the core profile's,
+ *                           only the dur binding is new.
  *  - `journal-window`     — a journaled tumbling `GroupByCell` (`window: {kind: tumbling,
  *                           size}`, `agg`, `lateness?` — the core `window` binding under
  *                           the recorded ref); its checkpoint carries its state and its
@@ -237,24 +233,9 @@ internal class KernelDriverDur(
         val cell: Cell,
         val sink: ObservationSink<*>?,
         val viewKind: KernelCatalog.ViewKind,
-        /**
-         * When the cell declared `glitch-free: true`, the downstream
-         * [GlitchFreeCell] its output is routed through (see [glitchFreeDelegate]).
-         * A downstream edge reads *this* ref's outlet, so the consumer sees the
-         * wave-aligned stream — the same indirection [KernelDriver.Bound.outletDelegate]
-         * performs on the core profile.
-         */
-        val outletDelegate: CellRef? = null,
     )
 
     private val cells = LinkedHashMap<CellId, Bound>()
-
-    /**
-     * Stable [CellRef]s for the [GlitchFreeCell] wrappers, minted once per cell id
-     * and reused across every rebuild — a wrapper is as much part of the recovered
-     * graph as the cell it fronts, and the dur driver rebuilds under recorded refs.
-     */
-    private val glitchFreeRefs = LinkedHashMap<CellId, CellRef>()
 
     /** Stable refs for the volatile set-view companion of each durable replica. */
     private val replicaViewRefs = LinkedHashMap<CellId, CellRef>()
@@ -408,7 +389,7 @@ internal class KernelDriverDur(
             instantiateReplica(spec, built)
         } else {
             host.managementInlet.call.spawn(built.cell)
-            built.copy(outletDelegate = glitchFreeDelegate(spec, built.ref))
+            built
         }
         // The observation stream is recorded at the fold in [build] (into this
         // cell's surviving [logs] entry), not through `sink.onChange` — the sink's
@@ -443,48 +424,6 @@ internal class KernelDriverDur(
             sink = companion,
             viewKind = KernelCatalog.ViewKind.SET,
         )
-    }
-
-    /**
-     * `glitch-free: true` on the lane-counting fan-in (`BS-40`, `DUR-GF-01`): spawn
-     * the kernel's own [GlitchFreeCell] downstream of [upstream] and route the
-     * fan-in's output through it over a **real host link**, so the wrapper's
-     * `WaveFrontier` sees the `EdgeOpen`/progress a link handshake announces. This
-     * is the core driver's construction verbatim ([KernelDriver.spawn]) —
-     * `glitch-free` is an existing descriptor param on an existing catalog id
-     * (`concord/schema/scenario.md`, `cell-catalog.md`), so nothing new is minted
-     * here; only the *durable* binding is new.
-     *
-     * Two dur-specific details. The wrapper is built under a **recorded** ref
-     * ([glitchFreeRefs]) rather than a fresh random one, because the durable host is
-     * torn down and rebuilt on every crash and every cell — wrapper included — must
-     * come back under the ref the pre-crash graph used (PN-1 derived port identity).
-     * And the wrapper is **volatile**: it is never added to [journalByRef], so a
-     * crash re-mints it with an empty frontier. What makes an empty frontier
-     * survivable is PN-2, not `[24-DUR-04]`: `recoverFrom` stamps the replayed
-     * re-emission `MessageContext.baseline`, and `WaveFrontier.offer` takes its
-     * baseline branch *before* any edge/lane lookup — releasing immediately and
-     * excluding the invocation from every wave-completeness set — so the replayed
-     * cone is never a torn second lane the frontier could not complete. The source's
-     * identity is not consulted on that path, which is why `DUR-GF-01` carries
-     * `24-DUR-02` and not `24-DUR-04` (kernel `DurableGlitchFreeReplayTest`: control
-     * (a) stalls on every seed when the baseline stamp is removed, while control (b)
-     * stays green with replay-stable identity reverted).
-     *
-     * Returns `null` for every cell that did not request wave alignment.
-     */
-    private fun glitchFreeDelegate(spec: Spec, upstream: CellRef): CellRef? {
-        if (spec.type != LANE_FAN_IN) return null
-        if ((spec.params["glitch-free"] as? Value.BoolVal)?.value != true) return null
-        val gfRef = glitchFreeRefs.getOrPut(spec.cellId) { CellRef(UUID.randomUUID()) }
-        @Suppress("UNCHECKED_CAST")
-        val gf = GlitchFreeCell(Propagate::class.java as Class<Propagate<Any>>, gfRef)
-        host.managementInlet.call.spawn(gf)
-        val result = host.managementInlet.call.connect(upstream, "outlet", gfRef, "inlet")
-        check(result is civictech.cell.link.LinkResult.Connected) {
-            "durable glitch-free wrapper for '${spec.cellId}' was not admitted: $result"
-        }
-        return gfRef
     }
 
     private fun build(spec: Spec): Bound = when (spec.type) {
@@ -734,11 +673,8 @@ internal class KernelDriverDur(
      * fan-in arms are ordinary `linkTo` links.
      */
     private fun linkEdge(src: Bound, dst: Bound, inlet: String?, outlet: String?) {
-        // A wave-aligned fan-in publishes on its [GlitchFreeCell] wrapper's outlet, so
-        // the consumer reads the aligned stream rather than the operator's raw output.
-        val srcRef = src.outletDelegate ?: src.ref
         val result = host.managementInlet.call.connect(
-            srcRef,
+            src.ref,
             KernelCatalog.outletName(src.type, outlet),
             dst.ref,
             KernelCatalog.inletName(dst.type, inlet),
@@ -1156,10 +1092,8 @@ internal class KernelDriverDur(
         }
         cells.remove(cellId)?.let { bound ->
             host.managementInlet.call.despawn(bound.ref)
-            bound.outletDelegate?.let { host.managementInlet.call.despawn(it) }
             journalByRef.remove(bound.ref)
         }
-        glitchFreeRefs.remove(cellId)
         specs.remove(cellId)
         linkRecs.removeAll { it.from == cellId || it.to == cellId }
     }

@@ -22,7 +22,7 @@ interface Driver {
 
     /**
      * Construct a cell of catalog [type] with [params] (the [CellSpec]'s
-     * descriptor fields — `of`, `fn`, `glitch-free`, …) on [hostId], under the
+     * descriptor fields — `of`, `fn`, `agg`, …) on [hostId], under the
      * scenario-local [cellId].
      */
     fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>)
@@ -76,7 +76,7 @@ interface Driver {
     /** The current materialized value of a view cell. */
     fun readView(cellId: CellId): Value
 
-    /** The ordered stream of values a view observed (glitch-freedom / monotonicity checks). */
+    /** The ordered stream of values a view observed (predicate / monotonicity checks). */
     fun observationLog(cellId: CellId): List<Value>
 
     /**

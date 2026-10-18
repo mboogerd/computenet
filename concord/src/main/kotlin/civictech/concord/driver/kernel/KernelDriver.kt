@@ -8,7 +8,6 @@ import civictech.cell.ExclusiveEntry
 import civictech.cell.StateRead
 import civictech.cell.StateReadResult
 import civictech.cell.Stateful
-import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.SetCell
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.InterestSpawnRefused
@@ -55,8 +54,6 @@ import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ExecutionException
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Binding #1 of the Concord [Driver] SPI (CONCORD-PLAN §1.4, W1-A): the
@@ -208,20 +205,6 @@ class KernelDriver private constructor(
          * [ObservationSink.onChange].
          */
         val log: MutableList<Value> = mutableListOf(),
-        /**
-         * When the cell declared `glitch-free: true`, the downstream
-         * [civictech.cell.consistency.GlitchFreeCell] its output is routed through
-         * (spawned in [spawn]). A downstream [connect] reads *this* cell's outlet,
-         * so the wave-aligned stream is what the consumer sees.
-         */
-        val outletDelegate: CellRef? = null,
-        /**
-         * The bound cell coalesces at the operator itself
-         * ([KernelCatalog.Built.waveAligned]) — it needs no [outletDelegate]
-         * wrapper, and its neutral `left`/`right` arms resolve onto a single
-         * unrestricted `inlet` (see [KernelCatalog.inletName]).
-         */
-        val waveAligned: Boolean = false,
     )
 
     override fun createHost(hostId: HostId) {
@@ -386,19 +369,6 @@ class KernelDriver private constructor(
         val host = hostFor(if (hostId == "" ) defaultHostId else hostId)
         val built = KernelCatalog.build(type, params)
         val ref = host.managementInlet.call.spawn(built.cell)
-        // `glitch-free: true` (spec 20/22, GlitchFreeOperatorSuiteTest construction):
-        // spawn a downstream GlitchFreeCell and route the operator's outlet through
-        // it over a real host link (so the frontier sees EdgeOpen/Progress). A
-        // downstream connect then reads the gf's outlet via [outletDelegate].
-        val delegate = if (built.glitchFree) {
-            @Suppress("UNCHECKED_CAST")
-            val gf = GlitchFreeCell(civictech.cell.Propagate::class.java as Class<civictech.cell.Propagate<Any>>)
-            val gfRef = host.managementInlet.call.spawn(gf)
-            host.managementInlet.call.connect(ref, "outlet", gfRef, "inlet")
-            gfRef
-        } else {
-            null
-        }
         val bound = Bound(
             ref, type, host, built.cell, built.sink, built.viewKind,
             // The observation stream is captured at the fold by the catalog
@@ -408,8 +378,6 @@ class KernelDriver private constructor(
             // would hand the capture to the sink's own dispatcher thread, which the
             // runner never waits for.
             log = built.observations ?: mutableListOf(),
-            outletDelegate = delegate,
-            waveAligned = built.waveAligned,
         )
         cells[cellId] = bound
     }
@@ -466,17 +434,10 @@ class KernelDriver private constructor(
         if (src.host !== dst.host) {
             return dist.connectCrossHost(from, src, to, dst, inlet, outlet)
         }
-        val inletName = KernelCatalog.inletName(dst.type, inlet, dst.waveAligned)
-        // A glitch-free source exposes its wave-aligned stream on the downstream
-        // GlitchFreeCell's `outlet`; read from the delegate so consumers see the
-        // aligned deltas, not the operator's raw (torn) output.
-        val (srcRef, outletName) = if (src.outletDelegate != null) {
-            src.outletDelegate to "outlet"
-        } else {
-            src.ref to KernelCatalog.outletName(src.type, outlet)
-        }
+        val inletName = KernelCatalog.inletName(dst.type, inlet)
+        val outletName = KernelCatalog.outletName(src.type, outlet)
         val options = if (role == "observe") LinkOptions(role = LinkRole.Observe) else LinkOptions.DEFAULT
-        val result = src.host.managementInlet.call.connect(srcRef, outletName, dst.ref, inletName, options)
+        val result = src.host.managementInlet.call.connect(src.ref, outletName, dst.ref, inletName, options)
         return when (result) {
             is civictech.cell.link.LinkResult.Connected -> {
                 val linkRef = UUID.randomUUID().toString()
@@ -536,19 +497,9 @@ class KernelDriver private constructor(
     override fun transferAuthority(cellId: CellId, actor: String, to: String) =
         dist.transferAuthority(cellId, actor, to)
 
-    /**
-     * How long [quiesce] waits for each aligned view's listener dispatcher to
-     * reach its drain barrier ([RecordedComposite.drain]) before failing loudly.
-     * A generous bound: an idle dispatcher reaches it in microseconds, so this
-     * only ever elapses for a wedged or badly starved listener. `internal var`
-     * so a test can shorten it.
-     */
-    internal var compositeDrainTimeout: Duration = 60.seconds
-
     override fun quiesce(budget: Int): QuiesceReport {
         if (transport == null) {
             val drained = drainController(budget)
-            drainComposites()
             return QuiesceReport(settled = drained.settled, steps = drained.steps)
         }
 
@@ -558,7 +509,6 @@ class KernelDriver private constructor(
             val drained = drainController((budget - steps).coerceAtLeast(0))
             steps += drained.steps
             if (!drained.settled) {
-                drainComposites()
                 return QuiesceReport(settled = false, steps = steps)
             }
 
@@ -570,11 +520,9 @@ class KernelDriver private constructor(
                 val confirming = drainController((budget - steps).coerceAtLeast(0))
                 steps += confirming.steps
                 if (!confirming.settled) {
-                    drainComposites()
                     return QuiesceReport(settled = false, steps = steps)
                 }
                 if (confirming.steps == 0 && transportFramesBalanced()) {
-                    drainComposites()
                     return QuiesceReport(settled = true, steps = steps)
                 }
             }
@@ -657,20 +605,7 @@ class KernelDriver private constructor(
                 "enqueued=${listening.framesEnqueued}) dialers=$dialled"
         }
 
-    /**
-     * The drain barrier for every aligned view (5ubdv-D1): each composite
-     * published before this call is in its observation log on return, or this
-     * throws. Single-view logs need no barrier — they are recorded at the fold.
-     */
-    private fun drainComposites() {
-        cells.values.mapNotNull { it.sink as? RecordedComposite }.forEach { it.drain(compositeDrainTimeout) }
-    }
-
-    /**
-     * Shut every aligned view's listener dispatcher thread (one daemon thread
-     * per aligned sink per run). Idempotent. The runner calls it once per run,
-     * after its checks have read the logs.
-     */
+    /** Close transport resources. Idempotent. */
     fun close() {
         if (closed) return
         closed = true
@@ -691,7 +626,6 @@ class KernelDriver private constructor(
                 if (failure == null) failure = e
             }
         }
-        cells.values.mapNotNull { it.sink as? RecordedComposite }.forEach { it.close() }
         failure?.let { throw it }
     }
 
@@ -702,12 +636,7 @@ class KernelDriver private constructor(
         return KernelCatalog.readView(bound.viewKind, sink.current())
     }
 
-    /**
-     * The recorded observation stream. A single view's log is recorded at the
-     * fold and is whole at any quiescent point; an `aligned-view`'s composite
-     * log is recorded by its listener and is whole once [quiesce] has returned
-     * (its drain barrier), which is when the runner reads it.
-     */
+    /** The recorded observation stream, captured at the fold and whole at any quiescent point. */
     override fun observationLog(cellId: CellId): List<Value> =
         if (cellId in durCells) dur.observationLog(cellId) else cells.getValue(cellId).log.toList()
 

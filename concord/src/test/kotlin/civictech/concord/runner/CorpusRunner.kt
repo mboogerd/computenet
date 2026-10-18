@@ -16,7 +16,6 @@ import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.AuthoritySpec
 import civictech.concord.schema.CellSpec
 import civictech.concord.schema.Check
-import civictech.concord.schema.CompositeWholeWaves
 import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DeclareInterestStep
 import civictech.concord.schema.DespawnStep
@@ -36,7 +35,6 @@ import civictech.concord.schema.LateJoinEqualsEarly
 import civictech.concord.schema.NoDeadLetters
 import civictech.concord.schema.ObservationsAllSatisfy
 import civictech.concord.schema.ObservationsMonotone
-import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.Profile
 import civictech.concord.schema.QuiesceStep
@@ -116,8 +114,8 @@ class CorpusRunner {
         /** Where the runner's working directory sees the corpus (Gradle sets cwd = module dir). */
         val CORPUS = File("corpus")
 
-        /** `CTL-GF-01`'s declared failure, reused by the control-assertion tests below. */
-        val DECLARED_GF_FAILURE = ExpectFailure(
+        /** A declared predicate failure reused by the control-assertion tests below. */
+        val DECLARED_CONTROL_FAILURE = ExpectFailure(
             check = "observations-all-satisfy",
             messageContains = "fails the predicate",
         )
@@ -364,8 +362,8 @@ class CorpusRunner {
      * an empty observation log, a missing view, an oracle that cannot model the
      * graph — keeps failing, keeps satisfying `!passedAllRuns`, and has silently
      * stopped covering anything. From outside that is indistinguishable from the
-     * control still working, which is exactly how `CTL-GF-01`'s vacuous pass
-     * survived (computenet-qaz / computenet-dqy.18).
+     * control still working, which is how the retired alignment control's
+     * vacuous pass survived (computenet-qaz / computenet-dqy.18).
      *
      * So four things are asserted, and each is RED on its own:
      * 1. the control declares at least one real, routed check;
@@ -434,8 +432,6 @@ class CorpusRunner {
         is LateJoinEqualsEarly -> "late-join-equals-early"
         is ObservationsAllSatisfy -> "observations-all-satisfy"
         is ObservationsMonotone -> "observations-monotone"
-        is ObservationsWholeWaves -> "observations-whole-waves"
-        is CompositeWholeWaves -> "composite-whole-waves"
         is ReplicasConverge -> "replicas-converge"
         is FamilyHolds -> "family-holds"
         is InterestRefusals -> "interest-refusals"
@@ -464,22 +460,22 @@ class CorpusRunner {
     // rejects it.
     // ------------------------------------------------------------------------
 
-    /** The synthetic stand-in for `CTL-GF-01`: one declared check, one declared reason. */
-    private fun gfLikeControl(
-        expectFailure: ExpectFailure? = DECLARED_GF_FAILURE,
+    /** A synthetic control with one declared check and one declared reason. */
+    private fun syntheticControl(
+        expectFailure: ExpectFailure? = DECLARED_CONTROL_FAILURE,
         checks: List<Check> = listOf(ObservationsAllSatisfy(view = "v", fn = "even")),
     ) = Scenario(
         id = "CTL-SYNTHETIC-01",
         title = "synthetic control for the runner's own control assertion",
-        covers = listOf("22-GF-01"),
+        covers = emptyList(),
         profile = Profile.CORE,
         kind = Kind.CONTROL,
         checks = checks,
         expectFailure = expectFailure,
     )
 
-    /** `CTL-GF-01`'s declared failure, in the wording the reviewer observed 20/20. */
-    private fun tornSumFailure() = CheckFailure(
+    /** The declared predicate failure used by the synthetic control. */
+    private fun declaredPredicateFailure() = CheckFailure(
         "observations-all-satisfy",
         "observations-all-satisfy(v, even): event #1 1 fails the predicate",
     )
@@ -496,9 +492,9 @@ class CorpusRunner {
 
     @Test
     fun `a control failing for a reason it does not declare is rejected, where the old assertion accepted it`() {
-        val scenario = gfLikeControl()
+        val scenario = syntheticControl()
         // The control still fails on every run — and has stopped testing
-        // torn-sum detection entirely.
+        // its declared predicate failure entirely.
         val wrongReason = mapOf(0 to listOf(emptyLogFailure()))
 
         val oldAssertionAccepted = scenario.checks.isNotEmpty() && wrongReason.isNotEmpty()
@@ -520,28 +516,28 @@ class CorpusRunner {
 
     @Test
     fun `a control failing for the reason it declares is accepted`() {
-        // Only some runs of the sweep need fail: CTL-GF-01's torn sum is a
-        // schedule-dependent observation, not a certainty on every seed.
-        val declaredReason = mapOf(3 to listOf(tornSumFailure()))
+        // Only some runs of a sweep need fail: a control's provocation can be a
+        // schedule-dependent observation rather than a certainty on every seed.
+        val declaredReason = mapOf(3 to listOf(declaredPredicateFailure()))
 
-        assertControlFailedAsDeclared(gfLikeControl(), declaredReason, runs = 20)
+        assertControlFailedAsDeclared(syntheticControl(), declaredReason, runs = 20)
     }
 
     @Test
     fun `a wrong-reason failure on one run of the sweep is rejected even when another run failed correctly`() {
         // Averaging a wrong-reason run away against a correct one would hide
         // exactly the drift this assertion exists to surface.
-        val failures = mapOf(2 to listOf(tornSumFailure()), 7 to listOf(emptyLogFailure()))
+        val failures = mapOf(2 to listOf(declaredPredicateFailure()), 7 to listOf(emptyLogFailure()))
 
-        assertThrows<AssertionError> { assertControlFailedAsDeclared(gfLikeControl(), failures, runs = 20) }
+        assertThrows<AssertionError> { assertControlFailedAsDeclared(syntheticControl(), failures, runs = 20) }
     }
 
     @Test
     fun `a control declaring no expect-failure is rejected`() {
-        val failures = mapOf(0 to listOf(tornSumFailure()))
+        val failures = mapOf(0 to listOf(declaredPredicateFailure()))
 
         val rejected = assertThrows<AssertionError> {
-            assertControlFailedAsDeclared(gfLikeControl(expectFailure = null), failures, runs = 1)
+            assertControlFailedAsDeclared(syntheticControl(expectFailure = null), failures, runs = 1)
         }
         assertTrue(rejected.message!!.contains("no `expect-failure:` block")) {
             "expected the missing-declaration diagnosis, got: ${rejected.message}"
@@ -550,8 +546,8 @@ class CorpusRunner {
 
     @Test
     fun `an expect-failure naming a check the scenario never declares is rejected`() {
-        val scenario = gfLikeControl(expectFailure = ExpectFailure(check = "final-view", messageContains = "but read"))
-        val failures = mapOf(0 to listOf(tornSumFailure()))
+        val scenario = syntheticControl(expectFailure = ExpectFailure(check = "final-view", messageContains = "but read"))
+        val failures = mapOf(0 to listOf(declaredPredicateFailure()))
 
         val rejected = assertThrows<AssertionError> { assertControlFailedAsDeclared(scenario, failures, runs = 1) }
         // The substring has to be one only the STALE-ID diagnosis produces. The
@@ -570,7 +566,7 @@ class CorpusRunner {
     @Test
     fun `a control declaring no check at all is rejected`() {
         val rejected = assertThrows<AssertionError> {
-            assertControlFailedAsDeclared(gfLikeControl(checks = emptyList()), emptyMap(), runs = 20)
+            assertControlFailedAsDeclared(syntheticControl(checks = emptyList()), emptyMap(), runs = 20)
         }
         assertTrue(rejected.message!!.contains("declares no check at all")) {
             "expected the no-check diagnosis, got: ${rejected.message}"
@@ -580,7 +576,7 @@ class CorpusRunner {
     @Test
     fun `a control whose every check passes on every run is still rejected`() {
         val rejected = assertThrows<AssertionError> {
-            assertControlFailedAsDeclared(gfLikeControl(), emptyMap(), runs = 20)
+            assertControlFailedAsDeclared(syntheticControl(), emptyMap(), runs = 20)
         }
         assertTrue(rejected.message!!.contains("every check passed on every one of 20 run(s)")) {
             "expected the never-failed diagnosis (P7), got: ${rejected.message}"
@@ -594,9 +590,9 @@ class CorpusRunner {
         // discovered file by the test factory rather than per run — so it holds
         // under `-Pconcord.profiles=core` too, for the dist/dur files that loop
         // never executes.
-        assertExpectFailureMatchesKind(gfLikeControl())
+        assertExpectFailureMatchesKind(syntheticControl())
 
-        val example = gfLikeControl().copy(kind = Kind.EXAMPLE, expectFailure = DECLARED_GF_FAILURE)
+        val example = syntheticControl().copy(kind = Kind.EXAMPLE, expectFailure = DECLARED_CONTROL_FAILURE)
         val onExample = assertThrows<AssertionError> { assertExpectFailureMatchesKind(example) }
         assertTrue(onExample.message!!.contains("only `kind: control` may declare")) {
             "expected the wrong-kind diagnosis, got: ${onExample.message}"
@@ -604,7 +600,7 @@ class CorpusRunner {
 
         assertExpectFailureMatchesKind(example.copy(expectFailure = null))
 
-        val bareControl = gfLikeControl(expectFailure = null)
+        val bareControl = syntheticControl(expectFailure = null)
         val onControl = assertThrows<AssertionError> { assertExpectFailureMatchesKind(bareControl) }
         assertTrue(onControl.message!!.contains("no `expect-failure:` block")) {
             "expected the missing-declaration diagnosis, got: ${onControl.message}"
@@ -806,7 +802,6 @@ class CorpusRunner {
         cell.fn?.let { put("fn", Value.StrVal(it)) }
         cell.agg?.let { put("agg", Value.StrVal(it)) }
         cell.k?.let { put("k", Value.IntVal(it.toLong())) }
-        cell.glitchFree?.let { put("glitch-free", Value.BoolVal(it)) }
         cell.inletMode?.let { put("inlet-mode", Value.StrVal(it)) }
         cell.journal?.let { put("journal", Value.StrVal(it)) }
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }
@@ -819,7 +814,6 @@ class CorpusRunner {
         cell.interest?.let { put("interest", interestValue(it)) }
         cell.family?.let { put("family", familyValue(it)) }
         cell.window?.let { put("window", windowValue(it)) }
-        cell.views?.let { put("views", Value.MapVal(it.mapValues { (_, id) -> Value.StrVal(id) })) }
         cell.lateness?.let { put("lateness", Value.IntVal(it)) }
     }
 
