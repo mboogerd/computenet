@@ -286,20 +286,19 @@ and each generic protocol declares whether it travels with or against it.
 Upstream protocols share one termination discipline (decided in 93 I-23,
 rule R6, unimplemented): a per-traversal epoch plus a visited-edge set
 bounds every flood (each edge expands at most once per epoch), and a
-per-protocol terminal predicate ends it — FRONTIER terminates at sources,
-glitch-free cells, and opaque membranes; STATE_REQUEST (21) at the nearest
+per-protocol terminal predicate ends it — STATE_REQUEST (21) at the nearest
 stateful cell that can serve state-as-delta; multi-hop ATTENTION (34) at a
 source or a band-quantization damper.
 
 ⚠ GAP (G-36): All metadata-plane notices are single-hop (M6): attention
-retraction, upstream disinterest, Stall/Progress, and state-request pulls
+retraction, upstream disinterest, and state-request pulls
 do not propagate through absorbing or stateless intermediaries to distant
 joins or remote producers. Proposal: One hop-by-hop re-emission rule for
 metadata-plane notices with loop prevention and the band-quantization
 interaction pinned per protocol — attention levels and transitive
 retraction across damped hops, disinterest quiescing remote producer cones,
-stall/progress watermarks reaching deep joins, and requestState forwarding
-through stateless cells (93 I-1/I-4/I-9/I-16/I-18).
+and requestState forwarding through stateless cells
+(93 I-1/I-4/I-9/I-16/I-18).
 
 ## Policies
 
@@ -312,31 +311,22 @@ only tier order is authoritative.
 
 An inlet routes each inbound invocation through an ordered chain of tiers:
 
-1. **ADMIT** — may drop an invocation, **never holds** one. A dropping ADMIT
-   that sits above an ALIGN tier MUST mint a metadata-plane `Progress`
-   absorb-ack for every *waved* invocation it drops (the CP-A3 law): the
-   dropped edge otherwise never settles and the downstream frontier stalls
-   forever waiting for the contribution. A policy declares whether it satisfies
-   this obligation (`mintsProgressAck`).
+1. **ADMIT** — may drop an invocation, **never holds** one.
 2. **GATE** — holds invocations FIFO (suspension / backpressure), draining in
    arrival order when released. Never drops, never reorders. **(specified,
    unimplemented)** — `PolicyTier.GATE` and its `Gate` policy had zero
    production installs and were deleted (remediation T03); real backpressure
    today lives in `IntakeControl`/`ParkQueue`. A GATE tier can be
    reintroduced with its first real user — see `91-gap-analysis.md`.
-3. **ALIGN** — reorders/buffers for wave completeness (the wave frontier,
-   20/22). **At most one ALIGN per inlet** — a second is rejected at install
-   time.
-4. **ACTIVATE** — cold-park until a handler is installed (10/15 §Admission vs
+3. **ACTIVATE** — cold-park until a handler is installed (10/15 §Admission vs
    activation). This tier is intrinsic to the port (its parked tail); it is the
    terminal of every chain, not an installable policy.
 
 `FanInlet.at(portRef)` — targeted catch-up / pull-reply delivery — is
 **policy-exempt** (PN-9 decision): it carries a topology-versioned baseline, not
 a wave position, so it bypasses the chain and dispatches straight to the handler.
-Routing it through ADMIT/GATE/ALIGN would be wrong — none of drop, hold, or
-reorder is admissible for state transfer, and the ALIGN frontier already
-releases such deliveries immediately.
+Routing it through ADMIT/GATE would be wrong — neither drop nor hold is
+admissible for state transfer.
 
 ### Outlet policies
 
@@ -355,8 +345,8 @@ An outlet composes two families:
 
 Pull-serve (answering a `StateRequest` with a single-wave state-as-delta
 baseline) and pull-on-open (issuing a `StateRequest` when an inlink opens) are
-themselves installable policies — composed, not welded into the frontier or a
-data cell's constructor.
+themselves installable policies — composed, not welded into a data cell's
+constructor.
 
 ## What ports are not
 

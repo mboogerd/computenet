@@ -45,12 +45,12 @@
 # through a derivation would put the oracle between a reader and the claim. A
 # journaled view is exactly what BS-12 needs (a volatile view carries no checkpointed
 # `Stateful` state to be torn from the frontier), so the fold stays pinned as the
-# explicit `final-view` golden `DUR-GF-01` uses. `DUR-REPLAY-01` is where
+# explicit `final-view` golden for this scenario. `DUR-REPLAY-01` is where
 # `incremental-equals-batch` earns its place instead: its data arm is VOLATILE, so
 # everything the oracle's fold is compared against was refilled solely by the replay.
 #
 # NON-VACUITY (every perturbation below was actually run against this scenario, as
-# `24-REPLAY-01` and `DUR-GF-01` did; results are the evidence for the `covers:` line):
+# `24-REPLAY-01` did; results are the evidence for the `covers:` line):
 #   * `[24-DUR-02]`, snapshot half — neuter `HostDurability.restoreCheckpoint` so it
 #     stops calling `Stateful.restore` for the checkpointed cells → `final-view` fails
 #     on every run ("expected [k1,k2,k3,k4] but read [k3,k4]"): the compacted-away

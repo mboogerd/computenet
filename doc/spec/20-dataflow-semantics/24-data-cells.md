@@ -247,59 +247,30 @@ semantics only — neither is a convergent merge under concurrent writers
     side's removal is not left dead under tombstone folding (Ubiquitous).
     Output membership
     at idle is a deterministic function of the converged add-wins input
-    memberships; duplicates converge on membership, not tags; not
-    glitch-free (22's wrapper is the remedy). `[24-OP-SEMIJOIN-03]` WHILE
+    memberships; duplicates converge on membership, not tags; transient
+    intermediate membership may be observed before idle. `[24-OP-SEMIJOIN-03]` WHILE
     both input streams are idle, semijoin/antijoin output membership SHALL
-    be a deterministic function of the converged add-wins input
-    memberships (duplicates converge on membership, not tags); the operator
-    is not glitch-free on its own (State-driven). Set semantics only — bag
+    be a deterministic function of the converged add-wins input memberships
+    (duplicates converge on membership, not tags) (State-driven). Set semantics only — bag
     semantics (EXCEPT ALL) would need a weighted family (see below).
     Antijoin membership flips are **absence assertions**: emitting or
     retracting a row because the *other* side does or doesn't hold a
     matching key needs knowing non-membership, which is non-monotone in the
     CALM sense — confluent, coordination-free composition is available only
     to monotone operators (`03-lasp-crdt-lattice.md` §5); antijoin needs
-    sealing. [24-OP-SEMIJOIN-04] WHERE `emitOnFrontier` gating is enabled, a
-    `SemiJoinCell` antijoin's output SHALL emit only at wave completeness,
-    coalesced to the wave's net minted enter/exit set, such that a
-    transient enter-then-exit within one wave is never observed on the
-    outlet (Optional feature). The gate is opt-in; the default stays
-    ungated, so a transient flicker within one wave may still reach the
-    outlet, remediated only by 22's glitch-free wrapper rather than by a
-    smarter convergent cell — research rejects a convergent fix here
-    (absence-based emission is non-monotone; some sealing is unavoidable,
-    and per-wave sealing over `cell.consistency.WaveFrontier` is the
-    cheapest ComputeNet has). See 20/22 §The observation frontier for the
-    guarantee this gate serves. *(Implemented — `SemiJoinCell(…,
-    emitOnFrontier = true)`: the wave's input deltas across both inlets are
-    buffered by a `WaveFrontier`-shaped fold mirrored at cell scope
-    (`cell.data.op.WaveGate` — the frontier itself is untouched, for
-    `CoalescingCombineCell`'s structural reason), applied together at
-    completeness, and reconciled once on membership before any tag is
-    minted. The gate inherits the static-link-set frontier's phantom
-    expected edge (G-13): it is for a shared-source diamond, not for two
-    independent roots.)*
   - `CombineLatestCell` — incremental keyed **outer** combine over two map
     streams (the outer sibling of `JoinCell`); a key present on only one
     side still emits, computed as `combine(k, v, null)` / `combine(k, null,
     w)`. A null-extension is an **absence assertion** exactly like
-    antijoin's — it asserts the other side holds no value for `k` at this
-    frontier (CALM, `03-lasp-crdt-lattice.md` §5) — and is the
+    antijoin's — it asserts the other side holds no value for `k` in the
+    current fold (CALM, `03-lasp-crdt-lattice.md` §5) — and is the
     internal-consistency essay's exact outer-join failure mode: a
     null-extended row can be emitted and then retracted within one wave as
     the other side's real value arrives
-    (`04-cross-cutting-watermarks-consistency.md` §3). Ungated (the
-    default), a null-extension may ride the outlet and be retracted moments
-    later, remediated only by 22's wrapper; gated (`emitOnFrontier`,
-    mirroring `SemiJoinCell` above), the null-extension emits only once the
-    wave has settled, so a same-wave retraction never reaches the outlet —
-    a genuinely one-sided key still null-extends at completeness, so outer
-    semantics are unchanged and only the timing gates.
-    See 20/22 §The observation frontier. *(Implemented, as for
-    `SemiJoinCell` above — 96 §E2.4, same mirrored fold and same
-    phantom-expected-edge caveat. This cell now also absorb-acks a wave it
-    silently swallows, closing the last divergence from 20/22 §Completeness
-    over silent or stuck edges.)*
+    (`04-cross-cutting-watermarks-consistency.md` §3). A null-extension may
+    ride the outlet and be retracted moments later; a genuinely one-sided key
+    still null-extends, so outer semantics are unchanged apart from the
+    timing of intermediate observations.
   - `UntagCell` (96 §E1.5) — the G-23 adoption seam, not an incremental
     algebra of its own: an adapter from `TaggedMapDelta` (§Tagged maps below)
     to `MapDelta`, so a converged `OrMapCell` can feed the untagged join
@@ -307,8 +278,8 @@ semantics only — neither is a convergent merge under concurrent writers
     reintroducing arrival-order bias. Effective-only: one `MapDelta` per
     input delta, a put for a key whose exposed value changed, a removal only
     when the key's last live dot dies, never a removal followed by a put for
-    the same delta. Rides the arriving wave rather than originating one
-    (single-inlet, so no completeness gate is needed). `Stateful`, snapshotting
+    the same delta. Rides the arriving wave rather than originating one.
+    `Stateful`, snapshotting
     the exposed-value map it diffs against so a restored instance does not
     replay the whole map as novelty. *(Implemented.)*
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
@@ -467,7 +438,7 @@ excluded (Ubiquitous).
   `insert`/`retract`, and a group's last retraction SHALL remove the group
   from the `MapDelta` outlet (Ubiquitous). All groups
   touched by one input delta emit as one `MapDelta` under the input's wave
-  id (22), so a glitch-free wrap composes normally. `[24-OP-GROUPBY-03]` All
+  id (22). `[24-OP-GROUPBY-03]` All
   groups touched by one input delta SHALL emit as one `MapDelta` under that
   input's wave id (Ubiquitous).
 - Aggregator classes: **self-inverting** (count, sumOf, avgOf — O(1)
@@ -508,9 +479,9 @@ excluded (Ubiquitous).
   `rightJoin` / `fullJoin` graph factories union the relational join's
   matched rows with null-completed antijoin rows. `[24-OP-OUTERJOIN-01]`
   `leftJoin`/`rightJoin`/`fullJoin` SHALL union the relational join's
-  matched rows with null-completed antijoin rows (Ubiquitous). Eventually consistent,
-  not glitch-free — transient `(a, null)`/`(a, b)` overlap while opposing
-  updates are in flight; an atomic outer-join cell waits for a consumer
+  matched rows with null-completed antijoin rows (Ubiquitous). Eventually
+  consistent — transient `(a, null)`/`(a, b)` overlap while opposing updates
+  are in flight; an atomic outer-join cell waits for a consumer
   that can't tolerate the transient. `[24-OP-OUTERJOIN-02]` WHILE opposing
   updates to an outer-join composition are in flight, the composition SHALL
   be only eventually consistent — a transient overlap of `(a, null)` and
@@ -554,11 +525,12 @@ partitions replicate (93 I-25/I-2/I-3/I-8).
 > `computenet-6gkou`/`computenet-3vd7k`), and so did the generative lateness
 > harness and `:demo:slotfinder` adoption (96 §E4.6, `computenet-fh1fo`).
 > Concord corpus coverage of the `[24-WL-*]` ids landed too (96 §E4,
-> `computenet-t4od7`): every id is covered except `[24-WL-15]`,
-> `[24-WL-17]` and `[24-WL-18]`, which remain gap rows for reasons filed in
-> `concord/corpus/DISPUTES.md`. `[24-WL-04]` is covered by its settlement
-> consequence (`computenet-tcovt`); its structural half (the floor is not a
-> wave position or completeness-set member) stays disputed there. Retracts the eviction
+> `computenet-t4od7`): every id is covered except `[24-WL-04]`,
+> `[24-WL-15]`, `[24-WL-17]` and `[24-WL-18]`, which remain gap rows for
+> reasons filed in `concord/corpus/DISPUTES.md`. The `[24-WL-04]` settlement
+> scenario (`computenet-tcovt`) was retired with glitch-freedom; its
+> structural half (the floor is not a wave position) stays disputed there.
+> Retracts the eviction
 > trigger that used to trail `[24-OP-WINDOW-02]` (the session-windows
 > deferral stays there). Research: Feldera's lateness → waterline → GC
 > (`doc/research/incremental-engines/01-dbsp-feldera.md` §5), Flink's
@@ -615,10 +587,7 @@ prefix of every execution (Ubiquitous). `WaterlineDelta` merges by maximum, so
 redelivery and reordering are fixpoints: a floor that does not rise evicts
 nothing and emits nothing. The waterline edge itself is the delay Feldera
 realises with a z⁻¹-delayed max (research `01` §5). `[24-WL-04]` The floor
-SHALL be a value, not a wave: it SHALL NOT be a wave position and SHALL NOT be
-a member of any completeness set or glitch-free frontier (Ubiquitous). How a
-`WaterlineDelta` emission nonetheless rides the wave plane is stated once, in
-22 §Interaction with other parts.
+SHALL be a value, not a wave: it SHALL NOT be a wave position (Ubiquitous).
 
 **A source joining below the floor.** `[24-WL-20]` WHEN a source first
 contributes, or contributes again after retirement (`[24-WL-12]`,
@@ -952,8 +921,7 @@ never on position.
   `MessageContext` — it neither re-mints a wave nor coalesces sources; each
   organelle outlet is its own wave source. Because ranges are disjoint, a
   delta from one organelle only ever mentions its own keys: merging is
-  conflict-free union, no downstream diamond joins two partitions on the
-  same key, and cross-source glitches are impossible without coordination.
+  conflict-free union, and no downstream join spans two partitions on one key.
   `[24-PART-03]` Because organelle key ranges are disjoint, the composite's
   merging outlet SHALL forward each organelle's delta preserving its
   `MessageContext` as conflict-free union, such that a partitioned cell's
@@ -1216,12 +1184,11 @@ that is what the per-rule notes below now say instead of one blanket line.)*
   (G-42, below).
 
 ⚠ GAP (G-42): Epoch source-ids and restart generations accrete unboundedly:
-OR-set/PN source columns, stale glitch-free partial-wave buffers, and
-frontier entries for vanished epochs are never reclaimed, and
+OR-set/PN source columns and frontier entries for vanished epochs are never
+reclaimed, and
 counter/generation continuity across migration and host failure is
 unpinned. Proposal: safe reclamation of provably-superseded epochs
-(compaction riding G-25 checkpoints), frontier GC for orphaned partial
-waves triggered by relink-driven recompute, a concrete migration-payload
+(compaction riding G-25 checkpoints), a concrete migration-payload
 field carrying the outlet counter high-water, durable-counter batching kept
 off the emission hot path, and generation derivation from the journal
 high-water (fresh high base on non-durable hosts) so post-restart tags
@@ -1563,8 +1530,8 @@ fresh catch-up baselines is tracked by `computenet-n2jwi`.
 
 ⚠ GAP (G-59): The M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells: wall-clock/random logic,
-spontaneously-emitting sources, Effectful sinks without idempotency keys,
-glitch-free partial-wave buffers, and cross-host recovery-frontier drift
+spontaneously-emitting sources, Effectful sinks without idempotency keys, and
+cross-host recovery-frontier drift
 are unhandled. Proposal: a determinism marker/lint forcing
 non-deterministic cells to output-mode journaling (or a captured-entropy
 WAL record); an emitted-delta log format for sources and a
@@ -1599,23 +1566,18 @@ at-rest encryption stance for durable journals and parked/overflow state
 
 A journaled data cell is recovered by replaying its write-ahead frames through
 the ordinary intake (24 durability, M10.1). PN-2 (22 §Recovery is a baseline)
-makes that replay a **baseline** rather than a live wave: a mid-graph cell whose
-frames carry a non-null wave context re-emits its restored deltas flagged
-`MessageContext.baseline`, so a downstream glitch-free join installs them as arm
-state and never waits for a volatile sibling arm to replay the same wave.
-`[24-REPLAY-01]` WHEN a journaled mid-graph cell's replayed frames carry a
-non-null wave context, it SHALL re-emit its restored deltas flagged
-`MessageContext.baseline`, such that a downstream glitch-free join installs
-them as arm state without waiting for a volatile sibling arm to replay the
-same wave (Event-driven). This
-is what lets a durable data cell feed one arm of a fork-join diamond whose other
-arm is volatile — the exchange demo's previously-unwritten "journal only
-context-free roots" invariant is retired: mid-graph journaled cells recover
-without stalling the join. Tag continuity across the replay is unchanged — tag
-sources are derived from the cell ref (M10.1), so a recovered instance re-mints
-the exact tags the network already observed; the baseline marks the *wave-plane*
-disposition of the replay, not the *state-plane* merge, which stays ordinary
-observed-remove/tag-set union.
+makes that replay a **baseline** rather than live traffic: a mid-graph cell
+whose frames carry a non-null wave context re-emits its restored deltas flagged
+`MessageContext.baseline`, so downstream state installs them as a baseline and
+never as a live wave. `[24-REPLAY-01]` WHEN a journaled mid-graph cell's
+replayed frames carry a non-null wave context, it SHALL re-emit its restored
+deltas flagged `MessageContext.baseline`, such that downstream state installs
+them as a baseline and never as a live wave (Event-driven). Tag continuity
+across the replay is unchanged — tag sources are derived from the cell ref
+(M10.1), so a recovered instance re-mints the exact tags the network already
+observed; the baseline marks the replay as restored state, not a live
+emission, while the state-plane merge stays ordinary observed-remove/tag-set
+union.
 
 ## The shard is a dataflow cell (PN-4)
 

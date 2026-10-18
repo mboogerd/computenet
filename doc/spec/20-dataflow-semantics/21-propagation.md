@@ -2,7 +2,7 @@
 
 > **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up, on-demand pull, the catch-up baseline, and the RESTART re-baseline core implemented — the re-baseline's checkpoint-tier and direction residuals stay open under G-42/G-43; the cycle-head model decided in 93, unimplemented)
 > **Sources**: ADR 1 (§1, §2, §4), ADR — Cellular Software Development Process (incremental dataflow layer); 93 resolutions I-5, I-6, I-16, I-22, I-24, I-28
-> **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains); catch-up via `LinkSupport.onLinked`; on-demand pull via `StateRequestProtocol`/`FanOutlet.baselineTo` (`civictech.cell.port`), catch-up baseline via `MessageContext.baseline`/`TagFrontier` and `GlitchFreeCell`'s baseline branch (W2.2)
+> **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains); catch-up via `LinkSupport.onLinked`; on-demand pull via `StateRequestProtocol`/`FanOutlet.baselineTo` (`civictech.cell.port`), catch-up baseline via `MessageContext.baseline`/`TagFrontier` (W2.2)
 
 ## Push (default, implemented)
 
@@ -114,28 +114,15 @@ rule below) plus a nullable `MessageContext.baseline: TagFrontier` — a
 merge-tag frontier for dedup and incremental pull, never a wave position
 (tags and waves stay separate uses of one clock shape, 20/22) — causally
 anchored at the stamped link-install event (20/22 §Topology versioning),
-and **never admitted to any wave-completeness set**. A glitch-free consumer
-installs the baseline as arm state (deduping by tag union, 24) and resumes
-evaluation at the first wave that completes over the post-install topology;
-the install→first-complete-wave window gets convergence, not simultaneity,
-exactly as any topology change does (G-20). *(`MessageContext.baseline`/
-`TagFrontier` (`civictech.cell`); `GlitchFreeCell`'s baseline branch forwards
-it immediately, bypassing floors/watermark/pending — never buffered, never
-counted toward completeness.)*
+and remains outside the live data stream. A subscriber installs the baseline
+as state (deduping by tag union, 24) and continues with subsequent live
+delivery.
 
-⚠ GAP (G-39): link/unlink are null-context management ops with no stamp in
-the wave domain — glitch-free consumers cannot know from which wave a
-new/removed edge counts, source-set changes do not propagate downstream,
-and EdgeEvents/floors have no wire form. *Proposal*: in-band
-EdgeOpen/EdgeClose markers injected into the affected link's own FIFO
-carrying a per-source flushed-high-water floor; design the floor
-representation and retention/compaction horizon, hop-by-hop downstream
-source-set delta propagation with a liveness proof (an upstream cut must
-not strand a waiting join), bridged EdgeEvent frame types ordered against
-data across disconnect/park/replay, the floors×cycles×merge-tag
-interaction, and the explicit topology-serializing coordinator
-(JoinBarrier) cell that doubles as the diamond-over-replica escape hatch
-(93 I-13/I-14).
+**In-band edge markers** *(built, W3.2)*: `EdgeOpen`/`EdgeClose` markers are
+injected into the affected link's own FIFO, with `EdgeOpen` ahead of data and
+`EdgeClose` after the final data. They preserve topology ordering for
+pull-on-open catch-up, presence lanes, QuorumSet lane accounting, and
+waterline retirement.
 
 **On-demand pull** *(implemented, W2.2 — closes the G-18 residual, decided
 in 93 I-16)*: a consumer asking for a recompute or state *without*
@@ -156,8 +143,8 @@ via `FanOutlet.baselineTo`/`outlet.at(replyTo)` (`since = null` ⇒ full
 state-from-empty; `since` present ⇒ only tags beyond the frontier per
 source; cells without a per-source-monotonic tag clock fall back to full
 state). Per-link FIFO (30/31) makes the reply one contiguous unit ahead of
-subsequent live waves. The shipped trigger is subscriber-side: `GlitchFreeCell`
-issues a `StateRequest(since = null)` on every fresh `EdgeOpen`, which by
+subsequent live waves. The shipped trigger is subscriber-side: the `PullOnOpen`
+inlet policy issues a `StateRequest(since = null)` on every fresh `EdgeOpen`, which by
 construction never re-fires across a park/replay (the link object survives
 a park) — satisfying the fresh-link-⇒-pull and parked→replayed-⇒-no-pull
 rows. Producer-side `onLinked` push (above) is retained purely as the
@@ -189,15 +176,14 @@ the host accessor sits beside the whole-state one on the managed host.)
 
 [21-PULL-02] WHEN an instrument reads a cell's state under a cursor and a
 limit, the framework SHALL answer without emitting, without linking, and
-without advancing any wave position, delivered watermark or completeness set.
+without advancing any wave position or delivered watermark.
 
 Wave neutrality is what distinguishes a read from a pull, and it is
 boundary-observable rather than an internal claim: every delivery in this model
 carries a fresh per-source wave position minted by the emitting outlet (20/22
 §Structural changes), so a cell whose wave plane has not advanced across a read
-delivered nothing; a delivered watermark and a completeness set both advance
-only on a delivery, an absorb-ack or a later wave (20/22 §Watermarks), so
-neither can have moved either; and a link installed by a read would announce
+delivered nothing; a delivered watermark (42) advances only on a delivery,
+so it cannot have moved either; and a link installed by a read would announce
 itself as catch-up, which is an emission. A `StateRequest` reply, by contrast,
 consumes exactly one wave position — it is an ordinary stamped emission — which
 is exactly right for the pull path and exactly wrong for an instrument.
@@ -342,15 +328,13 @@ the empirical probe for weak-tier quiescence (G-19 residual):
 
 - **Re-origination at declared heads** (93 I-5). Every cycle MUST declare at
   least one **`CycleHead`** with a **`feedbackInput`** — a feedback inlet
-  declared distinctly from ordinary wave-joining inlets. Feedback is
-  **absorbed into loop state, not joined**: the incoming wave terminates at
-  the head (it never enters the head's glitch-free completeness condition),
-  and the head mints a **fresh** `Timestamp(headSourceId, ++counter)` for
-  the next iteration — the one precisely-located exception to transparent
-  flow (20/22 rule 2). Iteration = wave: no `(sourceId, counter)` traverses
-  any cell twice, so glitch-free cells inside loops need no re-entry
-  detection, and "the topology version iteration *N* sees" is simply the
-  edge set feeding wave *t_N* (20/22 §Topology versioning). **Fixpoint =
+  declared distinctly from ordinary inputs. Feedback is **absorbed into loop
+  state, not joined**: the incoming wave terminates at the head, and the head
+  mints a **fresh** `Timestamp(headSourceId, ++counter)` for the next
+  iteration — the one precisely-located exception to transparent flow (20/22
+  rule 2). Iteration = wave: no `(sourceId, counter)` traverses any cell
+  twice, and "the topology version iteration *N* sees" is simply the edge set
+  feeding wave *t_N* (20/22 §Topology versioning). **Fixpoint =
   the state after the terminating sequence of head-minted waves settles.**
 - **Two-tier quiescence** (93 I-6), keyed on KSP-verified descriptor bits
   (`magnitude`, `idempotentMerge` — read at link time, never reflection):
