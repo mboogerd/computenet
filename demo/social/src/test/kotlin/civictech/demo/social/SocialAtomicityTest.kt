@@ -4,7 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.ActorIngress
@@ -12,7 +11,6 @@ import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.cell.host.link
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.streamTo
 import civictech.testkit.forEachSeed
@@ -23,7 +21,7 @@ import java.util.Random
 import java.util.UUID
 
 /**
- * `[SOC1-ATOM-01..03]` (feature `computenet-jadt6`, task `computenet-jadt6.1`,
+ * `[SOC1-ATOM-01..02]` (feature `computenet-jadt6`, task `computenet-jadt6.1`,
  * designs jadt6-D1..D4) — **a verification, not a construction**. It asks what
  * wave id one [SocialGraph.addPost] actually carries on each of the three
  * cells it writes, and records the answer; it does not reshape `addPost` or
@@ -65,19 +63,9 @@ import java.util.UUID
  * nothing, or that recorded a constant, would fail one of them. That is this
  * task's mutation check, reached without editing a file outside its claim.
  *
- * ## The glitch-free path
- *
- * `[SOC1-ATOM-03]` is checked on a **test-side** [GlitchFreeCell] fed by
- * `manage.link` (a `Consume`-role link) from the three contributing outlets —
- * never `streamTo`, which installs an `Observe`-role link that
- * `WaveFrontier` excludes from the frontier and which would therefore gate
- * nothing. Observed: under plain `addPost` the cell releases **nothing** (each
- * source's wave waits on the two sibling edges that never carry that source —
- * the "phantom expected edge" of spec 20/22), and under
- * `ActorIngress.drive` it releases exactly three invocations, contiguous,
- * carrying one timestamp. `GlitchFreeCell` GROUPS a wave, it does not COMBINE
- * one, so that contiguity is the whole of what `[SOC1-ATOM-03]` can honestly
- * assert here — never "no torn state".
+ * The cross-cell atomicity question is closed by the accepted removal ADR; the
+ * retired atomicity requirement is no longer part of this demo's coverage
+ * ledger.
  *
  * **Limit of this file, stated where it is made:** everything above is
  * measured on the in-process `SimulationController` host with `journalDir =
@@ -250,76 +238,6 @@ class SocialAtomicityTest {
             withSeed(clue) { records.map { it.timestamp }.toSet().size shouldBe 1 }
         }
     }
-
-    // --- [SOC1-ATOM-03] ------------------------------------------------------
-
-    /**
-     * The Consume-linked [GlitchFreeCell] path, under both ingress shapes.
-     * Asserts the observed release count per ingress and, for any wave with
-     * more than one release, that the releases are contiguous and carry one
-     * timestamp.
-     */
-    @Test
-    fun `SOC1-ATOM-03 a Consume-linked GlitchFreeCell releases nothing under plain ingress and one contiguous wave under drive`() {
-        forEachSeed(0L until 20L) { seed ->
-            val plain = runGlitchFree(seed) { it() }
-            withSeed("seed=$seed plain=$plain") {
-                // Phantom expected edges: each source's wave waits forever on the
-                // two sibling edges that structurally never carry that source.
-                plain.size shouldBe 0
-            }
-
-            val actor = ActorIngress(UUID.randomUUID())
-            val driven = runGlitchFree(seed) { block -> actor.drive(block) }
-            val clue = "seed=$seed driven=$driven"
-            withSeed(clue) { driven.size shouldBe 3 }
-            withSeed(clue) { driven.map { it.timestamp }.toSet().size shouldBe 1 }
-            withSeed(clue) { contiguousByWave(driven) shouldBe true }
-        }
-    }
-
-    private fun runGlitchFree(seed: Long, ingress: (() -> Unit) -> Unit): List<WaveRecord> {
-        val rig = Rig(seed)
-        rig.applyPrefix(seed)
-
-        @Suppress("UNCHECKED_CAST")
-        val gf = GlitchFreeCell(Propagate::class.java as Class<Propagate<SetDelta<Any>>>)
-        rig.manage.spawn(gf)
-        rig.contributingOutlets().forEach { (_, outlet) ->
-            val result = rig.manage.link(outlet, gf.inlet)
-            // [SOC1-ATOM-03]'s "IF the link is refused" arm: a refusal is the
-            // uncheckable-with-reason outcome, recorded verbatim, never worked
-            // around with a kernel change.
-            check(result is civictech.cell.link.LinkResult.Connected) {
-                "manage.link refused the Consume link into the GlitchFreeCell: $result"
-            }
-        }
-        // The probe on the glitch-free outlet labels by the delta's element type:
-        // the pass-through rewrites sourcePort, so the element is how the three
-        // contributing inputs are told apart.
-        gf.outlet.streamTo(
-            Propagate<SetDelta<Any>> { delta ->
-                val ctx = CurrentContext.get() ?: return@Propagate
-                if (ctx.baseline != null) return@Propagate
-                val element = (delta.adds.keys + delta.dels.keys).firstOrNull()
-                rig.records += WaveRecord(element?.javaClass?.simpleName ?: "empty", ctx.timestamp)
-            },
-        )
-        rig.controller.runToIdle()
-        rig.records.clear()
-
-        ingress { rig.graph.addPost(rig.probedPost()) }
-        rig.controller.runToIdle()
-        return rig.records.toList()
-    }
-
-    /** True when every wave id's releases occupy one unbroken run of [records]. */
-    private fun contiguousByWave(records: List<WaveRecord>): Boolean =
-        records.map { it.timestamp }
-            .let { stamps -> stamps.distinct().all { wave -> isRun(stamps.indices.filter { stamps[it] == wave }) } }
-
-    private fun isRun(indices: List<Int>): Boolean =
-        indices.isEmpty() || indices.last() - indices.first() == indices.size - 1
 
     /** Keeps the seed in the assertion message, per `[SOC1-ATOM-01]`. */
     private fun withSeed(clue: String, assertion: () -> Unit) {

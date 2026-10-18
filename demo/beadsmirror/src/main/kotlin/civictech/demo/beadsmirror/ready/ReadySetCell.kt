@@ -109,11 +109,10 @@ import java.util.UUID
  * because `MirrorProjector.apply` propagates into two independent cells. Both
  * propagations complete before `apply` returns, so any observation made
  * between records is whole; an observation interleaved *within* one record can
- * still see the field half applied and the edge half not. That is the
- * glitch-freedom question sibling feature computenet-98u.3 owns and tests —
- * this cell deliberately keeps it *observable* (the intermediate state is a
- * real emission, not something swallowed) rather than papering over it here,
- * which is what a wave-gated wrapper would do.
+ * still see the field half applied and the edge half not. This cell deliberately
+ * keeps that intermediate state *observable* (the intermediate state is a real
+ * emission, not something swallowed) rather than papering over it here, which
+ * is what a wave-gated wrapper would do.
  *
  * ## Threading: one writer, no lock; the read side is a published snapshot
  *

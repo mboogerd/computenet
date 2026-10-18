@@ -52,9 +52,8 @@ data class AllocatorReport(
  * batch of records. The kernel's wave machinery cannot supply that here:
  * `SetCell`'s `SetOps` inlet propagates one `SetDelta` per element, and
  * `SpendLogIngester.fold` loops one add per record, so a poll's batch of N
- * records is N waves, not one. `GlitchFreeCell` groups a wave; it does not
- * combine several. F3 may not change ingest (that is F1's surface), so the
- * batch boundary has to come from the caller who knows where the batch ends —
+ * records is N waves, not one. F3 may not change ingest (that is F1's surface),
+ * so the batch boundary has to come from the caller who knows where the batch ends —
  * the poll driver, which calls [publish] after each ingester poll returns.
  *
  * The consequence is the invariant this class actually enforces: **readers read
