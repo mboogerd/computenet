@@ -38,7 +38,7 @@ data class NodeState(val id: String, val status: String = "idle", val output: Js
                      val runCount: Int = 0, val lastRun: RunSummary? = null,
                      val text: String = "", val ref: String? = null, val code: String? = null,
                      val codeHash: String? = null, val approvedHash: String? = null,
-                     val preview: PreviewState? = null)
+                     val preview: PreviewState? = null, val beads: BeadsState? = null)
 @Serializable
 data class StudioGraph(val nodes: List<StudioNode>, val edges: List<StudioEdge>,
                        val state: Map<String, NodeState> = emptyMap())
@@ -54,6 +54,7 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
     val defaults = when (kind) {
         "text" -> "{}"
         "git" -> """{"repo":"","branch":"","intervalSec":60,"fetch":true}"""
+        "beads" -> beadsDefaults
         "program" -> """{"prompt":"","inputs":["in"],"generator":"claude","auto":true,"timeoutSec":120}"""
         "exec" -> {
             val preset = supplied.string("preset", "custom")
@@ -61,6 +62,7 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
                 "custom" -> """"command":"echo {{in}}""""
                 "claude" -> """"prompt":"","model":"","maxTurns":10,"maxBudgetUsd":1.0,"tools":"readonly""""
                 "codex" -> """"prompt":"","model":"","effort":"medium""""
+                "bd-comment", "bd-create" -> beadsPresetDefaults(preset)
                 else -> bad("unknown exec preset: $preset")
             }
             """{"preset":"$preset","auto":${preset == "custom"},"timeoutSec":600,"cwd":"",$fields}"""
@@ -79,11 +81,13 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
     }
     if (kind == "exec" && config.string("preset") == "codex" && config.string("effort") !in setOf("low", "medium", "high")) bad("invalid effort")
     if (kind == "program" && config.string("generator") !in setOf("claude", "codex")) bad("invalid generator")
+    if (kind == "beads" || (kind == "exec" && beadsPreset(config.string("preset")))) validateBeadsConfig(config, kind == "beads")
     return config
 }
 
 internal fun inputPorts(kind: String, config: JsonObject): List<String> = when (kind) {
-    "exec" -> placeholder.findAll(config.string(if (config.string("preset") == "custom") "command" else "prompt"))
+    "exec" -> placeholder.findAll(if (beadsPreset(config.string("preset"))) beadsFields(config.string("preset")).joinToString("\n") { config.string(it) }
+        else config.string(if (config.string("preset") == "custom") "command" else "prompt"))
         .map { it.groupValues[1] }.distinct().toList()
     "program" -> {
         val ports = (config["inputs"] as? JsonArray)?.map {

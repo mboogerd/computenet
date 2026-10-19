@@ -1,4 +1,4 @@
-export type Kind = 'text' | 'git' | 'exec' | 'program';
+export type Kind = 'text' | 'git' | 'exec' | 'program' | 'beads';
 export type Config = Record<string, string | number | boolean | string[]>;
 export interface StudioNode {
   id: string;
@@ -46,6 +46,7 @@ export interface NodeState {
   codeHash?: string | null;
   approvedHash?: string | null;
   preview?: PreviewState | null;
+  beads?: { watch: string; set: string } | null;
 }
 export interface Graph { nodes: StudioNode[]; edges: Edge[]; state: Record<string, NodeState> }
 export type Frame =

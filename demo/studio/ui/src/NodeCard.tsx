@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
 import type { NodeState, StudioNode } from './types';
 import { outputPreview, PORT_GAP, PORT_TOP } from './model';
 import { nodePath } from './api';
+import { BeadsCard } from './StudioBeads';
 
 export type Action = (path: string, method?: string, body?: unknown) => Promise<boolean>;
 export function Status(props: { state?: NodeState }) {
@@ -64,6 +65,8 @@ export default function NodeCard(props: {
         <p class="repo" title={String(props.node.config.repo ?? '')}>{String(props.node.config.repo || 'Select cell to set repository')}</p>
         <div class="actions"><code>{props.state?.ref?.slice(0, 7) || 'No ref yet'}</code><button onClick={() => props.action(`${nodePath(props.workflowId, props.node.id)}/fire`, 'POST')}>Fire</button></div>
       </Show>
+      <Show when={props.node.kind === 'beads'}><BeadsCard config={props.node.config} state={props.state}
+        fire={() => props.action(`${nodePath(props.workflowId, props.node.id)}/fire`, 'POST')} /></Show>
       <Show when={props.node.kind === 'exec' || props.node.kind === 'program'}>
         <div class="actions"><button class={props.state?.status === 'stale' ? 'stale-run' : 'primary'} disabled={unapproved()}
           title={unapproved() ? 'Generate and approve the code in the side panel first' : 'Run with current inputs'} onClick={run}>

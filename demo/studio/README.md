@@ -50,6 +50,70 @@ manual programs. Later inputs follow the live node's auto setting. A program wit
 no approved implementation keeps its live state `stale` until promotion.
 Blank agent models use the CLI default, including the user’s Codex configuration.
 
+### Beads work items and findings
+
+Add a **Beads** source with the toolbar, then set `workspace` to an absolute
+directory containing `.beads`. `bd` must be on the server's PATH. The source has
+no input ports. Its config is `{"workspace":"/absolute/workspace","query":"ready",
+"intervalSec":60}`. `query: "list"` also accepts optional `status`, `label`, and
+`type` filters (the CLI's default list status semantics apply when status is blank).
+Both queries use `--limit=0` to watch the entire matching set.
+
+Studio reads through argv-only `bd --directory <workspace> --readonly --sandbox
+ready|list --json`, with only those fixed read commands and filters. This is
+smaller than importing Beads-mirror's Dolt projection, and the kernel's
+`DemoIsolationRatchetTest` prohibits new dependencies between demo applications.
+No demo dependency or isolation exception is added. `--readonly` refuses writes;
+`--sandbox` disables auto-push. The workspace is validated before CLI launch and
+Beads discovery is pinned to its `.beads` directory. There is one poll in flight
+per source; poll errors appear in `state.error` and polling continues.
+
+The first successful observation records a silent baseline in the cell's
+checkpoint. Each observed difference emits **one change**, for example:
+
+```json
+{"old":"[]","new":"[{\"id\":\"ws-abc\",\"title\":\"Check result\",\"status\":\"open\",\"priority\":2,\"type\":\"task\",\"labels\":[]}]","added":["ws-abc"],"removed":[],"changed":[],"workspace":"/absolute/workspace"}
+```
+
+`old` and `new` are JSON **text**, each encoding an array sorted by id, containing
+only `{id,title,status,priority,type,labels}`; labels are sorted too. `old` can be
+null on an initial Fire. `added`, `removed`, and `changed` are sorted id arrays;
+changed means one of those small fields changed for a retained id. Description
+or timestamp edits alone do not emit. Changes between polls are observed as one
+net difference. The card shows the current count, including the silent baseline,
+and the latest added ids. Downstream templates use `{{x.new}}`, `{{x.old}}`,
+`{{x.added}}`, `{{x.removed}}`, `{{x.changed}}`, and `{{x.workspace}}`, replacing
+`x` with the input port name. Array template values render as JSON text.
+
+Pending bursts compose the first old set with the latest new set, recomputing
+all three id arrays across that interval. Fire re-emits the stored change with
+an ISO-8601 `fired` timestamp, even if the set is unchanged. Recovery/re-link
+catch-up retains that exact stored change and dedupes it. Changing the workspace,
+query or active list filters establishes a new silent baseline; changing just
+the interval retains it. Each workflow owns its polling runtime independently.
+
+Choose either preset in an **exec** cell's settings to write findings:
+
+- `bd-comment`: configure `workspace`, `issue` and `text` templates. Runs
+  `bd --directory <workspace> --sandbox comment -- <issue> <text>`.
+- `bd-create`: configure `workspace`, `title`, `description`, `type`, `priority`
+  (0–4), and comma-separated `labels` templates. Runs `bd ... create --json`
+  with the corresponding named flags. Issues are always **unparented**; no
+  parent option is forwarded. Defaults: type `task`, priority `2`, empty labels.
+
+Both presets default to `auto: false`, including when switching from an automatic
+custom command. Connect inputs, review settings, and use **Run**. Every template
+value stays within its own argv element; no shell interprets it. The configured
+workspace is the working directory; these presets do not infer a tracker from
+upstream inputs or `cwd`. Output uses the normal `{"old","new"}` change envelope.
+
+**These presets write to the real tracker of the configured workspace. This
+repository's tracker syncs to DoltHub on push.** Studio does not push or sync it;
+`--sandbox` also disables Beads auto-push. Inputs, results and job status use the
+normal durable exec ledger. Recovery never automatically retries an interrupted
+write: its external effect may already have happened, so inspect the tracker
+before choosing Run again.
+
 The service binds loopback, validates Host on all routes, requires JSON on
 POST/PATCH, and sends no CORS headers. Agents use read-only tools; generation
 has no tools. Custom commands are user-authored and run with your OS permissions; Claude/Codex

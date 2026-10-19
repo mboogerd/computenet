@@ -243,6 +243,7 @@ export default function App() {
       </div>
       <Show when={available()}><div class="add-tools" role="group" aria-label="Add a cell"><span class="muted small">Add cell</span>
         <button onClick={() => add('text')}>+ Text</button><button onClick={() => add('git')}>+ Git repo</button>
+        <button onClick={() => add('beads')}>+ Beads</button>
         <button onClick={() => add('exec', 'custom')}>+ Command</button><button onClick={() => add('exec', 'claude')}>+ Claude</button>
         <button onClick={() => add('exec', 'codex')}>+ Codex</button><button onClick={() => add('program')}>+ Programmable</button>
       </div></Show>

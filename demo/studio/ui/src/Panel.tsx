@@ -4,6 +4,8 @@ import type { Config, NodeState, RunDetail, RunSummary, StudioNode } from './typ
 import { Status, type Action } from './NodeCard';
 import { promotionAction } from './model';
 import ConfirmationDialog, { type Confirmation } from './ConfirmationDialog';
+import { BeadsFields } from './StudioBeads';
+import { beadsPresetConfig, isBeadsPreset } from './beadsModel';
 
 export default function Panel(props: { workflowId: string; node: StudioNode; state?: NodeState; action: Action; close: () => void; remove: () => void; toast: (message: string) => void }) {
   const [title, setTitle] = createSignal('');
@@ -41,7 +43,10 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
     <Show when={hint}><small>{hint}</small></Show>
   </label>;
   const select = (key: string, label: string, choices: string[]) => <label class="field"><span>{label}</span>
-    <select value={String(config()[key] ?? choices[0])} onChange={event => set(key, event.currentTarget.value)}>
+    <select value={String(config()[key] ?? choices[0])} onChange={event => {
+      const value = event.currentTarget.value;
+      if (key === 'preset' && isBeadsPreset(value)) setConfig(beadsPresetConfig(config(), value)); else set(key, value);
+    }}>
       <For each={choices}>{choice => <option value={choice}>{choice}</option>}</For>
     </select>
   </label>;
@@ -62,10 +67,12 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
         {field('intervalSec', 'Poll interval (seconds)', 'number')}
         <label class="toggle"><input type="checkbox" checked={Boolean(config().fetch)} onChange={event => set('fetch', event.currentTarget.checked)} />Fetch before polling</label>
       </Show>
+      <Show when={props.node.kind === 'beads'}><BeadsFields source config={config()} set={set} /></Show>
       <Show when={props.node.kind === 'exec'}>
-        {select('preset', 'Preset', ['custom', 'claude', 'codex'])}
+        {select('preset', 'Preset', ['custom', 'claude', 'codex', 'bd-comment', 'bd-create'])}
         <Show when={preset() === 'custom'}>{textarea('command', 'Command')}</Show>
-        <Show when={preset() !== 'custom'}>
+        <Show when={isBeadsPreset(preset())}><BeadsFields config={config()} set={set} /></Show>
+        <Show when={preset() === 'claude' || preset() === 'codex'}>
           {textarea('prompt', 'Prompt')}
           {field('model', 'Model', 'text', 'Leave empty for the CLI default')}
         </Show>
@@ -76,7 +83,7 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
         </Show>
         <Show when={preset() === 'codex'}>{select('effort', 'Effort', ['low', 'medium', 'high'])}<p class="muted small">Sandbox: read-only</p></Show>
         <p class="hint">Templates accept <code>{'{{port}}'}</code>, <code>{'{{port.old}}'}</code>, <code>{'{{port.new}}'}</code>, <code>{'{{port.repo}}'}</code>. Replace “port” with an input name. Missing values become empty strings.</p>
-        {field('cwd', 'Working directory', 'text', 'Leave empty for the server default')}
+        <Show when={!isBeadsPreset(preset())}>{field('cwd', 'Working directory', 'text', 'Leave empty for the server default')}</Show>
       </Show>
       <Show when={props.node.kind === 'program'}>
         {textarea('prompt', 'Program prompt')}

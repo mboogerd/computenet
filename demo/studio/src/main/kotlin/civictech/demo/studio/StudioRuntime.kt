@@ -110,7 +110,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         }
         recovering = false
         nodes.values.forEach(::attach)
-        nodes.values.filter { it.node.kind == "git" }.forEach { schedulePoll(it, 0) }
+        nodes.values.filter { it.node.kind in setOf("git", "beads") }.forEach { schedulePoll(it, 0) }
     } }
 
     private fun checkpointOf(ref: CellRef): StudioCheckpoint =
@@ -170,6 +170,10 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     internal fun settleInputs() {
         host.quiescence().await(5_000)
         intake.submit {}.get(5, TimeUnit.SECONDS)
+    }
+    internal fun settlePoll(id: String) {
+        val task = synchronized(lock) { entry(id).gitTask }
+        task?.get(65, TimeUnit.SECONDS)
     }
     private fun snapshot() = StudioGraph(nodes.values.map { it.node }, edges.values.toList(), nodes.mapValues { it.value.state })
     private fun graphFrame(): String = buildJsonObject {
@@ -231,7 +235,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         val e = spawn(node)
         nodes[id] = e
         structural(); changed(e)
-        if (kind == "git") schedulePoll(e, 0)
+        if (kind in setOf("git", "beads")) schedulePoll(e, 0)
         node
     }
 
@@ -239,7 +243,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         val e = entry(id)
         val patch = body["config"]?.jsonObject
         val old = e.node
-        val config = nodeConfig(old.kind, JsonObject(old.config + patch.orEmpty()))
+        val config = nodeConfig(old.kind, beadsPatchConfig(old, patch))
         val ports = inputPorts(old.kind, config)
         e.node = old.copy(title = body.string("title", old.title),
             x = (body["x"] as? JsonPrimitive)?.doubleOrNull ?: old.x,
@@ -252,7 +256,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
             if (e.shadow != null) discardShadow(e)
         }
         structural(); changed(e)
-        if (patch != null && old.kind == "git") schedulePoll(e, 0)
+        if (patch != null && old.kind in setOf("git", "beads")) schedulePoll(e, 0)
         e.node
     }
 
@@ -337,8 +341,8 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         val e = entry(id)
         when (e.node.kind) {
             "text" -> publish(e, fired(e.state.output ?: change(null, e.state.text)))
-            "git" -> poll(id, true)
-            else -> conflict("fire requires a text or git node")
+            "git", "beads" -> poll(id, true)
+            else -> conflict("fire requires a text, git or beads node")
         }
     }
 
@@ -353,7 +357,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         edges.values.filter { it.from == input.fromNodeId && it.to == id }.forEach { edge ->
             if (e.state.inputs[edge.port] != value) {
                 val pending = e.pending[edge.port]
-                e.pending[edge.port] = if (pending == null) value else JsonObject(value + ("old" to (pending["old"] ?: JsonNull)))
+                e.pending[edge.port] = if (pending == null) value else composeBeadsOrChange(pending, value)
                 e.state = e.state.copy(inputs = e.state.inputs + (edge.port to value))
                 any = true
             }
@@ -541,7 +545,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         try {
             val config = node.config
             val preset = if (generating) config.string("generator", "claude") else if (node.kind == "program") "python" else config.string("preset")
-            cwd = if (node.kind == "program") { if (generating) nodeDir(node.id) else dir.resolve("work") } else {
+            cwd = if (beadsPreset(preset)) beadsWorkspace(config) else if (node.kind == "program") { if (generating) nodeDir(node.id) else dir.resolve("work") } else {
                 val path = config.string("cwd").takeIf { it.isNotBlank() }
                     ?: inputs.values.firstNotNullOfOrNull { it.string("repo").takeIf(String::isNotBlank) }
                 path?.let(Path::of) ?: nodeDir(node.id)
@@ -551,6 +555,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 "custom" -> tokenize(config.string("command")).map { substitute(it, inputs) }
                 "claude" -> claudeArgv(config, prompt, noTools = generating)
                 "codex" -> codexArgv(config, prompt, dir.resolve("last.txt"), noTools = generating)
+                "bd-comment", "bd-create" -> beadsWriteArgv(config, inputs)
                 "python" -> {
                     // Each execution owns a fresh scratch directory and immutable code bytes.
                     // The same sandbox applies before and after promotion.
@@ -561,7 +566,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
             }
             result = processes.run(argv, cwd, dir, config.long("timeoutSec", 120),
                 if (preset == "python") json.encodeToString(inputs) else null,
-                if (preset == "python") mapOf("TMPDIR" to cwd.toRealPath().toString()) else emptyMap(), fence)
+                if (preset == "python") mapOf("TMPDIR" to cwd.toRealPath().toString()) else if (beadsPreset(preset)) beadsEnvironment(config) else emptyMap(), fence)
             if (result.error == null) when (preset) {
                 "claude" -> {
                     val envelope = json.parseToJsonElement(result.stdout).jsonObject
@@ -615,7 +620,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         e.poll?.cancel(false)
         e.poll = timers.schedule({ poll(e.node.id, false) }, delay, TimeUnit.SECONDS)
     }
-    private fun poll(id: String, fire: Boolean) = synchronized(lock) {
+    internal fun poll(id: String, fire: Boolean = false) = synchronized(lock) {
         val e = nodes[id] ?: return@synchronized
         if (closed) return@synchronized
         e.firePending = e.firePending || fire
@@ -626,13 +631,23 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         e.gitTask = workers.submit {
             var sha: String? = null
             var error: String? = null
-            try { sha = gitRef(config) } catch (ex: Exception) { error = ex.message ?: "git poll failed" }
+            try { sha = if (e.node.kind == "beads") processes.readBeads(config, data) else gitRef(config) } catch (ex: Exception) { error = ex.message ?: "source poll failed" }
             synchronized(lock) {
                 if (closed || nodes[id] !== e) return@synchronized
                 e.pollBusy = false
                 if (version == e.version) {
                     if (error != null) { e.state = e.state.copy(error = error); changed(e) }
-                    else {
+                    else if (e.node.kind == "beads") {
+                        val watch = beadsWatch(config)
+                        val previous = e.state.beads?.takeIf { it.watch == watch }?.set
+                        e.state = e.state.copy(beads = BeadsState(watch, sha!!), error = null,
+                            output = if (previous == null) null else e.state.output)
+                        if (previous != null && previous != sha) {
+                            val value = beadsChange(previous, sha!!, config.string("workspace"))
+                            publish(e, if (e.firePending) fired(value) else value)
+                        } else if (e.firePending) publish(e, fired(e.state.output ?: beadsChange(null, sha!!, config.string("workspace"))))
+                        else changed(e)
+                    } else {
                         val previous = e.state.ref
                         e.state = e.state.copy(ref = sha, error = null)
                         if (previous != null && previous != sha) {
