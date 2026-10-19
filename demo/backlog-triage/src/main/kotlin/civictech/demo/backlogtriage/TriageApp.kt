@@ -247,8 +247,8 @@ class TriageApp(
 
     private val shell = DemoShell(port)
 
-    internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf
+    internal val observationViews: Set<String>
+        get() = observation.views
 
     private val observation = host.observation {
         set("features", refs.features)

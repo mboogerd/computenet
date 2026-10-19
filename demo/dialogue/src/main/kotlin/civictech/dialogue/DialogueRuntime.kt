@@ -57,7 +57,7 @@ import java.util.UUID
  * 4. [AgoraService] shares that context, and [BindingTable] reads its
  *    read-only live topology fold.
  * 5. [GraphApplier], which registers its direct typed observation views under
- *    deterministic group refs.
+ *    deterministic sink refs.
  * 6. The observation below, whose `utterances` view reads back what the WAL
  *    restored into the ingress `SetCell`, so [completeRecovery] can seed the
  *    driver's ledger; its other two views back [claimProvenance] and
@@ -168,34 +168,32 @@ class DialogueRuntime(
     // (5) the applier, which spawns its own deterministic-ref sinks.
     val applier = GraphApplier(host, refs, service, bindings)
 
-    // Keep these as separate one-view observations. A multi-view group can
-    // hold at rest when these folds share a root through pure hops; the split
-    // is the disclosed interim for computenet-6ovpx, while each view still
-    // reads the canonical fold rather than rebuilding it at the app edge.
-    private val utterancesObservation: Observation = host.observation(groupRef = ::sinkRef) {
+    // Keep these as separate one-view observations. Each view reads its
+    // canonical fold rather than rebuilding it at the app edge.
+    private val utterancesObservation: Observation = host.observation(sinkRef = ::sinkRef) {
         set("utterances", refs.utterances)
     }
 
-    private val claimProvenanceObservation: Observation = host.observation(groupRef = ::sinkRef) {
+    private val claimProvenanceObservation: Observation = host.observation(sinkRef = ::sinkRef) {
         map("claimProvenance", refs.claimProvenance.ref)
     }
 
-    private val relationProvenanceObservation: Observation = host.observation(groupRef = ::sinkRef) {
+    private val relationProvenanceObservation: Observation = host.observation(sinkRef = ::sinkRef) {
         map("relationProvenance", refs.relationProvenance.ref)
     }
 
-    internal val observationGroups: Map<String, String>
-        get() = mapOf(
-            "utterances" to utterancesObservation.groups.single(),
-            "claimProvenance" to claimProvenanceObservation.groups.single(),
-            "relationProvenance" to relationProvenanceObservation.groups.single(),
+    internal val observationViews: Set<String>
+        get() = setOf(
+            utterancesObservation.views.single(),
+            claimProvenanceObservation.views.single(),
+            relationProvenanceObservation.views.single(),
         )
 
-    internal val observationGroupRefs: Map<String, CellRef>
+    internal val observationSinkRefs: Map<String, CellRef>
         get() = mapOf(
-            "utterances" to utterancesObservation.group("utterances").ref,
-            "claimProvenance" to claimProvenanceObservation.group("claimProvenance").ref,
-            "relationProvenance" to relationProvenanceObservation.group("relationProvenance").ref,
+            "utterances" to utterancesObservation.sink("utterances").ref,
+            "claimProvenance" to claimProvenanceObservation.sink("claimProvenance").ref,
+            "relationProvenance" to relationProvenanceObservation.sink("relationProvenance").ref,
         )
 
     /** The ingress handle the driver writes through. */
@@ -381,10 +379,8 @@ class DialogueRuntime(
         )
 
         /**
-         * Deterministic ids used by the observation groups in [GraphApplier]
-         * and this class. Each view has its own one-view group so a shared
-         * extraction root cannot make one canonical fold hold another at rest
-         * (computenet-6ovpx).
+         * Deterministic ids used by the observation sinks in [GraphApplier]
+         * and this class. Each view has its own one-view sink.
          *
          * Every name here becomes a volatile ref via [isDurable].
          *

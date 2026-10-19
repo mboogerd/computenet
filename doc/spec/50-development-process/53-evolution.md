@@ -1,6 +1,6 @@
 # 53 — Deployment as Evolution
 
-> **Status**: Implemented (core, M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`; the full four-phase swap transaction, `PromotionPolicy`, and contract-granular effect suppression (`Shadow.suppressEffectContracts` NoOp-serves every `@Contract(effect = true)` fan-in inlet) are also implemented (`Evolution.kt:78,90-95`, `PromotionPolicy.kt`). State-transform tiers and the state-transform contract are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-21/I-27), unimplemented; I-17's remaining residue — protocol-capability-gated downstream taps, SCC-closed cuts, glitch-consistent judgment, and a shadow-specific promotion policy — is still open (93 §I-17, landed-state PARTIAL).
+> **Status**: Implemented (core, M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`; the full four-phase swap transaction, `PromotionPolicy`, and contract-granular effect suppression (`Shadow.suppressEffectContracts` NoOp-serves every `@Contract(effect = true)` fan-in inlet) are also implemented (`Evolution.kt:78,90-95`, `PromotionPolicy.kt`). State-transform tiers and the state-transform contract are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-21/I-27), unimplemented; I-17's remaining residue — protocol-capability-gated downstream taps, SCC-closed cuts, convergence-scoped judgment, and a shadow-specific promotion policy — is still open (93 §I-17, landed-state PARTIAL).
 > **Sources**: ADR — Cellular Software Development Process (deployment model, versioning), ADR 0 (§7)
 > **Implementation**: `civictech.cell.evolve` (`Shadow`, `Promotion`, `StateMigrating`, `Effectful`); `ShadowPromotionTest`
 
@@ -19,8 +19,8 @@ Versioning is evolutionary selection:
    shadows** against production data.
 3. The **active** instance is selected on invariant satisfaction under real
    data; promotion and rollback are link-swap operations (13) — atomic per
-   membrane (11's atomic multi-port transitions is the primitive that makes a
-   swap glitch-free at the boundary).
+   membrane (11's atomic multi-port transitions ensures no half-swapped link
+   set is observable at the boundary).
 
 **Shadow isolation** (decided in 93 I-17, amending the landed rule). The
 shipped G-32 mechanism (52) NoOp-serves *every* fan-in inlet of an
@@ -40,8 +40,7 @@ transfer function; closed-loop claims need a canary promotion instead).
 
 **Judgment is declarative policy** (decided in 93 I-17).
 [53-JUDGE-01] `PromotionPolicy(gates, window, threshold, judge, baseline?)` is the decided
-shape: gate invariants (glitch-free where their inlets share an upstream
-fork; convergence-at-quiescence across independent sources), an observation
+shape: gate invariants evaluated at convergence-at-quiescence, an observation
 window measured in observed production waves and/or coverage stabilization —
 never wall-clock, never a barrier — a satisfaction criterion (strict
 default: zero gate violations over the window), the judge cell, and an
@@ -203,7 +202,7 @@ the post-retire checkpoint).
 [53-SWAP-05] The swap is atomic per membrane at the membrane's host
 (management-preempts-data single-consumer serialization; no global lock, no
 coordinator) and emits no topology event: an instance swap leaves the
-logical edge set intact, so downstream wave completeness never observes it.
+logical edge set intact, so no topology change is exposed downstream.
 A journaled host nevertheless appends the committed swap as a `TopoEvent.Promote`
 durability record (93 I-7), after the COMMIT checkpoint and before green; it is a
 recovery record, not a wave-observable `EdgeEvent`.
@@ -270,9 +269,9 @@ merge-semantics change is not a promotion — it is ordinary topology surgery
 
 [53-EPOCH-01] On T0/T1 the snapshot carries each outlet's `OutletWaveState(sourceId,
 highWater)` and the candidate adopts it (decided in 93 I-11) — same source
-lane, counter continued from the high-water mark — so downstream glitch-free
-consumers see one monotone source and need no re-baseline (the PREPARE flush
-guarantees no wave straddles the handoff). [53-EPOCH-02] T2 mints a fresh `sourceId`, and
+lane, counter continued from the high-water mark — so downstream dedup and
+processed frontiers see one monotone source and need no re-baseline (the
+PREPARE flush guarantees no wave straddles the handoff). [53-EPOCH-02] T2 mints a fresh `sourceId`, and
 the fresh epoch MUST NOT be silent: the candidate MUST emit the `ReBaseline`
 supersession notice naming the superseded sourceIds (93 I-22), making the
 succession wave-observable rather than a silent fresh-source reset — this
@@ -363,7 +362,8 @@ I-21/I-17/I-27) — M15.5 in the roadmap.
 transaction fails three ways: the gossip mesh is not relinked, a candidate's
 fresh `CellRef` re-mints the tag lane (`SetCell.tagSource` is derived from
 `(id, instanceId)`) and the delivered-watermark slot (`watermarkRef`), and the
-retired incumbent's watermark row then holds downstream frontiers forever.
+retired incumbent's row is orphaned. The fresh ref therefore breaks both tag
+and watermark identity continuity.
 
 Set-atomic promotion (every replica swapped as one transaction) is a
 distributed consensus barrier — the P4-forbidden global lock — and is **out of
@@ -379,8 +379,8 @@ delivered-watermark row, and every port ref (PN-1) — reusing it makes the swap
 - peers' inbound gossip links keep resolving to the ref (now the candidate)
   with no relink — a routed proxy resolves by ref at call time;
 - this peer's delivered-watermark companion (and its row) is **retained** — the
-  swap never closes it (unlike an `evict` departure), so a downstream
-  replica-frontier read never sees the member vanish;
+  swap never closes it (unlike an `evict` departure), so the stability read
+  continues across the same member row;
 - the candidate re-syncs by the same two halves a recovered replica uses:
   **journal replay** (`Stateful.snapshot`/`restore` carries the incumbent's tag
   *counter* forward, so a fresh mint never collides with an already-emitted tag)
@@ -412,23 +412,16 @@ on the incumbent by ordinary merge.
 **Partitioned nodes extend by the same rolling form, shard-by-shard.** A
 partitioned node's shards are ref-addressed instances (PN-6); promoting one is
 this same rebind. **Promotion is a rebind**, so each swap re-runs link-time
-authority — the coverage/interest check the linker already applies (PN-6/PN-7)
+authority — the interest check the linker already applies (PN-6)
 is exactly the re-authorization the swap needs, no separate protocol. The
 **ordering and abort policy** for a roll (which shard/replica next, when to
 halt) is `PromotionPolicy` **data** consulted per instance via the judge — not
 new control flow. This resolves the *mechanism* half of the G-50 residual's
 "ordering/monitoring/abort policy for partitioned rolling promotion"; the
 *authority* half (who may trigger a roll) stays open under §Trust boundary, and
-a converged-membership barrier for the flip window remains the R13/PN-19
-residual (a covering member the local view has not yet learned of cannot be
-waited on).
+membership-discovery sufficiency remains the R13 residual.
 
-Verified in `ReplicatedPromotionTest`: a three-peer mesh, a
-`GlitchFreeCell.useReplicaFrontier` consumer gating on the merged replica
-frontier, a rolling promotion across peer 0 then peer 1 while the others write —
-100 seeds converge to the batch union and surface no undelivered element across
-both swaps. Controls diverge: **(a)** the T2 fresh-epoch fallback (the tag lane
-restarts, so a mint collides with an already-emitted tag) tears the frontier;
-**(b)** a fresh `CellRef` orphans the watermark row and re-mints the tag/slot
-identity — the removes-fail-to-cover / resurrection failure the reused ref
-prevents.
+Verified in `ReplicatedPromotionTest`: a three-peer mesh rolling promotion
+across peer 0 then peer 1 while the others write — 100 seeds converge to the
+batch union. The T2 fresh-epoch control diverges because the tag lane restarts
+and a mint collides with an already-emitted tag.

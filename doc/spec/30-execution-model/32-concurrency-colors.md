@@ -135,8 +135,8 @@ closure fast-path read; saturated sends dispatch by payload class (mergeable
 deltas coalesce into bounded per-source pending slots, exclusive/non-mergeable
 park in-order at the sender, management band exempt); `SaturationSignal` rides
 the metadata plane upstream with a terminal park-overflow policy (visible
-dead-letter default, `Block(timeout)` opt-in only, with Block ×
-glitch-free-wave semantics pinned), realized at the `enqueueHostedInvocation`
+dead-letter default, `Block(timeout)` opt-in only), realized at the
+`enqueueHostedInvocation`
 seam keyed by (senderHostColor, targetHostColor), including the cross-wire
 saturation frame vs transport flow control (93 I-12/I-15/I-9/I-19/I-26).
 

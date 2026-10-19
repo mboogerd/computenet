@@ -11,11 +11,7 @@ the three parallel corpus tickets (W3-1 propagation/consistency, W3-2 operators,
 W3-3 ports/links/lifecycle/cycles/ownership/controls). Entries are organized by
 scenario id and tagged with a category. W3-4 took the cheap
 `driver-wiring-gap` / `driver-bug` items: the `intersect` port bug and the
-single-writer wiring resolved cleanly (scenarios authored & passing); the
-glitch-free *wiring* landed too, but its stream-invariant checks turned out to
-need a deeper kernel capability (a wave-coalescing operator) and stayed filed
-until wave B2 — the set-shaped half was resolved in R2 over `quorum-set`, and
-the scalar half in B2/D-CONCORD once `CoalescingCombineCell` landed (D-COMBINE).
+single-writer wiring resolved cleanly (scenarios authored & passing).
 
 ## Resolved by W3-4 (driver-wiring gaps)
 
@@ -30,15 +26,6 @@ the scalar half in B2/D-CONCORD once `CoalescingCombineCell` landed (D-COMBINE).
   single-writer` now binds a strict point-to-point (FU-6) `FanInlet` on the
   view's inlet (driver adapter `SingleWriterObserveCell`), so a second writer's
   `connect` is `Rejected`. Scenario authored per exemplar (d) and passing.
-- **glitch-free wiring** (`driver-wiring-gap`) — **RESOLVED** for the wiring
-  itself: `glitch-free: true` was inert (silently ignored); the W3-4 driver now
-  spawns a downstream kernel `GlitchFreeCell` and routes the operator's output
-  through it over a real host link (GlitchFreeOperatorSuiteTest construction),
-  de-inerting the param. `22-WAVE-FANIN-01`'s `incremental-equals-batch` /
-  `no-dead-letters` now pass *through* that wrapper. What did NOT resolve is the
-  positive stream assertion (`observations-all-satisfy`) — a genuinely deeper
-  gap, re-filed below.
-
 ## Resolved by R1 (dispute-resolution wave)
 
 Five entries below were first addressed in dispute-resolution wave R1 (two
@@ -95,19 +82,6 @@ by-scenario entries below are now marked **RESOLVED (R2)**.
   into a `GroupByCell`), and `BatchOracle.windowFold` models the identical key
   derivation. Both scenarios pass golden + `incremental-equals-batch` +
   `no-dead-letters`.
-- `22-WAVE-FANIN-01` — **RESOLVED** (`schema-gap`). The set-shaped per-wave
-  predicate that was missing now exists: `observations-whole-waves`
-  (`schema/Check.kt` + `check/Checks.kt`, R2-A) asserts that every observation on
-  the view is a complete wave (no torn single-arm partial), evaluated over the
-  real `quorum-set` (`QuorumSetCell`) glitch-free fan-in. The scenario positively
-  asserts glitch-freedom again alongside `final-view` + `incremental-equals-batch`
-  + `no-dead-letters`.
-- `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — **RESOLVED** (`schema-gap`). Re-modeled
-  as SET fork-joins over `quorum-set` (a genuine kernel glitch-free operator whose
-  `evaluate()` only `propagate()`s once quorum is met), so glitch-freedom is now
-  positively asserted via `observations-whole-waves` (single diamond and nested
-  double-diamond respectively) — no longer `final-view`-only.
-
 ## Category index (worklist, cheapest first)
 
 **`schema-gap` — a descriptor surface the frozen W0 schema does not expose;
@@ -115,15 +89,7 @@ needs a between-waves schema-change ticket:**
 
 *(empty — every entry filed under this category has been resolved.)*
 
-*(`24-OP-COMBINE-01` (+ the `CTL-GF-01` control) — resolved in B2/D-CONCORD: the
-wave-coalescing scalar combine landed in the kernel (D-COMBINE) and binds inside
-the **existing** `combine-latest` id and `glitch-free` param, so this never
-needed a schema change after all; `24-OP-COMBINE-02` now asserts scalar
-glitch-freedom positively. See the "By scenario id" entry.)*
-
 *(`24-OP-WINDOW-01` / `24-OP-WINDOW-02` — resolved in R2 (window = key-derivation
-group-by over `Windows`); `22-WAVE-FANIN-01` — resolved in R2 (set-shaped
-`observations-whole-waves` predicate landed). See the "Resolved by R2" section.)*
 
 *(`12-NEGOTIATE-01`, `24-OP-PRESENCE-01` — resolved in R1;
 `23-SPSC-01` — R1 catalog surface plus the in-host Observe driver-binding
@@ -142,20 +108,13 @@ surface (a `restart` driver verb, a `rebaseline-source` catalog id, a scenario),
 and what was wrong was the "unimplemented" claim in the spec prose. Both closed;
 `21-REBASE-01.yaml` authored. See the "By scenario id" entry.)*
 
-*(`24-OP-COMBINE-01` / `CTL-GF-01` (scalar `combine-latest`) — resolved in
-B2/D-CONCORD: the wave-**coalescing scalar** combine now exists in the kernel
-(`CoalescingCombineCell`, D-COMBINE — version-buffered, one delta per completed
-wave), the driver binds it behind `glitch-free: true`, and `24-OP-COMBINE-02`
-asserts glitch-freedom positively over a fork-join diamond. `24-REPLAY-01` —
-resolved in B2/D-CONCORD: `QuorumSetCell` now installs a replayed baseline as
-recovered arm state (D-REPLAY), and the dur scenario is authored. There is no
-remaining glitch-free `kernel-gap`. See the "By scenario id" entries.)*
+*(`24-REPLAY-01` — resolved in B2/D-CONCORD: `QuorumSetCell` now installs a
+replayed baseline as recovered arm state (D-REPLAY), and the dur scenario is
+authored. See the "By scenario id" entry.)*
 
 *(`24-OP-WINDOW-01` / `24-OP-WINDOW-02` — resolved in R2: on investigation this
 was a schema/driver-binding gap, not a kernel one (`Windows.tumbling`/`sliding`
-are real). `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — resolved in R2: re-modeled as
-SET fork-joins over the real `quorum-set` glitch-free join, so wave-coalescing is
-no longer needed to observe them. See the "Resolved by R2" section.)*
+are real). See the "Resolved by R2" section.)*
 
 ---
 
@@ -182,106 +141,6 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
 - Scenario `13-LINK-REJECT-01.yaml` authored per CONCORD-PLAN exemplar (d) (first
   writer flows, second writer `expect: rejected`, `final-view: [still-flows]` +
   `no-dead-letters`); passes the sweep.
-
-### `22-WAVE-FANIN-01` — **RESOLVED (R2, `schema-gap`)**
-
-- **Requirement**: `22-GF-01` (while a single-source wave is partially delivered
-  across a fork-join, a glitch-free cell shall not expose derived state mixing
-  pre-wave and post-wave inputs).
-- **Wiring (resolved W3-4)**: `glitch-free: true` was inert; the W3-4 driver
-  spawns a downstream kernel `GlitchFreeCell` and routes the operator's output
-  through it over a real host link (the GlitchFreeOperatorSuiteTest construction).
-  The wrapper is correctness-preserving: `final-view` / `incremental-equals-batch`
-  / `no-dead-letters` pass *through* it.
-- **How resolved (R2-A)**: the missing piece was a **set-shaped per-wave
-  predicate**. R2 added the `observations-whole-waves` check (`schema/Check.kt`
-  parse + `check/Checks.kt` evaluator/dispatch): over the real `quorum-set`
-  (`QuorumSetCell`, `civictech.cell.data.op`) glitch-free fan-in — whose own
-  `evaluate()` only `propagate()`s once quorum is met — it asserts that every
-  observation on the view is a *whole wave*, never a torn single-arm partial.
-  No scalar predicate is coerced onto a `ListVal`; the check reasons about wave
-  completeness directly.
-- **Filed scenario**: `22-WAVE-FANIN-01.yaml` (one source forked through two
-  identity arms into a 2-of-2 glitch-free `quorum-set`) now positively asserts
-  `observations-whole-waves` alongside `final-view` + `incremental-equals-batch`
-  + `no-dead-letters`. Passes the multi-profile sweep.
-
-### `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — **RESOLVED (R2, `schema-gap`)**
-
-- **Requirement**: `22-GF-01` / `22-GF-02` (glitch-freedom, composing across
-  nested/chained fork-joins).
-- **How resolved (R2-A)**: both were originally SCALAR diamonds over
-  `combine-latest` (`ScalarSumCombineCell`), which cannot be glitch-free-observed
-  (torn per-arm delta — see the scalar-combine residual entry below). R2
-  **re-modeled them as SET fork-joins over `quorum-set`** (`QuorumSetCell`), a
-  genuine kernel glitch-free operator whose `evaluate()` only `propagate()`s once
-  quorum is met. Glitch-freedom is now **positively asserted** via the new
-  `observations-whole-waves` check: `22-GF-DIAMOND-01.yaml` is a single set
-  diamond (`s`→two identity arms→2-of-2 `quorum-set`), `22-GF-NESTED-01.yaml` a
-  nested double-diamond (three chained `quorum-set` levels). Both drop the old
-  `final-view`-only shape and assert `observations-whole-waves` +
-  `incremental-equals-batch` + `no-dead-letters`. Pass the multi-profile sweep.
-- **Note**: the scalar wave-coalescing gap these entries used to file is real but
-  narrower than first thought — it blocks only the *scalar* `combine-latest`, not
-  the glitch-free set joins. It is re-filed precisely as the scalar-combine
-  residual entry below (`24-OP-COMBINE-01` / `CTL-GF-01`).
-
-### `24-OP-COMBINE-01` / `CTL-GF-01` — **RESOLVED (B2 / D-CONCORD, `kernel-gap`; kernel fix by D-COMBINE)**
-
-- **Requirement**: `22-GF-01` (glitch-freedom) for the **scalar** combine shape
-  specifically.
-- **Gap (as filed)**: a genuinely wave-aligned / wave-**coalescing scalar**
-  combine (version-buffered, emitting one delta per completed wave) did not exist
-  in the kernel. The only scalar `combine-latest` binding was
-  `ScalarSumCombineCell`, which emits a `CounterDelta` per input arm; the two arms
-  of one source wave arrived as distinct waves and `GlitchFreeCell` replays
-  per-invocation, so an observer folded the torn intermediate sum before any
-  wrapper could coalesce it. `CTL-GF-01.yaml` asserted the true invariant
-  (`observations-all-satisfy(v, even)`) against that binding and
-  **FAILED-as-asserted** — the sentinel that kept the gap visible. The entry's
-  Resolves clause: *"Restore a positive scalar glitch-free assertion on
-  `24-OP-COMBINE-01` once a wave-coalescing scalar combine lands in the kernel."*
-- **How resolved (kernel, D-COMBINE)**: it landed —
-  `civictech.cell.data.op.CoalescingCombineCell`, a version-buffered scalar
-  combine over a single unrestricted `CounterDelta` fan-in. It buffers each wave's
-  per-arm contributions and emits their **net** as one delta once the wave's
-  expected-edge set is complete (the `WaveFrontier` completeness condition folded
-  internally), absorb-acking a completed wave whose net is zero. Note it does
-  **not** carry the PN-12 `GlitchFree` structural marker — a conscious ratchet
-  decision (marking `.data` operators would mint a `data -> consistency` package
-  cycle), the same precedent `QuorumSetCell` set — so the corpus asserts its
-  observed behavior, never a manifest flag.
-- **How resolved (driver, D-CONCORD)**: bound inside the **existing**
-  `combine-latest` catalog id and the **existing** `glitch-free` descriptor param
-  (no new id, no new field, no schema edit): `KernelCatalog.build` binds
-  `fn: sum` + `glitch-free: true` → `CoalescingCombineCell`, and plain `fn: sum` →
-  the retained `ScalarSumCombineCell`. Two consequences the driver reads off the
-  new `Built.waveAligned` flag: the redundant downstream `GlitchFreeCell` wrapper
-  is *not* spawned for a cell that coalesces at the operator, and `inletName`
-  collapses both neutral arms onto the coalescing cell's single `inlet` (each
-  still its own link, hence its own expected edge). The plain form is retained
-  deliberately, not by inertia: the wave-aligned form is a *fork-join* operator
-  whose completeness set is its open inlinks, so it aligns arms of one source,
-  whereas `24-OP-COMBINE-01`'s shape is two genuinely **independent** inlets.
-- **What the corpus now asserts**: `24-OP-COMBINE-01` keeps the independent-inlet
-  case (`final-view`, `covers: [21-PROP-01]`) with its header rewritten — the
-  omission it used to document no longer exists — and names its companion. The
-  positive assertion lives in the new **`24-OP-COMBINE-02`** (`covers: [22-GF-01]`):
-  a genuine fork-join diamond (one `counter-source` → two `map fn: identity` arms →
-  `combine-latest fn: sum, glitch-free: true` → `value-view`), asserting
-  `observations-all-satisfy(v, even)` + `final-view: 100` + `no-dead-letters` on
-  every run of the sweep. Verified non-vacuous: the observation log carries one
-  even value per completed wave (event #1 is already the coalesced `2`, on all 20
-  runs), not a single settled value.
-- **What became of `CTL-GF-01`**: it is no longer a **gap** sentinel — nothing in
-  the repo now describes the wave-coalescing scalar combine as missing. It is
-  retained as an ordinary `kind: control` in `CTL-GOLDEN-01`'s register (the
-  wrongness in the *expectation*, not in the lineage): the graph asks for the
-  plain, documented non-wave-aligned form and then asserts wave-aligned semantics
-  of it, which still fails as asserted. Its header and narrative were rewritten to
-  say exactly that, and to point at `24-OP-COMBINE-02` for the aligned form. It
-  therefore pins something real going forward: that the two bound forms are
-  observably different, and that the harness catches the difference.
 
 ### `12-NEGOTIATE-01` — **RESOLVED (R1, `schema-gap`)**
 
@@ -755,8 +614,8 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   corrupted half likewise keeps its recorded behaviour — its single re-delivery re-fires,
   which is now `[24-DUR-09]` rather than an owned defect.
 - **Also not resolved by this entry**: `[24-DUR-04]`'s emission-identity plane is now
-  asserted head-on by `DUR-SRCID-01`/`DUR-SRCID-02`; its OR-set tag plane and
-  wave-aligned-consumer plane are recorded separately under "Not covered" below.
+  asserted head-on by `DUR-SRCID-01`/`DUR-SRCID-02`; its OR-set tag plane is
+  recorded separately under "Not covered" below.
 - **The G-59 / C-9 gap rows themselves are not closed by this.** What is retired is the
   slice this entry recorded — a spontaneously-emitting *journaled* source double-firing an
   `Effectful` sink. G-59's row (`91-gap-analysis.md`) also spans non-deterministic
@@ -1296,31 +1155,6 @@ claiming coverage for this unresolved case.
     ref-derived tags, so its recovered membership equals the twin's with no
     double-count, but the directed add/remove/replay control belongs in a kernel
     unit test — the tag plane itself is not boundary-observable per P1.
-  - The **wave-aligned-consumer plane is NOT boundary-discriminable, and is
-    therefore recorded here rather than claimed by a scenario.** BS-40 asked for
-    head-on `24-DUR-04` coverage via a glitch-free consumer downstream of a
-    recovered source, on the reasoning that such a consumer keys per-source wave
-    completeness on emission identity and so must be sensitive to it. On the
-    replay path it is not. `WaveFrontier.offer` takes its `ctx.baseline != null`
-    branch and releases the invocation *before* any edge/lane lookup, so a
-    replayed cone is released without the frontier ever consulting the source id;
-    PN-2's baseline stamp, not replay-stable identity, is what carries the
-    recovered cone. Two independent results pin this: kernel
-    `DurableGlitchFreeReplayTest` control (b) ("PN-1 derivation reverted but
-    baseline on — recovery still green") holds over 100 seeds; and `DUR-GF-01`,
-    the corpus scenario authored for BS-40, still passes 20 of 20 with the
-    kernel's whole replay-stable identity mechanism disabled. `DUR-GF-01`
-    therefore carries `covers: [24-DUR-02]` only. It remains a real composition
-    gate — a wave-aligned consumer downstream of a recovered source must not
-    regress the recovery outcome, and making its journaled arm volatile fails it
-    20 of 20 — but it is not a `24-DUR-04` check, and claiming the id would have
-    made the concordance assert coverage no run could falsify.
-  - **Resolves**: nothing at the corpus boundary — this is a property of the
-    mechanism, not a gap in the scenario vocabulary. A wave-aligned consumer
-    becomes identity-sensitive across recovery only if its own frontier survives
-    the crash (a journaled `GlitchFreeCell`, so the restored frontier has a lane
-    to disagree with). That is a kernel/durability design question adjacent to
-    G-59's research-gated partial-wave-buffer slice, not a scenario to author.
 - `24-REPLAY-01` — **RESOLVED (B2 / D-CONCORD, `kernel-gap`; kernel fix by
   D-REPLAY)**. *As filed (R3, empirically confirmed):* the PN-2 baseline path
   worked for the *generic* glitch-free join — `HostDurability.recoverFrom` stamps
@@ -1875,165 +1709,6 @@ used as one. Nothing here mints a `[43-*]` id or authors a scenario.
 
 ---
 
-## SEC1 (wave completeness + reconvergence): BS-12/BS-13 are kernel-test-covered only, and `[SEC1-28]` is UNVERIFIED
-
-Two entries, filed together by `computenet-usd.3.2` (feature `computenet-usd.3`).
-The first is the `[SEC1-30]` coverage record for the pair; the second is the
-honest verdict on `[SEC1-28]` itself.
-
-### BS-12 / BS-13 (`[SEC1-27]`, `[SEC1-28]`) — coverage — **`spec-gap` (no requirement id)**
-
-- **Category**: `spec-gap` (id-authoring backlog). The third instance of the
-  same structural fact the BS-8 and BS-16 entries above record for this chapter:
-  `doc/spec/40-distribution/43-security.md` mints no `[NN-SLUG-nn]` ids, so the
-  behaviours BS-12 and BS-13 name have **no legal `covers:` target**. Filed per
-  `[SEC1-30]`: a SEC1 concord candidate lands as a kernel test **plus** an entry
-  here — never as an invented `covers:` id (which fails `./gradlew
-  :concord:check` as a dangling id), never as a scenario carrying none (an
-  orphan, which fails the same gate), and never as a hand-edit of the generated
-  `doc/spec/CONCORDANCE.md`.
-- **Behaviours** (epic `computenet-usd`, feature `computenet-usd.3`; spec
-  `40-distribution/43-security.md` §BoundaryPolicy with `20-dataflow-semantics/22-consistency.md`
-  §"Completeness over silent or stuck edges", `30-execution-model/31-hosts.md` rule 5,
-  and `90-roadmap/93-feature-interactions.md` I-18 / I-28 §6):
-  - **BS-12** — *Given a downstream wave depending on two upstream edges, one
-    crossing a boundary that refuses a delta mid-wave, then the wave reaches
-    completeness within a bounded wait via the I-18 edge-will-not-deliver
-    classification, the frontier advances, the edge stays open, and the run does
-    not hang.*
-  - **BS-13** — *Given a reconvergent diamond with one filtered and one
-    unfiltered arm, when the filtered arm is denied mid-wave, then the
-    reconvergence point never observes a mixed pre/post-denial combination.*
-- **Scenarios they would have been**: `43-DENIAL-COMPLETENESS-01.yaml` and
-  `43-DENIAL-DIAMOND-01.yaml`, in a `concord/corpus/43-security/` directory that
-  does not exist.
-- **Why they cannot be authored today**: reason 1 above (no id to cover), plus
-  the BS-8 entry's reason 2 verbatim — the scenario schema has no vocabulary for
-  a `CompositeCell` exposure, a `BoundaryPolicy`, a `ProjectionId`, an
-  `IntegrityPolicy`, or a per-boundary denial counter, and binding one would
-  mean reaching into `civictech.cell.membrane.*` from the corpus, which only
-  `civictech.concord.driver.kernel` may do.
-- **What was NOT done instead**: no scenario was authored over a nearby
-  *unmediated* two-edge join or diamond asserting only that waves group
-  correctly. Such a scenario passes today, would read as coverage of BS-12/BS-13
-  in `CONCORDANCE.md`, and asserts nothing about a denial — which is the entire
-  behaviour. `22-WAVE-FANIN-01` already covers the undenied fan-in; adding a
-  denial-shaped *name* to an undenied scenario is precisely the weakening this
-  file exists to refuse.
-- **What is not lost.** Both behaviours are pinned implementation-side, by name:
-  - `kernel/src/test/kotlin/civictech/cell/consistency/BoundaryDenialWaveCompletenessTest.kt`
-    (BS-12, `computenet-usd.3.1`) — integrity and disclosure variants of the
-    two-edge join, each asserting the *poisoned wave itself* releases before any
-    later wave exists to retroactively complete it, plus the guard that a denial
-    naming no wave position classifies nothing and leaves the edge open;
-  - `kernel/src/test/kotlin/civictech/cell/consistency/BoundaryDenialDiamondGlitchTest.kt`
-    (BS-13, `computenet-usd.3.2`) — the diamond, over seeds `0 until 40`, with
-    its own control run proving the harness tears without the frontier.
-  What this filing forgoes is the *cross-implementation* obligation: a second,
-  non-kernel binding of the model would not be held to BS-12/BS-13 by the
-  corpus.
-- **Resolves**: normative `[43-*]` ids land in `doc/spec/40-distribution/43-security.md`
-  (the SEC1 feature-6 id-authoring authorization — documentation maintenance
-  **not** authorized by the epic that produced these behaviours), **and** the
-  scenario schema gains the membrane surface BS-8's item (b) already names. With
-  both, author the two scenarios above.
-
-### BS-13 / `[SEC1-28]` — **UNVERIFIED** (`requirement-gap`): the reconvergence point forms no combination
-
-Filed as the explicitly-allowed outcome of `computenet-usd.3.2`, not as a
-failure of it. `[SEC1-28]` is **not** weakened, and the kernel test above is not
-softened to make this entry go away: it asserts the narrower properties that are
-genuinely checkable and leaves the rest here.
-
-- **Category**: `requirement-gap`. Unlike the entries above, the obstacle is not
-  the corpus schema or a missing id — it is that the requirement's subject has
-  no referent in the landed model, so no binding, kernel or corpus, could check
-  it as written.
-- **The requirement**: "*a boundary denying mid-wave in a reconvergent diamond
-  with one filtered and one unfiltered arm SHALL never yield an observed mixed
-  pre/post-denial combination*".
-- **Why it cannot be checked as stated — the reconvergence point forms no
-  combination.** `GlitchFreeCell` is a *grouping* pass-through: a completed
-  wave's buffered invocations are replayed to the consumer **individually**
-  (`WaveFrontier.flushReady`). That is not an accident of this test's shape but
-  the structural fact `civictech.cell.data.op.CoalescingCombineCell`'s KDoc
-  records as the reason a coalescing operator cannot compose the frontier
-  policy. So at the reconvergence point there is no combined value to inspect
-  for a pre/post-denial mixture; there is a *group* of arrivals.
-- **What was checked instead, and is asserted** (`BoundaryDenialDiamondGlitchTest`,
-  a diamond whose projecting arm redacts `M:secret-n -> M:n` and suppresses
-  every third wave, swept over seeds `0 until 40`):
-  1. **wave-contiguity** — the arrival log partitions into exactly one
-     contiguous run per wave, in strictly increasing counter order; no wave's
-     contributions are split by another's;
-  2. **no stale substitution** — each run carries contributions of that wave
-     only; on a denied wave the surviving arm rides alone, and the denied arm's
-     pre-denial value is never paired into the release;
-  3. **the flagged RE-SCOPE release, exactly once per denied wave** — one
-     `GlitchViolation` naming `DEAD_LETTERED` and that wave's `Timestamp`, with
-     the boundary's denial counter moved and no supervision restart
-     (`[SEC1-29]`, BS-14);
-  4. **the regimes genuinely differ** — no unredacted value is observable at the
-     reconvergence point.
-  The test's name and KDoc claim exactly these four and no more. A `control -`
-  test runs the same graph, seeds and denials without the frontier and requires
-  that the full property (1)+(2) does tear, so none of it is "no glitch was
-  observed".
-- **What could NOT be checked, measured rather than asserted away.** One hop
-  past the join, any consumer that folds the two arms into a single value does
-  hold the mixture `[SEC1-28]` names, and nothing refuses, flags or tags it:
-  - **at a denied wave** the fold retains the denied arm's *previous* value
-    beside the surviving arm's fresh one — literally a pre/post-denial pair;
-  - **within every wave, denied or not**, the fold is torn between the group's
-    two arrivals. So the denial is not what creates the hazard: it is the
-    ordinary partial-fold transient of a grouping join, which means a check of
-    `[SEC1-28]` at that level would fail for reasons having nothing to do with
-    boundaries.
-  Both are pinned as measurements in the test (`the fold one hop past the join
-  does form the mixed combination nothing refuses`) so the gap cannot rot
-  silently; a failure there means something started refusing the mixture and
-  **this entry is stale and must be revisited**.
-- **The stance this is judged under, and where it is recorded.** 93 I-28 §9 open
-  question 1 is decided by `computenet-usd.3.2` as **stance (ii)**: a projected
-  value is a distinct logical value, so reconvergence across disclosure regimes
-  is a modelling error rather than a runtime hazard the frontier can rescue. The
-  reasoning, the rejection of stance (i), and the enforceable-today-vs-deferred
-  split are recorded as a design record in the `DisclosurePolicy` KDoc,
-  `kernel/src/main/kotlin/civictech/cell/membrane/BoundaryPolicy.kt`. Under that
-  stance the fold above is precisely the modelling error — and it is **nobody's
-  job to detect today**, which is why this entry exists rather than a passing
-  scenario.
-- **Why neither stance is enforceable on the landed machinery** (verified at
-  this branch's base, `5e56586`):
-  - **no cross-hop policy visibility** — a policy is a property of the exposure
-    it is declared on, nothing propagates it, and identity does not transit hops
-    (`BoundaryPolicy`'s multi-hop block, `computenet-usd.4.3`). A join cannot
-    ask, at link time, which regime an arm's upstream crossing was under.
-  - **no regime tagging on values** — a projected delta is indistinguishable
-    downstream from a full one, so the reconvergence point cannot detect that
-    its arms disagree, let alone refuse it.
-  - and, for the reconvergence shape that *does* combine: `CoalescingCombineCell`
-    registers a handler for `Protocols.Progress` only — it installs **no**
-    `Protocols.Suspension` handler, so the I-18 classification a boundary denial
-    emits does not reach it at all. A denied wave there is retired only by a
-    later wave's monotone watermark or by `EdgeClose`. (Read from
-    `kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`; its
-    KDoc says as much — "Deliberately *not* mirrored ... terminal-stall
-    RE-SCOPE". Not measured here: staging a `CounterDelta` diamond over that
-    operator is outside `computenet-usd.3.2`'s scope, and this bullet is a
-    code-reading fact, not a test result.)
-- **Resolves**: (a) a value-level **disclosure-regime tag** that survives
-  re-emission through intermediate cells — a provenance carrier the wave/tag
-  plane deliberately lacks (predicates never mint or carry waves, 93 I-28 §6 /
-  G-20) — plus a decided rule for what a cell derived from two regimes *is*;
-  that is 93 I-28 §8's open cross-hop composition question, which SEC1 does not
-  settle. **And** (b) a decision about whether a combining reconvergence point
-  (`CoalescingCombineCell`) must handle terminal stalls, since without it the
-  denial classification never reaches the only landed cell that forms a
-  combination. With both, restore the check as: stage the diamond over a
-  combining join, and assert the emitted per-wave value for a denied wave is
-  either refused as regime-crossed or carries no pre-denial contribution.
-
 ## ORA1/ORA2 marker ids are NOT EARS requirements, so their absence from this corpus is not a gap (computenet-4ru.22)
 
 The entry below cites `ORA1 §DIFF-09` and its neighbours. Read that citation form correctly,
@@ -2200,67 +1875,10 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
   which is the tripwire above. With either, build the control BS-12 specifies and delete this
   entry.
 
-## CHA3-42-stall-notice-unclean-departure: an unclean departure's `Stall`-family notice is not observable on any read `testkit`'s churn harness has
+## CHA3-42-frontier-freeze: the unclean departure's frontier-freeze half is honest only for a marker read, not for `stabilityCovers` on a new wave (`rig-gap`)
 
 Filed by `computenet-umx.2.5` per the decided fallback named on its own bead
-(`computenet-umx.2`'s breakdown comment, "umx.2-D7"): `[CHA3-42]` requires the harness assert
-BOTH halves of an unclean departure's effect — the frontier freezes, AND a `Stall`-family
-notice ([civictech.cell.control.StallNotice]) is observed on the reads. The task's own text
-required the premise to be probed first, honestly, before writing the second half; it was, and
-the negative held. This entry is that probe's record, plus a second, narrower finding measured
-while building the frontier-freeze half itself.
-
-### Half 1 — the `Stall`-family notice: **`kernel-gap`** (no mechanism reaches a churn peer's crash at all)
-
-- **Category**: `kernel-gap`. Nothing here is worked around; `DepartureGatesTest`'s BS-10
-  crash test asserts only the frontier-freeze marker (below) and says explicitly, in its own
-  KDoc, that it does not assert the notice.
-
-- **The clause in dispute**: `[CHA3-42]` / `96 §E3.6 (c)` — "surfaced as a `Stall`-family
-  notice on the reads, not worked around" — for `DepartureMode.CRASH_UNCLEAN`.
-
-- **Why it is not constructible**, traced from source rather than assumed:
-  - `StallNotice.Stall` is constructed at six call sites in `kernel` main, five of them in
-    `kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt` — `:738` (`SUSPENDED`, on the
-    host-level suspend cascade), `:1096` (`DEAD_LETTERED`, on a dead-lettered invocation under
-    `SupervisionPolicy.PROPAGATE`), `:1101`/`:1138` (`RESTARTING`/`SUSPENDED`, under
-    `SupervisionPolicy.RESTART`/`SUSPEND`) and `:1326` (`SUSPENDED`, from
-    `HostManagementApi.suspend(ref)`) — plus `CompositeCell.kt:455` (`DEAD_LETTERED`, from
-    `stallDeniedEdges` on a `BoundaryPolicy` refusal). Every one of them requires the AFFECTED
-    CELL's OWN HOST to still be alive and routing a suspend, a supervision decision or an
-    invocation through it; `CompositeCell`'s additionally requires the cell to be a composite
-    boundary, which a churn-mesh data replica is not. (Enumeration corrected in review: the
-    original filing said "exactly three ... `:738`, `:1096`, `:1101`/`:1138`" and both omitted
-    `:1326`/`CompositeCell.kt:455` and mislabelled `:738` as the `HostManagementApi.suspend`
-    site. The conclusion is unchanged and the wider enumeration strengthens it — none of the six
-    is reachable from `HostSlot.crash`.)
-  - `MeshPeer.crash()` (`testkit/src/main/kotlin/civictech/testkit/dst/churn/PeerHandles.kt`)
-    calls `HostSlot.crash()` (`testkit/src/main/kotlin/civictech/testkit/dst/DstWorld.kt`),
-    which shuts down the crashed generation's scheduler and rebuilds a fresh `ManagedHost` from
-    the graph's own build lambda. It calls none of `suspend`, `restart`, or any invocation path
-    that could dead-letter — it discards the host outright. `ChurnMeshTest`'s own control
-    confirms this at the churn layer: `peer1.lastEvictDespawned` is `null` after a crash — "no
-    eviction ran: nothing was announced or drained".
-  - Even granting a notice fired somehow, it travels `notifyDownstream` — to cells LINKED
-    downstream of the crashed replica **on its own host**. The churn mesh's replicas are plain
-    data cells with no such downstream consumer wired to them, and — as `ReconvergenceCheck`'s
-    own KDoc already states — "the kernel has no failure detector, so a crashed peer never
-    unpublishes": a SURVIVING peer has no notification path for another peer's crash at all.
-
-- **What was NOT done instead**: no downstream consumer was wired onto a churn replica purely
-  to catch a notice that the crash path never emits; no assertion was written that would pass
-  vacuously against an empty read.
-
-- **Resolves**: either (a) a churn-reachable path that routes an unclean departure through
-  `ManagedHost`'s own suspend/restart/dead-letter machinery instead of discarding the host
-  outright (the "verified-first" premise `computenet-umx.2.2` built `CRASH_UNCLEAN` against
-  explicitly rejected this — see its own bead comment on the crash-and-rebuild design), or (b) a
-  future E3.6 milestone (per the task's own text, "the property becomes checkable when E3.6
-  lands") that gives a departed-peer notice a path independent of the crashed host's own
-  lifecycle. With either, add the notice assertion to `DepartureGatesTest`'s BS-10 crash test
-  and delete this half of the entry.
-
-### Half 2 — the frontier-freeze half itself is honest only for a marker read, not for `stabilityCovers` on a new wave: **`rig-gap`** (synchronous gossip delivery outlives a crashed peer's host)
+(`computenet-umx.2`'s breakdown comment, "umx.2-D7").
 
 - **Category**: `rig-gap`. `DepartureGatesTest`'s BS-10 crash test asserts the marker read
   (`StabilityObservables.rowClosed`/`rowSuspended` stay `false` across a bounded further drain)
@@ -2299,103 +1917,6 @@ while building the frontier-freeze half itself.
   back to `DepartureGatesTest`'s BS-10 crash test and this half deleted. Until then, a suite
   relying on "a crashed peer's delivered-watermark row stops accepting new coverage" is relying
   on something this rig does not model.
-
-## B14-promotion-glitch-freedom: the promotion swap has no corpus surface — no step verb, no gate/candidate catalog cell, and no L0 id in chapter 53
-
-Filed by `computenet-051.5.5` (epic `computenet-051` JAR1, feature
-`computenet-051.5`), which owns that feature's concord decision: *"evaluate whether
-B14's glitch-freedom-across-swap is expressible in the existing corpus vocabulary.
-If it IS expressible with existing verbs, write the scenario carrying `covers:`
-against the 53 promotion requirement it exercises — never a JAR1-local id. If it is
-NOT, record the gap honestly here — never substitute an easier scenario."* It is
-not. This entry is that evaluation's record, with the four independent blockers
-traced from source rather than assumed.
-
-- **Category**: `schema-gap` (step vocabulary + cell catalog) **and**
-  `provenance-gap` (chapter 53 carries no L0 id to cover). Nothing was worked
-  around: no weakened scenario was authored, and the property is instead pinned as
-  a kernel/loader test —
-  `loader/src/test/kotlin/civictech/loader/B14ModulePromotionTest.kt`, alongside
-  the host-classpath twin `kernel/src/test/kotlin/civictech/cell/evolve/ShadowPromotionTest.kt`.
-
-  **Addendum (2026-09-30, `computenet-xn0ox`, feature-branch sha
-  `d0584563`)**: chapter 53 now carries `53-SWAP-01..05` and `53-ROLLBACK-01`
-  (`computenet-xn0ox.3`); `53-SWAP-05` is the no-torn/dup/missing sentence this
-  entry cites ("the swap is atomic per membrane... an instance swap leaves the
-  logical edge set intact, so downstream wave completeness never observes
-  it"). The `provenance-gap` half no longer applies as stated. The
-  `schema-gap` half — no swap step verb, no gate/candidate catalog cell —
-  still stands, so this entry remains open.
-
-- **The clause in dispute**: `doc/spec/50-development-process/53-evolution.md`
-  §"The promotion swap" — PRECHECK → PREPARE → COMMIT → RETIRE, with the buffered
-  window's guarantee that downstream observes no torn, duplicate or missing delta
-  across the swap. Scenario B14 adds that the candidate may come from a **loaded
-  module** (`[JAR1-SPAWN-04]`, `[JAR1-UNL-02]`).
-
-- **Blocker 1 — the closed step vocabulary has no verb that swaps one instance for
-  another.** `concord/schema/scenario.md` §"`script` — the step verbs" enumerates
-  the complete set: `apply`, `quiesce`, `connect`, `disconnect`, `snapshot`,
-  `restore`, `restart`, `despawn`, `read-state`, `retransmit`. None introduces a
-  *second* instance of a cell at run time, and the schema's own header states that
-  "growing the schema, the step/verb set, the check vocabulary, or the catalogs is
-  a deliberate schema-change ticket between waves — not a corpus-authoring
-  convenience". The nearest neighbour, `restart`, is explicitly ruled out by that
-  same document: it "recovers a cell from its freshest available checkpoint" and
-  the scenario "names no blob and no failure" — same class, same code, new epoch.
-  A promotion is the opposite claim: a *different* implementation takes over the
-  logical position, and the whole point of B14 is that downstream sees the
-  behavioural difference without seeing a seam. (`Driver.spawn` does exist in the
-  SPI — `concord/src/main/kotlin/civictech/concord/driver/Driver.kt:28` — but only
-  as graph *construction*, driven from `graph.cells`; no step reaches it, so a
-  scenario cannot name a candidate that was not in the topology from the start.)
-
-- **Blocker 2 — the cell catalog has no membrane gate and no candidate pair.**
-  `concord/schema/cell-catalog.md` carries sources, operators, views, and the
-  specialised controls (`nature-gate`, `exclusive-source`/`-sink`, `feedback`,
-  `journal`, `effect-sink`). There is no traffic-light / buffering membrane, so a
-  scenario cannot express the red-drain-green window at all — and that window *is*
-  the mechanism the requirement is about. Nor is there any pair of catalog ids
-  standing in the incumbent/candidate relation (contract-identical outlet,
-  observably different fold), which is what makes a swap detectable rather than a
-  no-op.
-
-- **Blocker 3 — chapter 53 has no L0 requirement id, so `covers:` would dangle
-  (fatal lint).** `concord/schema/provenance.md` §3 makes a `covers:` id that
-  matches no L0 requirement a build failure, and P6 makes an empty `covers:` an
-  orphan — equally fatal. Measured on this branch:
-  `grep -rnoE '\[5[0-9]-[A-Z]+-[0-9]+\]' doc/spec/` returns **nothing**, and the
-  chapters present in `doc/spec/CONCORDANCE.md` are 12, 13, 15, 21, 22, 24, 33, 41
-  and 42 only. So the bead's own premise — "the 53 promotion requirement it
-  exercises" — does not yet exist: minting one is a W1-C-class spec edit
-  (`provenance.md` §1, including the "checkable through the SPI" L0 gate, which
-  blockers 1 and 2 currently fail), not something a corpus author may do on the
-  way past.
-
-- **Blocker 4, specific to B14's module half.** Even with 1–3 resolved, the
-  *module-supplied* candidate is unreachable from any driver: `:concord` depends on
-  `:kernel` alone (`concord/build.gradle.kts:11`), never on `:loader`, and only
-  `civictech.concord.driver.kernel` may import `civictech.cell.*` at all. A
-  conformance corpus is implementation-neutral by construction, so "the candidate
-  class came from a jar this runtime loaded" is not a neutral claim it can state —
-  which suggests that even a future promotion scenario would cover spec 53's swap,
-  with B14's loader-provenance half staying a `:loader` test.
-
-- **What was NOT done instead.** No easier scenario was substituted for the hard
-  one: nothing was authored that promotes nothing, that swaps a cell for itself, or
-  that reads "restart" as "promotion". No JAR1-local id was minted into `covers:`.
-  No `53-*` id was invented in the spec to make a `covers:` line resolve. No
-  catalog cell or step verb was added under cover of a corpus-authoring task.
-
-- **Resolves**: a schema-change ticket that does all three of (a) mint EARS ids for
-  `53-evolution.md` §"The promotion swap" that pass the L0 "checkable through the
-  SPI" gate, (b) grow the step vocabulary with a promotion verb naming an
-  incumbent, a candidate and the outlet being rebound, and (c) grow the cell
-  catalog with a buffering-membrane gate plus an incumbent/candidate pair whose
-  outlets are contract-identical and whose folds differ observably. With all three,
-  author the scenario over the existing `observations-whole-waves` /
-  `incremental-equals-batch` / `no-dead-letters` checks — which are adequate to the
-  glitch-freedom claim once the swap itself is expressible — and delete this entry.
 
 ## `[KE1-04]` / `[KE1-10]` — embedded-value merge class is not classifiable at link time, and not classifiable at all for an unnamed payload
 
@@ -3811,37 +3332,32 @@ possible in either direction.
 
 Filed 2026-09-27 by `computenet-t4od7.9` (feature `computenet-t4od7` = KE4.7,
 epic `computenet-lxo` = KE4), over `feature/computenet-t4od7` at `15fd3e46`.
-Every other `[24-WL-nn]` id reads `covered` in `doc/spec/CONCORDANCE.md`
-(the `24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
-`[24-WL-11]`). `24-WL-04` now reads covered (only its structural residual stays disputed below), and so does `24-WL-09` (covered by the narrower implemented rule; its general `[KE4-30]` residual is disputed below); the other ids below stay `gap` rows, and the last entry
-records a scenario that was designed and deliberately not authored. Kernel
-test names below were checked with `git grep -n` at that commit.
+Most `[24-WL-nn]` ids read `covered` in `doc/spec/CONCORDANCE.md` (the
+`24-WL-*` scenarios of tasks `.3`-`.8`, plus `24-OP-WINDOW-01` for
+`[24-WL-11]`). The retirement of `24-WL-SETTLE-01` left `[24-WL-04]`
+uncovered; its surviving structural requirement stays disputed below.
+`[24-WL-09]` remains covered by the narrower implemented rule while its
+general `[KE4-30]` residual is disputed below; the other ids below stay `gap`
+rows, and the last entry records a scenario that was designed and deliberately
+not authored. Kernel test names below were checked with `git grep -n` at that
+commit.
 
-## `24-WL-04` (residual) — the floor is not a wave position and is in no completeness set: no neutral observable (`check-vocabulary-gap`)
+## `24-WL-04` — the floor is not a wave position: no neutral observable (`check-vocabulary-gap`)
 
 - **Requirement**: `[24-WL-04]` (`20-dataflow-semantics/24-data-cells.md`
   §Lateness and waterlines; stated in `22-consistency.md` §Interaction with
-  other parts): the floor SHALL NOT be a wave position and SHALL NOT be a
-  member of any completeness set or glitch-free frontier.
-- **Covered half.** The settlement consequence (a wave that reaches the
-  waterline without moving the floor emits nothing and is absorb-acked, so a
-  wave-aligned consumer of data and waterline settles it) is authored as
-  `24-WL-SETTLE-01` (`computenet-tcovt`), through an `aligned-view` with a
-  `set-view` data member and a `value-view` waterline member. It discriminates:
-  with `WaterlineCell` no longer absorb-acking a no-rise wave
-  (`kernel/.../data/Waterline.kt`, the `outlet.absorbAck()` after a failed
-  `raiseTo`), it fails on 20 of 20 runs with `final-view(c): expected
-  {d=[[3,y],[8,z],[10,x]],f=5} but read {d=[[10,x]],f=5}`.
-- **Missing capability (the half that stays disputed)**: the literal
-  statement, that the floor is not a wave position and is in no completeness
-  set, has no neutral observable. No check reads a cell's completeness set or
-  a frontier's members. A broken implementation that made the floor a
-  frontier member but still acked every no-rise wave would pass every check
-  this vocabulary can state, including `24-WL-SETTLE-01`.
-- **Kernel pin**: `WaterlineCellTest` `a wave that does not move the floor is
-  absorb-acked so a downstream glitch-free join settles it`.
-- **Revisit trigger**: a check that can read frontier or completeness-set
-  membership.
+  other parts): "The floor SHALL be a value, not a wave: it SHALL NOT be a
+  wave position (Ubiquitous)."
+- **Coverage status**: uncovered. Its former scenario asserted a settlement
+  consequence that was retired with its consumer; it did not provide a
+  neutral observable for the surviving value-versus-wave distinction.
+- **Missing capability**: the literal statement that the floor is a payload
+  value rather than a wave position has no neutral observable. No existing
+  check can distinguish a floor interpreted as data from one incorrectly
+  interpreted as a `MessageContext.timestamp` position while all emitted
+  values remain equal.
+- **Revisit trigger**: a check that can distinguish the `WaterlineDelta` value
+  from the invocation's wave position.
 
 ## `24-WL-09` (residual) — `[KE4-30]`'s general safety condition has no clean formulation; the implemented rule is narrower (`proof-gap`)
 
@@ -3974,109 +3490,6 @@ test names below were checked with `git grep -n` at that commit.
   the B17 tests.
 - **Revisit trigger**: a waterline floor tied to the stable frontier. E3.7
   merely existing does not qualify (lxo-D3).
-
-## `24-WL-GF-01` (not authored) — B16, a glitch-free wrap around an evicting cell (`check-vocabulary-gap` + `driver-binding-gap`)
-
-- **Requirement it would cover**: `[22-GF-01]`/`[22-GF-02]` for KE4's B16
-  (`[KE4-42]`): no observation mixes pre-eviction and post-eviction
-  membership. Both ids are already `covered` by other scenarios
-  (`[22-GF-01]` by `22-GF-DIAMOND-01`, `22-WAVE-FANIN-01`, `24-OP-COMBINE-02`
-  and `CTL-GF-01`; `[22-GF-02]` by `22-GF-NESTED-01`), so this entry costs no
-  CONCORDANCE row.
-  The feature's rule "B16 SHALL cover `[22-GF-01]`/`[22-GF-02]`" was
-  re-scoped to this entry (t4od7-D6).
-- **Missing capability**: (a) `glitch-free: true` makes the driver spawn a
-  `GlitchFreeCell` downstream of the operator's single outlet
-  (`KernelDriver.spawn`, `if (built.glitchFree)`). That wrapper cannot
-  coalesce the operator's own torn same-wave emissions, which is the R2-A
-  finding in `22-GF-DIAMOND-01`'s header. The kernel form
-  (`GroupByEvictionGlitchFreeTest`) arms a `WaveFrontier` per inlet on the
-  `GroupByCell` itself, `waterline` first (nt17o-D2). The catalog does not
-  expose that construction. (b) Even with it, no check states the property
-  for a map-shaped stream. `observations-whole-waves` compares against the
-  source's set fold. The only neutral necessary condition on a windowed map,
-  "no observed window ends at or below `maxStart - lateness`", passes the
-  empty intermediate `{}` that a wrong arrival order produces, so it is
-  weaker than the requirement.
-- **What was NOT done instead**: that weaker check was not authored, and no
-  `glitch-free: true` window scenario claims B16.
-- **Kernel pins**: `GroupByEvictionGlitchFreeTest` `B16 - the frontier arm
-  order prevents a torn wave across eviction and fold`, with its control
-  `control - eager delivery (no frontier) tears the wave`.
-- **Check to restore**: a map-shaped whole-wave check backed by per-prefix
-  folds from the lateness oracle (`BatchOracle`'s `Lateness` model gives the
-  final fold only, `computenet-t4od7.2`), plus per-inlet frontier gating
-  exposed by the catalog. Both are schema changes.
-- **Revisit trigger**: a catalog form for per-inlet frontier gating, or a
-  check vocabulary change that adds prefix folds over map views.
-
-## 22-OBS-BRIDGED — bridged aligned observation ([KE2-28]..[KE2-30], BS-16): kernel-test-covered, no in-corpus driver binding
-
-### 22-OBS-BRIDGED-01 (a remote aligned arm settles the local sink) — **`driver-binding-gap`**
-
-- **Category**: `driver-binding-gap`.
-- **Requirement**: `[22-OBS-01]`, with the bridged frontier condition in
-  `[22-GF-03]` and the `[KE2-28]`/`[KE2-29]`/`[KE2-24]` feature clauses.
-- **Missing capability**: **cross-host aligned observation, no in-corpus driver binding**.
-  `KernelDriverDist.connectCrossHost` binds only
-  primary-`inlet` targets through `FanOutlet.streamTo` (with no `EdgeOpen`).
-  An `aligned-view` exposes one inlet per named member view and no primary
-  `inlet`, so the `dist` driver rejects this target; even a widened
-  `streamTo` binding would bypass the aligned frontier's edge-open handshake
-  and leave the arm's deltas unmatched. The missing runtime/corpus capability
-  is a named-inlet `bridgeTo`/`bridgeFrom` cross-host binding, plus a
-  `[22-GF-03]`-shaped corpus check for it.
-- **Behaviour it would carry**: Given an `aligned-view` with one member on a
-  second host, when a source wave reaches a local member and a remote member
-  over the bridge, every composite is the same per-source prefix as the
-  all-local case; a remote filter that absorbs the final wave settles by its
-  bridged `Progress` ack, and registering visibility handles adds no frame or
-  protocol lane.
-- **Scenario it would have been**: `22-OBS-BRIDGED-01.yaml`, `profile: dist`,
-  `covers: [22-OBS-01]`, with an `aligned-view` whose one member is hosted on
-  a second host.
-- **Why it cannot be checked honestly today**: the `dist` driver has no
-  binding for an `aligned-view` member inlet. Authoring the scenario over a
-  same-host stand-in would not exercise the bridge, while authoring it over
-  the available cross-host `streamTo` path would not install the frontier
-  edge it claims to test. That would make the scenario appear to cover
-  `[22-OBS-01]` without checking bridged completeness.
-- **What was NOT done instead**: no same-host stand-in was dressed as a
-  bridge, and no weakened scenario was authored. No scenario YAML or
-  `CONCORDANCE.md` row claims this corpus coverage.
-- **What is not lost**: the kernel proof is pinned by
-  `AlignedObserveBridgedTest`, over the in-process full-duplex frame bridge
-  and its Near/C/Far managed-host topology:
-  - `KE2-28 - an identity remote arm publishes exactly the local prefix for every wave`;
-  - `KE2-28 - an even-filtering remote arm publishes exactly the filtered local prefix`;
-  - `control - the same bridged topology tears under point-consistent observation`;
-  - `KE2-29 - a final wave swallowed remotely settles through bridged Progress`;
-  - `control - without negotiated Progress the final remote wave remains buffered`;
-  - `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`;
-  - `bridged Stall then Resume on one link are handled in wire order` (on a
-    single `ManagedHost` and a `WireEdgeLink`, not the frame bridge: it pins
-    the host-side fix this feature landed, which stages wire-arrived frontier
-    markers through the target's data FIFO so a bridged `Progress` cannot
-    overtake the data it orders).
-  The companion `GlitchFreeBridgedDiamondTest` also pins bridged frontier
-  ordering, absorb-ack settlement, and protocol-frame duplication controls.
-- **[KE2-30] clause status**: `[KE2-28]` identity and filtered cases are
-  shown by the two `KE2-28` methods above; its point-consistent control is
-  shown by `control - the same bridged topology tears under point-consistent observation`;
-  `[KE2-29]` is shown by `KE2-29 - a final wave swallowed remotely settles through bridged Progress`
-  with its no-`Progress` control; duplicated protocol frames are exercised,
-  not discriminated: the two `KE2-28` methods run under the seeded
-  `PROTOCOL_ONLY` duplicator on the Near→Far leg, but neutralising it can
-  leave them green, so a green seed is not evidence a duplicate occurred
-  (the test's class KDoc). The discriminating control for the duplicator
-  primitive is `BS-6` in `testkit`'s `DuplicateFaultTest`, and arm 3 of
-  `BS-16 CHA1-61 - the per-seed outcome vector survives the retrofit, is blind to a dead duplicator, and ungating it diverges`
-  in `GlitchFreeBridgedDiamondTest` shows the same duplicator, ungated,
-  firing in the harness this test's `Net` copies; `[KE2-24]` is shown by
-  `BS-14 - visibility handles add no frames or protocol lanes to the bridged aligned schedule`.
-- **Resolves**: a named-inlet cross-host link binding in `KernelDriverDist`,
-  together with the `[22-GF-03]`-shaped corpus check that exercises its
-  `EdgeOpen`/`EdgeClose`/`Progress` ordering and aligned-view completeness.
 
 ---
 

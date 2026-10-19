@@ -204,10 +204,8 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         host.lookupOrThrow(tref).inlet.call
     }
 
-    // The observation edge: each structural root set is an aligned group, and the
-    // observation assembles their latest views into one point-consistent frame with
-    // built-in late-join catch-up — no hand-rolled hub cells, no synchronized mutable
-    // snapshot. Typed overloads (T08 finding 2): the element/key type flows from each
+    // Each registered view is its own point-consistent sink with built-in late-join
+    // catch-up. Typed overloads (T08 finding 2): the element/key type flows from each
     // TypedRef's API shape, so a wrong-shaped source here is a compile error, not an
     // Any?-erased fold read back with an unchecked cast.
     private val view: Observation = host.observation {
@@ -228,11 +226,8 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
         }
     }
 
-    internal val observationGroups: Map<String, String>
-        get() = view.current().groupOf
-
-    internal val observationGroupBufferedWaves: Map<String, Int>
-        get() = view.groups.associateWith { view.group(it).bufferedWaves }
+    internal val observationViews: Set<String>
+        get() = view.views
 
     /** Test-only proof that each rendered payload obtains one observation frame. */
     internal val observationCurrentReads = AtomicLong()
@@ -311,7 +306,7 @@ class SlotFinderApp(port: Int = 8080, inspector: InspectorFlag.Options? = null) 
     fun stop() {
         inspector?.stop()
         shell.stop()
-        // Stop the canonical observation's group dispatchers; the demo keeps its
+        // Stop the canonical observation's view dispatchers; the demo keeps its
         // graph alive for the process lifetime, so stop() is its shutdown hook.
         view.close()
     }

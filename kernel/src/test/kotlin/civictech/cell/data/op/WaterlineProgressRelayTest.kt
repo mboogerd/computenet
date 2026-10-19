@@ -92,7 +92,7 @@ class WaterlineProgressRelayTest {
     }
 
     @Test
-    fun `silent filtered waves drain an aligned GroupBy observation through its waterline sibling`() {
+    fun `silent filtered waves leave GroupBy observation views converged through its waterline sibling`() {
         val controller = SimulationController()
         val host = ManagedHost(scheduler = controller.scheduler())
         val source = SetCell<Long>()
@@ -116,7 +116,7 @@ class WaterlineProgressRelayTest {
             count("byValue", byValue.ref)
             set("late", byValue.ref, outletName = "late")
         }
-        observation.groups shouldBe setOf("filtered+byValue+late")
+        observation.views shouldBe setOf("filtered", "byValue", "late")
         controller.runToIdle()
 
         val writer = host.lookup<LongSetInlet>(source.ref)!!.inlet.call
@@ -127,7 +127,6 @@ class WaterlineProgressRelayTest {
         writer.add(13L)
         controller.runToIdle()
 
-        observation.bufferedWaves shouldBe 0
         observation.get<Set<Long>>("filtered") shouldBe setOf(10L)
         observation.get<Map<Long, Long>>("byValue") shouldBe mapOf(10L to 1L)
         observation.get<Set<Long>>("late") shouldBe emptySet()

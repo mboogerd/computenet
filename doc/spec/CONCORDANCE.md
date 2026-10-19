@@ -74,20 +74,19 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 21-PULL-02 | 21-PULL-02 | covered |
 | 21-PULL-03 | — | gap |
 | 21-REBASE-01 | 21-REBASE-01, 24-WL-REBASE-01 | covered |
-| 22-GF-01 | 22-GF-DIAMOND-01, 22-WAVE-FANIN-01, 24-OP-COMBINE-02, CTL-GF-01 | covered |
-| 22-GF-02 | 22-GF-NESTED-01 | covered |
-| 22-GF-03 | — | gap |
-| 22-LIVE-01 | 22-LIVE-01 | covered |
-| 22-OBS-01 | 22-OBS-01 | covered |
-| 22-OBS-02 | 22-OBS-02 | covered |
+| 22-GF-01 | — | gap |
+| 22-GF-02 | — | gap |
+| 22-LIVE-01 | — | gap |
+| 22-OBS-01 | — | gap |
+| 22-OBS-02 | — | gap |
 | 22-REC-01 | 24-WL-REC-01, 24-WL-REC-02 | covered |
-| 22-SRC-01 | 22-SOURCE-ID-01 | covered |
+| 22-SRC-01 | 22-LIVE-01, 22-SOURCE-ID-01 | covered |
 | 24-AGG-01 | 24-OP-GROUPBY-01, 24-OP-GROUPBY-02, 24-OP-GROUPBY-03 | covered |
 | 24-BOUND-01 | 24-BOUND-01 | covered |
 | 24-BOUND-02 | 24-BOUND-02 | covered |
 | 24-CATCHUP-01 | 24-GEN-01 | covered |
 | 24-DUR-01 | DUR-REPLAY-01 | covered |
-| 24-DUR-02 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-GF-01, DUR-PART-01, DUR-PART-WHOLE-01, DUR-REPL-01, DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
+| 24-DUR-02 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-PART-01, DUR-PART-WHOLE-01, DUR-REPL-01, DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
 | 24-DUR-03 | DUR-SCOPE-01, DUR-SNAPTAIL-01 | covered |
 | 24-DUR-04 | DUR-SRCID-01, DUR-SRCID-02 | covered |
 | 24-DUR-05 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-CONTEXTLESS-01, DUR-LIVE-01, DUR-REPLAY-01, DUR-SRCID-01, DUR-SRCID-02, DUR-STAMPED-01 | covered |
@@ -150,7 +149,7 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 24-WL-01 | 24-WL-LATE-01 | covered |
 | 24-WL-02 | 24-WL-FLOOR-01, 24-WL-JOINLOW-01 | covered |
 | 24-WL-03 | 24-WL-DUP-01, 24-WL-FLOOR-01 | covered |
-| 24-WL-04 | 24-WL-SETTLE-01 | covered |
+| 24-WL-04 | — | gap |
 | 24-WL-05 | 24-WL-CATCHUP-01, 24-WL-REC-01 | covered |
 | 24-WL-06 | 24-WL-LATE-01 | covered |
 | 24-WL-07 | 24-WL-JOINLOW-01, 24-WL-LATE-01, 24-WL-REC-02 | covered |
@@ -176,7 +175,6 @@ Without ids (10) — structurally excluded from the table below; filed as a disp
 | 42-WM-01 | — | gap |
 | 42-WM-02 | — | gap |
 | 42-WM-03 | — | gap |
-| 42-WM-04 | — | gap |
 | 42-WM-05 | — | gap |
 | 42-WM-06 | — | gap |
 | 42-WM-07 | — | gap |
@@ -267,7 +265,16 @@ None.
 - Unestablished ownership: requirement '21-CYCLE-02' (20-dataflow-semantics/21-propagation.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '21-CYCLE-03' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '21-PULL-03' (20-dataflow-semantics/21-propagation.md) has no covering scenario
-- Coverage gap: requirement '22-GF-03' (20-dataflow-semantics/22-consistency.md) has no covering scenario
+- Coverage gap: requirement '22-GF-01' (90-roadmap/99-defects-engines-plan/tickets/D-COMBINE.md) has no covering scenario
+- Roadmap-owned declaration: requirement '22-GF-01' (90-roadmap/99-defects-engines-plan/tickets/D-COMBINE.md) has no declaration-classified occurrence in a normative chapter (00-50); its only declaration-classified occurrence is in 90-roadmap/99-defects-engines-plan/tickets/D-COMBINE.md
+- Coverage gap: requirement '22-GF-02' (90-roadmap/98-inspector-v4-plan/tickets/V3-BE.md) has no covering scenario
+- Unestablished ownership: requirement '22-GF-02' (90-roadmap/98-inspector-v4-plan/tickets/V3-BE.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
+- Coverage gap: requirement '22-LIVE-01' (90-roadmap/98-inspector-v4-plan/tickets/V3-BE.md) has no covering scenario
+- Unestablished ownership: requirement '22-LIVE-01' (90-roadmap/98-inspector-v4-plan/tickets/V3-BE.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
+- Coverage gap: requirement '22-OBS-01' (90-roadmap/99-defects-engines-plan/tickets/E2-ALIGN.md) has no covering scenario
+- Roadmap-owned declaration: requirement '22-OBS-01' (90-roadmap/99-defects-engines-plan/tickets/E2-ALIGN.md) has no declaration-classified occurrence in a normative chapter (00-50); its only declaration-classified occurrence is in 90-roadmap/99-defects-engines-plan/tickets/E2-ALIGN.md
+- Coverage gap: requirement '22-OBS-02' (90-roadmap/99-defects-engines-plan/tickets/E2-ALIGN.md) has no covering scenario
+- Roadmap-owned declaration: requirement '22-OBS-02' (90-roadmap/99-defects-engines-plan/tickets/E2-ALIGN.md) has no declaration-classified occurrence in a normative chapter (00-50); its only declaration-classified occurrence is in 90-roadmap/99-defects-engines-plan/tickets/E2-ALIGN.md
 - Coverage gap: requirement '24-DUR-09' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-05' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
@@ -277,7 +284,8 @@ None.
 - Coverage gap: requirement '24-OP-OUTERJOIN-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Unestablished ownership: requirement '24-OP-OUTERJOIN-01' (20-dataflow-semantics/24-data-cells.md) has no declaration-classified occurrence anywhere in doc/spec/**; attributed to its chapter by the first-sighting-by-path fallback only
 - Coverage gap: requirement '24-OP-OUTERJOIN-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
-- Coverage gap: requirement '24-OP-SEMIJOIN-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
+- Coverage gap: requirement '24-OP-SEMIJOIN-04' (90-roadmap/99-defects-engines-plan/tickets/E2-GATE.md) has no covering scenario
+- Roadmap-owned declaration: requirement '24-OP-SEMIJOIN-04' (90-roadmap/99-defects-engines-plan/tickets/E2-GATE.md) has no declaration-classified occurrence in a normative chapter (00-50); its only declaration-classified occurrence is in 90-roadmap/99-defects-engines-plan/tickets/E2-GATE.md
 - Coverage gap: requirement '24-PART-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-PART-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-PART-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
@@ -292,13 +300,13 @@ None.
 - Coverage gap: requirement '24-TAG-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-TAG-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-TAG-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
+- Coverage gap: requirement '24-WL-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-15' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-17' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-WL-18' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '42-WM-01' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-02' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-03' (40-distribution/42-replication.md) has no covering scenario
-- Coverage gap: requirement '42-WM-04' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-05' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-06' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-07' (40-distribution/42-replication.md) has no covering scenario

@@ -44,7 +44,7 @@ are consolidated in [90-roadmap/91-gap-analysis.md](90-roadmap/91-gap-analysis.m
 
 ### 20 — Dataflow semantics (what, precisely)
 - [21-propagation.md](20-dataflow-semantics/21-propagation.md) — push/pull, incremental/complete, delta algebra
-- [22-consistency.md](20-dataflow-semantics/22-consistency.md) — MessageContext, local glitch-freedom, topology versioning
+- [22-consistency.md](20-dataflow-semantics/22-consistency.md) — MessageContext, source identity, topology versioning
 - [23-ownership.md](20-dataflow-semantics/23-ownership.md) — Borrowed/Owned/Leased/Frozen payload contracts and the SPSC rule
 - [24-data-cells.md](20-dataflow-semantics/24-data-cells.md) — standard stateful cells, merge semantics, partitioning
 
@@ -84,7 +84,8 @@ are consolidated in [90-roadmap/91-gap-analysis.md](90-roadmap/91-gap-analysis.m
 | ADR — Computelet Kernel | 10/11–15, 30/31 |
 | ADR — Computelet Mobility | 30/33 |
 | ADR — Blocking Mailbox *(superseded)* | 30/33 (history only) |
-| ADR — Glitch Freedom | 20/22 |
+| ADR — Glitch Freedom *(superseded by ADR — Remove Glitch Freedom)* | 20/22 (history only) |
+| ADR — Remove Glitch Freedom | 00/02, 20/22, 30/34 |
 | ADR — SPSC link requirement | 20/23 |
 | ADR — Task Connectivity | 10/12–14, 20/22 |
 | ADR — Task Definitions | 10/15 |

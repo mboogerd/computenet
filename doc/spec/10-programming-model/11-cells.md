@@ -195,7 +195,7 @@ membrane declares an **exposure map** plus **couplings**:
   external face) — and a wave scope: **Preserve** (transparent, waves flow
   through per 20/22) or **Remint** (Mediate only: the proxy MUST mint fresh
   waves from its own counter, making the membrane a single external wave
-  source and a glitch-free frontier, 20/22), plus an optional observe/trace
+  source (20/22), plus an optional observe/trace
   outlet.
 - **Hidden by default (G-9)**: a cell that declares a membrane publishes to
   external resolvers ONLY its exposures' external names; host
@@ -233,17 +233,6 @@ a socket crossing whose hello verifies, or a `Peering.loopback` direction
 with credentials on both sides, promotes past `AuthLevel.TransportVouched` —
 and the hand-written proxy (not yet KSP-generated, G-52) is the
 outlet-direction Mediate realization — see `BoundaryPolicyTest`.
-
-**Frontier queries at the boundary (decided in 93 I-23)**: a membrane answers
-an upstream frontier traversal per its surface mode — Flatten is transparent
-(the resolved link lands on the organelle port; the delegating cell
-contributes no frontier node); Mediate+Preserve propagates the query inward
-and emits a re-based summary on its own exposed edge; Mediate+Remint or an
-authority-opaque membrane answers as a terminal/opaque source with its own
-sourceId and does not propagate the query inward. Interior edge/port refs
-MUST never cross the boundary — reports are re-based at the exposed edge, so
-frontier knowledge and addressing capability stay decoupled (hiding holds by
-construction).
 
 ⚠ GAP (G-10, design decided in 93 I-10, unimplemented): membranes have no
 code representation at all. This is acceptable — they are the *narrow/why*

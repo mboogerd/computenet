@@ -80,10 +80,10 @@ single-threadedly, seed-randomized across hosts, reproducible per seed.
 yet; add it when something is, e.g. G-19 throttling. The attention
 suspension policy window needs none of it: it is counted in host scheduling
 steps, not wall time — decided in 93 I-9 — so it is testable here
-deterministically by step count.) The first seeded
-invariant harness is the glitch-freedom diamond test (20/22): 200 seeds
-asserted invariant-style, plus a control run proving the harness can produce
-the failure it guards against.
+deterministically by step count.) A standing seeded invariant harness is
+`AttentionGenerativeTest`: 100 seeds exercise the stride floor plus
+park/replay, with a starvation control proving the harness detects a missing
+floor.
 
 *(Lateness harness, KE4.6 — [24 §Lateness and
 waterlines](../20-dataflow-semantics/24-data-cells.md#lateness-and-waterlines))*:
@@ -164,10 +164,8 @@ never granted closed-loop claims); the **shadow owns its own boundary
 instances** — fresh shadow instances of every effect-boundary cell, the tap
 being the only production→shadow edge, which prevents double-fire
 structurally; and **gate invariants** (promotion-deciding, unlike eager
-monitoring invariants which may see glitches) are trusted only at consistent
-evaluation points — glitch-free per-wave evaluation (20/22) when their
-inlets share an upstream fork, convergence-at-quiescence for independent
-sources.
+monitoring invariants which may see transient intermediate states) are trusted
+only at convergence-at-quiescence.
 
 *(Exclusive payloads in shadow mode — decided in 93 I-20; discharging sinks
 and in-host tap observation implemented, with G-47 refinements below)*:
@@ -232,16 +230,14 @@ already-acted `Effectful` sink remains open under `computenet-n2jwi`.
 
 ⚠ GAP (G-59): the M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells — wall-clock/random logic,
-spontaneously-emitting sources, Effectful sinks without idempotency keys,
-glitch-free partial-wave buffers, and cross-host recovery-frontier drift are
-unhandled. *Proposal*: a determinism marker/lint forcing non-deterministic
-cells to output-mode journaling (or a captured-entropy WAL record); an
+spontaneously-emitting sources, Effectful sinks without idempotency keys, and
+cross-host recovery-frontier drift are unhandled. *Proposal*: a determinism
+marker/lint forcing non-deterministic cells to output-mode journaling (or a
+captured-entropy WAL record); an
 emitted-delta log format for sources and a processed-frontier shape for
 Effectful sinks with a generative recovery-dedup test; document the
-external-idempotency ceiling as a stated limit; verify deterministic replay
-reconstructs partial-wave buffers or include them in `Stateful.snapshot`;
-evaluate an opt-in coordinated checkpoint for tightly-coupled subgraphs
-(never global, per P4) (93 I-7).
+external-idempotency ceiling as a stated limit; evaluate an opt-in coordinated
+checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
 
 ## What stays example-based
 

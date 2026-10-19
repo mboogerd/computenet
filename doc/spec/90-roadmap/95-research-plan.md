@@ -213,7 +213,8 @@ plus `StateRequest(since)` full-state fallback — the mapping named in research
 **Actions**: measure tombstone wire share on the replicated demos after E1/E3 land;
 pursue (1) only if the measured share justifies per-peer interval bookkeeping.
 
-## R11 — Frontier alignment across origination points (96 §E2 residual)
+## R11 — Frontier alignment across origination points (96 §E2 residual) — WITHDRAWN (2026-10-17)
+**Withdrawn**: the aligned sink / observation edge is removed by `doc/adr/ADR - Remove Glitch Freedom.md`; nothing is blocked on this question any more.
 
 **Question**: the aligned sink's shared wave vocabulary assumes sibling views see
 the same sourceIds; a re-origination point on one branch only (a `Replicable`
@@ -229,7 +230,8 @@ comparability at replica granularity).
 **Actions**: ship E2.3 with the direction-(1) structural check; collect the graphs
 it rejects from the demos to decide whether (2)/(3) are worth their weight.
 
-## R12 — Observation-edge triggering policy (96 §E2 residual)
+## R12 — Observation-edge triggering policy (96 §E2 residual) — WITHDRAWN (2026-10-17)
+**Withdrawn**: the aligned sink / observation edge is removed by `doc/adr/ADR - Remove Glitch Freedom.md`; nothing is blocked on this question any more.
 
 **Question**: the Dataflow Model's where/when/how decoupling (research 04 §2)
 suggests a trigger knob — emit per settled wave, on demand, or on cadence with

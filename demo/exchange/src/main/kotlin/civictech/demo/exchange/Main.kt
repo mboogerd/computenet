@@ -1,7 +1,6 @@
 package civictech.demo.exchange
 
 import civictech.cell.CellRef
-import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.Aggregators
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
@@ -38,17 +37,18 @@ import java.net.URLDecoder
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.UnionSetCell
 
 // The composition probe (:demo:exchange, CP-E1). Two symmetric JVM peers hold
 // region-keyed orders in per-peer writer SetCells; the writers stream into a
 // per-peer order union that is chained to the counterpart over the M5 wire
 // (the "existing mesh" replicating the order inputs). Each peer folds its union
-// through one replicated, region-partitioned board and observes it behind a
-// glitch-free cell (CP-A4 inlet policy). Writer intake is journaled per-cell
-// (CP-C1) so a killed peer recovers its own orders; the partitioned board
-// recomputes from membership gossip at each replica, so both peers converge.
+// through one replicated, region-partitioned board and observes the board
+// straight off the partitioned cell's outlet. The point-consistent SSE may
+// show a half-applied shard update (the observation ADR). Writer
+// intake is journaled per-cell (CP-C1) so a killed peer recovers its own
+// orders; the partitioned board recomputes from membership gossip at each
+// replica, so both peers converge.
 
 /** An order carries a region, an id and a Long amount, packed into one wire-safe
  *  string element (the M5 codec ships String/Long/deltas, not arbitrary classes). */
@@ -132,21 +132,14 @@ class ExchangeApp(
         aggregator = Aggregators.sumOf(::amountOf),
     )
 
-    // partitioned board → glitch-free board (CP-A4): a whole-cell fan-in whose inlet carries
-    // WaveFrontier(WAIT). It surfaces the scatter-gathered board as one aligned
-    // MapDelta per wave, so the SSE never shows a half-applied shard update.
-    @Suppress("UNCHECKED_CAST")
-    private val boardApi = Propagate::class.java as Class<Propagate<MapDelta<String, Long>>>
-    private val boardCell = GlitchFreeCell(boardApi)
-
     private val observation: Observation by lazy {
         host.observation {
-            map("board", boardCell.ref)
+            map("board", partitioned.ref)
         }
     }
 
-    internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf
+    internal val observationViews: Set<String>
+        get() = observation.views
 
     // Per-region durable writers (CP-C1): one SetCell per region, journaled, its
     // ref registered so `journalFor` selects the WAL for it. The factory wires
@@ -208,12 +201,10 @@ class ExchangeApp(
     init {
         manage.spawn(orderUnion)
         replication.replicate(partitioned, host)
-        manage.spawn(boardCell)
 
         // the order union feeds the replicated partitioned board; its composite
         // membrane routes each order to exactly one private organelle.
         orderUnion.outlet.streamTo(routedDelta(partitioned.ref))
-        manage.link(partitioned.outlet, boardCell.inlet)
 
         // Read the board through the canonical observation → SSE state.
         observation.onChange { frame ->
@@ -309,7 +300,7 @@ class ExchangeApp(
     private fun inspectorCellNames(): Map<CellRef, String> = buildMap {
         put(orderUnion.ref, "orders")
         put(partitioned.ref, "board-partitioned")
-        put(boardCell.ref, "board")
+        put(observation.sink("board").ref, "board")
     }
 
     fun start(): ExchangeApp = apply {

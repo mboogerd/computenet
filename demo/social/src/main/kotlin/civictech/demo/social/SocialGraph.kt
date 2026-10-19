@@ -51,10 +51,10 @@
  * **Reads** are one [civictech.cell.observe.Observation] per spawned keyed
  * cell (jo2jk-D2): the observation is created the moment a cell is first
  * reached (in [personCell]/[forumCell]/[messageCell]/[authoredCell]), folding
- * that cell's outlet as one aligned view so
+ * that cell's outlet as one point-consistent view so
  * [personFacts]/[authored]/[forumFacts]/[messageFacts] read a consistent
  * snapshot from any thread, never `SetCell.membership()` directly. This is a
- * demo-scale cost worth stating plainly: one one-view aligned group per keyed
+ * demo-scale cost worth stating plainly: one one-view observation per keyed
  * cell that has ever been touched, not per family — an SNB dataset with many
  * persons/forums/messages spawns one extra observing cell for each. [onChange]
  * registers a listener that every observation, present and future, fires on a
@@ -125,8 +125,8 @@ class SocialGraph(
     /**
      * Set by the first [onChange]; until then no observation carries a listener
      * (computenet-v10ou.1). A listener is not free: each one-view [Observation]
-     * forwards to its aligned group's dedicated dispatcher thread, minted on
-     * its first fire and released by [close]. Registering `{ fireChange() }`
+     * forwards to its view sink's dedicated dispatcher thread, created when a
+     * listener is registered and released by [close]. Registering `{ fireChange() }`
      * on every observation unconditionally cost one idle thread per keyed cell
      * of every graph ever built — also for graphs nobody listens to (every
      * sim-scheduler test graph) — and a test JVM building a handful of seed-42
@@ -175,14 +175,13 @@ class SocialGraph(
      * [SocialApp]'s coalescing only divided by a load-dependent factor (CI
      * measured 101-233). So the bulk path registers [skipFirst]: its first
      * invocation is dropped, and that first invocation is always the catch-up
-     * — the aligned group adds the listener and submits the catch-up inside
+     * — the view sink adds the listener and submits the catch-up inside
      * one synchronized block, and propagation submits a change only under the
      * same lock, to the same single-consumer executor. No
      * change fold can therefore be submitted for this listener before its
      * catch-up, and every fold after registration still gets its own later
      * invocation, so no change is dropped. The skip leans on that ordering,
-     * which the kernel states as a guarantee for aligned observations, not on
-     * an implementation accident.
+     * which the observation API guarantees, not on an implementation accident.
      *
      * [attach], for a sink created AFTER listening started, keeps its
      * catch-up: that sink's creating write may already have folded by the time
@@ -504,7 +503,7 @@ class SocialGraph(
     /**
      * Terminally closes every per-key observation and turns [fireChange] into
      * a no-op ([closed]). This uses the app-edge lifecycle directly rather
-     * than despawning through the host: despawn tears each aligned group down
+     * than despawning through the host: despawn tears each observation down
      * through the full management lifecycle, which is more than a stopping
      * app that will never read these observations again needs. Idempotent. The
      * only caller is `SocialApp.stop` (computenet-a77tu).

@@ -1,46 +1,30 @@
 package civictech.demo.exchange
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.data.Aggregators
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.data.WatermarkCell
-import civictech.cell.onEach
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.nature.manifestOf
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
-import civictech.cell.port.LinkFrom
-import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
-import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
-import civictech.cell.proxy.Invocation
 import civictech.cell.link.Interest
 import civictech.cell.replication.Replication
 import civictech.cell.wire.Peering
 import civictech.nature.Manifest
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
-import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
-import civictech.cell.data.op.FlatMapSetCell
-import civictech.cell.data.op.mapSet
 import civictech.cell.data.op.MergeableGroupByCell
 import civictech.cell.partition.PartitionedCell
 import civictech.cell.partition.ShardCell
@@ -49,14 +33,13 @@ import civictech.cell.partition.PartitionedShardSet
 /**
  * CP-E2 — the composition **phase exit** ("the Agora for composition").
  *
- * One in-process graph composes ALL five Phase-1/Phase-2 natures over one
+ * One in-process graph composes four Phase-1/Phase-2 natures over one
  * cross-peer-replicated order stream, deterministically over a
  * [SimulationController] (100 seeds), and asserts the composed board equals a
  * batch recompute on every seed through a **repartition**, a **shard
- * migration**, a **peer partition/recover**, and a **late joiner** — plus the
- * two mandated diverging controls.
+ * migration**, a **peer partition/recover**, and a **late joiner**.
  *
- * The five natures, in one graph, per peer:
+ * The four natures, in one graph, per peer:
  *  - **[F] wire**: two symmetric peers' order replicas gossip over a
  *    [Peering.loopback] bridge (the same M5 frame path a socket carries), and
  *    each peer's partitioned shards live on their own hosts reached over bridges.
@@ -69,18 +52,14 @@ import civictech.cell.partition.PartitionedShardSet
  *    [PartitionedShardSet] whose [ShardCell] shards own disjoint region-slot
  *    ranges on different hosts; the scatter-gather union of shard ranges is the
  *    board, with the merge function never exercised (ranges disjoint).
- *  - **[A] glitch-free**: a [GlitchFreeCell] folds the per-region rows and the
- *    global total into one aligned board; the aligned board never shows
- *    total ≠ sum(rows), where a point-consistent sink does (control 1).
  *  - **[D] journal**: durable writer intake — covered by the real two-JVM
  *    `ExchangeScaffoldTest` (kill -9 + journal replay) and the solo journal
  *    test; here the peer partition/heal exercises anti-entropy recovery.
  *
- * Controls that MUST diverge: (1) a point-consistent sink shows a torn board on
- * some seed; (2) an epoch-blind repartition forks a moved region and diverges.
+ * The control that MUST diverge is an epoch-blind repartition that forks a moved
+ * region and diverges.
  *
- * Closes the 7 empty pairwise cells in one graph: A–B, A–C, A–F, A–O, C–B,
- * C–F, C–D.
+ * Closes the remaining pairwise cells in one graph: C–B, C–F, C–D.
  */
 class ExchangeCompositionExitTest {
 
@@ -214,6 +193,10 @@ class ExchangeCompositionExitTest {
     // [B×C] one replicated PartitionedCell per peer. Membership gossip crosses
     // the composite membrane, while each replica folds its private organelles.
     // ------------------------------------------------------------------
+
+    interface SetDeltaInletProxy {
+        val inlet: Use<Propagate<SetDelta<String>>>
+    }
 
     private fun foldBoard(board: MutableMap<String, Long>, delta: MapDelta<String, Long>) {
         delta.puts.forEach { (key, value) -> board[key] = value }
@@ -408,112 +391,10 @@ class ExchangeCompositionExitTest {
         assertTrue(divergedSeed != null, "epoch-blind control never diverged — the flip moved no live region")
     }
 
-    // ------------------------------------------------------------------
-    // [A] the glitch-free aligned board, over replicated inputs. A
-    // GlitchFreeCell folds one arm from EACH peer's order replica into one
-    // board, gated by the cross-replica settlement frontier (CP-B3): a board
-    // row never surfaces an order some replica-set member has not yet
-    // delivered. The point-consistent control (frontier off) tears.
-    // ------------------------------------------------------------------
-
-    interface SetDeltaInletProxy {
-        val inlet: Use<Propagate<SetDelta<String>>>
-    }
-
-    private val propagateSetDelta =
-        @Suppress("UNCHECKED_CAST") (Propagate::class.java as Class<Propagate<SetDelta<String>>>)
-
-    /** The origin add/del tags a released [SetDelta] depends on. */
-    private val originTags: (Invocation) -> Collection<Timestamp> = { inv ->
-        (inv.args.firstOrNull() as? SetDelta<*>)?.let { it.adds.values.flatten() + it.dels.values.flatten() }
-            ?: emptyList()
-    }
-
-    /** One released board update: the order it names, and whether every replica-set member had delivered it. */
-    private data class BoardObs(val order: String, val allMembersDelivered: Boolean)
-
-    private fun reroute(outlet: FanOutlet<Propagate<SetDelta<String>>>, inletRef: PortRef, routed: Propagate<SetDelta<String>>) {
-        outlet.unsubscribe(inletRef)
-        outlet.subscribe(Use.fixed(routed, inletRef))
-    }
-
-    private fun runGlitchFreeBoard(seed: Long, replicaFrontierOn: Boolean): List<BoardObs> {
-        val controller = SimulationController(seed)
-        val rnd = Random(seed)
-        val p0 = Peer(controller)
-        val p1 = Peer(controller)
-        Peering.loopback(p0.side, p1.side)
-        val logicalId = ordersId
-
-        val a = SetCell<String>(CellRef(logicalId, 0)).also { p0.replication.replicate(it, p0.host) }
-        val b = SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
-        controller.runToIdle()
-
-        // the glitch-free board lives on peer0, folding one arm from each replica
-        val board = GlitchFreeCell(propagateSetDelta)
-        p0.host.managementInlet.call.spawn(board)
-        val routedBoard = p0.host.lookup<SetDeltaInletProxy>(board.ref)!!.inlet.call
-
-        @Suppress("UNCHECKED_CAST") val aOut = PortRegistry.of(a)["outlet"] as FanOutlet<Propagate<SetDelta<String>>>
-        @Suppress("UNCHECKED_CAST") val bOut = PortRegistry.of(b)["outlet"] as FanOutlet<Propagate<SetDelta<String>>>
-        @Suppress("UNCHECKED_CAST") val boardFrom = board.inlet as LinkFrom<Propagate<SetDelta<String>>>
-        assertTrue(aOut.linkTo(boardFrom) is LinkResult.Connected)
-        assertTrue(bOut.linkTo(boardFrom) is LinkResult.Connected)
-        reroute(aOut, board.inlet.ref, routedBoard)
-        reroute(bOut, board.inlet.ref, routedBoard)
-
-        val rows = mutableMapOf<String, Long>()
-        val observations = mutableListOf<BoardObs>()
-        board.outlet.subscribe(Use.fixed(Propagate<SetDelta<String>> { delta ->
-            val order = delta.adds.keys.firstOrNull() ?: return@Propagate
-            delta.adds.keys.forEach { rows.merge(region(it), amount(it), Long::plus) }
-            val members = p0.registry.replicasOf(logicalId).map { it.instanceId }
-            val byInstance = mapOf(0L to a, 1L to b)
-            observations += BoardObs(order, members.all { order in (byInstance[it]?.membership() ?: emptySet()) })
-        }, PortRef.generate()))
-
-        val frontier: ReplicaFrontier =
-            if (replicaFrontierOn) p0.replication.replicaFrontier(logicalId)
-            else ReplicaFrontier { _, _, _ -> true }
-        board.useReplicaFrontier(frontier, originTags)
-        p0.replication.onWatermarkAdvance(logicalId) { board.recheck() }
-
-        val ops = listOf(
-            (HostedCellProxy.create(a.ref, p0.registry, SetInletProxy::class.java) as SetInletProxy).inlet.call,
-            (HostedCellProxy.create(b.ref, p1.registry, SetInletProxy::class.java) as SetInletProxy).inlet.call,
-        )
-        val orders = listOf("a1", "b2", "c3", "d4", "e5", "f6", "g7", "h8", "a9", "b1", "c2", "d3")
-        for (op in 1..24) {
-            ops[rnd.nextInt(2)].add(orders[op % orders.size])
-            repeat(rnd.nextInt(4)) { controller.step() }
-        }
-        controller.runToIdle()
-        return observations
-    }
-
-    @Test
-    fun `glitch-free board never surfaces an order a replica has not delivered - 100 seeds`() {
-        for (seed in 0L until 100L) {
-            val obs = runGlitchFreeBoard(seed, replicaFrontierOn = true)
-            assertTrue(obs.isNotEmpty(), "no board output on seed $seed")
-            obs.forEach { assertTrue(it.allMembersDelivered, "torn board on seed $seed: ${it.order} surfaced early") }
-        }
-    }
-
-    @Test
-    fun `control - a point-consistent board tears (surfaces an undelivered order) on some seed`() {
-        // Existential claim (SOME seed tears): stop at the first witness.
-        val tornSeed = (0L until 100L).firstOrNull { seed ->
-            runGlitchFreeBoard(seed, replicaFrontierOn = false).any { !it.allMembersDelivered }
-        }
-        assertTrue(tornSeed != null, "point-consistent control never tore — tune the interleaving")
-    }
-
     // ==================================================================
     // PN-15 — the evidence join. The per-node combinations, brought into the
     // one graph that IS the composition evidence, so the run's claim is not
-    // unit-test-deep. Three arms, one manifest assertion, three diverging
-    // controls (torn / stall / wedge — one per failure mode of one arm).
+    // unit-test-deep.
     // ==================================================================
 
     // ------------------------------------------------------------------
@@ -645,237 +526,28 @@ class ExchangeCompositionExitTest {
     }
 
     // ------------------------------------------------------------------
-    // Control (wedge): a covering-quorum member evicted WITHOUT closing its
-    // delivered-watermark row wedges a settlement-gated board on failover
-    // (PN-7 / the reverted PN-0c). Post-failover waves never settle. Closing
-    // the row on evict keeps the board settling. Over the origin-tagged
-    // tagged-set family ([SetCell]) — the substrate the delivered-watermark
-    // frontier is defined on (a mergeable aggregate's gossip re-mints wave
-    // identity per member, so PN-0c is only observable on the tagged set).
-    // ------------------------------------------------------------------
-
-    // The delivered-watermark slot for a data ref, re-derived from the kernel's
-    // stable naming (Replication.watermarkRef ∘ WatermarkCell.slotId): the
-    // deriving fn is kernel-internal, but the naming is stable and slotId is public.
-    private fun watermarkSlot(dataRef: CellRef): UUID =
-        WatermarkCell.slotId(CellRef(UUID.nameUUIDFromBytes("watermark:${dataRef.id}".toByteArray()), dataRef.instanceId))
-
-    private fun runFailover(seed: Long, closeOnEvict: Boolean): List<String> {
-        val controller = SimulationController(seed)
-        val peers = List(3) { Peer(controller) }
-        for (i in peers.indices) for (j in i + 1 until peers.size) Peering.loopback(peers[i].side, peers[j].side)
-        val logicalId = UUID.randomUUID()
-
-        val r0 = SetCell<String>(CellRef(logicalId, 0)).also { peers[0].replication.replicate(it, peers[0].host) }
-        val r1 = SetCell<String>(CellRef(logicalId, 1)).also { peers[1].replication.replicate(it, peers[1].host) }
-        val r2 = SetCell<String>(CellRef(logicalId, 2)).also { peers[2].replication.replicate(it, peers[2].host) }
-        controller.runToIdle()
-
-        val p0 = peers[0]
-        val gf = GlitchFreeCell(propagateSetDelta)
-        p0.host.managementInlet.call.spawn(gf)
-        val routedGf = p0.host.lookup<SetDeltaInletProxy>(gf.ref)!!.inlet.call
-        @Suppress("UNCHECKED_CAST") val r0Out = r0.outlet as FanOutlet<Propagate<SetDelta<String>>>
-        @Suppress("UNCHECKED_CAST") val gfInletFrom = gf.inlet as LinkFrom<Propagate<SetDelta<String>>>
-        assertTrue(r0Out.linkTo(gfInletFrom) is LinkResult.Connected)
-        reroute(r0Out, gf.inlet.ref, routedGf)
-
-        // original view: the consumer has not learned of the departure (membership
-        // is only eventually consistent), so the settlement read still counts r2 —
-        // whether it CONSTRAINS turns entirely on the closed-row marker.
-        val members = listOf(r0.ref, r1.ref, r2.ref)
-        val frontier = ReplicaFrontier { source, counter, _ ->
-            val companion = p0.replication.watermarkOf(logicalId) ?: return@ReplicaFrontier false
-            val rows = companion.rows()
-            val closed = companion.closed()
-            members.all { ref ->
-                val slot = watermarkSlot(ref)
-                slot in closed || (rows[slot]?.get(source) ?: Long.MIN_VALUE) >= counter
-            }
-        }
-        gf.useReplicaFrontier(frontier, originTags)
-        p0.replication.onWatermarkAdvance(logicalId) { gf.recheck() }
-
-        val released = mutableListOf<String>()
-        gf.outlet.subscribe(Use.fixed(Propagate<SetDelta<String>> { delta ->
-            delta.adds.keys.forEach { released += it }
-        }, PortRef.generate()))
-
-        val op0 = (HostedCellProxy.create(r0.ref, p0.registry, SetInletProxy::class.java) as SetInletProxy).inlet.call
-        val op1 = (HostedCellProxy.create(r1.ref, peers[1].registry, SetInletProxy::class.java) as SetInletProxy).inlet.call
-        val op2 = (HostedCellProxy.create(r2.ref, peers[2].registry, SetInletProxy::class.java) as SetInletProxy).inlet.call
-
-        listOf(op0, op1, op2).forEachIndexed { i, op -> op.add("pre$i") }
-        controller.runToIdle()
-
-        peers[2].replication.evict(r2, peers[2].host, closeDepartedRow = closeOnEvict)
-        controller.runToIdle()
-
-        (0 until 5).map { "post$it" }.forEach { op0.add(it); controller.runToIdle() }
-        controller.runToIdle()
-        return released
-    }
-
-    @Test
-    fun `failover keeps the settlement-gated board settling once the departed row is closed - 100 seeds`() {
-        for (seed in 0L until 100L) {
-            val released = runFailover(seed, closeOnEvict = true)
-            assertTrue(released.containsAll((0 until 3).map { "pre$it" }), "pre-failover orders missing on seed $seed")
-            assertTrue(released.containsAll((0 until 5).map { "post$it" }), "post-failover orders never settled on seed $seed")
-        }
-    }
-
-    @Test
-    fun `control - a covering-quorum member evicted without close wedges the board on failover - 100 seeds`() {
-        for (seed in 0L until 100L) {
-            val released = runFailover(seed, closeOnEvict = false)
-            assertTrue(released.containsAll((0 until 3).map { "pre$it" }), "pre-failover orders missing on seed $seed")
-            assertTrue(
-                (0 until 5).map { "post$it" }.none { it in released },
-                "expected a wedge on seed $seed but post-failover orders surfaced: $released",
-            )
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // [A×filter] the filtered arm (A–C), and control (stall). A glitch-free
-    // board folds a passing arm (identity mapSet, always emits) and an
-    // absorbing arm (a region filter). The final order is filtered on the
-    // absorbing arm — so the board can only settle that wave if the filter's
-    // CP-A3 absorb-ack crossed. A non-acking filter strands the wave: the board
-    // stalls forever. This is the absorb-ack-suppressed → stall control.
-    // ------------------------------------------------------------------
-
-    /** A filter that forwards passing elements but NEVER acks a swallowed wave (the CP-A3 control). */
-    private class NonAckingFilter(
-        private val predicate: (String) -> Boolean,
-        override val ref: CellRef = CellRef(UUID.randomUUID()),
-    ) : Cell {
-        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
-        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<String>>>())
-
-        init {
-            inlet.onEach { d ->
-                val passed = SetDelta(d.adds.filterKeys(predicate), d.dels.filterKeys(predicate))
-                if (passed.adds.isNotEmpty() || passed.dels.isNotEmpty()) outlet.call.propagate(passed)
-                // deliberately no absorb-ack
-            }
-        }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun outletOf(cell: Cell): FanOutlet<Propagate<SetDelta<String>>> =
-        PortRegistry.of(cell)["outlet"] as FanOutlet<Propagate<SetDelta<String>>>
-
-    /** Membership under the tag algebra: an element is live iff an add-tag is uncovered. */
-    private fun tagFold(deltas: List<SetDelta<String>>): Set<String> {
-        val all = deltas.fold(SetDelta<String>()) { acc, d -> acc.merge(d) }
-        return all.adds.filter { (e, tags) -> (tags - (all.dels[e] ?: emptySet())).isNotEmpty() }.keys
-    }
-
-    private fun runFilteredArm(seed: Long, acking: Boolean): Set<String> {
-        val controller = SimulationController(seed)
-        val hostSrc = ManagedHost(scheduler = controller.scheduler())
-        val hostMap = ManagedHost(scheduler = controller.scheduler())
-        val hostFilter = ManagedHost(scheduler = controller.scheduler())
-        val hostJoin = ManagedHost(scheduler = controller.scheduler())
-
-        val source = SetCell<String>()
-        val pass = FlatMapSetCell<String, String>(f = { listOf(it) }) // identity mapSet (always emits)
-        val filter: Cell = if (acking) FilterCell<String>(predicate = { region(it) == "a" })
-        else NonAckingFilter(predicate = { region(it) == "a" })
-        val gf = GlitchFreeCell(propagateSetDelta)
-        val observed = mutableListOf<SetDelta<String>>()
-        val observer = object : Cell {
-            override val ref = CellRef(UUID.randomUUID())
-            val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
-
-            init {
-                inlet.onEach { observed += it }
-            }
-        }
-
-        hostSrc.managementInlet.call.spawn(source)
-        hostMap.managementInlet.call.spawn(pass)
-        hostFilter.managementInlet.call.spawn(filter)
-        hostJoin.managementInlet.call.spawn(gf)
-        hostJoin.managementInlet.call.spawn(observer)
-        controller.runToIdle()
-
-        // source fans to both arms through their own hosts (independent scheduling)
-        val passInlet = hostMap.lookup<SetDeltaInletProxy>(pass.ref)!!.inlet.call
-        val filterInlet = hostFilter.lookup<SetDeltaInletProxy>(filter.ref)!!.inlet.call
-        source.outlet.subscribe(Use.fixed(passInlet, PortRef.generate()))
-        source.outlet.subscribe(Use.fixed(filterInlet, PortRef.generate()))
-
-        // both arms link into the glitch-free join, delivery routed over hostJoin
-        val passOutlet = outletOf(pass)
-        val filterOutlet = outletOf(filter)
-        passOutlet.linkTo(gf.inlet as LinkFrom<Propagate<SetDelta<String>>>)
-        filterOutlet.linkTo(gf.inlet as LinkFrom<Propagate<SetDelta<String>>>)
-        val routedGf = hostJoin.lookup<SetDeltaInletProxy>(gf.ref)!!.inlet.call
-        passOutlet.unsubscribe(gf.inlet.ref)
-        passOutlet.subscribe(Use.fixed(routedGf, gf.inlet.ref))
-        filterOutlet.unsubscribe(gf.inlet.ref)
-        filterOutlet.subscribe(Use.fixed(routedGf, gf.inlet.ref))
-        gf.outlet.subscribe(Use.fixed(observer.inlet.call, observer.inlet.ref))
-        controller.runToIdle()
-
-        val srcApi = hostSrc.lookup<SetInletProxy>(source.ref)!!.inlet.call
-        val rnd = Random(seed)
-        // interleaved passing writes, then a final non-"a" add absorbed by the filter arm
-        listOf("a1", "a2", "a4").forEach { e ->
-            srcApi.add(e)
-            repeat(rnd.nextInt(4)) { controller.step() }
-        }
-        srcApi.add("z9") // final wave: real on the pass arm, absorbed on the filter arm
-        controller.runToIdle()
-        return tagFold(observed)
-    }
-
-    @Test
-    fun `filtered arm settles the glitch-free board once the absorb-ack crosses - 100 seeds`() {
-        for (seed in 0L until 100L) {
-            val settled = runFilteredArm(seed, acking = true)
-            assertTrue("z9" in settled, "the absorbed final wave never settled on seed $seed (settled=$settled)")
-            assertEquals(setOf("a1", "a2", "a4", "z9"), settled, "unexpected membership on seed $seed")
-        }
-    }
-
-    @Test
-    fun `control - a suppressed absorb-ack stalls the filtered arm's board`() {
-        for (seed in 0L until 20L) {
-            val settled = runFilteredArm(seed, acking = false)
-            // the filter arm never acks 'z9'; the board holds that wave forever
-            assertFalse("z9" in settled, "expected a stall on seed $seed but z9 settled (settled=$settled)")
-        }
-    }
-
-    // ------------------------------------------------------------------
     // The manifest assertion (PN-12): the evidence graph's composed natures,
-    // read off the marker interfaces the cells implement — board {GLITCH_FREE},
-    // writers {DURABLE}, union {REPLICATED}, partitioned board {PARTITIONED}.
-    // The composed graph's manifest is the union of its cells' manifests: the four
-    // Phase-1/2/3 natures, all present in one graph.
+    // read off the marker interfaces the cells implement — writers {DURABLE},
+    // union {REPLICATED}, partitioned board {PARTITIONED}.
+    // The composed graph's manifest is the union of its cells' manifests: the
+    // three remaining per-node natures, all present in one graph.
     // ------------------------------------------------------------------
 
     @Test
-    fun `the evidence graph's composed manifest carries all four per-node natures`() {
+    fun `the evidence graph's composed manifest carries the three per-node natures`() {
         // each role carries its declared nature (a cell may carry more — e.g. a
         // writer SetCell is DURABLE and REPLICATED; the assertion is presence).
-        assertTrue(Manifest.GLITCH_FREE in manifestOf(GlitchFreeCell::class.java), "board is not GLITCH_FREE")
         assertTrue(Manifest.DURABLE in manifestOf(SetCell::class.java), "writers are not DURABLE")
         assertTrue(Manifest.REPLICATED in manifestOf(UnionSetCell::class.java), "union is not REPLICATED")
         assertTrue(Manifest.PARTITIONED in manifestOf(PartitionedCell::class.java), "board is not PARTITIONED")
 
-        val composed = manifestOf(GlitchFreeCell::class.java) +   // board
-            manifestOf(SetCell::class.java) +                     // writers
-            manifestOf(UnionSetCell::class.java) +                // union
-            manifestOf(PartitionedCell::class.java)               // replicated partitioned board
+        val composed = manifestOf(SetCell::class.java) +             // writers
+            manifestOf(UnionSetCell::class.java) +                   // union
+            manifestOf(PartitionedCell::class.java)                 // replicated partitioned board
         assertEquals(
-            setOf(Manifest.GLITCH_FREE, Manifest.DURABLE, Manifest.REPLICATED, Manifest.PARTITIONED),
+            setOf(Manifest.DURABLE, Manifest.REPLICATED, Manifest.PARTITIONED),
             composed,
-            "composed manifest is not exactly the four per-node natures: $composed",
+            "composed manifest is not exactly the three per-node natures: $composed",
         )
     }
 }

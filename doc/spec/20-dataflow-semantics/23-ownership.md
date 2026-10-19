@@ -54,13 +54,6 @@ Corollaries:
   exactly once, at replay delivery. Drop is forbidden for exclusive
   payloads — park, or the visible dead-letter boundary below, are the only
   admissible dispositions.
-- **Glitch-free frontier edges refuse `Leased` at link time** (decided in
-  93 I-18): an unbounded-WAIT version buffer would hold the lease past its
-  mandatory release, starving the pool — freeze or copy first, exactly as
-  at machine boundaries. Buffered `Owned` is safe (buffering preserves
-  exclusivity); a stalled wave's buffered `Owned` is released when the
-  stall policy resolves the wave — discarding it violates nothing, since
-  the sender already moved-from it.
 - **Cycle edges** (decided in 93 I-6): `Leased` is forbidden on any cycle
   edge — link-time `Rejected`, since a lease circulating a loop has
   ambiguous release responsibility and a throttled (dropped) lap would
@@ -171,25 +164,22 @@ loudly (a typed `NatureMismatch` naming the axis) — there is no adapter synthe
 
 **Link-flow axes vs structural natures (normative).** Only a small set of
 **link-flow axes** may refuse a link — natures that describe *how a payload flows
-across this edge*: `OWNERSHIP`, `MERGE_IDEMPOTENCE`, `MONOTONICITY`, and (PN-12)
-`WAVE_PARTICIPATION` and `INSTANCE_SCOPING`. `COLOR` is deliberately excluded (a
-placement property validated at spawn; a link legitimately crosses colors). The
-two PN-12 axes each turn a previously *silent* mismatch into a refusal:
+across this edge*: `OWNERSHIP`, `MERGE_IDEMPOTENCE`, `MONOTONICITY`, and
+`INSTANCE_SCOPING`. `COLOR` is deliberately excluded (a placement property
+validated at spawn; a link legitimately crosses colors). `INSTANCE_SCOPING`
+turns a previously *silent* mismatch into a refusal:
 
-- `WAVE_PARTICIPATION` (`UNWAVED` < `WAVED`): an ALIGN-tier (`WaveFrontier`) inlet
-  requires `WAVED`. An unwaved producer streamed onto it is dropped silently today
-  (the F1 frontier drop); as a link-flow axis it is refused at formation instead.
 - `INSTANCE_SCOPING` (`SINGLETON` < `INTEREST_SCOPED`): a partial-interest inlet
   requires an interest-scopable (`Scoped`) delta. A non-`Scoped` delta rides whole
   and over-delivers silently today; as a link-flow axis it is refused instead.
 
-KSP stamps these as **offers** on producer outlets only (a glitch-free cell's
-outlets offer `WAVED`; a `Scoped`-delta outlet offers `INTEREST_SCOPED`) —
+KSP stamps these as **offers** on producer outlets only (a `Scoped`-delta outlet
+offers `INTEREST_SCOPED`) —
 offering a stronger level never refuses, so no existing link acquires a new
 requirement, and today's behavior is preserved verbatim on every link.
 
 **The CellManifest is not link-flow (normative).** A cell's *structural* natures
-— `GLITCH_FREE`, `DURABLE`, `REPLICATED`, `PARTITIONED`, `PULL_SERVING`, `GATED`
+— `DURABLE`, `REPLICATED`, `PARTITIONED`, `PULL_SERVING`, `GATED`
 (`Manifest`, KSP-derived from marker interfaces onto `CellDescriptor.manifest`) —
 describe *what a cell is*, not how an edge flows. They MUST NOT be reconciled at a
 link: a volatile consumer of a durable producer is normal (the exchange demo is
@@ -203,8 +193,8 @@ assertions (`ManifestDriftTest`: declared == installed) — never by `reconcile`
 default** (`negotiated = true`) when — and only when — the target is a local
 `Linked` port: the attachment runs the same handshake as a Consume link, with
 `LinkRole.Observe`, so it announces an `EdgeOpen` and is refused on a nature
-mismatch, yet is filtered out of the wave-completeness frontier (Observe edges
-never gate a wave). A non-`Linked` target (an ad-hoc `Use.fixed` endpoint, a
+mismatch, yet remains outside the consuming delivery path (Observe edges never
+gate a data delivery). A non-`Linked` target (an ad-hoc `Use.fixed` endpoint, a
 routed cross-process proxy whose negotiation is the bridge's job) cannot
 negotiate and falls through to the historic bypass unchanged. This change is gated
 on the composition demo suite (`ExchangeCompositionExitTest`, `ExchangeScaffoldTest`).
