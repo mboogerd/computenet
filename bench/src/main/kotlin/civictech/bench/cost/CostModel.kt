@@ -9,7 +9,11 @@ import kotlinx.serialization.Serializable
  * A SIM-derived structural cost entry ([BEN2-33], [BEN2-42]).
  *
  * The nullable [transportValidated] slot is reserved for the later wire cross-check;
- * leaving it null is meaningful and must survive serialization without a schema bump.
+ * [TransportValidation] is its only writer. Leaving it null is meaningful and must
+ * survive serialization without a schema bump. The whole-export rewrite performed by
+ * `MacroSweepTest`, and the subject rewrite performed by [SubjectMerge], drop marks
+ * from the entries they regenerate; the wire cross-check must therefore be rerun after
+ * either operation ([BEN2-21], 0cnmw-D17).
  */
 @Serializable
 data class StructuralCost(
@@ -105,6 +109,33 @@ data class GrowthLaw(
     }
 }
 
+/**
+ * Evidence for a growth-law fit that could not be stated honestly.
+ *
+ * [slice] names the attempted slice even when no point was admitted, while
+ * [fittedOver] retains every admitted raw point used by the attempt. This makes an
+ * attempted-but-unfitted slice distinguishable from one that was never studied.
+ */
+@Serializable
+data class UnfittedFit(
+    val dimension: String,
+    val slice: String,
+    val subject: CostSubject,
+    val metric: String,
+    val form: GrowthForm,
+    val fittedOver: List<Coordinate>,
+    val reason: String,
+    val goodnessOfFit: Double?,
+) {
+    init {
+        require(slice.isNotBlank()) { "unfitted growth-law slice must not be blank" }
+        require(reason.isNotBlank()) { "unfitted growth-law reason must not be blank" }
+        require(goodnessOfFit == null || goodnessOfFit in 0.0..1.0) {
+            "goodnessOfFit must be null or between 0.0 and 1.0, was $goodnessOfFit"
+        }
+    }
+}
+
 /** An admitted-point exclusion and the reason its coordinate is absent ([BEN2-41]). */
 @Serializable
 data class ExcludedPoint(
@@ -119,7 +150,8 @@ data class ExcludedPoint(
  *
  * [structural] contains SIM-derived counts and [calibration] contains REAL-derived
  * per-unit observations. Keeping those layers distinct prevents wall-clock values from
- * being mistaken for structural measurements.
+ * being mistaken for structural measurements. [laws] contains only admitted fits;
+ * [unfitted] records every attempted slice that could not support a law.
  */
 @Serializable
 data class CostModel(
@@ -129,6 +161,7 @@ data class CostModel(
     val structural: List<StructuralCost>,
     val calibration: List<CalibrationConstant>,
     val laws: List<GrowthLaw>,
+    val unfitted: List<UnfittedFit>,
     val exclusions: List<ExcludedPoint>,
 )
 

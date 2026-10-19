@@ -951,7 +951,8 @@ class EvolveOrchestratorTest {
         override fun submit(priority: Int, action: suspend () -> Unit) {
             check(!refusing.get()) { "host scheduler terminated" }
             if (priority == Int.MAX_VALUE) lowestPrioritySubmissions.incrementAndGet()
-            if (priority == 0) nextManagementSubmission.getAndSet(null)?.countDown()
+            val managementSubmission =
+                if (priority == 0) nextManagementSubmission.getAndSet(null) else null
             delegate.submit(priority) {
                 if (priority == Int.MAX_VALUE) {
                     nextLowestPriorityHold.getAndSet(null)?.let { hold ->
@@ -962,6 +963,10 @@ class EvolveOrchestratorTest {
                 action()
                 if (priority == Int.MAX_VALUE) nextLowestPriorityRun.getAndSet(null)?.countDown()
             }
+            // Tests release blocked host work after this signal, so the priority-0 task must
+            // already be queued. Signalling before delegate.submit let the held lowest-priority
+            // fence win that hand-off race and park the host's sole drain thread ahead of recovery.
+            managementSubmission?.countDown()
         }
 
         /** Dequeued-but-not-yet-run point of the next lowest-priority task. */

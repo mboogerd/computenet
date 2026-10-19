@@ -54,12 +54,10 @@ configuration of the one `ManagedHost` class (30/31, C-2/G-2 resolved).
 | **Delta** | An incremental state transition propagated along links; the default payload style. | 20/21 |
 | **Tag hygiene** | The normative rule for tagged delta emitters: never re-emit a tag previously deleted. Pass-through operators may reuse input tags only when every membership flip-ON rides a fresh input add-tag; non-monotone operators mint fresh output tags per entry. | 20/21, 20/24 |
 | **Aggregator** | A grouped aggregate as a deterministic function of group membership (never arrival order): `empty/insert/retract/value` over a serializable accumulator. | 20/24 |
-| **MessageContext** | Metadata traveling with invocations: logical timestamp / wave id + source port. Required for glitch-freedom. | 20/22 |
-| **Glitch-free frontier** | The nearest upstream set of glitch-free cells at which dependency tracking may stop; realized per-inlet as an edge/link-set fold (see the disambiguation table below). | 20/22 |
+| **MessageContext** | Metadata traveling with invocations: logical timestamp / wave id + source port. Required for durable replay dedup, the cycle hop guard, and evolution's wave-state adoption. | 20/22 |
 | **Ownership contract** | Payload sharing semantics: `Borrowed`, `Owned`, `Leased`, `Frozen`. | 20/23 |
 | **Suspension** | Isolating a cell/host from the graph by unlinking (buffering at the boundary). | 30/33 |
-| **Suspension region** | The atomic unit of attention-driven suspension: a glitch-free join plus its local transitive upstream contributors, bounded by further glitch-free cells. Parks together or not at all. | 30/34 |
-| **Non-suspendable** | Per-cell marker vetoing attention suspension; the veto is contagious to the cell's whole suspension region. | 30/34 |
+| **Non-suspendable** | Per-cell marker vetoing attention suspension of that cell. | 30/34 |
 | **Migration** | Unlink → move → relink of a host's cells to another host. | 30/33 |
 | **Attention** | A subscription-derived scheduling-priority signal (`civictech.cell.control.AttentionSupport`): downstream demand aggregates upstream into a band that drives suspend/resume and dispatch priority. | 30/34 |
 | **Interest** | A key-space admission/demand predicate (`civictech.cell.link.Interest`): decides whether a replication link forms at all and which slice of a source's deltas rides it — replication, partitioning, and sharded replication are three settings of this one knob. | 40/42 |
@@ -78,24 +76,21 @@ serve. Callers wire them by passing the same `Interest.overlaps` check into
 `scatter` (see the `AttentionSupport.scatter` KDoc); there is no shared type
 enforcing this, so a future refactor of either must re-check the other.
 
-### Disambiguation: "frontier" / "watermark" / "region"
+### Disambiguation: "frontier" / "watermark"
 
-Eight code types share the `*Frontier` suffix across three genuinely
+Five code types share the `*Frontier` suffix across two genuinely
 different senses. This table pins one word per sense — **no renames**, the
 code identifiers below stay exactly as they are; this is a reading aid only.
 
 | Sense | Meaning | Code |
 |---|---|---|
 | **Watermark** | A per-source counter high-water mark — the highest/most-complete position observed, tracked as scalar or per-source state. | `TagFrontier` (merge-tag currency, `MessageContext.kt`); `DeliveredFrontier` (contiguous-prefix delivery watermark, `data/delta/DeliveredFrontier.kt`); `RetainedFrontiers` (per-instance retained `TagFrontier`s, `protocol/StateRequestProtocol.kt`) |
-| **Frontier** | An edge/link-set fold — the boundary of tracked links a completeness or attention computation folds over. This is the sense the "Glitch-free frontier" row above realizes. | `WaveFrontier` (per-inlet wave-completeness fold over `EdgeOpen`/`EdgeClose`, `consistency/WaveFrontier.kt`); `AttentionFrontier` (per-link attention-version fold, `control/Attention.kt`); `ReplicaFrontier` (`consistency/WaveFrontier.kt`) is a settlement *predicate* over the replica set's delivered-watermark lattice rather than a stored fold, but answers the same "has this frontier passed" question |
-| **Region** | A *set of cells*, not an edge or counter structure — see the "Suspension region" row above. | `suspensionRegionOf` (`host/TopologyWalks.kt`) |
+| **Frontier** | An edge/link-set fold — the boundary of tracked links a computation folds over. | `AttentionFrontier` (per-link attention-version fold, `control/Attention.kt`) |
 
-Two more `*Frontier` names are policy/record types owned by a specific host
-structure, not additional senses: `InletFrontier` (`port/FanInlet.kt`) is the
-policy interface a fan-inlet installs to opt into the wave-completeness fold
-above; `FrontierRecord` (`host/HostDurability.kt`) is the durable on-disk
-record of an `Effectful` inlet's processed-frontier advance — a watermark-sense
-value, persisted.
+One more `*Frontier` name is a record type owned by a specific host structure,
+not an additional sense: `FrontierRecord` (`host/HostDurability.kt`) is the
+durable on-disk record of an `Effectful` inlet's processed-frontier advance —
+a watermark-sense value, persisted.
 
 ## Naming conventions (normative)
 

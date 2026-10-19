@@ -160,7 +160,8 @@ concurrent-write case asserting one deterministic winner).
 
 ---
 
-## Milestone E2 — Vector-frontier observation edge ✅ LANDED (E2.1-E2.6)
+## Milestone E2 — Vector-frontier observation edge ✅ LANDED (E2.1-E2.6) — WITHDRAWN 2026-10-17
+**Withdrawn**: landed and then removed by `doc/adr/ADR - Remove Glitch Freedom.md` (epic computenet-nogtk, GFR); the E2.x entries below are history.
 
 Realizes backlog `consistent-multiview-snapshot.md` (**F-5**) and the gap-4 borrow;
 advances **G-13**'s frontier residual and **G-40**. Target guarantee (research 04 §3,
@@ -800,7 +801,8 @@ correct, unbounded until E3.7).
 (2) tombstones stay on the wire, reclaimed only at rest via causal stability (E3.7) —
 smaller step, preferred first.
 
-### R11 — Frontier alignment across origination points — from E2
+### R11 — Frontier alignment across origination points — from E2 — WITHDRAWN 2026-10-17
+**Withdrawn**: the aligned sink / observation edge is removed by `doc/adr/ADR - Remove Glitch Freedom.md`; this echo is historical context only.
 **Question**: the aligned sink's shared wave vocabulary assumes sibling views see the
 same sourceIds; a re-origination point on one branch only (a `Replicable` cell's
 post-merge re-emission per C-10, a future `CycleHead`) breaks it — what provenance must
@@ -812,7 +814,8 @@ views (structural check at build, loud rejection) — smallest honest step; (2) 
 `TagFrontier` provenance summary through origination; (3) fold with E3's
 delivered-watermark rows.
 
-### R12 — Observation-edge triggering policy — from E2
+### R12 — Observation-edge triggering policy — from E2 — WITHDRAWN 2026-10-17
+**Withdrawn**: the aligned sink / observation edge is removed by `doc/adr/ADR - Remove Glitch Freedom.md`; this echo is historical context only.
 **Question**: the Dataflow Model's where/when/how decoupling (research 04 §2) suggests a
 trigger knob — emit per settled wave, on demand, or on cadence with accumulating panes;
 which modes does the observation edge need, and is retraction-on-refire (native via tags)

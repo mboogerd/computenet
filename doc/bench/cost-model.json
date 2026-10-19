@@ -1,5 +1,5 @@
 {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "harnessSha": "6940663d",
     "envelope": {
         "numeric": {
@@ -26,7 +26,9 @@
                 "CHAIN",
                 "FAN_OUT_TREE",
                 "FAN_IN_LATTICE",
-                "RANDOM_DAG"
+                "RANDOM_DAG",
+                "REBASELINE_LOCAL_TAPS",
+                "REBASELINE_REMOTE_TAPS"
             ],
             "replication": [
                 "false",
@@ -53,14 +55,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 36583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 26583,
                 "wireBytes": 13605747,
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -76,14 +79,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 13250,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 3250,
                 "wireBytes": 1647000,
                 "journalRecords": 0,
                 "simSteps": 16500
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -99,14 +103,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 40000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 30000,
                 "wireBytes": 15410034,
                 "journalRecords": 0,
                 "simSteps": 70000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -122,14 +127,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 17500,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 7500,
                 "wireBytes": 3735025,
                 "journalRecords": 0,
                 "simSteps": 25000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -145,14 +151,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 65000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 55000,
                 "wireBytes": 27781717,
                 "journalRecords": 0,
                 "simSteps": 120000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -168,14 +175,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 3583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 2583,
                 "wireBytes": 1314743,
                 "journalRecords": 0,
                 "simSteps": 6166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -191,14 +199,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 366583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 266583,
                 "wireBytes": 137235751,
                 "journalRecords": 0,
                 "simSteps": 633166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -214,14 +223,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 3666583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 2666583,
                 "wireBytes": 1380735755,
                 "journalRecords": 0,
                 "simSteps": 6333166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -237,14 +247,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 36583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 26583,
                 "wireBytes": 13605747,
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -260,14 +271,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 36583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 26583,
                 "wireBytes": 13605747,
                 "journalRecords": 0,
                 "simSteps": 63166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -283,14 +295,14 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 10000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 0,
                 "simSteps": 10000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28"
         },
         {
             "at": {
@@ -306,14 +318,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 31458,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 21458,
                 "wireBytes": 10789569,
                 "journalRecords": 0,
                 "simSteps": 52916
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -329,14 +342,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 38125,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 28125,
                 "wireBytes": 14592723,
                 "journalRecords": 0,
                 "simSteps": 66250
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -352,14 +366,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 54791,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 44791,
                 "wireBytes": 22978506,
                 "journalRecords": 0,
                 "simSteps": 99582
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -375,14 +390,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 10000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 0,
                 "wireBytes": 0,
                 "journalRecords": 0,
                 "simSteps": 10000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -398,14 +414,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 90000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 80000,
                 "wireBytes": 40493424,
                 "journalRecords": 0,
                 "simSteps": 170000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -421,14 +438,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 430000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 420000,
                 "wireBytes": 212440476,
                 "journalRecords": 0,
                 "simSteps": 850000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -444,14 +462,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 1670000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 1660000,
                 "wireBytes": 827788548,
                 "journalRecords": 0,
                 "simSteps": 3330000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -467,14 +486,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 436583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 426583,
                 "wireBytes": 217981655,
                 "journalRecords": 0,
                 "simSteps": 863166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -490,14 +510,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 36583,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 26583,
                 "wireBytes": 13605747,
                 "journalRecords": 36583,
                 "simSteps": 63166
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -513,14 +534,15 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 5499791,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 4499791,
                 "wireBytes": 2335558514,
                 "journalRecords": 0,
                 "simSteps": 9999582
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
         },
         {
             "at": {
@@ -536,14 +558,1769 @@
             },
             "subject": "PROPAGATION",
             "counts": {
-                "messages": null,
-                "messagesNotMeasured": "local dispatches are not observable harness-side: ManagedHost submits each delivery to its scheduler internally (ManagedHost.kt:1335) and the mesh owns the schedulers; a kernel counter is forbidden by [BEN2-51]. Candidate G-item: a per-host dispatch counter. simSteps is an upper bound under SIM.",
+                "messages": 2280000,
+                "messagesNotMeasured": null,
                 "crossHostFrames": 2270000,
                 "wireBytes": 1161075906,
                 "journalRecords": 0,
                 "simSteps": 4550000
             },
-            "harnessSha": "6940663d"
+            "harnessSha": "f81eef28",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 1,
+                "wireBytes": 88275,
+                "journalRecords": 0,
+                "simSteps": 4
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 1,
+                "wireBytes": 88275,
+                "journalRecords": 0,
+                "simSteps": 4
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 4,
+                "wireBytes": 353100,
+                "journalRecords": 0,
+                "simSteps": 10
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 4,
+                "wireBytes": 353100,
+                "journalRecords": 0,
+                "simSteps": 10
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 16,
+                "wireBytes": 1412400,
+                "journalRecords": 0,
+                "simSteps": 34
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 16,
+                "wireBytes": 1412400,
+                "journalRecords": 0,
+                "simSteps": 34
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 64,
+                "wireBytes": 5649600,
+                "journalRecords": 0,
+                "simSteps": 130
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 64,
+                "wireBytes": 5649600,
+                "journalRecords": 0,
+                "simSteps": 130
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 256,
+                "wireBytes": 22598400,
+                "journalRecords": 0,
+                "simSteps": 514
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 256,
+                "wireBytes": 22598400,
+                "journalRecords": 0,
+                "simSteps": 514
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 1,
+                "wireBytes": 898276,
+                "journalRecords": 0,
+                "simSteps": 4
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 1,
+                "wireBytes": 898276,
+                "journalRecords": 0,
+                "simSteps": 4
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 4,
+                "wireBytes": 3593104,
+                "journalRecords": 0,
+                "simSteps": 10
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 4,
+                "wireBytes": 3593104,
+                "journalRecords": 0,
+                "simSteps": 10
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 16,
+                "wireBytes": 14372416,
+                "journalRecords": 0,
+                "simSteps": 34
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 16,
+                "wireBytes": 14372416,
+                "journalRecords": 0,
+                "simSteps": 34
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 64,
+                "wireBytes": 57489664,
+                "journalRecords": 0,
+                "simSteps": 130
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 64,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 64,
+                "wireBytes": 57489664,
+                "journalRecords": 0,
+                "simSteps": 130
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 256,
+                "wireBytes": 229958656,
+                "journalRecords": 0,
+                "simSteps": 514
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 256,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 256,
+                "wireBytes": 229958656,
+                "journalRecords": 0,
+                "simSteps": 514
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 1,
+                "wireBytes": 9178277,
+                "journalRecords": 0,
+                "simSteps": 4
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 1,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 1,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 1,
+                "wireBytes": 9178277,
+                "journalRecords": 0,
+                "simSteps": 4
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 4,
+                "wireBytes": 36713108,
+                "journalRecords": 0,
+                "simSteps": 10
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 4,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 4,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 4,
+                "wireBytes": 36713108,
+                "journalRecords": 0,
+                "simSteps": 10
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 16,
+                "wireBytes": 146852432,
+                "journalRecords": 0,
+                "simSteps": 34
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 0,
+                "simSteps": 2
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 16,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "counts": {
+                "messages": 16,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 16,
+                "wireBytes": 146852432,
+                "journalRecords": 0,
+                "simSteps": 34
+            },
+            "harnessSha": "6bc0caf4",
+            "transportValidated": true
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 1000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 1000,
+                "simSteps": 1000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000,
+                "batchSize": 10,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 1000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 1000,
+                "simSteps": 1000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000,
+                "batchSize": 100,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 1000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 1000,
+                "simSteps": 1000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 10000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 10000,
+                "simSteps": 10000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 10,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 10000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 10000,
+                "simSteps": 10000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 10000,
+                "batchSize": 100,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 10000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 10000,
+                "simSteps": 10000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 100000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 100000,
+                "simSteps": 100000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 100000,
+                "batchSize": 10,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 100000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 100000,
+                "simSteps": 100000
+            },
+            "harnessSha": "e27ec3df"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 100000,
+                "batchSize": 100,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "counts": {
+                "messages": 100000,
+                "messagesNotMeasured": null,
+                "crossHostFrames": 0,
+                "wireBytes": 0,
+                "journalRecords": 100000,
+                "simSteps": 100000
+            },
+            "harnessSha": "e27ec3df"
         }
     ],
     "calibration": [
@@ -641,8 +2418,2129 @@
                 "measurementIterations": 10,
                 "harnessCommitSha": "c4366b8a"
             }
+        },
+        {
+            "name": "journalBytesPerRecord",
+            "value": 192.8898,
+            "unit": "bytes/record",
+            "dispersion": 0.0,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
+        },
+        {
+            "name": "replayNanosPerRecord",
+            "value": 208.2856,
+            "unit": "ns/record",
+            "dispersion": 83.4591,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
+        },
+        {
+            "name": "checkpointNanosPerElement",
+            "value": 2947.6289,
+            "unit": "ns/element",
+            "dispersion": 546.9034,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
+        },
+        {
+            "name": "checkpointBytesPerElement",
+            "value": 159.5506,
+            "unit": "bytes/element",
+            "dispersion": 0.0,
+            "env": {
+                "jvmVendor": "Microsoft (Microsoft-13877178)",
+                "jvmVersion": "21.0.11",
+                "heapSettings": "JVM defaults (VM options: <none>)",
+                "cpuModel": "Apple M3 Max",
+                "coreCount": 16,
+                "os": "Mac OS X 26.7.1",
+                "jmhMode": "Single shot invocation time",
+                "forkCount": 3,
+                "warmupIterations": 2,
+                "measurementIterations": 5,
+                "harnessCommitSha": "2d9e029e"
+            }
         }
     ],
-    "laws": [],
-    "exclusions": []
+    "laws": [
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "coefficients": [
+                1.0,
+                0.0
+            ],
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "goodnessOfFit": 1.0
+        }
+    ],
+    "unfitted": [
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=1 REBASELINE_LOCAL_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=3 REBASELINE_LOCAL_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=8 REBASELINE_LOCAL_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_LOCAL_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "fanOut",
+            "slice": "n=100000 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "messages",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=1 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=1 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=4 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=4 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=16 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=16 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 0.9999971167913491
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=64 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=64 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=256 H=3 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "f=256 H=8 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "wireBytes",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 2",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=1 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=4 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=16 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=64 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=1000 f=256 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 1000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=1 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=4 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=16 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=64 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 64,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=10000 f=256 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 256,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=1 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 1,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=4 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=16 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 3,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "REBASELINE_REMOTE_TAPS",
+                    "shapeSeed": 0,
+                    "cardinality": 100000,
+                    "batchSize": 1,
+                    "hostCount": 8,
+                    "fanOut": 16,
+                    "replication": false,
+                    "durability": false,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'crossHostFrames' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=64 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [],
+            "reason": "ordinary least squares requires at least two points",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "hostCount",
+            "slice": "n=100000 f=256 REBASELINE_REMOTE_TAPS",
+            "subject": "REBASELINE",
+            "metric": "crossHostFrames",
+            "form": "LINEAR",
+            "fittedOver": [],
+            "reason": "ordinary least squares requires at least two points",
+            "goodnessOfFit": null
+        },
+        {
+            "dimension": "cardinality",
+            "slice": "batch=10",
+            "subject": "JOURNAL",
+            "metric": "journalRecords",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "DIAMOND",
+                    "shapeSeed": 1,
+                    "cardinality": 1000,
+                    "batchSize": 10,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": true,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "DIAMOND",
+                    "shapeSeed": 1,
+                    "cardinality": 10000,
+                    "batchSize": 10,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": true,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "DIAMOND",
+                    "shapeSeed": 1,
+                    "cardinality": 100000,
+                    "batchSize": 10,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": true,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "a law requires at least 4 points, found 3",
+            "goodnessOfFit": 1.0
+        },
+        {
+            "dimension": "batchSize",
+            "slice": "C=1e4",
+            "subject": "JOURNAL",
+            "metric": "journalRecords",
+            "form": "LINEAR",
+            "fittedOver": [
+                {
+                    "shape": "DIAMOND",
+                    "shapeSeed": 1,
+                    "cardinality": 10000,
+                    "batchSize": 1,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": true,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "DIAMOND",
+                    "shapeSeed": 1,
+                    "cardinality": 10000,
+                    "batchSize": 10,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": true,
+                    "drive": "SIM"
+                },
+                {
+                    "shape": "DIAMOND",
+                    "shapeSeed": 1,
+                    "cardinality": 10000,
+                    "batchSize": 100,
+                    "hostCount": 1,
+                    "fanOut": 4,
+                    "replication": false,
+                    "durability": true,
+                    "drive": "SIM"
+                }
+            ],
+            "reason": "metric 'journalRecords' has no variance, so R² is undefined",
+            "goodnessOfFit": null
+        }
+    ],
+    "exclusions": [
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 64,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 3,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_LOCAL_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space: failed reallocation of scalar replaced objects; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "REBASELINE_REMOTE_TAPS",
+                "shapeSeed": 0,
+                "cardinality": 100000,
+                "batchSize": 1,
+                "hostCount": 8,
+                "fanOut": 256,
+                "replication": false,
+                "durability": false,
+                "drive": "SIM"
+            },
+            "subject": "REBASELINE",
+            "kind": "Unschedulable",
+            "reason": "java.lang.OutOfMemoryError: Java heap space; observed limit: maxHeap=2147483648"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000000,
+                "batchSize": 1,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "kind": "ForkedOk",
+            "reason": "computenet-9f7x5.5: executed separately in a bounded fork at -Xmx8g; the 2 GiB Gradle executor does not repeat that measurement"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000000,
+                "batchSize": 10,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "kind": "ForkedOk",
+            "reason": "computenet-9f7x5.5: executed separately in a bounded fork at -Xmx8g; the 2 GiB Gradle executor does not repeat that measurement"
+        },
+        {
+            "at": {
+                "shape": "DIAMOND",
+                "shapeSeed": 1,
+                "cardinality": 1000000,
+                "batchSize": 100,
+                "hostCount": 1,
+                "fanOut": 4,
+                "replication": false,
+                "durability": true,
+                "drive": "SIM"
+            },
+            "subject": "JOURNAL",
+            "kind": "ForkedOk",
+            "reason": "computenet-9f7x5.5: executed separately in a bounded fork at -Xmx8g; the 2 GiB Gradle executor does not repeat that measurement"
+        }
+    ]
 }

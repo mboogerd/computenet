@@ -1,5 +1,7 @@
 package civictech.agora
 
+import civictech.agora.semantics.DfQuad
+import civictech.agora.semantics.GradualSemantics
 import civictech.cell.CellRef
 import civictech.testkit.SimWorld
 
@@ -9,6 +11,7 @@ class Harness(
     quiescence: Double = 1e-3,
     magnitude: Boolean = true,
     onCredence: (CellRef, Double) -> Unit = { _, _ -> },
+    semantics: GradualSemantics = DfQuad,
 ) {
     private val world = SimWorld(
         seed = seed,
@@ -19,7 +22,13 @@ class Harness(
     val controller = world.controller
     val registry = world.registry
     val host = world.host
-    val service = AgoraService(host, registry, quiescence = quiescence, onCredence = onCredence)
+    val service = AgoraService(
+        host,
+        registry,
+        semantics = semantics,
+        quiescence = quiescence,
+        onCredence = onCredence,
+    )
 
     /** Drain to idle under a hard step budget: quiescence is asserted, not hoped for. */
     fun runToIdle(budget: Int = 200_000): Int = world.runToIdle(budget)

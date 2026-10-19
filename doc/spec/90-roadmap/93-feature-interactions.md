@@ -3042,6 +3042,13 @@ fresh `[24-DUR-07]` firing at an already-acted `Effectful` sink remains open und
 - **RESTART within a replicated logical cell** (carried from I-2) — whether a durable replica
   should prefer local journal restore or mesh re-catch-up when its journal lags the mesh.
 
+> Stacked decision (2026-10-15, `DUR-REPL-01`, `computenet-u7mox`): a crashed
+> durable replica of a mergeable cell is recovered by **both** routes — its own
+> journal replay and the mesh's M10 re-announce catch-up — and converges because
+> both are idempotent by tag union. The “prefer” question therefore has no
+> observable answer for the mergeable class and remains open only for
+> leader+follower replication (I-25).
+
 #### 9. Confidence & open questions
 
 **Confidence: medium-high.** The amended mechanism describes the tested recovery path:
@@ -3642,6 +3649,14 @@ tables are hard to keep coherent behind a proxy — the proxy wins on the fast p
 but pushes table-coherence work onto the composite; (2) the exact `@Key` surface
 for composite/derived keys; (3) whether key-less broadcast should be permitted at
 all for large N, or replaced by a scatter-gather read protocol.
+
+> Stacked decision (2026-10-15, `DUR-PART-01`, `computenet-u7mox`): a
+> journaled `PartitionedCell` recovers its pre-crash board by whole-tail replay
+> into a rebuilt composite under its recorded ref (no checkpoint: the current
+> composite is not `Stateful`). With the journaled upstream source deliberately
+> isolated on a different, unrecovered journal, the recovered board equals both
+> an uninterrupted partitioned twin and the batch oracle; organelle merging on
+> replay neither loses nor double-counts the disjoint scalar keys.
 
 ### I-9 — Attention as the resource lever: suspension triggers, priority mapping, fairness, and edge cases (G-6)
 
@@ -5028,6 +5043,7 @@ Open questions lowering confidence to medium: (1) the reinterpretation of ADR-2'
 > Spec drift (judged at `a69186a`): 2/10 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The whole mechanism: in-band EdgeOpen/EdgeClose markers on the link's own FIFO channel, the consumer-computed per-source floor completeness rule (prospective floors, pre-join discard, EdgeClose unblocking waiting waves), the rule that migration/re-resolutio…
 > Reconciled after cross-check: swap invisibility qualified by the epoch guard: preserved-epoch relocations invariant; fresh-epoch successions wave-observable via the ReBaseline notice.
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the edge-set-completeness half — per-source floors, pre-join discard, `EdgeClose` unblocking a waiting wave, and the `JoinBarrier` coordinator — is withdrawn with glitch-freedom; the in-band `EdgeOpen`/`EdgeClose` marker rule (`[13-EDGE-01]`) and the swap-invisibility / `ReBaseline` qualification stand.
 
 #### 1. Challenge restatement
 
@@ -6593,6 +6609,7 @@ ShadowSpec(
 > Existing gaps touched: G-6, G-26 · Confidence: high
 > Spec drift (judged at `a69186a`): 2/5 member pairs largely addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **PARTIAL** — The other four causes and the unifying protocol: the Progress watermark (an absorbed-then-quiet arm still stalls a WAITing join — effective-only silence has no positive completeness signal), the typed Stall/Resume family with RESTARTING/DEAD_LETTERED/LOST a…
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the `Stall`/`Resume` family, `Progress` absorb-acks and WAIT/DEGRADE/RE-SCOPE are removed from spec and code.
 
 #### 1. Challenge restatement
 
@@ -8664,6 +8681,7 @@ could turn the best-effort case into a link-time contract.
 > Existing gaps touched: G-13, G-9, G-10 · Confidence: medium
 > Spec drift (judged at `a69186a`): 2/4 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The whole traversal protocol: DescribeFrontier/FrontierReport on the I-1 metadata plane (unbuilt), epoch + visited-set edge-once termination with CYCLIC flagging (G-19 fixpoint stays open, now with marked back-edges as input), source-and-guarantee vocabular…
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the glitch-freedom-dependent resolution is withdrawn with glitch-freedom; the FRONTIER traversal protocol is no longer specified. The shared upstream termination discipline in R6 — a per-traversal epoch plus visited-edge set, with per-protocol terminal predicates — stands for STATE_REQUEST and multi-hop ATTENTION.
 
 #### 1. Challenge restatement
 
@@ -9101,6 +9119,7 @@ single initiator.
 > Existing gaps touched: G-18, G-20 · Confidence: high
 > Landed state at `0c09a32` (M11): **NOT_LANDED** — The whole alignment design: the nullable baseline: TagFrontier? on MessageContext, the baseline-is-never-a-wave-join-input rule, causal anchoring at the link-install topology event, glitch-freedom resuming at the first complete post-install wave, and the re…
 > ⚠ Divergence with landed code: Spec 22 §Interaction still asserts 'catch-up snapshots are stamped with the wave they represent, so a glitch-free consumer can align them with live deltas' — the resolution explicitly retracts this (a multi-source fold has no representable wave), and the cl…
+> **Superseded (2026-10-17, `doc/adr/ADR - Remove Glitch Freedom.md`)**: the baseline marker on catch-up (`MessageContext.baseline`) survives for dedup and late join (20/22 §Pull/late-join).
 
 #### 1. Challenge restatement
 

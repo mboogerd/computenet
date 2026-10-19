@@ -14,7 +14,6 @@ import civictech.cell.host.link
 import civictech.cell.observe.Observation
 import civictech.cell.observe.ObservationFrame
 import civictech.cell.observe.observation
-import civictech.cell.port.PortRef
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.replication.Replication
@@ -128,10 +127,6 @@ class DemoApp(
     private fun unionRef(name: String, role: String) =
         CellRef(UUID.nameUUIDFromBytes("demo-union:$name@$role".toByteArray()))
 
-    /** Stable opaque root for the per-user family, including before its first member exists. */
-    private fun writerFamilyRoot(name: String) =
-        PortRef(UUID.nameUUIDFromBytes("demo-writer-family:$name@$myRole".toByteArray()))
-
     private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
     private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
 
@@ -184,18 +179,10 @@ class DemoApp(
     private var produceRef: CellRef? = null
     private var wantedRef: CellRef? = null
 
-    /** The canonical app-edge read, partitioned by equal structural root sets. */
+    /** The canonical app-edge read, exposed as named point-consistent views. */
     private lateinit var observation: Observation
 
-    /** Diagnostic (G-13): 0 at idle: no wave held awaiting a stalled or phantom arm. */
-    internal val alignedBufferedWaves: Int get() = observation.bufferedWaves
-
-    /** The observation's computed root partition, used by the frame-level demo proof. */
-    internal val observationGroups: Set<String> get() = observation.groups
-
-    /** The latest aligned frontier for one observation group, for frame-level proofs. */
-    internal fun observationFrontier(group: String): Map<UUID, Long> =
-        observation.current().groups.getValue(group).frontier
+    internal val observationViews: Set<String> get() = observation.views
 
     /** The inspector the Runtime serves for `--inspect-port`, null when the flag is absent. */
     val inspector: civictech.inspect.InspectorServer? get() = node.inspector
@@ -266,22 +253,14 @@ class DemoApp(
         }
 
         /*
-         * One app-edge observation. Equal root sets share a wave-aligned group:
-         * {items, produce}. Independent roots stay in their own groups so a
-         * silent vote or item source cannot hold another group's progress.
-         * `wanted` is intentionally unchecked because IntersectSetCell is the
-         * ungated independent-root operator recorded by F-27.
+         * One point-consistent sink per app-edge view. Views may briefly reflect
+         * different publications, and converge independently once the graph is
+         * idle.
          */
         observation = host.observation {
-            // Writer members are lazy (and recovery runs below), so name each
-            // routed family before its first streamTo exists. The live links
-            // use the target inlet ref above and are discoverable too.
-            unmanagedFeed(itemsUnion.ref, writerFamilyRoot("items"))
-            unmanagedFeed(votesUnion.ref, writerFamilyRoot("votes"))
             set("items", itemsUnion.ref)
             set("produce", produceCell.ref)
             set("votes", votesUnion.ref)
-            unchecked("wanted")
             set("wanted", wantedCell.ref)
             if (sharedCell != null) set("shared", sharedCell.ref)
         }
@@ -408,12 +387,9 @@ class DemoApp(
         exchange.respond(200, "ok")
     }
 
-    // The observation's `{items+produce}`, `{votes}`, `{wanted}` (and optional
-    // `{shared}`) groups are each internally aligned. Its delivered frame
-    // assembles the group publication that triggered this callback and
-    // serializes `crossRoot`, making the F-27 boundary visible instead of
-    // silently traversing it. `[22-LIVE-01]` is therefore preserved:
-    // independent groups never wait on one another.
+    // Each observation view is point-consistent on its own sink. A delivered
+    // frame assembles the latest value of every view and may pair publications
+    // from different moments before the graph converges at idle.
     private fun broadcast(frame: ObservationFrame) = shell.broadcast { stateJson(frame) }
 
     private fun stateJson(): String = stateJson(observation.current())
@@ -426,13 +402,6 @@ class DemoApp(
         fun arr(values: Set<String>) =
             values.sorted().joinToString(",", "[", "]") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
 
-        fun crossRootJson() = frame.crossRoot.entries.joinToString(",", "{", "}") { (pair, disclosure) ->
-            val lag = disclosure.lagBySource.entries.joinToString(",", "{", "}") { (source, value) ->
-                "\"$source\":$value"
-            }
-            "\"${pair.a}|${pair.b}\":{\"independent\":${disclosure.independent},\"lagBySource\":$lag}"
-        }
-
         val items = setOf("items")
         val votes = setOf("votes")
         val produce = setOf("produce")
@@ -442,7 +411,7 @@ class DemoApp(
         // default payload keeps the shared field absent, as every existing test
         // and the browser page expect when replication is disabled.
         val sharedField = if (sharedCell == null) "" else ",\"shared\":${arr(setOf("shared"))}"
-        return """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount,"crossRoot":${crossRootJson()}$sharedField}"""
+        return """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount$sharedField}"""
     }
 
     /**
@@ -491,8 +460,8 @@ class DemoApp(
             put(votesUnion.ref, "votes")
             produceRef?.let { put(it, "produce") }
             wantedRef?.let { put(it, "wanted") }
-            observation.groups.forEach { group ->
-                put(observation.group(group).ref, if (group == "items+produce") "ui-aligned" else "ui-$group")
+            observation.views.forEach { view ->
+                put(observation.sink(view).ref, "ui-$view")
             }
             if (wire != null) {
                 put(peerItems, "items@$peerRole")

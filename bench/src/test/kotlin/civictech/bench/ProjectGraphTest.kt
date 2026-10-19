@@ -7,7 +7,7 @@ import java.io.File
 
 /**
  * Leaf-module guard [BEN1-04] / BS-6: `:bench` sits at the edge of the project
- * graph. Nothing else depends on it, and it depends only on the two modules its
+ * graph. Nothing else depends on it, and it depends only on the three modules its
  * benchmarks are allowed to exercise.
  *
  * Deliberately NOT the Gradle Tooling API: opening a `ProjectConnection` spawns a
@@ -112,19 +112,20 @@ class ProjectGraphTest {
     }
 
     @Test
-    fun `bench depends only on kernel and testkit`() {
+    fun `bench depends only on kernel, testkit and wire`() {
         val benchDeps = projectReferencesOf(":bench").distinct()
+        val allowedDependencies = setOf(":kernel", ":testkit", ":wire")
 
         // Assert both directions: bench must not reach beyond the allowed set, and (the
         // sentinel that the parse itself is actually finding something, rather than
         // silently matching zero references and passing vacuously) it must still declare
-        // the two dependencies the module is built around.
+        // all three dependencies the module is built around.
         benchDeps.forEach { dep ->
-            require(dep == ":kernel" || dep == ":testkit") {
+            require(dep in allowedDependencies) {
                 "bench/build.gradle.kts declares project(\"$dep\"), which is neither " +
-                    ":kernel nor :testkit [BEN1-03]"
+                    ":kernel, :testkit nor :wire [BEN1-03, BEN2-07]"
             }
         }
-        benchDeps.shouldContainAll(listOf(":kernel", ":testkit"))
+        benchDeps.shouldContainAll(allowedDependencies)
     }
 }

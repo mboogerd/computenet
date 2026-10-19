@@ -28,9 +28,32 @@ class CostRoundTripTest {
     }
 
     @Test
+    fun `the stable version two export round trips with migrated unfitted evidence`() {
+        val export = Path.of("..").resolve(CostSchema.STABLE_PATH)
+        val model = CostSchema.parse(export.toFile().readText())
+
+        model.schemaVersion shouldBe CostSchema.VERSION
+        model.unfitted.size shouldBe 32
+        model.unfitted.groupingBy { it.dimension }.eachCount() shouldBe mapOf(
+            Dimensions.FAN_OUT to 5,
+            Dimensions.CARDINALITY to 11,
+            Dimensions.BATCH_SIZE to 1,
+            Dimensions.HOST_COUNT to 15,
+        )
+        model.unfitted.filter { it.fittedOver.isEmpty() }.map { it.slice }.toSet() shouldBe setOf(
+            "n=100000 f=64 REBASELINE_REMOTE_TAPS",
+            "n=100000 f=256 REBASELINE_REMOTE_TAPS",
+        )
+        CostSchema.parse(CostSchema.encode(model)) shouldBe model
+    }
+
+    @Test
     fun `an unknown schema version is rejected before entries are decoded`() {
         val original = CostSchema.encode(populatedModel())
-        val replaced = original.replace("\"schemaVersion\": 1", "\"schemaVersion\": 99")
+        val replaced = original.replace(
+            "\"schemaVersion\": ${CostSchema.VERSION}",
+            "\"schemaVersion\": 99",
+        )
         replaced shouldNotBe original
 
         val exception = shouldThrow<UnknownSchemaVersionException> {
@@ -47,9 +70,27 @@ class CostRoundTripTest {
     }
 
     @Test
+    fun `the version one export is rejected after the unfitted evidence migration`() {
+        val versionOne = CostSchema.encode(populatedModel()).replace(
+            "\"schemaVersion\": ${CostSchema.VERSION}",
+            "\"schemaVersion\": 1",
+        )
+
+        val exception = shouldThrow<UnknownSchemaVersionException> {
+            CostSchema.parse(versionOne)
+        }
+
+        exception.message shouldContain "1"
+        exception.message shouldContain CostSchema.VERSION.toString()
+    }
+
+    @Test
     fun `a missing schema version is rejected`() {
         val withoutVersion = CostSchema.encode(populatedModel())
-            .replace(Regex("\\s*\\\"schemaVersion\\\": 1,?\\s*"), "")
+            .replace(
+                Regex("\\s*\\\"schemaVersion\\\": ${CostSchema.VERSION},?\\s*"),
+                "",
+            )
 
         val exception = shouldThrow<UnknownSchemaVersionException> {
             CostSchema.parse(withoutVersion)
@@ -170,6 +211,32 @@ class CostRoundTripTest {
         exception.message shouldContain law.dimension
         exception.message shouldContain law.subject.toString()
         exception.message shouldContain law.metric
+    }
+
+    @Test
+    fun `duplicate unfitted slices are rejected naming the slice`() {
+        val model = populatedModel()
+        val fit = model.unfitted.single()
+
+        val exception = parseFailure(model.copy(unfitted = listOf(fit, fit)))
+
+        exception.message shouldContain fit.slice
+        exception.message shouldContain fit.dimension
+        exception.message shouldContain fit.subject.toString()
+    }
+
+    @Test
+    fun `an unfitted slice cannot cite a point that was not admitted`() {
+        val model = populatedModel()
+        val fit = model.unfitted.single()
+        val absent = fit.fittedOver.single().copy(fanOut = 99)
+
+        val exception = parseFailure(
+            model.copy(unfitted = listOf(fit.copy(fittedOver = listOf(absent)))),
+        )
+
+        exception.message shouldContain fit.slice
+        exception.message shouldContain absent.toString()
     }
 
     @Test
@@ -297,6 +364,18 @@ class CostRoundTripTest {
                     coefficients = listOf(2.0, 1.0),
                     fittedOver = listOf(coordinate(Drive.SIM)),
                     goodnessOfFit = 1.0,
+                ),
+            ),
+            unfitted = listOf(
+                UnfittedFit(
+                    dimension = Dimensions.CARDINALITY,
+                    slice = "single re-baseline point",
+                    subject = CostSubject.REBASELINE,
+                    metric = "wireBytes",
+                    form = GrowthForm.LINEAR,
+                    fittedOver = listOf(coordinate(Drive.SIM).copy(cardinality = 1_000)),
+                    reason = "a law requires at least 4 points, found 1",
+                    goodnessOfFit = null,
                 ),
             ),
             exclusions = listOf(

@@ -146,8 +146,7 @@ interface View<in D, out S> {
  * without replaying history.
  *
  * This is the lower-level single-view specialization; apps normally enter
- * through [observation], which also handles same-root alignment and cross-root
- * disclosure.
+ * through [observation], which composes one such sink per named view.
  *
  * Threading: the fold runs on the host scheduler thread (per-cell FIFO); a
  * [lock] serializes the fold against [onChange] registration, and the published
@@ -508,25 +507,15 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
  * byDay as one JSON object).
  *
  * This is the lower-level point-consistent specialization; apps normally enter
- * through [observation], which partitions views into aligned root groups.
+ * through [observation], which provides the canonical named-view API.
  *
  * **Consistency (honest):** this composite is **point-consistent per outlet**,
  * NOT wave-aligned. Each named outlet is folded by its own [ObserveCell] and
  * the composite assembles the latest per-outlet snapshot; a read may therefore
  * pair `common` at wave `t` with `filtered` at wave `t-1` mid-pipeline (the F-5
  * flash is possible here). Each *individual* per-outlet value is always
- * internally consistent. The wave-aligned alternative is shipped beside it:
- * [AlignedCompositeCell], behind [observeAligned] (spec 20/22 §The observation
- * frontier, `[22-OBS-01]`/`[22-OBS-02]`). This composite remains the right
- * choice when an arm may stall and a stale-but-prompt read beats a delayed
- * aligned one — the aligned sink defaults to WAIT, holding a wave until every
- * contributing view has settled it, and in DEGRADE publishes past a
- * recoverably stalled arm with that arm disclosed in
- * [AlignedComposite.droppedEdges] until it catches up, so this composite
- * remains the choice only when the app wants no wave alignment at all. A
- * point-consistent sink witnesses no
- * per-source frontier, so it offers no write-visibility handle (it is not a
- * [FrontierWitness]) — `[22-OBS-01]`'s frontier is the aligned sink's alone.
+ * internally consistent. [observation] exposes the same point-consistent
+ * semantics while owning the named sinks and their listener lifecycle.
  *
  * T08 finding 4: routes its own listener dispatch through the same
  * dedicated-executor mechanism as [ObserveCell] (its own `dispatcher`, not a
@@ -704,22 +693,8 @@ class CompositeSink internal constructor(
  *
  * **This composite is point-consistent per outlet** (see [CompositeSink]): a
  * read may pair `common` at wave `t` with `filtered` at wave `t-1` mid-wave.
- * The wave-aligned composite is [observeAligned] / [AlignedCompositeCell] (spec
- * 20/22 §The observation frontier, `[22-OBS-01]`/`[22-OBS-02]`; 96 §E2.3) —
- * shipped, not deferred. It reaches alignment by *not* going through
- * [civictech.cell.consistency.GlitchFreeCell]: one **named inlet per view**
- * makes each delta's source view structural, dissolving the name erasure a
- * single-outlet replay would impose (two `set(...)` outlets both emit
- * `SetDelta`, indistinguishable once merged), and one completeness fold spans
- * every inlet's edges.
- *
- * Both sinks ship. Prefer this one when an arm may stall and a stale-but-prompt
- * read beats a delayed aligned one; prefer [observeAligned] when a mixed-wave
- * read is a correctness problem. The frontier's static-link-set residual
- * (G-13: no upstream traversal, so an arm that structurally never carries a
- * source is a phantom expected edge for its waves) is documented on
- * [AlignedCompositeCell] and is the reason this fallback is kept rather than
- * retired.
+ * [observation] is the canonical app-edge entry point and gives every named
+ * outlet its own sink with the same semantics.
  */
 fun ManagedHost.observeAll(block: ObserveAllBuilder.() -> Unit): CompositeSink {
     val builder = ObserveAllBuilder(managementInlet).apply(block)

@@ -66,8 +66,8 @@ closure fast-path read; saturated sends dispatch by payload class (mergeable
 deltas coalesce into bounded per-source pending slots, exclusive/non-mergeable
 park in-order at the sender, management band exempt); a `SaturationSignal`
 rides the metadata plane upstream with a terminal park-overflow policy
-(visible dead-letter default, Block(timeout) opt-in only, with Block ×
-glitch-free-wave semantics pinned), realized at the `enqueueHostedInvocation`
+(visible dead-letter default, Block(timeout) opt-in only), realized at the
+`enqueueHostedInvocation`
 seam keyed by (senderHostColor, targetHostColor), including the cross-wire
 saturation frame vs transport flow control (93 I-12/I-15/I-9/I-19/I-26).
 
@@ -158,14 +158,13 @@ frontier instead of re-driving the sink.
 ⚠ GAP (G-59): the M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells — wall-clock/random logic,
 spontaneously-emitting sources, `Effectful` sinks without idempotency keys,
-glitch-free partial-wave buffers, and cross-host recovery-frontier drift
-are unhandled. Proposal: a determinism marker/lint forcing
+and cross-host recovery-frontier drift are unhandled. Proposal: a determinism
+marker/lint forcing
 non-deterministic cells to output-mode journaling (or a captured-entropy
 WAL record); an emitted-delta log format for sources and a
 processed-frontier shape for `Effectful` sinks with a generative
 recovery-dedup test; document the external-idempotency ceiling as a stated
-limit; verify deterministic replay reconstructs partial-wave buffers or
-include them in `Stateful.snapshot`; and evaluate an opt-in coordinated
+limit; and evaluate an opt-in coordinated
 checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
 
 ## Normative rules
@@ -209,16 +208,6 @@ checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
    thus flow through visible topology (P3) to whoever links a consumer — the
    natural one being an invariant cell (52). Opt-in per P6: `Cell` itself
    stays minimal.)*
-   *(Decided in 93 I-18, extending G-26: a dead-letter on a glitch-free
-   frontier edge MUST additionally emit `Stall(DEAD_LETTERED)` on the
-   frontier protocol alongside the `DeadLetter`; the contribution is gone,
-   so the downstream join RE-SCOPEs — advances past the poisoned wave and
-   surfaces a `GlitchViolation` through the `ErrorReporting`/`CellError`
-   path — rather than waiting forever or silently degrading. RESTART of a
-   glitch-free cell drops its transient version buffer (never captured by
-   `Stateful.snapshot`) and re-enters by frontier re-discovery +
-   re-catch-up; the unflushed buffered inputs were never observed
-   downstream, so dropping them is safe.)*
    *(Decided in 93 I-22 (R1–R4, R6–R9), redefining RESTART — **and the
    redefinition's core has landed (W2.1), so rule 5's parenthetical above is
    the historical M3.5 shape, not the current one**: RESTART is

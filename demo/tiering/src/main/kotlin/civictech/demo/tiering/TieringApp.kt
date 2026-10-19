@@ -388,33 +388,22 @@ class TieringApp(
         map("tierAvg", refs.tierAvg.ref)
         set("prefs", refs.prefs.ref)
         map("prefAvg", refs.prefAvg.ref)
-        // These are existing point-consistent one-view reads over ungated
-        // CombineLatestCell operators, which [KE2-09] admission rejects. They
-        // are not gated with emitOnFrontier: each combines independent roots
-        // (fused: vals x prefs; board: fused x the manual OR-map), and
-        // CombineLatestCell's WaveGate suits only a shared-source diamond —
-        // gated, both stop publishing (seven tiering tests red, computenet-axcyk.3).
-        // A single view has no mixed-view alignment risk.
-        unchecked("fused")
+        // Each registered view is its own point-consistent sink.
         map("fused", refs.fused.ref)
         map("manual", refs.manualEffective.ref)
-        unchecked("board")
         map("board", refs.board.ref)
     }
 
-    /** Same-root observation groups must drain completely once the host is idle. */
-    internal val alignedBufferedWaves: Int get() = observation.bufferedWaves
-
-    internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf
+    internal val observationViews: Set<String>
+        get() = observation.views
 
     // Expose the published snapshots to frame-contract tests: reading current()
     // from an asynchronous callback can hide intermediate publications.
     internal fun onValuationSnapshot(listener: (Map<String, Any?>) -> Unit) =
-        observation.group("valuations+tierAvg").onChange(listener)
+        observation.onChange { frame -> listener(frame.views) }
 
     internal fun onPreferenceSnapshot(listener: (Map<String, Any?>) -> Unit) =
-        observation.group("prefs+prefAvg").onChange(listener)
+        observation.onChange { frame -> listener(frame.views) }
 
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
     // keeps a Valuation-valued shadow index. This lightweight KEY set exists only

@@ -55,7 +55,7 @@
 #     but observed 0; effect-count(sink, key=k2): expected 1 but observed 0", while
 #     EVERY other scenario in the corpus stays green — `DUR-BASELINE-02`,
 #     `DUR-LIVE-01`, `DUR-CKPT-FRONTIER-01`, `DUR-REPLAY-01`, `DUR-SRCID-01/02`,
-#     `DUR-ATOMIC-01`, `DUR-SNAPTAIL-01` and `DUR-GF-01` included. Rule (1) of I-24 is
+#     `DUR-ATOMIC-01` and `DUR-SNAPTAIL-01` included. Rule (1) of I-24 is
 #     asserted here and nowhere else in the corpus.
 id: DUR-BASELINE-01
 title: An Effectful sink acts on a catch-up baseline, and the baseline advances no processed-frontier

@@ -1,5 +1,7 @@
 package civictech.deliberate
 
+import civictech.agora.semantics.*
+
 import civictech.agora.cell.Polarity
 import civictech.cell.Cell
 import civictech.cell.CellRef
@@ -216,8 +218,8 @@ class CredenceGraph(
     class Hub<D : Any> internal constructor(
         host: ManagedHost,
         ref: CellRef,
-        observationRef: CellRef,
-        private val viewName: String,
+        sinkRef: CellRef,
+        internal val viewName: String,
         keyOf: (D) -> CellRef,
         equivalent: (D, D) -> Boolean,
         onEffectiveChange: (() -> Unit)? = null,
@@ -226,7 +228,7 @@ class CredenceGraph(
         private val feed = ObservationMapFeed(ref, keyOf, equivalent, onEffectiveChange)
         private val observation: Observation = run {
             host.managementInlet.call.spawn(feed)
-            host.observation(groupRef = { observationRef }) {
+            host.observation(sinkRef = { sinkRef }) {
                 map(viewName, feed.ref)
             }
         }
@@ -249,8 +251,7 @@ class CredenceGraph(
         fun current(): Map<CellRef, D> =
             observation.current().views.getValue(viewName) as Map<CellRef, D>
 
-        internal val groupId: String get() = observation.groups.single()
-        internal val groupRef: CellRef get() = observation.group(groupId).ref
+        internal val sinkRef: CellRef get() = observation.sink(viewName).ref
     }
 
     private val recordsTopology = context?.topology != null
@@ -264,7 +265,7 @@ class CredenceGraph(
     val hub = Hub(
         host = host,
         ref = hubRef("hub"),
-        observationRef = hubRef("hub-observation"),
+        sinkRef = hubRef("hub-observation"),
         viewName = HUB_HANDLE,
         keyOf = Credence::source,
         equivalent = { old, new ->
@@ -284,7 +285,7 @@ class CredenceGraph(
     val sensitivityHub = Hub(
         host = host,
         ref = hubRef("sensitivity-hub"),
-        observationRef = hubRef("sensitivity-hub-observation"),
+        sinkRef = hubRef("sensitivity-hub-observation"),
         viewName = SENSITIVITY_HUB_HANDLE,
         keyOf = Sensitivity::source,
         equivalent = { old, new -> old.values == new.values && old.root == new.root },
@@ -294,25 +295,21 @@ class CredenceGraph(
     val sharesHub = Hub(
         host = host,
         ref = hubRef("shares-hub"),
-        observationRef = hubRef("shares-hub-observation"),
+        sinkRef = hubRef("shares-hub-observation"),
         viewName = SHARES_HUB_HANDLE,
         keyOf = Shares::source,
         equivalent = { old, new -> old.values == new.values && old.consensus == new.consensus },
         onPublication = onCredence,
     )
 
-    internal val observationGroups: Map<String, String>
-        get() = mapOf(
-            HUB_HANDLE to hub.groupId,
-            SENSITIVITY_HUB_HANDLE to sensitivityHub.groupId,
-            SHARES_HUB_HANDLE to sharesHub.groupId,
-        )
+    internal val observationViews: Set<String>
+        get() = setOf(hub.viewName, sensitivityHub.viewName, sharesHub.viewName)
 
-    internal val observationGroupRefs: Map<String, CellRef>
+    internal val observationSinkRefs: Map<String, CellRef>
         get() = mapOf(
-            HUB_HANDLE to hub.groupRef,
-            SENSITIVITY_HUB_HANDLE to sensitivityHub.groupRef,
-            SHARES_HUB_HANDLE to sharesHub.groupRef,
+            HUB_HANDLE to hub.sinkRef,
+            SENSITIVITY_HUB_HANDLE to sensitivityHub.sinkRef,
+            SHARES_HUB_HANDLE to sharesHub.sinkRef,
         )
 
     private val cells = HashMap<CellRef, ClaimNode>()

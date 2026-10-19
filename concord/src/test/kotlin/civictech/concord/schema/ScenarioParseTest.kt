@@ -19,11 +19,9 @@ class ScenarioParseTest {
     private val pilots = listOf(
         "corpus/24-data-cells/24-OP-UNION-01.yaml",
         "corpus/21-propagation/21-PIPE-01.yaml",
-        "corpus/22-consistency/22-GF-DIAMOND-01.yaml",
         "corpus/controls/CTL-GOLDEN-01.yaml",
         // D-CONCORD (B2): the parser is lenient (unknown keys ignored), so a
         // round-trip is the only typo catch for a newly authored file.
-        "corpus/24-data-cells/24-OP-COMBINE-02.yaml",
         "corpus/24-data-cells/24-REPLAY-01.yaml",
         // V1C-CONCORD: the three bounded-read scenarios, carrying the schema's
         // newest step verb and both new checks. Same reason as above — a
@@ -94,15 +92,6 @@ class ScenarioParseTest {
             s.graph!!.cells.map { it.id } shouldContainExactly listOf("a", "b", "u", "v")
             s.script.filterIsInstance<ApplyStep>() shouldNotBe emptyList<ApplyStep>()
             (s.checks.first() as FinalView).view shouldBe "v"
-        },
-        DynamicTest.dynamicTest("22-GF-DIAMOND-01 carries a glitch-free quorum join and a set golden") {
-            // Re-modeled R2-A (DISPUTES.md): the scalar `combine-latest` shape could
-            // never be made glitch-free-observable (kernel gap — see the scenario's
-            // own header note), so the pilot now carries a SET-based fork-join over
-            // a real kernel glitch-free operator (`quorum-set`, `QuorumSetCell`).
-            val s = load("corpus/22-consistency/22-GF-DIAMOND-01.yaml")
-            s.graph!!.cells.single { it.type == "quorum-set" }.glitchFree shouldBe true
-            s.script.filterIsInstance<ApplyStep>() shouldNotBe emptyList<ApplyStep>()
         },
         DynamicTest.dynamicTest("24-BOUND-02 carries a read-state limit sweep and both new checks") {
             // V1C-CONCORD: the sweep is explicit steps, not a generator — `kind:
@@ -239,6 +228,39 @@ class ScenarioParseTest {
         runner.params(cells.getValue("w"))["lateness"] shouldBe civictech.concord.value.Value.IntVal(2)
         runner.params(cells.getValue("wl"))["lateness"] shouldBe civictech.concord.value.Value.IntVal(2)
         runner.params(cells.getValue("v")).containsKey("lateness") shouldBe false
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `a journal cell carries its typed param, round-trips, and reaches the driver params`() {
+        // computenet-u7mox.1: the parser is lenient, so `journal:` must be typed
+        // or a named durable cell silently falls back to the default/volatile arm.
+        val yaml = """
+            id: FX-JOURNAL-01
+            title: named journal fixture
+            covers: [24-DUR-03]
+            profile: dur
+            kind: example
+            graph:
+              cells:
+                - {id: a, type: journal-set-source, host: dur, journal: alpha}
+                - {id: v, type: set-view, host: dur}
+                - {id: ctl, type: journal, host: dur, journal: alpha}
+              links:
+                - {from: a, to: v}
+        """.trimIndent()
+        val decoded = ConcordYaml.instance.decodeFromString(Scenario.serializer(), yaml)
+        val cells = decoded.graph!!.cells.associateBy { it.id }
+        cells.getValue("a").journal shouldBe "alpha"
+        cells.getValue("ctl").journal shouldBe "alpha"
+        cells.getValue("v").journal shouldBe null
+
+        val reencoded = ConcordYaml.instance.encodeToString(Scenario.serializer(), decoded)
+        ConcordYaml.instance.decodeFromString(Scenario.serializer(), reencoded) shouldBe decoded
+
+        val runner = civictech.concord.runner.CorpusRunner()
+        runner.params(cells.getValue("a"))["journal"] shouldBe Value.StrVal("alpha")
+        runner.params(cells.getValue("ctl"))["journal"] shouldBe Value.StrVal("alpha")
+        runner.params(cells.getValue("v")).containsKey("journal") shouldBe false
     }
 
     @org.junit.jupiter.api.Test

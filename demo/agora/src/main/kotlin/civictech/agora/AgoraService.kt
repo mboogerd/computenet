@@ -156,6 +156,8 @@ private class RemovalIntentCell(override val ref: CellRef) : Cell
  * the topology records the same links the kernel admits for cycle safety. Hops
  * into a `ClaimCell` or `EdgeCell` use their registered port-name strings; the
  * app-local credence source keeps the reified string form.
+ * The semantics must keep the product energy (`separatesCredence == false`);
+ * the cells refuse the others.
  */
 class AgoraService(
     private val host: ManagedHost,
@@ -212,24 +214,18 @@ class AgoraService(
     init {
         require(this.context.host === host) { "AgoraService context belongs to a different host" }
         manage.spawn(hub)
-        observation = host.observation(groupRef = { AGORA_OBSERVATION_REF }) {
-            // This app-owned source is the explicit alignment boundary for a
-            // dynamically growing set of claim/edge feeds.
-            unchecked(CREDENCES_VIEW)
+        observation = host.observation(sinkRef = { AGORA_OBSERVATION_REF }) {
             map(CREDENCES_VIEW, hub.ref)
         }
         hub.attach(observation)
         this.context.adopt(HUB_HANDLE, hub.ref)
     }
 
-    internal val observationGroups: Map<String, String>
-        get() = observation.current().groupOf
+    internal val observationViews: Set<String>
+        get() = observation.views
 
-    internal val observationGroupRef: CellRef
-        get() = observation.group(CREDENCES_VIEW).ref
-
-    internal val observationBufferedWaves: Int
-        get() = observation.bufferedWaves
+    internal val observationSinkRef: CellRef
+        get() = observation.sink(CREDENCES_VIEW).ref
 
     /** Apply one claim and its hub link as one write-ahead topology delta. */
     fun createClaim(
@@ -491,7 +487,7 @@ class AgoraService(
 
     /**
      * Every cell instance this service spawned and still holds: [hub], its
-     * canonical observation group, and every live claim and edge cell. A
+     * canonical observation sink, and every live claim and edge cell. A
      * point-in-time copy for callers at rest — the
      * underlying map is mutated by [createClaim]/[createEdge]/[remove] on the
      * app's mutation thread, so a caller racing those sees one side of the race.
@@ -502,7 +498,7 @@ class AgoraService(
      * `GRAPH_SOURCE_INCOMPLETE`.
      */
     fun cells(): Collection<Cell> = synchronized(nodesLock) {
-        listOf<Cell>(hub, observation.group(CREDENCES_VIEW)) + cells.values.toList()
+        listOf<Cell>(hub, observation.sink(CREDENCES_VIEW)) + cells.values.toList()
     }
 
     fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }

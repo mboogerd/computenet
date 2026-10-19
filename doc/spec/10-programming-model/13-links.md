@@ -197,7 +197,7 @@ riding the link's own per-link FIFO channel — `EdgeOpen` ahead of any data,
 `EdgeClose` after the final data — so topology changes sit in the same
 logical-time domain as the waves they affect (20/22 §Topology versioning).
 Emission is gated on a downstream having expressed topology-order interest;
-outlets without glitch-free subscribers pay nothing.
+outlets without topology-order subscribers pay nothing.
 
 [13-NOLOSS-01] Invariant (normative): **no message loss at link operations** — a message
 accepted by a link before `unlink`/suspend MUST be delivered or explicitly
@@ -217,7 +217,7 @@ closure fast-path read; saturated sends dispatch by payload class
 exclusive/non-mergeable park in-order at the sender, management band
 exempt); `SaturationSignal` rides the metadata plane upstream with a
 terminal park-overflow policy (visible dead-letter default, Block(timeout)
-opt-in only, with Block × glitch-free-wave semantics pinned), realized at
+opt-in only), realized at
 the `enqueueHostedInvocation` seam keyed by (senderHostColor,
 targetHostColor), including the cross-wire saturation frame vs transport
 flow control (93 I-12/I-15/I-9/I-19/I-26).

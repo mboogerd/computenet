@@ -1,5 +1,7 @@
 package civictech.deliberate
 
+import civictech.agora.semantics.*
+
 import civictech.agora.AgoraService
 import civictech.agora.cell.Polarity
 import civictech.cell.Cell
@@ -117,12 +119,12 @@ class CredenceGraphTest {
         val g = graph(LayerSet.of(listOf("dfquad")))
 
         assertEquals(
-            mapOf("hub" to "hub", "sensitivityHub" to "sensitivityHub", "sharesHub" to "sharesHub"),
-            g.observationGroups,
+            setOf("hub", "sensitivityHub", "sharesHub"),
+            g.observationViews,
         )
-        assertEquals(3, g.observationGroupRefs.values.toSet().size)
+        assertEquals(3, g.observationSinkRefs.values.toSet().size)
         assertTrue(
-            g.observationGroupRefs.values.none { it in setOf(g.hub.ref, g.sensitivityHub.ref, g.sharesHub.ref) },
+            g.observationSinkRefs.values.none { it in setOf(g.hub.ref, g.sensitivityHub.ref, g.sharesHub.ref) },
             "the stable topology feeds and canonical observation sinks must remain distinct",
         )
 
@@ -475,9 +477,9 @@ class CredenceGraphTest {
 
         val links = world.registry.localLinks()
         val observationLinks = listOf(
-            Triple(g.hub.ref, g.observationGroupRefs.getValue("hub"), "hub"),
-            Triple(g.sensitivityHub.ref, g.observationGroupRefs.getValue("sensitivityHub"), "sensitivityHub"),
-            Triple(g.sharesHub.ref, g.observationGroupRefs.getValue("sharesHub"), "sharesHub"),
+            Triple(g.hub.ref, g.observationSinkRefs.getValue("hub"), "inlet"),
+            Triple(g.sensitivityHub.ref, g.observationSinkRefs.getValue("sensitivityHub"), "inlet"),
+            Triple(g.sharesHub.ref, g.observationSinkRefs.getValue("sharesHub"), "inlet"),
         )
         assertEquals(
             g.wiring.size + observationLinks.size,

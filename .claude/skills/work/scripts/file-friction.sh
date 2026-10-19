@@ -7,7 +7,8 @@
 # --title WITHOUT it; a leading one is stripped so the call is idempotent
 # either way (21 of 235 friction beads carried it twice, computenet-rtoo) —
 # the skill_version
-# stamp (which skill revision produced the report), and the skill-friction
+# stamp (the full origin/main commit sha at filing time, or the commit
+# --skill-version names; a blob hash is refused, computenet-icusw), and the skill-friction
 # label — labels are NOT inherited when created unparented.
 #
 # It does NOT claim. Filing is not picking up: a claim belongs to the session
@@ -27,7 +28,8 @@
 #   file-friction.sh --type bug|feature --title "<one line, NO 'work skill:' prefix>" \
 #     (--desc "<what the skill says / what happened / what it cost>" | --desc-file F) \
 #     (--accept "<what must change in the skill for this not to recur>" | --accept-file F) \
-#     [--parent computenet-wpvy] [--priority 2] [--skill-version <sha>]
+#     [--parent computenet-wpvy] [--priority 2] [--skill-version <sha>] [--recurs-of <id>[,<id>]]
+#   --recurs-of: the landed fix(es) this repeats; recurrence-audit.py reads it.
 #   --desc-file/--accept-file are PREFERRED: a body passed as --desc "$(cat f)"
 #   goes through a shell word, so backticks and $(...) in it are executed
 #   (computenet-s5dh).
@@ -39,7 +41,7 @@
 #   bd update <id> --parent=computenet-wpvy
 set -uo pipefail
 
-TYPE= TITLE= DESC= ACCEPT= PARENT=computenet-wpvy PRIO=2 SKILL_V=
+TYPE= TITLE= DESC= ACCEPT= PARENT=computenet-wpvy PRIO=2 SKILL_V= RECURS=
 while [ $# -gt 0 ]; do
   case "$1" in
     --type)          TYPE=$2; shift 2 ;;
@@ -51,6 +53,7 @@ while [ $# -gt 0 ]; do
     --parent)        PARENT=$2; shift 2 ;;
     --priority)      PRIO=$2; shift 2 ;;
     --skill-version) SKILL_V=$2; shift 2 ;;
+    --recurs-of)     RECURS=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -61,7 +64,9 @@ case "$TYPE" in bug|feature) ;; *) echo "--type must be bug or feature (bug = th
   || { echo "--title, --desc[-file] and --accept[-file] are all required" >&2; exit 2; }
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-[ -n "$SKILL_V" ] || SKILL_V=$(git hash-object "$SCRIPT_DIR/../SKILL.md")
+ASKED=$SKILL_V
+SKILL_V=$(git -C "$SCRIPT_DIR" rev-parse --verify --quiet "${ASKED:-origin/main}^{commit}") \
+  || { [ -z "$ASKED" ] || { echo "--skill-version $ASKED is not a commit" >&2; exit 2; }; }
 
 # The prefix is a deliberate, useful convention, but it is invisible at the
 # call site: SKILL.md step 7's template reads as the complete title, so a
@@ -78,4 +83,5 @@ done
 exec "$SCRIPT_DIR/create-ticket.sh" \
   --type "$TYPE" --title "work skill: $TITLE" --parent "$PARENT" \
   --desc-file <(printf '%s' "$DESC") --accept-file <(printf '%s' "$ACCEPT") --priority "$PRIO" \
-  --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}"
+  --label skill-friction --metadata "$(jq -nc --arg v "$SKILL_V" --arg r "$RECURS" \
+      '{skill_version:$v, recurs_of:$r} | with_entries(select(.value != ""))')"

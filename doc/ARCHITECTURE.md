@@ -50,7 +50,7 @@ runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
 | `:gen` | KSP processor: `@Contract`/`@CellBase`/`@Key`/`@Protocol` → generated descriptor tables, AOT proxies, port-id constants, `<Name>CellBase` classes. `ContractProcessor.process()` delegates its five inline lints to `ContractLints` and its three descriptor-table builders to `contractTable()`/`protocolTable()`/`cellTable()` (T09 §D). `:gen`'s own test suite (`ContractProcessorTest`, `NatureDescriptorSweepTest`) is the real generator-regression gate; `:kernel:compileKotlin` depends on `:gen:test`, so generator regressions fail before kernel compiles. | `:nature`, kotlinpoet, ksp-api |
 | `:kernel` | The entire cell model and runtime (see §2). Transport-dependency-free by policy. `@CellBase` is landed and adopted here — every source cell/operator in `civictech.cell.data`/`.data.op` is authored this way. | `api(:nature)`, `ksp(:gen)` (processor-time only), coroutines, kotlinx-serialization |
 | `:testkit` | Shared test scaffolding: `SimWorld`, `awaitUntil`, `HttpProbe`, `JvmPeer`. Lives in `src/main` so a plain project dep reaches it from consumers' test source sets. | `api(:kernel)`, `api(junit)` |
-| `:bench` | The JMH benchmark harness module (BEN1). Three source sets: fixtures in `bench/src/main/kotlin` (`civictech.bench`), `@Benchmark` bodies in `bench/src/jmh/kotlin` (`civictech.bench.micro`), fast unit tests in `bench/src/test/kotlin`. Kotlin benchmarks are discovered by `me.champeau.jmh`'s **bytecode** generator (`jmhRunBytecodeGenerator` over compiled classes), not by an annotation processor, so no kapt is involved and `jmhAnnotationProcessor` is empty. `:bench:verifyBenchmarkDiscovery` runs as part of `check` and fails the build naming `bench/src/jmh/kotlin` if zero benchmarks were generated — a benchmark module that silently generates nothing would otherwise report a successful run. Benchmark *execution* is deliberately outside the build lifecycle: neither `:bench:jmhJar` nor `:bench:jmh` is reachable from `:bench:build`. Infrastructure, not an application — depended on by nothing. | `:kernel`, `:testkit`, jmh |
+| `:bench` | The JMH benchmark harness module (BEN1). Three source sets: fixtures in `bench/src/main/kotlin` (`civictech.bench`), `@Benchmark` bodies in `bench/src/jmh/kotlin` (`civictech.bench.micro`), fast unit tests in `bench/src/test/kotlin`. Kotlin benchmarks are discovered by `me.champeau.jmh`'s **bytecode** generator (`jmhRunBytecodeGenerator` over compiled classes), not by an annotation processor, so no kapt is involved and `jmhAnnotationProcessor` is empty. `:bench:verifyBenchmarkDiscovery` runs as part of `check` and fails the build naming `bench/src/jmh/kotlin` if zero benchmarks were generated — a benchmark module that silently generates nothing would otherwise report a successful run. Benchmark *execution* is deliberately outside the build lifecycle: neither `:bench:jmhJar` nor `:bench:jmh` is reachable from `:bench:build`. The `:wire` edge is for the BEN2 real-transport cross-check only. Infrastructure, not an application — depended on by nothing. | `:kernel`, `:testkit`, `:wire`, jmh |
 | `:oracle` | Batch-oracle differential tester over the operator algebra (ORA1, epic `computenet-4ru`). `civictech.oracle.bind.OperatorCatalog` binds a catalog id to a kernel `CellFactory` and an independent `ReferenceOp` *together* — half a binding fails at registration time naming the id — and `ShapeRule`/`ElementShape` state an operator's ports as data, so a newly registered operator reaches the generator without a generator edit. `civictech.oracle.model` may reference value/key/delta types but no `civictech.cell.data.op` type: that independence is what makes the oracle a check on the implementation rather than a second copy of it. Lives in `src/main` like `:testkit`; `gen`/`run`/`shrink`/`corpus` are placeholders owned by later ORA1 features. Deliberately a separate module rather than part of `:concord` (ORA1 D1): the oracle is kernel-coupled by construction, and §5's rule that only `civictech.concord.driver.kernel` may import `civictech.cell.*` is what folding it in would cost. | `api(:kernel)`, `api(:testkit)`. The `:kernel` edge runs both ways but in different scopes — `:kernel`'s **test** source set takes `testImplementation(project(":oracle"))`, which is the point of the module (a consumer reaches it through a plain project dep and nothing else), while nothing on `:kernel`'s main classpath knows it exists. Must not depend on `:concord`, `:wire`, `:inspect` or `:demo:*`; its own `ModuleDependencyTest` enforces that against both the build file and the runtime classpath |
 | `:query` | Compiles non-recursive Datalog/relational queries to a kernel `civictech.cell.graph.GraphSpec` (QRY1, epic `computenet-cab`). Lands the schema catalog (`civictech.query.schema`: `RelationSchema`, `Attribute`, `AttrType`, `Catalog`), the query AST (`civictech.query.ast`), the `CompileResult`/`RejectionCode` diagnostic shape (`civictech.query.diag`), and the parser/planner/lowering/run pipeline (`civictech.query.parse`, `.plan`, `.lower`, `.run`) fronted by `QueryCompiler.compile()`. Authors no cell of its own (`[QRY1-LOWER-03]`); `civictech.query.ref` imports no `civictech.cell.data`/`.data.op` type (`[QRY1-ORA-03]`), keeping the module a check on `:kernel`'s operator algebra rather than a copy of it, the same independence `:oracle` keeps from `civictech.cell.data.op`. Lives in `src/main` like `:testkit`/`:oracle` so a consumer reaches it from its own main source set through a plain `implementation(project(":query"))` (`[QRY1-API-01]`); its only consumers are the TEST source sets of the four demo modules (`:demo:skillmatch`, `:demo:tiering`, `:demo:slotfinder`, `:demo:backlog-triage`), which run query-equivalence tests against the hand-wired pipelines (`computenet-cab.7`), so `[QRY1-API-01]`'s main-source-set claim is still proven by module shape and `ModuleDependencyTest` alone, not by a main-scope caller. | `api(:kernel)`; `testImplementation(:testkit)`, `testImplementation(:oracle)` — `:oracle` is `:query`'s own test-time differential harness, not a main-scope dependency. Must not depend on `:concord`, `:wire`, `:inspect` or `:demo:*`; its own `ModuleDependencyTest` enforces that, plus the `:oracle`-is-test-scope-only and no-`ksp-cell` shape, against both the build file and the runtime classpath |
 | `:wire` | WebSocket transport over Java-WebSocket. `WsTransport` owns the socket/framing implementation; `WsPeerTransport` binds it to the kernel's transport-neutral `PeerTransport` seam through `WsPeerTransportProvider`, so callers name a `ws` address without exposing a Java-WebSocket type. Reconnect intent and refused-dial policy come from kernel `ReconnectPolicy`, shared with the iroh binding. `:wire` additionally depends on `:economy` in **test** scope only (`testImplementation(project(":economy"))`) to verify `[ECO1-PAR-09r]` over a real socket; `:economy` stays independent of `:wire`. | `:kernel`, `:identity`, Java-WebSocket |
@@ -155,11 +155,10 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   letters (sanitized — no live `Owned`/`Leased` escapes), `CellError`,
   remoting proxies (`HostProxy`, `HostedCellProxy`, `RoutedInlet`), `TypedLink`.
 - `.observe` — app-facing reads: `Observation` (`observation {}` is the one
-  app-edge API; `current()`, `onChange` with late-join catch-up, grouped
-  views, and `crossRoot` disclosure), `ObservationSink`,
+  app-edge API; `current()`, `onChange` with late-join catch-up, one
+  `ObserveCell` per view, point-consistent per view), `ObservationSink`,
   `View.set()/map()/count()`, and the `host.observe` / `host.observeAll`
-  specialisations. Caveat: `observeAll` is point-consistent per outlet, not
-  wave-aligned across outlets (G-13).
+  specialisations.
 - `.durability` — `Journal` (`append`/`replay`/`reset`), `InMemoryJournal`,
   `FileJournal`. Records are opaque bytes; the host writes `WireCodec` frames —
   "a journal is a bridge to disk".
@@ -335,7 +334,7 @@ Schema contracts live in `concord/schema/*.md` (single-writer,
 schema-change-gated). Cross-process driver (W5) is deferred until a second
 implementation exists.
 
-**Architecture ratchets (T10).** Four of this document's boundary claims are
+**Architecture ratchets (T10).** Five of this document's boundary claims are
 executable, not just prose, each wired into the normal test task so it gates
 `./gradlew test`/`check` the same way `concordanceGate` and `docLints` do:
 `NeutralityGateTest` (`concord/src/test/kotlin/civictech/concord/provenance/`)
@@ -345,10 +344,16 @@ imports `civictech.cell.*`, enforcing the L3 rule above; `DemoSurfaceAllowlistTe
 `src/main` and fails if it reaches past the allowed `civictech.cell` surface
 (root vocabulary, `.host`/`.port`/`.data*`/`.observe`/`.link`/`.wire`/`.proxy`/
 `.partition`/`.graph`/`.membrane`); demo modules may import any kernel package.
-The separate guardrail for demo-to-demo imports is tracked in computenet-yvzfh;
+`DemoIsolationRatchetTest` (same directory) derives the `:demo:*` module list
+from `settings.gradle.kts` and package ownership from each module's main sources,
+then fails if an application imports another application's package or declares a
+cross-application `project()` dependency. `:demo:shell` is shared infrastructure;
+the intentional `:demo:deliberate`/`:demo:dialogue` -> `:demo:agora` edges are
+the only entries in its shrink-only baseline
+(`kernel/src/test/resources/architecture/demo-isolation-allowlist.txt`).
 `ArchitectureRatchetTest`
-(same directory) pins the current `civictech.cell` package→package import edge
-set against a checked-in baseline
+(same directory) pins the current `civictech.cell` package→package edge set from
+imports and fully qualified code references against a checked-in baseline
 (`kernel/src/test/resources/architecture/package-edges.txt`) — see
 `90/91` gap `G-63` (all 20 non-leaf `civictech.cell.*` packages form one SCC;
 this is a ratchet, not a claim of acyclicity) — and fails on any *new* edge, while a baseline
@@ -356,12 +361,12 @@ edge no longer present in code is warn-only (delete the stale line by hand;
 the ratchet only ever tightens); `DemoBypassRatchetTest` (same directory) fails
 if any demo `src/main` file calls raw `.subscribe(`/`.streamTo(`/`.routeTo(`
 (outside comments) and is not on the checked-in allowlist
-(`kernel/src/test/resources/architecture/demo-bypass-allowlist.txt`) — unlike
-the other three, *both* directions fail here: an unlisted offender fails, and
+(`kernel/src/test/resources/architecture/demo-bypass-allowlist.txt`) — *both*
+directions fail here: an unlisted offender fails, and
 so does a listed path with no such call any more (stale) or that is not a
 file, so the allowlist can only shrink as each demo migrates onto the routed,
 glitch-free-admitted path (INT1 1.1) — its own allowlist has no widen path.
-To widen any of the other three deliberately, change the allowlist/baseline
+To widen any allowlist/baseline deliberately, change it
 in the same PR that adds the edge/import, citing why.
 
 ## 6. Demos
@@ -373,7 +378,8 @@ else `$PORT`, else 8080. See the README for run commands.
   demo (`--listen`/`--peer` over `:wire`), host-WAL journaling, kill-9-safe.
 - `:demo:exchange` — **the composition probe**: two symmetric peers,
   region-keyed orders, per-cell journaling for writers, volatile aggregates
-  recomputed from replay, glitch-free board. `ExchangeCompositionExitTest` is
+  recomputed from replay, board observed straight off the replicated partitioned
+  cell. `ExchangeCompositionExitTest` is
   the repo's toughest gate (100-seed sweeps through repartition, migration,
   recovery, late join — each paired with a deliberate failing control).
 - `:demo:agora` — argumentation graph (claims/edges with `DfQuad` gradual

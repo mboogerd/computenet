@@ -126,7 +126,10 @@ object Findings {
      *   retract row of the same operator distinguishable and a before/after pair
      *   labellable; a table missing it is refused as incomplete (`[BEN1-30]`), the same
      *   as a missing date or subject. Missing (`null`) [results] is likewise refused as
-     *   an incomplete entry (`[BEN1-30]`).
+     *   an incomplete entry (`[BEN1-30]`). A row whose dispersion was not observed is
+     *   marked on [FindingsTable] with `dispersionObserved = false`; its table cell is
+     *   rendered as `± n/a` rather than using the non-null numeric placeholder in
+     *   [BenchResult.dispersion].
      * @param trigger what the entry says about a cited gap's trigger question, or
      *   [TriggerClaim.None] if it answers none. Defaults to [TriggerClaim.None].
      * @param comparisons claims that two rows of [results] differ. Each is checked
@@ -293,11 +296,14 @@ object Findings {
      */
     private fun renderTable(results: FindingsTable): String {
         val labels = results.labels!!
+        val dispersionObserved = results.dispersionObserved
+            ?: List(results.results.size) { true }
         val header = "| subject | value | notes |"
         val separator = "| --- | --- | --- |"
-        val rows = results.results.zip(labels).joinToString(separator = "\n") { (result, label) ->
-            "| $label | ${result.value} ± ${result.dispersion} ${result.unit} | |"
-        }
+        val rows = results.results.mapIndexed { index, result ->
+            val dispersion = if (dispersionObserved[index]) result.dispersion.toString() else "n/a"
+            "| ${labels[index]} | ${result.value} ± $dispersion ${result.unit} | |"
+        }.joinToString(separator = "\n")
         return listOf(header, separator, rows).joinToString(separator = "\n")
     }
 }

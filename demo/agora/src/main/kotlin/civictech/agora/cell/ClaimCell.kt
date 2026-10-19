@@ -65,6 +65,9 @@ open class ClaimCell(
     var catchUp: Boolean = true
 
     init {
+        require(!semantics.separatesCredence) {
+            "$semantics computes an argument's energy from strength and credence separately; agora's edges carry only the product s·c, so it needs the vector influence (not yet journaled)"
+        }
         stanceInlet.onEach { value ->
             if (value.value == null) stances.remove(value.user) else stances[value.user] = value.value
             recompute()

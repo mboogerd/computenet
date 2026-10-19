@@ -6,6 +6,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Records failures that a production [HostScheduler] drain loop would otherwise
@@ -22,6 +24,8 @@ class InstrumentedScheduler(private val inner: HostScheduler) : HostScheduler {
     private val submittedCount = AtomicLong()
     private val completedCount = AtomicLong()
     private val capturedFailures = ConcurrentLinkedQueue<Throwable>()
+    private val idleLock = ReentrantLock()
+    private val becameIdle = idleLock.newCondition()
 
     override val color: HostColor get() = inner.color
 
@@ -50,7 +54,10 @@ class InstrumentedScheduler(private val inner: HostScheduler) : HostScheduler {
                 capturedFailures += failure
                 throw failure
             } finally {
-                completedCount.incrementAndGet()
+                val completed = completedCount.incrementAndGet()
+                if (completed == submittedCount.get()) {
+                    idleLock.withLock { becameIdle.signalAll() }
+                }
             }
         }
     }
@@ -60,19 +67,21 @@ class InstrumentedScheduler(private val inner: HostScheduler) : HostScheduler {
     override fun shutdown() = inner.shutdown()
 
     /**
-     * Poll [idle] from outside the scheduler's execution context until it is
-     * true or [millis] elapses. This deliberately does not call [inner.await].
+     * Wait outside the scheduler's execution context until [idle] is true or
+     * [millis] elapses. Completion signals the condition directly, so benchmark
+     * timing does not include a polling interval. This deliberately does not call
+     * [inner.await].
      */
-    fun awaitIdle(millis: Long, pollMillis: Long = 5): Boolean {
+    fun awaitIdle(millis: Long): Boolean {
         require(millis >= 0) { "millis must not be negative" }
-        require(pollMillis > 0) { "pollMillis must be positive" }
 
-        val started = System.nanoTime()
-        val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(millis)
-        while (!idle) {
-            if (System.nanoTime() - started >= timeoutNanos) return false
-            Thread.sleep(pollMillis)
+        return idleLock.withLock {
+            var remainingNanos = TimeUnit.MILLISECONDS.toNanos(millis)
+            while (!idle) {
+                if (remainingNanos <= 0L) return@withLock false
+                remainingNanos = becameIdle.awaitNanos(remainingNanos)
+            }
+            true
         }
-        return true
     }
 }

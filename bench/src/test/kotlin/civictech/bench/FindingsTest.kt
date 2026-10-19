@@ -117,6 +117,20 @@ class FindingsTest {
     }
 
     @Test
+    fun `entry renders an observed zero dispersion as zero, not not observed`() {
+        val rendered = Findings.entry(
+            date = "2026-08-18",
+            subject = "deterministic run",
+            results = FindingsTable(
+                listOf(validResult(value = 100.0, dispersion = 0.0)),
+                labels = listOf("run"),
+            ),
+        )
+
+        rendered shouldContain "| run | 100.0 ± 0.0 ops/s | |"
+    }
+
+    @Test
     fun `entry admits the PROBE-A negative-value result, whose ratio classify cannot use`() {
         // value=-100.0, dispersion=50.0: relativeDispersion is -0.5. classify still
         // refuses it as above the harness sanity bound (computenet-x9e.3.6's shape), and

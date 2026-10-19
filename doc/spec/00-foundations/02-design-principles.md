@@ -1,7 +1,7 @@
 # 02 — Design Principles
 
 > **Status**: Specified
-> **Sources**: ADR 0, ADR — Computelet Kernel, ADR — Computelet Mobility, ADR — Glitch Freedom
+> **Sources**: ADR 0, ADR — Computelet Kernel, ADR — Computelet Mobility
 > **Implementation**: these principles are *enforced by review*; they are the acceptance criteria for every other spec section
 
 These are the constraints that recur across every ADR. Any proposal that
@@ -36,11 +36,11 @@ topology.
 
 ## P4 — Local, compositional consistency
 
-Consistency guarantees (glitch-freedom, causal buffering, convergence) are
-**opt-in per cell** and compose across boundaries. There is no global
-propagation lock, no global clock, and no global barrier. Inside a boundary,
-stronger assumptions are allowed; across boundaries, asynchrony and
-incrementality dominate.
+The consistency guarantees ComputeNet offers are per-link FIFO, causal
+delivery where specified, and convergence. They are **opt-in per cell** and
+compositional; there is no global propagation lock, global clock, or global
+barrier. Multi-input derived state may be observed mid-wave. An application
+that needs an atomic view keeps the joined state in one cell.
 
 ## P5 — Correctness by construction
 
@@ -88,7 +88,7 @@ throughput benchmarks or feature parity with existing silos.
   and the two cheap first cuts on the table).
 - P3 + P8 make mobility tractable: because links are explicit, suspension =
   unlink-all, migration = unlink/move/relink (see 30/33).
-- P4 + P6 shape the consistency story: glitch-freedom frontiers instead of
-  global locks (see 20/22).
+- P4 + P6 shape the consistency story: convergence without global locks
+  (see 20/22).
 - P5 + P9 shape connectivity: typed port contracts whose calls are captured as
   serializable invocations (see 10/14, 40/41).
