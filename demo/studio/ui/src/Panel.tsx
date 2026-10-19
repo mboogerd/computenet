@@ -3,11 +3,13 @@ import { nodePath, request } from './api';
 import type { Config, NodeState, RunDetail, RunSummary, StudioNode } from './types';
 import { Status, type Action } from './NodeCard';
 import { promotionAction } from './model';
+import ConfirmationDialog, { type Confirmation } from './ConfirmationDialog';
 
-export default function Panel(props: { node: StudioNode; state?: NodeState; action: Action; close: () => void; remove: () => void; toast: (message: string) => void }) {
+export default function Panel(props: { workflowId: string; node: StudioNode; state?: NodeState; action: Action; close: () => void; remove: () => void; toast: (message: string) => void }) {
   const [title, setTitle] = createSignal('');
   const [config, setConfig] = createSignal<Config>({});
   const [saving, setSaving] = createSignal(false);
+  const [confirmation, setConfirmation] = createSignal<Confirmation>();
   const [runId, setRunId] = createSignal<string>();
   // Runtime frames do not overwrite unsaved form edits.
   const signature = createMemo(() => JSON.stringify([props.node.id, props.node.title, props.node.config]));
@@ -17,13 +19,13 @@ export default function Panel(props: { node: StudioNode; state?: NodeState; acti
     setTitle(name); setConfig(settings);
   });
   const set = (key: string, value: Config[string]) => setConfig(old => ({ ...old, [key]: value }));
-  const base = () => nodePath(props.node.id);
+  const base = () => nodePath(props.workflowId, props.node.id);
   const [runs] = createResource(() => `${props.node.id}:${props.state?.runCount ?? 0}:${props.state?.lastRun?.runId ?? ''}`, async () => {
     try { return await request<RunSummary[]>(`${base()}/runs`); }
     catch (error) { props.toast(String(error instanceof Error ? error.message : error)); return []; }
   });
   const [detail] = createResource(() => runId() ? [props.node.id, runId()!] as const : false, async ([id, run]) => {
-    try { return await request<RunDetail>(`${nodePath(id)}/runs/${encodeURIComponent(run)}`); }
+    try { return await request<RunDetail>(`${nodePath(props.workflowId, id)}/runs/${encodeURIComponent(run)}`); }
     catch (error) { props.toast(String(error instanceof Error ? error.message : error)); return undefined; }
   });
   const save = async () => {
@@ -100,9 +102,14 @@ export default function Panel(props: { node: StudioNode; state?: NodeState; acti
             <Show when={preview().error}><p class="error-box">{preview().error}</p></Show>
           </div>
         </div>}</Show>
-        <Show when={unapproved()}><button class="approve" disabled={promotionAction(props.state) === 'disabled'} onClick={() => {
-          if (promotionAction(props.state) === 'confirm' && !confirm('This sandboxed preview failed. Promote this version anyway?')) return;
-          void props.action(`${base()}/approve`, 'POST', { hash: props.state?.codeHash });
+        <Show when={unapproved()}><button class="approve" disabled={promotionAction(props.state) === 'disabled'} onClick={event => {
+          event.currentTarget.focus();
+          const path = `${base()}/approve`;
+          const hash = props.state?.codeHash;
+          const promote = () => props.action(path, 'POST', { hash });
+          if (promotionAction(props.state) === 'confirm') {
+            setConfirmation({ message: 'This sandboxed preview failed. Promote this version anyway?', label: 'Promote anyway', run: promote });
+          } else void promote();
         }}>Promote this version</button></Show>
         <Show when={props.state?.codeHash && !unapproved()}><p class="approved">Current code approved</p></Show>
       </section>
@@ -125,6 +132,8 @@ export default function Panel(props: { node: StudioNode; state?: NodeState; acti
         <h4>Stdout</h4><pre>{run().stdout || '(empty)'}</pre><h4>Stderr</h4><pre>{run().stderr || '(empty)'}</pre>
       </div>}</Show>
     </section>
-    <button class="danger" onClick={props.remove}>Delete cell…</button>
+    <Show when={confirmation()} keyed>{pending => <ConfirmationDialog message={pending.message} label={pending.label}
+      cancel={() => setConfirmation(undefined)} accept={() => { setConfirmation(undefined); void pending.run(); }} />}</Show>
+    <button class="danger" onClick={event => { event.currentTarget.focus(); props.remove(); }}>Delete cell…</button>
   </aside>;
 }

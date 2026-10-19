@@ -11,4 +11,5 @@ export async function request<T = void>(path: string, method = 'GET', body?: unk
   }
   return response.status === 204 ? undefined as T : response.json();
 }
-export const nodePath = (id: string) => `/api/nodes/${encodeURIComponent(id)}`;
+export const workflowPath = (workflowId: string) => `/api/workflows/${encodeURIComponent(workflowId)}`;
+export const nodePath = (workflowId: string, id: string) => `${workflowPath(workflowId)}/nodes/${encodeURIComponent(id)}`;

@@ -52,3 +52,12 @@ export type Frame =
   | ({ type: 'snapshot' } & Graph)
   | { type: 'graph'; nodes: StudioNode[]; edges: Edge[] }
   | { type: 'state'; node: NodeState };
+
+export interface Workflow {
+  id: string;
+  name: string;
+  createdAt: string;
+  nodeCount: number;
+  status: 'ok' | 'failed';
+  error: string | null;
+}

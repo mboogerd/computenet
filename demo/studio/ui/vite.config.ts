@@ -8,7 +8,6 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': { target: backend, changeOrigin: true },
-      '/events': { target: backend, changeOrigin: true },
     },
   },
   build: { outDir: 'dist' },

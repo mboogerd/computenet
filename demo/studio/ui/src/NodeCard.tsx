@@ -11,6 +11,7 @@ export function Status(props: { state?: NodeState }) {
 }
 
 export default function NodeCard(props: {
+  workflowId: string;
   node: StudioNode;
   state?: NodeState;
   selected: boolean;
@@ -27,8 +28,8 @@ export default function NodeCard(props: {
   const [text, setText] = createSignal('');
   const submittedText = createMemo(() => props.state?.text ?? '');
   createEffect(() => setText(submittedText()));
-  const submit = () => props.action(`${nodePath(props.node.id)}/submit`, 'POST', { text: text() });
-  const run = () => props.action(`${nodePath(props.node.id)}/run`, 'POST');
+  const submit = () => props.action(`${nodePath(props.workflowId, props.node.id)}/submit`, 'POST', { text: text() });
+  const run = () => props.action(`${nodePath(props.workflowId, props.node.id)}/run`, 'POST');
   const unapproved = () => props.node.kind === 'program' &&
     !props.state?.approvedHash;
   return <article class={`node ${props.selected ? 'selected' : ''}`} style={{ left: `${props.x}px`, top: `${props.y}px` }}
@@ -57,18 +58,18 @@ export default function NodeCard(props: {
         <textarea id={`text-${props.node.id}`} rows="3" value={text()} placeholder="Write something to send…"
           onInput={event => setText(event.currentTarget.value)}
           onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); } }} />
-        <div class="actions"><button class="primary" onClick={submit}>Submit</button><button onClick={() => props.action(`${nodePath(props.node.id)}/fire`, 'POST')}>Fire</button></div>
+        <div class="actions"><button class="primary" onClick={submit}>Submit</button><button onClick={() => props.action(`${nodePath(props.workflowId, props.node.id)}/fire`, 'POST')}>Fire</button></div>
       </Show>
       <Show when={props.node.kind === 'git'}>
         <p class="repo" title={String(props.node.config.repo ?? '')}>{String(props.node.config.repo || 'Select cell to set repository')}</p>
-        <div class="actions"><code>{props.state?.ref?.slice(0, 7) || 'No ref yet'}</code><button onClick={() => props.action(`${nodePath(props.node.id)}/fire`, 'POST')}>Fire</button></div>
+        <div class="actions"><code>{props.state?.ref?.slice(0, 7) || 'No ref yet'}</code><button onClick={() => props.action(`${nodePath(props.workflowId, props.node.id)}/fire`, 'POST')}>Fire</button></div>
       </Show>
       <Show when={props.node.kind === 'exec' || props.node.kind === 'program'}>
         <div class="actions"><button class={props.state?.status === 'stale' ? 'stale-run' : 'primary'} disabled={unapproved()}
           title={unapproved() ? 'Generate and approve the code in the side panel first' : 'Run with current inputs'} onClick={run}>
           {props.state?.status === 'stale' ? 'Inputs changed — Run' : 'Run'}
         </button>
-          <label class="toggle"><input type="checkbox" checked={Boolean(props.node.config.auto)} onChange={event => props.action(nodePath(props.node.id), 'PATCH', { config: { auto: event.currentTarget.checked } })} />auto</label>
+          <label class="toggle"><input type="checkbox" checked={Boolean(props.node.config.auto)} onChange={event => props.action(nodePath(props.workflowId, props.node.id), 'PATCH', { config: { auto: event.currentTarget.checked } })} />auto</label>
         </div>
         <Show when={unapproved()}><p class="muted small">Code requires review and approval.</p></Show>
       </Show>

@@ -7,6 +7,33 @@ From the repository root, launch
 `demo/studio/build/install/studio/bin/studio --ui demo/studio/ui/dist`.
 Default data: `~/.local/share/computenet/studio/default`; default port: 18440.
 
+Create, open and remove workflows using the toolbar switcher. Each workflow runs
+independently in the backend, even when another is open in the UI. The URL hash
+`#/w/<id>` preserves the open workflow across reloads and browser navigation.
+An empty workspace starts with no workflows and offers “Create your first workflow”.
+
+`--data/workflows.json` is the atomically written registry of id, name and creation
+time. Names are trimmed, 1–80 characters and unique ignoring case. Each workflow
+owns a runtime/ManagedHost and all its files under `--data/workflows/<id>/`;
+workflows cannot share wires. A journal load failure marks only that workflow as
+failed, with its error visible in the switcher. Removing a workflow stops its cells
+and processes, ends its SSE streams and moves its directory intact to
+`--data/trash/<id>-<ISO timestamp>/`. Trash is never automatically deleted.
+
+The API is workflow-scoped; old `/api/graph`, `/api/nodes`, `/api/edges` and `/events`
+routes are removed:
+
+- `GET /api/workflows` lists `{id, name, createdAt, nodeCount, status, error}`.
+- `POST /api/workflows {"name":"…"}` creates and returns a workflow (duplicate: 409).
+- `DELETE /api/workflows/{id}` moves it to trash (204; unknown id: 404).
+- Under `/api/workflows/{id}/`: `GET graph`, `POST nodes`, `PATCH/DELETE nodes/{n}`,
+  `POST nodes/{n}/submit|fire|run|generate|approve`, `GET nodes/{n}/runs[/{runId}]`,
+  `POST edges`, `DELETE edges/{e}`, and `GET events` (SSE).
+
+Per-graph payloads are unchanged. Unknown workflow ids return 404; routes in a
+failed workflow return 409 with its load error. Listing workflows does not open
+or rerun their nodes. All routes retain the Host and JSON content-type guards.
+
 Text nodes submit changes; Git nodes watch commit refs (first observation is silent).
 Exec nodes invoke argv templates or read-only Claude/Codex agents. Program nodes
 generate Python 3 stdlib code; review its sandboxed preview and promote its SHA-256
@@ -40,7 +67,7 @@ it cannot write elsewhere or access the network. If `/usr/bin/sandbox-exec` is
 missing (including on non-macOS systems), programs fail with a clear error.
 There is no unsandboxed fallback. The profile does not impose resource quotas.
 
-Topology and executable node configuration live in `--data/studio.journal`, using
+Topology and executable node configuration live in each workflow’s `studio.journal`, using
 one kernel `ApplyContext` and synchronous `FileJournal` for topology and data.
 Node state, held inputs, generated code/approval hashes and the latest job record
 are cell-owned JSON snapshots; non-effectful journaled handlers also preserve
@@ -50,8 +77,10 @@ mappings. Run artifacts (`run.json`, stdout and stderr) remain plain files. Disp
 preview artifacts live separately under `nodes/<id>/previews/`; the `/runs` API
 continues to list live runs and generation jobs. Each Python run materializes its
 journaled code in its own `work/cell.py`.
-Use a fresh `--data` directory for v2; v1 plain-file data is not migrated, and
-journals are not a supported cross-build interchange format.
+Root-level v2 data migrates once into `workflows/default/` as “Default”, including
+its journal, canvas metadata, node artifacts and Python sandbox profile. Interrupted
+moves resume on startup. V1 plain-file data without a v2 journal is not upgraded
+to journaled topology; journals are not a supported cross-build interchange format.
 
 Recovery finishes before git polling, intake services or process workers start.
 A durable inbox retains deliveries until intake commits their resulting state.
@@ -97,7 +126,7 @@ running until its replacement is promoted. Preview history does not increment th
 live run count. The panel displays both outputs, sandbox status and errors; failed
 previews require an explicit confirmation before the UI requests promotion.
 
-`POST /api/nodes/{id}/approve {"hash":"..."}` promotes exactly the current candidate
+`POST /api/workflows/{workflowId}/nodes/{id}/approve {"hash":"..."}` promotes exactly the current candidate
 hash through `ApplyContext.promote`, using the shared data/topology journal, a
 traffic gate and `StateMigrating` state handoff. A wrong hash returns 409. Detached
 live and candidate jobs are fenced and their process trees stopped before the
