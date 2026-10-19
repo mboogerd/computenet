@@ -7796,3 +7796,93 @@ candidate continues to name missing tentative/abort semantics, not an existing
 post-GFR mechanism.
 
 Full analysis: `doc/bench/bb-tpcc-bridge.md`.
+
+## 2026-10-19 — BB-NEX — Nexmark Q1–Q8 coverage on kernel operator cells
+Harness: 819e2de7 · JVM Amazon.com Inc. (OpenJDK 64-Bit Server VM)/21.0.5 · heap -Xmx2g · Apple M3 Max, 16 cores, Mac OS X 26.7.1
+JMH: mode=Nexmark SIM collector-applied delta elements per insert/retract batch (JUnit @Tag(bench) probe) forks=1 warmup=1 iters=5 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| Q1 insert | 184.0 ± n/a applied delta elements/batch | |
+| Q1 retract | 200.0 ± n/a applied delta elements/batch | |
+| Q2 insert | 92.44 ± n/a applied delta elements/batch | |
+| Q2 retract | 100.41304347826087 ± n/a applied delta elements/batch | |
+| Q7 insert | 92.1 ± 0.0 applied delta elements/batch | |
+| Q7 retract | 100.0 ± 0.0 applied delta elements/batch | |
+Trigger: G-42 — RETIRES for Q7 window-keyed state under event-time eviction: unbounded series grows while evicting series stays within bound 2
+
+SIM maintenance-work caveat (all insert/retract rows above): `applied delta elements/batch` sums adds+dels applied by every materialized query-outlet collector between quiescence points; the same logical change counts once at each observed outlet it reaches. It is query-specific propagation volume, not elapsed time, internal operator operations, or deliveries on unmaterialized edges.
+
+Specification: Apache Beam Nexmark (sdks/java/testing/nexmark) at 2be52540457e3887080a67641240b243ea6dad45, inspected 2026-10-17
+Framing: continuous-query maintenance over a generated event prefix on kernel operator cells; not Beam's or Flink's pipeline runtime; set semantics; no published-figure comparison
+Generator deviations:
+- event-rate deviation: 1 000 events/s scale replaces Beam's firstEventRate 10 000 so 100 000 events span ten 10 s windows
+- synthetic-bid-id deviation: Bid.id is synthetic and equals eventNumber; Beam bids have no id
+- event model: eventNumber is carried on each row so generated prefixes can be replayed without a source-side event wrapper
+- rate shape: only the deterministic constant-rate path is transcribed; Beam's wall-clock rate-shape scheduler is outside this benchmark
+
+Query deviations:
+Q1:
+- set semantics over value-equal rows; Beam emits bags
+- Q1 is a set of transformed bids
+Q2:
+- set semantics over value-equal rows; Beam emits bags
+- Q2 uses the fixed auction skip of 123
+Q3:
+- set semantics over value-equal rows; Beam emits bags
+- Q3 uses a relational equi-join over filtered auctions and persons
+Q4:
+- catalogue row only: no reference result or graph is built for a blocked query
+- Q4 has no graph result because the catalogue records the aggregate wall
+Q5:
+- catalogue row only: no reference result or graph is built for a blocked query
+- Q5's sliding-window count is retained as a catalogue row only
+Q6:
+- catalogue row only: no reference result or graph is built for a blocked query
+- Q6 is not lowered because its last-per-seller result is arrival-order
+Q7:
+- set semantics over value-equal rows; Beam emits bags
+- Q7 emits one bid per window under price DESC and synthetic bid-id ASC; Beam emits every tied maximum
+Q8:
+- set semantics over value-equal rows; Beam emits bags
+- Q8 observes current tumbling-window contents at quiescence
+
+| Query | Tier | Status | Cause |
+| --- | --- | --- | --- |
+| Q1 | EXPRESSIBLE | verified |  |
+| Q2 | EXPRESSIBLE | verified |  |
+| Q3 | EXPRESSIBLE | unreportable | variance 5.0 exceeds threshold 0.1 |
+| Q4 | NOT_EXPRESSIBLE | not_expressible | blocked — aggregate output as a relation: GroupByCell emits MapDelta and no kernel relation operator consumes it; nested max-per-auction followed by average-per-category |
+| Q5 | NOT_EXPRESSIBLE | not_expressible | blocked — aggregate output as a relation: GroupByCell emits MapDelta and no kernel relation operator consumes it; windowed counts followed by the maximum-count selection |
+| Q6 | NOT_EXPRESSIBLE | not_expressible | blocked — aggregate output as a relation: GroupByCell emits MapDelta and no kernel relation operator consumes it; winning bid per auction followed by the last-ten-per-seller aggregate; Arrival-order aggregates (first/last/scan) are excluded |
+| Q7 | EXPRESSIBLE | verified |  |
+| Q8 | EXPRESSIBLE | unreportable | variance 0.15151515151515152 exceeds threshold 0.1 |
+
+Q7 state growth
+LatenessPolicy bounds live windows, not retained bytes; the 100k series is the growth evidence, while the 10k pair spans one 10 s window and is a classifier sanity check.
+Q7 unbounded-state series (batches, liveWindows, floor):
+- batches=0, liveWindows=0, floor=n/a
+- batches=1, liveWindows=1, floor=n/a
+- batches=2, liveWindows=1, floor=n/a
+Q7 evicting series (lateness=5000 ms; live-window bound=2; batches, liveWindows, floor):
+- batches=0, liveWindows=0, floor=4999
+- batches=1, liveWindows=1, floor=4999
+- batches=2, liveWindows=1, floor=4999
+Each policy-series floor is the final floor stamped on every sample; it is not a per-batch floor observation.
+Growth verdict: RETIRES: unbounded series grows while evicting series stays within bound 2
+
+Candidate G-item
+| Gap | Missing surface | Trigger | Tier |
+| --- | --- | --- | --- |
+| G-NN | aggregate output as a relation (Q4, Q5, Q6; same wall as BB-TPCH 2026-10-16) | first consumer needing a second-level aggregate or scalar-subquery threshold | 24 |
+
+No comparison against Beam, Flink, DBSP/Feldera or any published Nexmark figure is drawn: set semantics over value-equal rows, Q7 one-bid tie-break, 1 000 events/s, SIM collector-applied counts, no latency, no WAL comparison in this entry.
+
+100k growth evidence provenance: the companion `StateGrowthBenchTest` probe recorded in
+the `computenet-3xi.1.7` comment “Orchestrator bench probe rerun at task tip 79f718d3”
+prints an unbounded Q7 series of live windows
+`0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10` at batches 0–20, and an evicting
+series `0,1,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1` with final floor 94999 and
+bound 2. The same source measured retained bytes of 97,919,584 B without the policy
+and 97,315,296 B with `LatenessPolicy(5000)` at 100k (10k was 10,384,632 B and
+12,064,048 B respectively). Those byte figures show retained query state grows with
+events; the policy claim here is only the live-window bound, not a memory bound.
