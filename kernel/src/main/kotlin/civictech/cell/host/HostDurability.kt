@@ -429,7 +429,7 @@ internal class HostDurability(
      * so [recoverFrom] re-enters the intake as a *baseline*, not a live wave.
      * `false` reverts to the pre-PN-2 behavior — replay as ordinary waves,
      * which stalls an asymmetric diamond join (the volatile arm never advances).
-     * Test seam for `DurableGlitchFreeReplayTest`'s control; production always
+     * Test seam for `DurableQuorumReplayTest`'s control; production always
      * replays as baseline.
      */
     var replayAsBaseline = true

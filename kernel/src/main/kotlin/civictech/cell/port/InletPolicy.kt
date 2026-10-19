@@ -12,17 +12,12 @@ import civictech.nature.PullService
 /**
  * Fixed processing tiers of a [FanInlet] policy chain (PN-9, spec 12 §Policies).
  * Install order is irrelevant; **tier order is authoritative** — a chain always
- * runs ADMIT → ALIGN → ACTIVATE regardless of the order policies were
+ * runs ADMIT → ACTIVATE regardless of the order policies were
  * installed in.
  *
- *  - **ADMIT** — may drop an invocation, never holds one. A dropping ADMIT that
- *    sits above an ALIGN must mint a metadata-plane [Progress] absorb-ack for
- *    every waved invocation it drops ([InletPolicy.mintsProgressAck], the CP-A3
- *    law), or the downstream frontier stalls forever waiting for the dropped
- *    edge's contribution.
- *  - **ALIGN** — reorders/buffers for wave completeness
- *    ([civictech.cell.consistency.WaveFrontier]); **at most one per inlet**
- *    (install-time `require`).
+ *  - **ADMIT** — may drop an invocation, never holds one. A dropping ADMIT may
+ *    mint a metadata-plane [Progress] absorb-ack for every waved invocation it
+ *    drops ([InletPolicy.mintsProgressAck], the CP-A3 law).
  *  - **ACTIVATE** — cold-park until a handler is installed. This tier is
  *    intrinsic to [FanInlet] (its [civictech.cell.proxy.Buffering] parked tail);
  *    it is the terminal of every chain, not an installable policy.
@@ -31,7 +26,7 @@ import civictech.nature.PullService
  * [civictech.cell.control.ParkQueue], not in this chain — a GATE-shaped hold
  * tier can be reintroduced here with its first real (non-test) user.
  */
-enum class PolicyTier { ADMIT, ALIGN, ACTIVATE }
+enum class PolicyTier { ADMIT, ACTIVATE }
 
 /**
  * A composable stage on a [FanInlet]'s inbound path (PN-9). Stages are installed
@@ -44,8 +39,8 @@ interface InletPolicy {
 
     /**
      * CP-A3 law: whether this policy mints a [Progress] absorb-ack for a waved
-     * invocation it drops, so a downstream ALIGN frontier can retire the wave on
-     * the dropped edge instead of stalling. Only meaningful for [PolicyTier.ADMIT]
+     * invocation it drops, so a downstream settlement fold can retire the wave
+     * on the dropped edge. Only meaningful for [PolicyTier.ADMIT]
      * (the only tier that drops); non-dropping tiers never exercise it.
      */
     val mintsProgressAck: Boolean get() = true
@@ -64,8 +59,7 @@ interface InletPolicy {
  * ADMIT tier (spec 12 §Policies): filters inbound invocations by [admits]. A
  * rejected invocation is dropped (never held) and reported to [onDrop]; when
  * [mintsProgressAck] is set, a dropped *waved* invocation also mints a
- * downstream [Progress] absorb-ack on its own edge — the CP-A3 law that keeps an
- * ALIGN frontier below from stalling on the dropped contribution.
+ * downstream [Progress] absorb-ack on its own edge.
  */
 class Admit(
     override val mintsProgressAck: Boolean = true,
@@ -78,13 +72,12 @@ class Admit(
     private lateinit var release: (Invocation) -> Unit
 
     /**
-     * T05 finding 3: mirrors [civictech.cell.consistency.WaveFrontier.unmatchedDrops] —
-     * a counted tripwire for [mintAck]'s silent `?: return` exits (no context,
+     * T05 finding 3: a counted tripwire for [mintAck]'s silent `?: return`
+     * exits (no context,
      * no attached inlet, or — the one that matters in practice — no open link
      * matching [civictech.cell.MessageContext.sourcePort], e.g. a
      * wire-reconstructed edge, a `Use.fixed` producer, or a replayed journal
-     * frame). Each such exit means the ack was never minted and a downstream
-     * `WaveFrontier` stalls forever on that edge; this at least makes the gap
+     * frame). Each such exit means the ack was never minted; this makes the gap
      * observable instead of silent.
      */
     var unackedDrops: Long = 0
@@ -156,24 +149,19 @@ class Admit(
  * Pull-on-open (spec 20/21 §Pull, decided 93 I-16): a consumer-side link
  * lifecycle policy that issues an upstream [StateRequest] on the in-band
  * `EdgeOpen`, so a subscriber is caught up regardless of which side observes the
- * install. Extracted verbatim from [civictech.cell.consistency.WaveFrontier]
- * (PN-9): pull and wave-alignment are now composed, not welded — [GlitchFreeCell]
- * installs both, but either works alone (a plain inlet can pull-on-open without
- * an ALIGN frontier). It fires on the same [Protocols.TopologyOrder] `EdgeOpen`
- * event the frontier tracks — for a bridged consumer that arrives in-band once
+ * install. It fires on the [Protocols.TopologyOrder] `EdgeOpen` event — for a
+ * bridged consumer that arrives in-band once
  * the bridge is wired, so the emitted StateRequest sequence is identical to
  * pre-PN-9 (local and bridged alike). Data-transparent: [offer] is a pass-through.
  *
  * FU-5 — [requireServing] opts this inlet into the `PULL_SERVICE` refusing axis.
- * Pull-on-open is *not* by itself a hard dependency on a serving producer: a
- * [GlitchFreeCell] installs it against ordinary (non-serving) upstreams and
- * converges fine via its ALIGN frontier and upstream waves — the emitted
- * StateRequest is opportunistic there, tolerated-unanswered. Only a consumer
+ * Pull-on-open is *not* by itself a hard dependency on a serving producer: the
+ * emitted StateRequest may be opportunistic and tolerated-unanswered. Only a consumer
  * whose baseline arrives *solely* through the pull genuinely starves when the
  * producer cannot answer; such a consumer sets [requireServing] = true, folding
  * `BASELINE_SERVING` onto its inlet so a non-serving producer is refused at the
  * handshake instead of silently starving. Default false keeps every existing
- * install (glitch-free's included) DEFAULT on the axis ⇒ byte-identical.
+ * install DEFAULT on the axis ⇒ byte-identical.
  */
 class PullOnOpen(
     private val since: () -> civictech.cell.TagFrontier? = { null },
@@ -190,7 +178,7 @@ class PullOnOpen(
         // FU-5: opting in IS the requirement. Fold BASELINE_SERVING onto the inlet's
         // declared vector so a non-serving producer refuses at handshake instead of
         // leaving the StateRequest below unanswered (starved). Off by default so a
-        // tolerant puller (e.g. a glitch-free inlet with its own catch-up path)
+        // tolerant puller with its own catch-up path
         // stays DEFAULT on the axis and reconciles exactly as today.
         if (requireServing) {
             PortNatures.stamp(inlet, PortNatures.of(inlet).with(PullService.BASELINE_SERVING))

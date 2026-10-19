@@ -27,10 +27,8 @@ import java.util.*
 
 /**
  * D-REPLAY / `[24-REPLAY-01]` (spec 20/24 §Durable replay of a mid-graph data
- * cell, PN-2) for the **lane-counting** fan-in. `DurableGlitchFreeReplayTest`
- * proves the baseline path for the *generic* glitch-free join
- * (`WaveFrontier.offer()`); `QuorumSetCell`/`PresenceLanes` are an
- * architecturally different mechanism — one `TagState` per open source link,
+ * cell, PN-2) for the **lane-counting** fan-in. `QuorumSetCell`/`PresenceLanes`
+ * use one `TagState` per open source link,
  * admission by presence count against a threshold — and PN-2 patched only the
  * former.
  *
@@ -52,8 +50,7 @@ import java.util.*
  * lane-count 1 < 2 forever and the recovered state is silently dropped (the
  * `24-REPLAY-01` `kernel-gap` in `concord/corpus/DISPUTES.md`). Under PN-2 the
  * replayed delta is a baseline, and a baseline installs its arm state
- * regardless of the threshold — the SET-fan-in analogue of `WaveFrontier`'s
- * baseline branch.
+ * regardless of the threshold.
  *
  * `k = 2` is load-bearing: a `k = 1` quorum is met by any single lane and would
  * pass with or without the fix (uninformative). Controls: replay as ordinary
@@ -90,7 +87,7 @@ class DurableQuorumReplayTest {
 
     /**
      * Build / crash / rebuild / `recoverFrom`, in the shape
-     * `DurableGlitchFreeReplayTest.runSession` uses: an [InMemoryJournal] as
+     * used by the durability replay suites: an [InMemoryJournal] as
      * "the disk", a per-cell `journalFor` selector, a [SimulationController]
      * for bounded, seeded scheduling (no sleeps anywhere).
      *

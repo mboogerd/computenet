@@ -284,7 +284,7 @@ class BridgedGraphTest {
      *
      * computenet-umx.3.2 replaced this file's `interpose: (ByteArray, Int) -> ByteArray?` lambda
      * with the rig's [FrameInterposers.drop]/[FrameInterposers.windowed]. Unlike the duplicator
-     * retrofit in `GlitchFreeBridgedDiamondTest`, this one draws no randomness at all, so parity
+     * retrofit in the former bridged-diamond test, this one draws no randomness at all, so parity
      * here can be established **exactly** rather than statistically — and the exactness is what
      * makes the pinned per-seed vector below trustworthy without re-running pre-retrofit code:
      *

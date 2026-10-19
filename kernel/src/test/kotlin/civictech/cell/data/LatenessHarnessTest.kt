@@ -33,7 +33,7 @@ import java.util.UUID
  * One writer: one outlet, so one wave `sourceId` (`[22-SRC-01]`). [emit] is one
  * [FanOutlet.originate] — a fresh `(sourceId, counter)` fanned, as the SAME
  * `SetDelta`, to every link in attachment order (the
- * `GroupByEvictionGlitchFreeTest` shape).
+ * the grouped-eviction test shape).
  */
 internal class LatenessSource<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
     @Suppress("UNCHECKED_CAST")

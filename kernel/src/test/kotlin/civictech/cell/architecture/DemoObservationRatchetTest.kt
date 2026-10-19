@@ -17,7 +17,7 @@ import java.io.File
 class DemoObservationRatchetTest {
 
     companion object {
-        private val observationCall = Regex("""\.(observe|observeAll|observeAligned)\s*[({]""")
+        private val observationCall = Regex("""\.(observe|observeAll)\s*[({]""")
         private val observeCell = Regex("""\bObserveCell\s*[<(]""")
         private val hubCell = Regex("""\b(Set|Map)HubCell\s*[<(]""")
         // The deliberate journal/replay address is the sole carve-out; see computenet-t9tms.
@@ -97,7 +97,7 @@ class DemoObservationRatchetTest {
         }
         assertTrue(violations.isEmpty()) {
             "demo-observation ratchet violated (patterns " +
-                "\\.(observe|observeAll|observeAligned)\\s*[({], " +
+                "\\.(observe|observeAll)\\s*[({], " +
                 "\\bObserveCell\\s*[<(], \\b(Set|Map)HubCell\\s*[<(]):\n" +
                 violations.sorted().joinToString("\n") { "  $it" }
         }
@@ -107,7 +107,6 @@ class DemoObservationRatchetTest {
     fun `classifier counts code calls and constructions but not comments or observation`() {
         assertEquals(mapOf(".observe" to 1), countObservations("host.observe(ref, View.set<String>())"))
         assertEquals(mapOf(".observeAll" to 1), countObservations("host.observeAll { }"))
-        assertEquals(mapOf(".observeAligned" to 1), countObservations("host.observeAligned { }"))
         assertEquals(mapOf("ObserveCell" to 1), countObservations("ObserveCell(MetaView(), ref = OTHER)"))
         assertEquals(mapOf("SetHubCell" to 1, "MapHubCell" to 1), countObservations("SetHubCell<Int>(); MapHubCell<String>()"))
         assertEquals(emptyMap<String, Int>(), countObservations("host.observation { }"))

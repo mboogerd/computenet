@@ -186,7 +186,7 @@ class FanOutletTest {
      * (`CompositeCell.stallDeniedEdges`) must reach that consumer's link and no
      * other. Before the fix the walk covered every `Consume` link of the
      * outlet, so a denial aimed at one peer advanced watermarks and surfaced a
-     * `GlitchViolation` on edges nothing had been withheld from.
+     * false stall diagnostics on edges nothing had been withheld from.
      *
      * The context is deliberately non-null and **baseline-free**: that is the
      * one shape the walk's own guard (`context == null || context.baseline !=

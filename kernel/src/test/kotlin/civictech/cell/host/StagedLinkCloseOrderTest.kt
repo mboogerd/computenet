@@ -4,8 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Stateful
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.WaveFrontier
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionSupport
 import civictech.cell.durability.InMemoryJournal
@@ -33,10 +31,9 @@ class StagedLinkCloseOrderTest {
         fun emit(value: Int) = outlet.call.propagate(value)
     }
 
-    private class GlitchSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    private class Sink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val received = mutableListOf<Int>()
         val events = mutableListOf<String>()
-        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
         val inlet by input<Propagate<Int>>()
 
         init {
@@ -44,7 +41,6 @@ class StagedLinkCloseOrderTest {
                 received += value
                 events += "data($value)"
             })
-            inlet.install(frontier)
             inlet.onEdgeEvent { _, event ->
                 if (event == EdgeClose) events += "EdgeClose"
             }
@@ -55,7 +51,7 @@ class StagedLinkCloseOrderTest {
     fun `staged close follows accepted data and stops further intake immediately`() {
         val world = SimWorld()
         val source = Source()
-        val sink = GlitchSink()
+        val sink = Sink()
         world.host.managementInlet.call.spawn(source)
         world.host.managementInlet.call.spawn(sink)
         val link = world.host.managementInlet.call.connect(
@@ -73,7 +69,6 @@ class StagedLinkCloseOrderTest {
 
         world.runToIdle()
 
-        sink.frontier.unmatchedDrops shouldBe 0L
         sink.received shouldBe listOf(1, 2, 3)
         sink.events shouldBe listOf("data(1)", "data(2)", "data(3)", "EdgeClose")
     }
@@ -82,7 +77,7 @@ class StagedLinkCloseOrderTest {
     fun `staged close marker for a despawned target is not a dead letter`() {
         val world = SimWorld()
         val source = Source()
-        val sink = GlitchSink()
+        val sink = Sink()
         world.host.managementInlet.call.spawn(source)
         world.host.managementInlet.call.spawn(sink)
         val link = world.host.managementInlet.call.connect(
@@ -106,7 +101,7 @@ class StagedLinkCloseOrderTest {
     fun `attention parked staged close marker is discarded on despawn`() {
         val world = SimWorld(attention = AttentionPolicy(suspendAfter = 0))
         val source = Source()
-        val sink = GlitchSink()
+        val sink = Sink()
         world.host.managementInlet.call.spawn(source)
         world.host.managementInlet.call.spawn(sink)
         val link = world.host.managementInlet.call.connect(
@@ -130,7 +125,7 @@ class StagedLinkCloseOrderTest {
     fun `fused close remains synchronous`() {
         val world = SimWorld()
         val source = Source()
-        val sink = GlitchSink()
+        val sink = Sink()
         world.host.managementInlet.call.spawn(source)
         world.host.managementInlet.call.spawn(sink)
         val link = world.host.managementInlet.call.connect(
@@ -153,7 +148,7 @@ class StagedLinkCloseOrderTest {
         val registry = LocationRegistry()
         val journal = InMemoryJournal()
         val source = Source()
-        val sink = GlitchSink()
+        val sink = Sink()
         val host = ManagedHost(
             scheduler = controller.scheduler(),
             registry = registry,
@@ -179,14 +174,13 @@ class StagedLinkCloseOrderTest {
 
         controller.runToIdle()
         sink.received shouldBe listOf(1, 2, 3)
-        sink.frontier.unmatchedDrops shouldBe 0L
     }
 
     @Test
     fun `attention parked staged close keeps its place behind data`() {
         val world = SimWorld(attention = AttentionPolicy(suspendAfter = 0))
         val source = Source()
-        val sink = GlitchSink()
+        val sink = Sink()
         world.host.managementInlet.call.spawn(source)
         world.host.managementInlet.call.spawn(sink)
         val link = world.host.managementInlet.call.connect(
@@ -204,17 +198,14 @@ class StagedLinkCloseOrderTest {
 
         sink.received shouldBe listOf(1, 2, 3)
         sink.events shouldBe listOf("data(1)", "data(2)", "data(3)", "EdgeClose")
-        sink.frontier.unmatchedDrops shouldBe 0L
     }
 
     private class StatefulSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Stateful {
         val received = mutableListOf<Int>()
-        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
         val inlet by input<Propagate<Int>>()
 
         init {
             inlet.serve(Propagate { value -> received += value })
-            inlet.install(frontier)
         }
 
         override fun snapshot(): Serializable = ArrayList(received)
@@ -251,6 +242,5 @@ class StagedLinkCloseOrderTest {
             .map { WireCodec.decode(it.payload) }
         frames.map { it.type } shouldBe List(3) { HostedPortInvocation.Type.PORT_API }
         sink.received shouldBe listOf(1, 2, 3)
-        sink.frontier.unmatchedDrops shouldBe 0L
     }
 }

@@ -260,14 +260,12 @@ data class PromoteStep(
  *   and resolved by the runtime placement driver against the manifest (computenet-8k723).
  * - [journalId] the journal a `DURABLE` instance binds to; `null` ⇒ a
  *   journal-less host, refused for a durable cell at declaration ([InstanceSetStep.validate]).
- * - [frontierPolicy] the frontier-policy hint for this instance.
  */
 data class InstanceSpec(
     val interest: Interest,
     val instanceId: Int,
     val placement: String? = null,
     val journalId: String? = null,
-    val frontierPolicy: String? = null,
     val replicated: Boolean = false,
 ) : Serializable
 

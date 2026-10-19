@@ -8,7 +8,6 @@ import civictech.cell.Propagate
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.host.HostedCellProxy
@@ -86,15 +85,6 @@ private fun send(source: ChurnSource, vararg events: Long): UUID {
     source.send(*events)
     return source.sourceId
 }
-
-private class ChurnObserver<T>(clazz: Class<Propagate<T>>, override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-    val inlet = registerPort("inlet", FanInlet(clazz))
-    val received = mutableListOf<T>()
-    init { inlet.onEach { received += it } }
-}
-
-@Suppress("UNCHECKED_CAST")
-private val waterlineApi = Propagate::class.java as Class<Propagate<WaterlineDelta>>
 
 /** A pass-through relay: forwards under the arriving wave, so the `sourceId` survives and `sourcePort` becomes this relay's outlet. */
 private class ChurnRelay(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
@@ -586,40 +576,6 @@ class WaterlineChurnTest {
         CurrentContext.with(civictech.cell.MessageContext(foreign, PortRef.generate())) { f.cell.retire(f.idC) }
         f.rec.floors shouldBe listOf(5L, 15L)
         f.rec.seen.last().second!!.sourceId shouldBe f.cell.outlet.waveState().sourceId
-    }
-
-    @Test
-    fun `B10 hosted - a GlitchFreeCell downstream delivers the retirement emission`() {
-        val controller = SimulationController()
-        val host = ManagedHost(scheduler = controller.scheduler())
-        val a = ChurnSource()
-        val b = ChurnSource()
-        val c = ChurnSource()
-        val cell = WaterlineCell(lateness = lateness)
-        val gf = GlitchFreeCell(waterlineApi)
-        val observer = ChurnObserver(waterlineApi)
-        listOf(a, b, c, cell, gf, observer).forEach { host.managementInlet.call.spawn(it) }
-
-        link(a, cell)
-        link(b, cell)
-        val linkC = link(c, cell)
-        @Suppress("UNCHECKED_CAST")
-        cell.outlet.linkTo(gf.inlet as LinkFrom<Propagate<WaterlineDelta>>)
-        gf.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
-        controller.runToIdle()
-
-        c.send(10)
-        controller.runToIdle()
-        b.send(20)
-        controller.runToIdle()
-        a.send(30)
-        controller.runToIdle()
-        observer.received shouldBe listOf(WaterlineDelta(5))
-
-        unlink(linkC)
-        controller.runToIdle()
-        cell.floor() shouldBe 15L
-        observer.received shouldBe listOf(WaterlineDelta(5), WaterlineDelta(15))
     }
 
     // ---------------------------------------------------------------------

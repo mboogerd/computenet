@@ -228,10 +228,7 @@ interface QuorumSetApi<E> {
  * evaluates membership once before advancing the one output edge. The default
  * remains eager and zero-coordination, per spec 20/22; a frontier-gated
  * downstream join can require settlement and reject that eager outlet at link
- * time instead of silently weakening its own guarantee. `observeAligned`
- * likewise rejects an ungated multi-input quorum whose ancestry crosses an
- * opaque host boundary, while a gated instance and a single-input instance
- * remain admissible.
+ * time instead of silently weakening its own guarantee.
  */
 class QuorumSetCell<E>(
     ref: CellRef = CellRef(UUID.randomUUID()),
@@ -296,8 +293,7 @@ class QuorumSetCell<E>(
         // sibling arms are volatile and will never replay the same state, so
         // evaluating a replayed delta against the live threshold would leave
         // recovered arm state at lane-count 1 forever and silently drop it.
-        // The SET-fan-in analogue of WaveFrontier.offer()'s baseline branch:
-        // what the baseline ADDS to its lane is installed as authoritative
+        // Baseline branch: what the baseline ADDS to its lane is installed as authoritative
         // recovered arm state, bypassing the threshold. What it removes stays
         // on the live rule (the recovered arm no longer asserts it, so only a
         // live quorum can keep it advertised).
@@ -357,8 +353,8 @@ class QuorumSetCell<E>(
         // T05 finding 2: a re-evaluation that changes no membership (tag
         // churn, or a link open/close that doesn't tip any element's count
         // across the threshold) now absorb-acks the reactive wave instead of
-        // silently dropping it — a GlitchFreeCell downstream would otherwise
-        // stall forever on such a wave. Behavior change: this operator now
+        // silently dropping it — a downstream settlement consumer would
+        // otherwise stall forever on such a wave. Behavior change: this operator now
         // acks. (No-op via absorbAck's own CurrentContext guard when
         // `evaluate` runs from the EdgeOpen/EdgeClose protocol path, which
         // carries no reactive wave context.)

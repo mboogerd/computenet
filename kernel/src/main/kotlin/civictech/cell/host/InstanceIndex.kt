@@ -5,10 +5,10 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Instances-by-logical-id index (PN-7 perf cliff): the interest-scoped
- * settlement read ([civictech.cell.replication.Replication.replicaFrontier])
- * calls [instancesOf] once per buffered wave per `recheck`, so a linear scan
- * of every published ref would be quadratic in a large mesh. This index keeps
+ * Instances-by-logical-id index (PN-7 perf cliff):
+ * [civictech.cell.consistency.CausalStability] reads
+ * [instancesOf] while computing a logical id's stable frontier, so a linear
+ * scan of every published ref would be costly in a large mesh. This index keeps
  * the membership read O(instances-of-one-id). Maintained in lockstep with
  * `LocationRegistry`'s locations map on every install/removal.
  *

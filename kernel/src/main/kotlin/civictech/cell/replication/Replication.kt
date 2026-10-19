@@ -8,8 +8,6 @@ import civictech.cell.ClaimClass
 import civictech.cell.TagFrontier
 import civictech.cell.denyBudget
 import civictech.cell.consistency.CausalStability
-import civictech.cell.consistency.ReplicaFrontier
-import civictech.cell.consistency.ReplicaQuorum
 import civictech.cell.consistency.StabilityFreezeDetector
 import civictech.cell.control.StallNotice
 import civictech.cell.Propagate
@@ -322,28 +320,11 @@ class Replication(
         CellRef(UUID.nameUUIDFromBytes("watermark:${dataRef.id}".toByteArray()), dataRef.instanceId)
 
     /**
-     * The cross-replica settlement predicate (T11-D): extracted to
-     * [ReplicaQuorum] in `.consistency` — a consistency concern, same
-     * package as [ReplicaFrontier] itself and its consumer `WaveFrontier` —
-     * constructed from the three reads it needs, all already injected here
-     * ([watermarks], [civictech.cell.host.InstanceIndex.instancesOf],
-     * [civictech.cell.host.InstanceIndex.interestOf])
-     * plus the [watermarkRef] derivation.
-     */
-    private val replicaQuorum = ReplicaQuorum(
-        watermarkOf = { logicalId -> watermarks[logicalId] },
-        membersOf = { logicalId -> registry.instances.instancesOf(logicalId) },
-        interestOf = { ref -> registry.instances.interestOf(ref) },
-        watermarkRefOf = ::watermarkRef,
-    )
-
-    /**
      * The **causal-stability** read (E3.5, `computenet-9sm.3`; spec
      * `doc/spec/40-distribution/42-replication.md` [42-WM-05], [42-WM-07]):
-     * a sibling of [replicaQuorum] over the *same* injected reads minus
-     * `interestOf` — decision 9sm.3-D1 (one class each, not one class with
-     * two moods) and 9sm.3-D4 (interest is deliberately not applied; there
-     * is no key to scope it against for a per-logical-id read). See
+     * constructed from the companion watermark, live-member and derived-slot
+     * reads. Interest is deliberately not applied (decision 9sm.3-D4); there
+     * is no key to scope it against for a per-logical-id read. See
      * [CausalStability] for the whole model, including R14 (a superseded
      * column stays in the MIN).
      */
@@ -354,10 +335,9 @@ class Replication(
     )
 
     /**
-     * One-line facade over [CausalStability.stableFrontier] — the same shape
-     * [replicaFrontier] has over [ReplicaQuorum.frontier], and for the same
-     * reason: call sites name `Replication`, the semantics live in the
-     * `.consistency` class. **[CausalStability.stableFrontier] is the truth**:
+     * One-line facade over [CausalStability.stableFrontier]: call sites name
+     * `Replication`, while the semantics live in the `.consistency` class.
+     * **[CausalStability.stableFrontier] is the truth**:
      * the pointwise MIN of every open membership row, an absent row (and an
      * open slot lacking a column) reading as bottom and therefore ABSENT from
      * [TagFrontier.perSource]; no companion yields `TagFrontier(emptyMap())`.
@@ -367,7 +347,7 @@ class Replication(
      * it is safe from a checkpoint or GC pass outside any wave.
      *
      * @param degrade drop recoverably-suspended (odd-epoch) slots from the open
-     *   set — the same PN-19 quorum-shrink switch [replicaFrontier] carries.
+     *   set.
      */
     fun stableFrontier(logicalId: UUID, degrade: Boolean = false): TagFrontier =
         causalStability.stableFrontier(logicalId, degrade)
@@ -389,11 +369,9 @@ class Replication(
 
     /**
      * Poke [listener] with the new [TagFrontier] whenever [logicalId]'s
-     * [stableFrontier] **rises** — the stability analogue of
-     * [onWatermarkAdvance] and built the same way (decision 9sm.3-D2: a tap on
-     * the local companion's outlet). Returns silently when no replica of
-     * [logicalId] has been [replicate]d here, exactly as [onWatermarkAdvance]
-     * does.
+     * [stableFrontier] **rises** (decision 9sm.3-D2: a tap on the local
+     * companion's outlet). Returns silently when no replica of [logicalId] has
+     * been [replicate]d here.
      *
      * **Exactly once per effective rise, per listener** ([KE3-21]). The
      * baseline is taken at registration — registering never fires — and each
@@ -466,8 +444,8 @@ class Replication(
      *
      * **Also fanned downstream** (9sm.5-D7): every notice is additionally
      * pushed through [civictech.cell.host.notifyDownstream] for each local
-     * replica of [logicalId], so a downstream `WaveFrontier` consumer
-     * receives it on its Suspension protocol edge exactly as an ordinary
+     * replica of [logicalId], so a downstream consumer receives it on its
+     * Suspension protocol edge exactly as an ordinary
      * `Stall` and applies the 9sm.5-D3 disposition (WAIT: no action; DEGRADE:
      * the local-replica edge joins the suspended set). A consumer with no
      * Suspension handler ignores it — delivery is `handlers[id]?.invoke`.
@@ -531,32 +509,6 @@ class Replication(
     internal fun localDeliveredFrontier(logicalId: UUID): TagFrontier {
         val companion = watermarks[logicalId] ?: return TagFrontier(emptyMap())
         return TagFrontier(companion.rows()[WatermarkCell.slotId(companion.ref)] ?: emptyMap())
-    }
-
-    /**
-     * One-line factory over [ReplicaQuorum.frontier] (T11-D) — kept here so
-     * every existing call site (`Replication.replicaFrontier(...)`) is
-     * unchanged; see [ReplicaQuorum.frontier] for the full KDoc: the R13
-     * creation fence, the PN-19 DEGRADE quorum-shrink, and the FU-2
-     * converged-membership barrier.
-     */
-    fun replicaFrontier(
-        logicalId: UUID,
-        creationFence: Boolean = true,
-        degrade: Boolean = false,
-        membershipBarrier: Boolean = true,
-    ): ReplicaFrontier = replicaQuorum.frontier(logicalId, creationFence, degrade, membershipBarrier)
-
-    /**
-     * Poke [listener] whenever [logicalId]'s merged watermark advances (E3.4):
-     * a tap on the local companion's outlet fires on every effective advance —
-     * a local delivery OR an absorbed-and-re-emitted peer delta — so a
-     * glitch-free consumer gating on [replicaFrontier] re-checks exactly when a
-     * held wave might have become replica-complete.
-     */
-    fun onWatermarkAdvance(logicalId: UUID, listener: () -> Unit) {
-        val companion = watermarks[logicalId] ?: return
-        companion.outlet.tap(Use.fixed(Propagate<WatermarkDelta> { listener() }, PortRef.generate()))
     }
 
     /**
@@ -796,7 +748,7 @@ class Replication(
      * reviewer's alternative reading, that a `resume()` on a companion spawned
      * on the crashed host propagates into nothing, does not hold: the companion
      * is the same in-process object, its epoch map is plain local state, and
-     * [civictech.cell.consistency.ReplicaQuorum] reads it directly — measured by
+     * [CausalStability] reads it directly — measured by
      * `CrashRebuildWatermarkResidencyTest`.) The guard is `it !== cell`, so a
      * plain re-replicate of the same object never reaches this and no live
      * partition-suspend is resumed out from under [evict].
