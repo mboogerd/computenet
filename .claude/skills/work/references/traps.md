@@ -98,7 +98,7 @@ EOF
 | `gh pr checks` exits non-zero while checks look fine | It exits 8 while anything is pending | Classify on output, never `$?`. Wait with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`; its header documents the tokens. |
 | `wait-checks.sh` ends `SETTLED` | `SETTLED` means none pending, including failed | Read the rows above it for any non-pass required check before acting. |
 | `wait-checks.sh` ends `UNBOUND` | The rows settled, but over `gh pr checks`, which names no commit | Not evidence for your diff, whatever the rows say. Re-run; if REST keeps answering nothing, fix git first (below), then bind by hand with `gh api repos/{owner}/{repo}/commits/<sha>/check-runs`. |
-| `wait-checks.sh` ends `TIMEOUT-PENDING` or `QUERY-FAILED` | Checks outran one call, or nothing was read | The orchestrator re-runs it (two calls is a normal cold start; only a `STUCK` label is a defect). A reviewer gets one call per head (review.md "Read CI once per head"). |
+| `wait-checks.sh` ends `TIMEOUT-PENDING` or `QUERY-FAILED` | Checks outran one call, or nothing was read | The orchestrator re-runs it (two calls is a normal cold start; only a `STUCK` label is a defect). Reviewers make no call (review.md "CI is the orchestrator's"). |
 | A `gh` call returns no output at all | The harness backgrounded it | Not a reading. Run the same command again; if it fails to return twice, report the host as the problem. |
 | `gh` fails with 503 or a socket error | Transient GitHub or local exhaustion | Retry a few times with back-off, then re-read the state the call should have changed. |
 | `if gh … \| tail -1` reported success but nothing happened | A pipeline's status is its last stage's | Never test a pipeline's status; re-read the write. |
