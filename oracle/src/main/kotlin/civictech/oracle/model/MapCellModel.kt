@@ -73,7 +73,8 @@ import java.io.Serializable
  * to", and this is that record. A scalar edge in this catalog carries
  * `Propagate<CounterDelta>`. Since GFR.3 retired the former scalar-combining operator, **no
  * kernel cell serves `Propagate<CounterDelta>` on an inlet** (observed:
- * `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main` is empty).
+ * `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main` returns only
+ * `host/TypedLink.kt`'s generic-invariance KDoc, not a `Serve` declaration).
  * `CounterCell.inlet` is `Use<CounterOps>` and `PnCounterCell.deltaInlet` is the replication
  * seam, not an operator input.
  *

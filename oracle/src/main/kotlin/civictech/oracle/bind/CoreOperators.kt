@@ -250,7 +250,8 @@ object CoreOperators {
          * (as `PnCounterDelta`) and `CountCell.outlet` emit. Since GFR.3 retired the former
          * scalar-combining operator, no kernel cell serves `Propagate<CounterDelta>` on an
          * inlet (observed: `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main`
-         * is empty).
+         * returns only `host/TypedLink.kt`'s generic-invariance KDoc, not a `Serve`
+         * declaration).
          *
          * So the scalar hole is not the pair-shaped hole computenet-4ru.16 closed. That one was
          * repairable inside the catalog: `keyBy` reuses an already-registered kernel cell

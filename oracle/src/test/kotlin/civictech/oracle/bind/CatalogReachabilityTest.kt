@@ -154,7 +154,8 @@ class CatalogReachabilityTest {
      * one of effort. A scalar edge in this catalog carries `Propagate<CounterDelta>`. Since
      * GFR.3 retired the former scalar-combining operator, no kernel cell serves that type on
      * an inlet (observed:
-     * `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main` is empty).
+     * `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main` returns only
+     * `host/TypedLink.kt`'s generic-invariance KDoc, not a `Serve` declaration).
      *
      * Unlike the pair-shaped hole — repairable inside the catalog, because `keyBy` reuses an
      * already-registered cell and model and adds only a function — this one has no in-catalog

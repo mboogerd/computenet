@@ -478,6 +478,8 @@ class HonestyLedgerTest {
         ) {
             note.mustState("no kernel cell serves `Propagate<CounterDelta>` on an inlet")
             note.mustState("git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main")
+            note.mustState("host/TypedLink.kt")
+            note.mustState("not a `Serve` declaration")
             note.mustState("DISPUTES audit: no filing")
         }
     }
