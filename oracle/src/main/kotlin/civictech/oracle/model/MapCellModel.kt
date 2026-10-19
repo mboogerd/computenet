@@ -213,10 +213,10 @@ import java.io.Serializable
  *   Verified against its own KDoc
  *   (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`): it is a *replicable
  *   delivered-watermark lattice (spec 40/42, E3.2)*, whose four independent grow-only/
- *   pointwise-monotone lanes (`rows`, `closed`, `suspendEpoch`, `members`) exist to let
- *   `civictech.cell.consistency.ReplicaQuorum.frontier` decide, across a mesh of replicas,
- *   whether a covering quorum has settled — a cross-replica settlement read, not a data
- *   transformation. Its own KDoc says so directly: instances "converge by delta gossip over
+ *   pointwise-monotone lanes (`rows`, `closed`, `suspendEpoch`, `members`) are each read by
+ *   `civictech.cell.consistency.CausalStability.stableFrontier` to decide, across a mesh of
+ *   replicas, which waves every open member has delivered — a cross-replica settlement read,
+ *   not a data transformation. Its own KDoc says so directly: instances "converge by delta gossip over
  *   `deltaInlet` exactly like the tagged-set family and `PnCounterCell`", and unlike every
  *   registered source cell **"there is no `@Contract`"** — nothing here is spawned or driven
  *   through the generated `*Base`/`*Ports` machinery `OperatorCatalog.register`'s `CellFactory`
@@ -240,7 +240,9 @@ import java.io.Serializable
  *   (`kernel/src/test/kotlin/civictech/cell/data/WatermarkCellTest.kt`,
  *   `WatermarkCellBoundedReadTest.kt`,
  *   `kernel/src/test/kotlin/civictech/cell/replication/DeliveredWatermarkTest.kt`), and by
- *   `civictech.cell.consistency.ReplicaQuorum`'s own tests where it is actually consumed.
+ *   `civictech.cell.consistency.CausalStability`'s own tests
+ *   (`kernel/src/test/kotlin/civictech/cell/consistency/CausalStabilityTest.kt`), where it is
+ *   actually consumed.
  *
  * - **`WaterlineCell`.** (computenet-sjqat, KE4.2.) Verified against its own KDoc
  *   (`kernel/src/main/kotlin/civictech/cell/data/Waterline.kt`): the event-time waterline of
