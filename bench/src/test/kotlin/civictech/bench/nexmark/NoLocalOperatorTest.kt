@@ -47,12 +47,15 @@ class NoLocalOperatorTest {
     fun `operator inspection is non vacuous for every forbidden local mechanism`() {
         val fixtures = listOf(
             "local aggregator" to "class FakeLocalFold : Aggregator<Int> { override fun add(value: Int) = Unit }",
+            "anonymous local aggregator" to "val fold = object : Aggregator<Int, Int, Int> { }",
+            "second-supertype local aggregator" to "class FakeFold(val n: Int) : Base(n), Aggregator<Int, Int, Int> { }",
             "local treemap declaration" to "val counts: TreeMap<String, Int>",
             "local treemap construction" to "val counts = TreeMap<String, Int>()",
             "local ledger" to "val localLedger = 1",
             "local multiset" to "val multiset = 1",
             "nested join" to "for (left in lefts) { for (right in rights) { Unit } }",
             "window arithmetic" to "val w = bid.dateTime / WINDOW_MS * WINDOW_MS",
+            "envelope bound outside StateGrowth.kt" to "val w = policy.lateness / NexmarkSpec.WINDOW_MS + 2L",
             "wall clock" to "val now = System.currentTimeMillis()",
         )
         fixtures.forEach { (name, source) ->
@@ -80,7 +83,11 @@ class NoLocalOperatorTest {
             if (file.fileName.toString() !in REFERENCE_FILES && isNestedLoop(code)) {
                 add("$relative contains a hand-rolled nested join loop")
             }
-            val windowCode = WINDOW_BOUND_EXEMPTION.replace(code, "")
+            val windowCode = if (file.fileName.toString() == "StateGrowth.kt") {
+                WINDOW_BOUND_EXEMPTION.replace(code, "")
+            } else {
+                code
+            }
             if (file.fileName.toString() !in REFERENCE_FILES &&
                 WINDOW_KEY_ARITHMETIC.containsMatchIn(windowCode)
             ) {
@@ -145,7 +152,7 @@ class NoLocalOperatorTest {
                 "(?:JoinSetCell|SemiJoinCell|FilterCell|GroupByCell|FlatMapSetCell)\\b",
         )
         val AGGREGATOR_IMPLEMENTATION = Regex(
-            "(?m)^\\s*(?:class|object)\\s+\\w+[^\\n{]*:\\s*" +
+            "\\b(?:class|object)\\b(?:[^{=(\\n]|\\([^)\\n]*\\))*[:,]\\s*" +
                 "(?:civictech\\.cell\\.data\\.)?Aggregator\\s*<",
         )
         val LOCAL_TREE_MAP = Regex(
