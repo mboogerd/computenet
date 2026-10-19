@@ -78,8 +78,8 @@ class InletPolicyStackTest {
     }
 
     /** ADMIT policy dropping arm-B contributions for waves where [dropB] holds. */
-    private fun admit(mintsProgressAck: Boolean, dropB: (Int) -> Boolean): Admit {
-        return Admit(mintsProgressAck = mintsProgressAck, admits = { inv ->
+    private fun admit(dropB: (Int) -> Boolean): Admit {
+        return Admit(admits = { inv ->
             val pair = inv.args[0] as Pair<*, *>
             val drop = pair.first == "B" && dropB(pair.second as Int)
             drop.not()
@@ -95,7 +95,6 @@ class InletPolicyStackTest {
         seed: Long,
         waves: Int,
         order: List<String>,
-        mintsProgressAck: Boolean = true,
         dropB: (Int) -> Boolean = { false },
     ): List<Obs> {
         val rnd = Random(seed)
@@ -111,7 +110,7 @@ class InletPolicyStackTest {
 
         val hold = HoldingProbe()
         val policies: Map<String, InletPolicy> = mapOf(
-            "admit" to admit(mintsProgressAck, dropB),
+            "admit" to admit(dropB),
             "hold" to hold,
         )
         order.forEach { inlet.install(policies.getValue(it)) }

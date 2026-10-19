@@ -128,7 +128,6 @@ control -> port
 control -> protocol
 control -> proxy
 data -> cell
-data -> control
 data -> link
 data -> port
 data -> protocol

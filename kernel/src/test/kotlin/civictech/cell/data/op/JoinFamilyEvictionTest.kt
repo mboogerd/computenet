@@ -7,8 +7,6 @@ import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
-import civictech.cell.control.Progress
-import civictech.cell.control.absorbAck
 import civictech.cell.data.Replicable
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.SetDelta
@@ -22,8 +20,6 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.protocol.ProtocolSupport
-import civictech.cell.protocol.Protocols
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -112,20 +108,17 @@ class JoinFamilyEvictionTest {
         return seen
     }
 
-    /** A linked recording inlet: data deltas and metadata-plane [Progress] absorb-acks. */
+    /** A linked recording inlet for data deltas. */
     private class AckProbe<D>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         @Suppress("UNCHECKED_CAST")
         val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<D>>))
         val deltas = mutableListOf<D>()
-        val acks = mutableListOf<Progress>()
-
         init {
             inlet.serve(object : Propagate<D> {
                 override fun propagate(value: D) {
                     deltas += value
                 }
             })
-            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message -> acks += message as Progress }
         }
     }
 
@@ -290,7 +283,7 @@ class JoinFamilyEvictionTest {
     // ---------------------------------------- B5: a del for an evicted row
 
     @Test
-    fun `B5 - a del for an evicted row is a no-op that absorb-acks, and no pair exits twice`() {
+    fun `B5 - a del for an evicted row is a no-op, and no pair exits twice`() {
         val cell = joined()
         val seen = recordWaves(cell.outlet)
         b14Setup(cell)
@@ -304,8 +297,6 @@ class JoinFamilyEvictionTest {
         underWave(src, 1) { cell.left.call.propagate(dels(Row("a", 5) to tag(1))) }
         seen.size shouldBe emitted
         outProbe.deltas.shouldBeEmpty()
-        outProbe.acks shouldBe listOf(Progress(src, 1))
-        lateProbe.acks shouldBe listOf(Progress(src, 1))
         leftRows(cell).shouldBeEmpty()
         indexes(cell).first shouldBe emptyMap<Any, Any>()
 
@@ -314,7 +305,6 @@ class JoinFamilyEvictionTest {
         underWave(src, 2) { cell.left.call.propagate(adds(Row("a", 5) to fresh)) }
         lateProbe.deltas shouldBe listOf(adds(Row("a", 5) to fresh))
         seen.size shouldBe emitted
-        outProbe.acks shouldBe listOf(Progress(src, 1), Progress(src, 2))
         cell.droppedBelowFloorLeft shouldBe 1L
         tagFold(seen.map { it.first }) shouldBe emptySet()
     }
@@ -359,7 +349,6 @@ class JoinFamilyEvictionTest {
         lateL.deltas shouldBe listOf(adds(Row("a", 3) to t3))
         lateL.deltas.single().adds.getValue(Row("a", 3)) shouldBe setOf(t3)
         lateR.deltas.shouldBeEmpty()
-        lateR.acks shouldBe listOf(Progress(src, 1))
         cell.droppedBelowFloorLeft shouldBe 1L
         cell.droppedBelowFloorRight shouldBe 0L
         leftRows(cell).shouldBeEmpty()
@@ -368,7 +357,6 @@ class JoinFamilyEvictionTest {
         underWave(src, 2) { cell.left.call.propagate(adds(Row("a", 10) to tag(4))) }
         leftRows(cell) shouldBe setOf(Row("a", 10))
         lateL.deltas.size shouldBe 1
-        lateL.acks shouldBe listOf(Progress(src, 2))
         out.shouldBeEmpty()
     }
 
@@ -394,8 +382,6 @@ class JoinFamilyEvictionTest {
         rightRows(cell) shouldBe setOf(Row("b", 3))
         cell.droppedBelowFloorRight shouldBe 0L
         lateR.deltas.shouldBeEmpty()
-        lateR.acks shouldBe listOf(Progress(src, 1)) // still acked so a linked consumer's frontier advances
-
         cell.left.call.propagate(adds(Row("b", 4) to tag(2)))
         cell.droppedBelowFloorLeft shouldBe 1L
         leftRows(cell).shouldBeEmpty()
@@ -425,7 +411,7 @@ class JoinFamilyEvictionTest {
     // ------------------------------------------------- [24-WL-03] fixpoint
 
     @Test
-    fun `a redelivered or lower waterline after an eviction evicts nothing and acks all three outlets`() {
+    fun `a redelivered or lower waterline after an eviction evicts nothing and emits on none of the three outlets`() {
         val cell = joined()
         val seen = recordWaves(cell.outlet)
         b14Setup(cell)
@@ -444,15 +430,13 @@ class JoinFamilyEvictionTest {
         cell.floor() shouldBe 10L
         seen.size shouldBe emitted
         parts(cell) shouldBe before
-        val expected = listOf(Progress(src, 2), Progress(src, 3))
         for (p in listOf(outProbe, lateL, lateR)) {
             p.deltas.shouldBeEmpty()
-            p.acks shouldBe expected
         }
     }
 
     @Test
-    fun `a raising waterline that evicts no pair acks the outlet and both late outlets`() {
+    fun `a raising waterline that evicts no pair emits nothing on the outlet or either late outlet`() {
         val cell = joined()
         val outProbe = probe(cell.outlet)
         val lateL = probe(cell.lateLeft)
@@ -463,7 +447,6 @@ class JoinFamilyEvictionTest {
         leftRows(cell).shouldBeEmpty()
         for (p in listOf(outProbe, lateL, lateR)) {
             p.deltas.shouldBeEmpty()
-            p.acks shouldBe listOf(Progress(src, 1))
         }
     }
 

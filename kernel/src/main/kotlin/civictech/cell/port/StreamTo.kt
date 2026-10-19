@@ -74,7 +74,7 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
     // forever: `SingleWriterReplication` unlinks a departed follower's
     // shipping link on every `onUnpublish` and rebuilds it on re-announce, so
     // each peer disconnect/reconnect left one dead link behind for
-    // `Protocols.sendDownstream`/`AbsorbAck`/`Attention`/topology walks to
+    // `Protocols.sendDownstream`/`Attention`/topology walks to
     // keep walking.
     //
     // computenet-9wpa re-read that `SingleWriterReplication` claim rather than
@@ -137,8 +137,8 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
     // link must leave [LinkSupport] with it. `active` is keyed by a fresh random
     // `Link.id`, so without this the bookkeeping accumulates one orphan per
     // re-stream even though the outlet holds a single consumer, and everything
-    // that walks `linking.links` (protocol relay, `AbsorbAck` progress,
-    // attention, topology walks) counts the corpses. Not `unlink()`: that would
+    // that walks `linking.links` (protocol relay, attention, topology walks)
+    // counts the corpses. Not `unlink()`: that would
     // run the superseded link's teardown, `unsubscribe(at)`, and tear down the
     // attachment just installed. A caller that keeps the default generated [at]
     // never collides, so this is inert for every pre-T21 call site.

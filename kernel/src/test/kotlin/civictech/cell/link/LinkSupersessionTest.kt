@@ -27,10 +27,10 @@ import java.util.UUID
  * the fix a relink registered a sibling record for an attachment that had been
  * REPLACED. Every consumer of `linking.links` then counted the corpse:
  * `Protocols.relay` de-duplicates by `link.id` and so relays a protocol
- * message once per record, `FanOutlet.absorbAck` emits one `Progress` per
- * record, and `Attention`/`IntakeControl`/`TopologyWalks`/`CompositeCell`'s
- * stall notices all fan over it. This is the general-path pin; the wire-facing
- * consequence is pinned by `TrustBoundaryTest`'s computenet-hil6 case.
+ * message once per record, and `Attention`/`IntakeControl`/`TopologyWalks`/
+ * `CompositeCell`'s stall notices all fan over it. This is the general-path
+ * pin; the wire-facing consequence is pinned by `TrustBoundaryTest`'s
+ * computenet-hil6 case.
  *
  * The last three tests are the discriminators: the eviction key is the whole
  * `(from, to, role)` triple, so it must NOT collapse a second consumer, a

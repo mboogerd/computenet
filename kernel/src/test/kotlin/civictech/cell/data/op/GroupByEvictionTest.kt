@@ -7,7 +7,6 @@ import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
-import civictech.cell.control.Progress
 import civictech.cell.data.Aggregators
 import civictech.cell.data.Replicable
 import civictech.cell.data.Windows
@@ -22,8 +21,6 @@ import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.protocol.ProtocolSupport
-import civictech.cell.protocol.Protocols
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -76,20 +73,17 @@ class GroupByEvictionTest {
         return collected
     }
 
-    /** A linked recording inlet: data deltas and metadata-plane [Progress] absorb-acks. */
+    /** A linked recording inlet for data deltas. */
     private class AckProbe<D>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         @Suppress("UNCHECKED_CAST")
         val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<D>>))
         val deltas = mutableListOf<D>()
-        val acks = mutableListOf<Progress>()
-
         init {
             inlet.serve(object : Propagate<D> {
                 override fun propagate(value: D) {
                     deltas += value
                 }
             })
-            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message -> acks += message as Progress }
         }
     }
 
@@ -240,7 +234,7 @@ class GroupByEvictionTest {
     // ------------------------------------------ [24-WL-03] fixpoint, [24-WL-04]
 
     @Test
-    fun `a non-raising waterline changes nothing and absorb-acks outlet and late`() {
+    fun `a non-raising waterline changes nothing and emits on neither outlet`() {
         val cell = windowed()
         val outProbe = AckProbe<MapDelta<Long, Long>>()
         val lateProbe = AckProbe<SetDelta<Long>>()
@@ -260,15 +254,10 @@ class GroupByEvictionTest {
         // no data ever left either outlet: the floor is read, never re-emitted ([24-WL-04])
         outProbe.deltas.shouldBeEmpty()
         lateProbe.deltas.shouldBeEmpty()
-        // each delivery is acked on both outlets under its own wave (the raising one
-        // by the eviction step, which here has no window to evict)
-        val expected = listOf(Progress(src, 1), Progress(src, 2), Progress(src, 3))
-        outProbe.acks shouldBe expected
-        lateProbe.acks shouldBe expected
     }
 
     @Test
-    fun `an inlet delivery acks late when nothing is dropped and emits on it when something is`() {
+    fun `an inlet delivery emits on late only when something is dropped`() {
         val cell = windowed()
         val lateProbe = AckProbe<SetDelta<Long>>()
         @Suppress("UNCHECKED_CAST")
@@ -279,7 +268,6 @@ class GroupByEvictionTest {
         underWave(src, 2) { cell.waterline.call.propagate(WaterlineDelta(8)) }
         underWave(src, 3) { cell.inlet.call.propagate(SetDelta(adds = mapOf(1L to setOf(tag(2))))) }
 
-        lateProbe.acks shouldBe listOf(Progress(src, 1), Progress(src, 2))
         lateProbe.deltas shouldBe listOf(SetDelta(adds = mapOf(1L to setOf(tag(2)))))
     }
 
@@ -463,7 +451,6 @@ class GroupByEvictionTest {
         underWave(src, 3) { cell.waterline.call.propagate(WaterlineDelta(15)) }
 
         probe.deltas shouldBe deltas
-        probe.acks shouldBe listOf(Progress(src, 2), Progress(src, 3))
         cell.contents() shouldBe contents
         groupKeys(cell) shouldBe setOf(20L)
     }

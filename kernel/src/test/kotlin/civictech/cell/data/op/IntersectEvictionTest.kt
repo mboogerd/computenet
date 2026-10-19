@@ -7,8 +7,6 @@ import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
-import civictech.cell.control.Progress
-import civictech.cell.control.absorbAck
 import civictech.cell.data.Replicable
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.SetDelta
@@ -22,8 +20,6 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.protocol.ProtocolSupport
-import civictech.cell.protocol.Protocols
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -101,20 +97,17 @@ class IntersectEvictionTest {
         return seen
     }
 
-    /** A linked recording inlet: data deltas and metadata-plane [Progress] absorb-acks. */
+    /** A linked recording inlet for data deltas. */
     private class AckProbe<D>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         @Suppress("UNCHECKED_CAST")
         val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<D>>))
         val deltas = mutableListOf<D>()
-        val acks = mutableListOf<Progress>()
-
         init {
             inlet.serve(object : Propagate<D> {
                 override fun propagate(value: D) {
                     deltas += value
                 }
             })
-            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message -> acks += message as Progress }
         }
     }
 
@@ -316,8 +309,6 @@ class IntersectEvictionTest {
         underWave(src, 1) { cell.left.call.propagate(dels(5L to tag(1))) }
         seen.size shouldBe emitted
         outProbe.deltas.shouldBeEmpty()
-        outProbe.acks shouldBe listOf(Progress(src, 1))
-        lateProbe.acks shouldBe listOf(Progress(src, 1))
         leftOf(cell).shouldBeEmpty()
 
         // a re-add of the evicted element is late-dropped ([24-WL-07]), so it cannot resurrect the entry
@@ -325,7 +316,6 @@ class IntersectEvictionTest {
         underWave(src, 2) { cell.left.call.propagate(adds(5L to fresh)) }
         lateProbe.deltas shouldBe listOf(adds(5L to fresh))
         seen.size shouldBe emitted
-        outProbe.acks shouldBe listOf(Progress(src, 1), Progress(src, 2))
         cell.droppedBelowFloorLeft shouldBe 1L
         tagFold(seen.map { it.first }) shouldBe emptySet()
     }
@@ -345,7 +335,6 @@ class IntersectEvictionTest {
         underWave(src, 1) { cell.left.call.propagate(adds(3L to t3)) }
         lateL.deltas shouldBe listOf(adds(3L to t3))
         lateR.deltas.shouldBeEmpty()
-        lateR.acks shouldBe listOf(Progress(src, 1))
         cell.droppedBelowFloorLeft shouldBe 1L
         cell.droppedBelowFloorRight shouldBe 0L
         leftOf(cell).shouldBeEmpty()
@@ -354,7 +343,6 @@ class IntersectEvictionTest {
         underWave(src, 2) { cell.left.call.propagate(adds(10L to tag(4))) }
         leftOf(cell) shouldBe setOf(10L)
         lateL.deltas.size shouldBe 1
-        lateL.acks shouldBe listOf(Progress(src, 2))
         out.shouldBeEmpty()
     }
 
@@ -371,7 +359,7 @@ class IntersectEvictionTest {
     // ------------------------------------------------- [24-WL-03] fixpoint
 
     @Test
-    fun `a redelivered or lower waterline after an eviction evicts nothing and acks all three outlets`() {
+    fun `a redelivered or lower waterline after an eviction evicts nothing and emits on none of the three outlets`() {
         val cell = intersect()
         val seen = recordWaves(cell.outlet)
         setup5(cell)
@@ -390,10 +378,8 @@ class IntersectEvictionTest {
         cell.floor() shouldBe 10L
         seen.size shouldBe emitted
         parts(cell) shouldBe before
-        val expected = listOf(Progress(src, 2), Progress(src, 3))
         for (p in listOf(outProbe, lateL, lateR)) {
             p.deltas.shouldBeEmpty()
-            p.acks shouldBe expected
         }
     }
 
