@@ -52,10 +52,7 @@ interface SemiJoinApi<A, B> {
  * [droppedBelowFloorLeft]/[droppedBelowFloorRight] whether or not the outlet is
  * linked (`[24-WL-07]`). Dels are never filtered by time: the tag fold's
  * liveness check is the guard (`[24-WL-08]`). An inlet declaring no lateness
- * is never guarded and never evicted. Every delivery on either inlet (and on
- * [waterline]) emits on or absorb-acks **both** late outlets, so a consumer
- * linked to one of them sees every wave the cell sees and its frontier
- * advances.
+ * is never guarded and never evicted.
  *
  * The three ports are registered on this class, always present and unlinked
  * by default, and deliberately **not** on [SemiJoinApi] (as [JoinSetCell]'s):
@@ -219,8 +216,8 @@ class SemiJoinCell<A, B, K>(
 
     /**
      * `[24-WL-07]` on the left inlet: forward the sub-floor adds on [lateLeft]
-     * (else absorb-ack it) and return the admitted remainder. Without a left
-     * declaration or a floor this is the identity and [lateLeft] just acks.
+     * and return the admitted remainder. Without a left
+     * declaration or a floor this is the identity.
      */
     private fun guardLeft(value: SetDelta<A>): SetDelta<A> {
         val lateness = leftLateness
@@ -253,7 +250,7 @@ class SemiJoinCell<A, B, K>(
         }
         val current = floor
         if (current != null && delta.floor <= current) {
-            // [24-WL-03] fixpoint: a non-raising floor changes nothing — ack the wave on all three outlets
+            // [24-WL-03] fixpoint: a non-raising floor changes nothing
             return
         }
         floor = delta.floor
