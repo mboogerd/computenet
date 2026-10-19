@@ -130,7 +130,7 @@ internal interface ProtocolAnchored {
  * links have null endpoint objects, but a protocol negotiated into
  * `Link.protocolCapabilities` crosses through `Link.protocolBridge` via
  * `Protocols.sendUpstream` / `Protocols.sendDownstream` (`TopologyOrder` always),
- * as proven for bridged protocol traffic by `BridgedGraphTest`.
+ * as proven for bridged protocol traffic by `ProtocolBridgeTest`.
  */
 // PN-9 (leak fix): no `port` field is stored, and [ownerRef] is weak. A stored
 // `port`, or a strong `owner` ref (owner → its ports), would pin every port's

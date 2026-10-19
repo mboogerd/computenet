@@ -98,9 +98,9 @@ internal object PortIdentities {
     /**
      * PN-2 control seam: revert PN-1's replay-stable derivation (ports keep the
      * fresh random ref minted at construction) while keeping everything else.
-     * `DurableQuorumReplayTest`'s control flips this to prove PN-2's
-     * baseline path carries recovery *independently* of PN-1's identity
-     * derivation. Production always derives.
+     * `PropagateFeedbackInletTest` flips this to pin the non-derived refs;
+     * the PN-2 independence control that also flipped it was retired with
+     * glitch-freedom. Production always derives.
      */
     internal var deriveRefs = true
 
