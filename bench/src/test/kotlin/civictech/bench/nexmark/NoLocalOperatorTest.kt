@@ -65,6 +65,12 @@ class NoLocalOperatorTest {
                 "the source inspection must reject a test-local $name",
             )
         }
+        assertFalse(
+            OPERATOR_IMPORT.containsMatchIn(
+                withoutComments("import civictech.cell.data.Windows\n// import civictech.cell.data.op.GroupByCell"),
+            ),
+            "the operator-import requirement must reject a query file with no live operator import",
+        )
     }
 
     private fun localOperatorViolations(file: Path, source: String, repoRoot: Path): List<String> {
