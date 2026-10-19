@@ -66,9 +66,9 @@ import java.util.UUID
  * 3. [RunOutcome.ReplicasAgreeButWrong] — reachable only from an agreeing mesh, which is what
  *    makes the two mesh verdicts disjoint rather than two renderings of one condition.
  *
- * Quiescence, dead letters and the wave-prefix property are **not** this check's business: it
- * reads a mesh the caller has already driven to quiescence, and [DifferentialRunner] owns those
- * verdicts. There is deliberately no second runner here (feature §3.1: "if ORA2 finds itself
+ * Quiescence and dead letters are **not** this check's business: it reads a mesh the caller has
+ * already driven to quiescence, and [DifferentialRunner] owns those verdicts. There is
+ * deliberately no second runner here (feature §3.1: "if ORA2 finds itself
  * writing a second sweep loop, a second report format, or a second shrinker, it has gone wrong").
  *
  * ## The dot order is supplied, never derived

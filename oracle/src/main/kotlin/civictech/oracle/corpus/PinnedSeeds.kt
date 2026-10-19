@@ -19,6 +19,8 @@ import civictech.oracle.gen.GeneratorConfig
  * pinning convention this file follows). If a fix later needs to change a pinned entry's
  * expected outcome, that is a decision for whoever owns this file next to make explicitly, in
  * a commit that says so — never a silent edit.
+ * Every `WavePrefixTest` reference below is historical provenance: GFR.3 retired that test and
+ * its named ledgers; see git history before the retirement for their former implementation.
  *
  * ## What belongs here, and what does not — the boundary a later discoverer needs
  *

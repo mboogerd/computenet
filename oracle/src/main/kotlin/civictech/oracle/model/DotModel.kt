@@ -104,7 +104,7 @@ class DotModel(private val order: DotOrder) : Serializable {
     fun stateOf(script: Script, source: SourceId): DotState =
         Fold(script).stateAfter(source, script.slice(source).events.size)
 
-    /** [source]'s own state after its first [prefix] events — the wave-prefix instrument. */
+    /** [source]'s own state after its first [prefix] events. */
     fun stateOf(script: Script, source: SourceId, prefix: Int): DotState =
         Fold(script).stateAfter(source, prefix)
 
