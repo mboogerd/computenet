@@ -1314,7 +1314,6 @@ open class ManagedHost(
         if (link.toAddr.cell != hostedInvocation.cellRef || link.toAddr.port != hostedInvocation.portName) return false
         return when (hostedInvocation.protocolId) {
             Protocols.TopologyOrder -> hostedInvocation.protocolMessage is EdgeEvent
-            Protocols.Progress -> hostedInvocation.protocolMessage is civictech.cell.control.Progress
             Protocols.Suspension -> hostedInvocation.protocolMessage is StallNotice
             else -> false
         }
@@ -2070,9 +2069,8 @@ open class ManagedHost(
                     // A former second shape — a protocol frame synchronously
                     // unblocking a gated fan-out — was retired with the wave gates.
                     // `FanOutlet.call` still resets broadcasts to
-                    // `Principal.LocalTrusted`; GFR.4 owns whether absorb-ack
-                    // cleanup removes more of that protocol surface, and no
-                    // surviving fixture pins the removed trigger.
+                    // `Principal.LocalTrusted`, and no surviving fixture pins
+                    // the removed trigger.
                     // What stays open is per-*recipient* disclosure — 93 I-28 §8
                     // cross-hop composition, outside SEC1, incompatible with
                     // `[SEC1-19]`'s single shared verdict as landed

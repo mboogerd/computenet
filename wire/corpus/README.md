@@ -395,7 +395,7 @@ payload must never serialize at all (below).
 
 **Protocol messages** (generic-protocol crossings, spec 41 point 4):
 `Attention`, `Stall` (`StallNotice.Stall`), `Resume` (`StallNotice.Resume`),
-`Progress`, `SaturationSignal`, `EdgeOpen`, `EdgeClose`, `StateRequest`.
+`SaturationSignal`, `EdgeOpen`, `EdgeClose`, `StateRequest`.
 
 **`Interest` arms** (its own `polymorphic` block,
 `kernel/src/main/kotlin/civictech/cell/wire/WireCodec.kt:262-271`): `Total`,
