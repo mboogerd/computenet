@@ -5,6 +5,8 @@ import type { Config, Frame, Graph, Kind, StudioNode, Workflow } from './types';
 import NodeCard, { type Action } from './NodeCard';
 import Panel from './Panel';
 import ConfirmationDialog, { type Confirmation } from './ConfirmationDialog';
+import { compatible, portColors } from './portTypes';
+import Wire from './Wire';
 import NewWorkflowForm from './NewWorkflowForm';
 import { cellCount, resolveWorkflow, workflowHash } from './workflows';
 
@@ -91,7 +93,8 @@ export default function App() {
   };
   const validPort = (id: string, port: string) => {
     const current = gesture();
-    return current?.type === 'wire' && current.id !== id && !graph().edges.some(edge => edge.to === id && edge.port === port);
+    return current?.type === 'wire' && current.id !== id && !graph().edges.some(edge => edge.to === id && edge.port === port) &&
+      compatible(byId(current.id)?.types?.output, byId(id)?.types?.inputs[port]);
   };
   const removeNode = () => {
     const item = node();
@@ -263,12 +266,9 @@ export default function App() {
                 const from = byId(edge.from); const to = byId(edge.to);
                 return from && to ? wirePath(outputPoint(located(from)), inputPoint(located(to), edge.port)) : '';
               };
-              return <g class={`wire ${selectedEdge() === edge.id ? 'selected' : ''}`}>
-                <path class="wire-line" d={path()} />
-                <path class="wire-hit" d={path()} role="button" tabindex="0" aria-label={`Select wire ${edge.from} to ${edge.to}, input ${edge.port}`}
-                  onPointerDown={event => { event.stopPropagation(); setSelected(null); setSelectedEdge(edge.id); }}
-                  onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(null); setSelectedEdge(edge.id); } if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); event.stopPropagation(); setSelectedEdge(edge.id); void removeEdge(); } }} />
-              </g>;
+              return <Wire edge={edge} selected={selectedEdge() === edge.id} path={path()}
+                select={() => { setSelected(null); setSelectedEdge(edge.id); }}
+                remove={() => { setSelectedEdge(edge.id); void removeEdge(); }} />;
             }}</For>
             <Show when={gesture()?.type === 'wire'}><path class="wire-line live" d={(() => { const current = gesture(); const from = current?.type === 'wire' ? byId(current.id) : undefined; return from ? wirePath(outputPoint(located(from)), wireEnd()) : ''; })()} /></Show>
           </svg>
@@ -277,8 +277,9 @@ export default function App() {
             validPort={port => validPort(id, port)} wiring={gesture()?.type === 'wire'}
             select={() => { setSelected(id); setSelectedEdge(null); }} move={event => beginMove(event, byId(id)!)} wire={event => beginWire(event, id)} action={action} />}</For>
         </div>
-        <Show when={selectedEdge()}><div class="edge-controls"><span>Wire selected</span><button onClick={removeEdge} aria-label="Delete selected wire">× Remove</button></div></Show>
+        <Show when={selectedEdge()}><div class="edge-controls"><span>{graph().edges.find(edge => edge.id === selectedEdge())?.reason ?? 'Wire selected'}</span><button onClick={removeEdge} aria-label="Delete selected wire">× Remove</button></div></Show>
         <div class="canvas-controls"><span>{Math.round(zoom() * 100)}%</span><button onClick={() => { setZoom(1); setPan({ x: 80, y: 80 }); }}>Reset view</button></div>
+        <div class="type-legend" aria-label="Port types"><For each={Object.entries(portColors)}>{([kind, color]) => <span><i style={{ background: color }} />{kind}</span>}</For></div>
         <div class="canvas-hint">Drag background to pan · Scroll to zoom · Drag output to input</div>
       </div>
       <Show when={node()?.id} keyed>{id => <Panel workflowId={openId()!} node={node()!} state={graph().state[id]} action={action} toast={toast}

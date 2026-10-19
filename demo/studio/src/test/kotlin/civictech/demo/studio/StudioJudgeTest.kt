@@ -93,7 +93,7 @@ class StudioJudgeTest {
     @Test fun `boolean probability and choice parse real System One shapes without invented explanations or cost`() {
         for ((output, text) in listOf("boolean" to "false", "probability" to "0.49")) {
             val got = client { req -> assertEquals("jev-latest", body(req).string("model")); response(0.49) }
-                .judge(config("output" to JsonPrimitive(output)), emptyMap())
+                .judge(config("output" to JsonPrimitive(output)), mapOf("in" to change(null, "fixture")))
             assertEquals(StudioJudgment(text, 0.49), got.judgment); assertNull(got.costUsd)
         }
         val choices = JsonArray(listOf(JsonPrimitive("pass"), JsonPrimitive("stop")))
@@ -101,7 +101,7 @@ class StudioJudgeTest {
             val q = body(req)["questions"]!!.jsonObject.getValue("judgment").jsonObject
             assertEquals("choice", q.string("type")); assertEquals(obj("pass" to JsonNull, "stop" to JsonNull), q["criteria"])
             JevHttpResponse(200, """{"answers":{"judgment":{"type":"choice","choice":"stop","probabilities":{"pass":0.2,"stop":0.8},"confidence":0.6}}}""")
-        }.judge(config("output" to JsonPrimitive("choice"), "choices" to choices), emptyMap())
+        }.judge(config("output" to JsonPrimitive("choice"), "choices" to choices), mapOf("in" to change(null, "fixture")))
         assertEquals(StudioJudgment("stop", 0.8), got.judgment)
     }
 
@@ -114,12 +114,12 @@ class StudioJudgeTest {
             timeouts += req.timeout().get().toMillis()
             when (attempts.incrementAndGet()) { 1 -> JevHttpResponse(429, key); 2 -> JevHttpResponse(529, key); else -> response(1.0) }
         }, { ms -> delays += ms; now += TimeUnit.MILLISECONDS.toNanos(ms) }, { now })
-        assertEquals("true", judge.judge(config(), emptyMap()).judgment.answer)
+        assertEquals("true", judge.judge(config(), mapOf("in" to change(null, "fixture"))).judgment.answer)
         assertEquals(listOf(500L, 1000L), delays)
         assertEquals(listOf(60000L, 59500L, 58500L), timeouts)
         val exhausted = AtomicInteger()
         assertEquals("Jev HTTP 529", assertThrows(IOException::class.java) {
-            client { exhausted.incrementAndGet(); JevHttpResponse(529, key) }.judge(config(), emptyMap())
+            client { exhausted.incrementAndGet(); JevHttpResponse(529, key) }.judge(config(), mapOf("in" to change(null, "fixture")))
         }.message)
         assertEquals(4, exhausted.get())
     }
@@ -129,15 +129,15 @@ class StudioJudgeTest {
         val judge = TypeSafeStudioJudge({ key }, { JevHttpResponse(429, key) },
             { now += TimeUnit.SECONDS.toNanos(2) }, { now })
         assertEquals("Jev timed out after 1 seconds", assertThrows(IOException::class.java) {
-            judge.judge(config("timeoutSec" to JsonPrimitive(1)), emptyMap())
+            judge.judge(config("timeoutSec" to JsonPrimitive(1)), mapOf("in" to change(null, "fixture")))
         }.message)
         assertTrue(assertThrows(IOException::class.java) {
-            client { throw HttpTimeoutException(key) }.judge(config(), emptyMap())
+            client { throw HttpTimeoutException(key) }.judge(config(), mapOf("in" to change(null, "fixture")))
         }.message!!.contains("timed out"))
         now = 0L
         val late = TypeSafeStudioJudge({ key }, { now = TimeUnit.SECONDS.toNanos(2); response(1.0) }, {}, { now })
         assertTrue(assertThrows(IOException::class.java) {
-            late.judge(config("timeoutSec" to JsonPrimitive(1)), emptyMap())
+            late.judge(config("timeoutSec" to JsonPrimitive(1)), mapOf("in" to change(null, "fixture")))
         }.message!!.contains("timed out"))
     }
 
@@ -145,12 +145,12 @@ class StudioJudgeTest {
         val invalid = listOf("not JSON $key", "{}", """{"answers":{"judgment":{"noul":1.1}}}""",
             """{"answers":{"judgment":{"noul":"0.5"}}}""", """{"answers":{"judgment":{"type":"choice","noul":0.7}}}""")
         invalid.forEach { raw ->
-            val error = assertThrows(IOException::class.java) { client { JevHttpResponse(200, raw) }.judge(config(), emptyMap()) }
+            val error = assertThrows(IOException::class.java) { client { JevHttpResponse(200, raw) }.judge(config(), mapOf("in" to change(null, "fixture"))) }
             assertFalse(error.toString().contains(key))
         }
         assertThrows(IOException::class.java) {
             client { JevHttpResponse(200, """{"answers":{"judgment":{"choice":"unknown"}}}""") }.judge(
-                config("output" to JsonPrimitive("choice"), "choices" to JsonArray(listOf(JsonPrimitive("known")))), emptyMap())
+                config("output" to JsonPrimitive("choice"), "choices" to JsonArray(listOf(JsonPrimitive("known")))), mapOf("in" to change(null, "fixture")))
         }
     }
 

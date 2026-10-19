@@ -8,6 +8,9 @@ dependencies {
     implementation(project(":kernel"))
     implementation(project(":demo:shell"))
     implementation(libs.kotlinx.serialization)
+    implementation(libs.networknt) {
+        exclude(group = "com.fasterxml.jackson.dataformat", module = "jackson-dataformat-yaml")
+    }
     testImplementation(project(":testkit"))
 }
 

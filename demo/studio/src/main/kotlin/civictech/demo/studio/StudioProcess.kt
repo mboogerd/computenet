@@ -38,9 +38,15 @@ internal fun tokenize(template: String): List<String> {
     return result
 }
 
-internal fun substitute(template: String, inputs: Map<String, JsonObject>): String = placeholder.replace(template) {
-    val value = inputs[it.groupValues[1]]?.get(it.groupValues[2].ifEmpty { "new" })
-    if (value == null || value == JsonNull) "" else (value as? JsonPrimitive)?.content ?: value.toString()
+internal fun substitute(template: String, inputs: Map<String, JsonObject>): String = buildString {
+    var offset = 0
+    placeholders(template).forEach { p ->
+        append(template.substring(offset, p.start))
+        val value = inputs[p.port]?.get(p.field) ?: error("invalid input: ${p.port}: missing field '${p.field}'")
+        append(if (value == JsonNull) "" else (value as? JsonPrimitive)?.content ?: value.toString())
+        offset = p.end
+    }
+    append(template.substring(offset))
 }
 
 internal fun claudeArgv(config: JsonObject, prompt: String, noTools: Boolean = false): List<String> =
@@ -50,15 +56,17 @@ internal fun claudeArgv(config: JsonObject, prompt: String, noTools: Boolean = f
         "--max-budget-usd", (config["maxBudgetUsd"] as? JsonPrimitive)?.doubleOrNull?.toString() ?: "1.0",
         "--tools", if (noTools || config.string("tools", "readonly") == "none") "" else "Read,Grep,Glob") +
         (config.string("model").takeIf { it.isNotBlank() }?.let { listOf("--model", it) } ?: emptyList()) +
+        (if (!noTools) outputSchema(config)?.let { listOf("--json-schema", it.toString()) } ?: emptyList() else emptyList()) +
         listOf("--", prompt)
 
 private val codexDisabled = listOf("multi_agent", "apps", "view_image", "image_generation", "browser_use", "computer_use", "in_app_browser")
-internal fun codexArgv(config: JsonObject, prompt: String, out: Path, noTools: Boolean = false): List<String> =
+internal fun codexArgv(config: JsonObject, prompt: String, out: Path, noTools: Boolean = false, schemaFile: Path? = null): List<String> =
     listOf("codex", "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-rules",
         "-s", "read-only", "-c", "web_search=\"disabled\"",
         "-c", "model_reasoning_effort=\"${config.string("effort", "medium")}\"") +
         (codexDisabled + if (noTools) listOf("shell_tool", "unified_exec") else emptyList()).flatMap { listOf("--disable", it) } +
         (config.string("model").takeIf { it.isNotBlank() }?.let { listOf("-m", it) } ?: emptyList()) +
+        (schemaFile?.let { listOf("--output-schema", it.toAbsolutePath().toString()) } ?: emptyList()) +
         listOf("-o", out.toAbsolutePath().toString(), "--", prompt)
 
 internal fun sha256(code: String) = MessageDigest.getInstance("SHA-256").digest(code.toByteArray(Charsets.UTF_8))
@@ -89,12 +97,12 @@ internal class PythonSandbox(private val binary: Path = Path.of("/usr/bin/sandbo
     }
 }
 
-internal class StudioProcesses : AutoCloseable {
+internal open class StudioProcesses : AutoCloseable {
     internal val active = ConcurrentHashMap.newKeySet<Process>()
     @Volatile private var closed = false
 
     /** All streams are files; a child cannot deadlock by filling a pipe. */
-    fun run(argv: List<String>, cwd: Path, dir: Path, timeoutSec: Long, stdin: String? = null, environment: Map<String, String> = emptyMap(), fence: ProcessFence = ProcessFence()): ProcessResult {
+    open fun run(argv: List<String>, cwd: Path, dir: Path, timeoutSec: Long, stdin: String? = null, environment: Map<String, String> = emptyMap(), fence: ProcessFence = ProcessFence()): ProcessResult {
         Files.createDirectories(cwd)
         Files.createDirectories(dir)
         val stdout = dir.resolve("stdout.txt")

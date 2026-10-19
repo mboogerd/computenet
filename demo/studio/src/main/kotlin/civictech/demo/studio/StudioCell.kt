@@ -32,7 +32,7 @@ internal fun StudioNode.definition() = StudioDefinition(id, kind, config)
 internal data class StudioCheckpoint(val definition: StudioDefinition, val state: NodeState,
     val job: JobRecord? = null, val pending: Map<String, kotlinx.serialization.json.JsonObject> = emptyMap(),
     val inbox: Map<String, StudioMsg> = emptyMap(), val outputId: String? = null,
-    val liveCode: String? = null)
+    val liveCode: String? = null, val liveSchema: kotlinx.serialization.json.JsonObject? = null)
 
 @Serializable
 internal data class StudioCommit(val checkpoint: StudioCheckpoint, val acknowledge: List<String> = emptyList(),
@@ -83,10 +83,10 @@ internal class StudioCell(ref: CellRef, definition: StudioDefinition) : StudioCe
     override fun importFrom(prior: java.io.Serializable) {
         val incumbent = json.decodeFromString<StudioCheckpoint>(prior as String)
         val code = checkNotNull(held.state.code)
-        val hash = sha256(code)
+        val hash = artifactHash(code, held.liveSchema)
         // Import continuity, never overwrite the reviewed candidate's implementation.
         // This runs both at COMMIT and during uncompacted Promote replay.
-        held = incumbent.copy(state = incumbent.state.copy(code = code, codeHash = hash,
+        held = incumbent.copy(definition = held.definition, liveSchema = held.liveSchema, state = incumbent.state.copy(code = code, codeHash = hash,
             approvedHash = hash, preview = null, status = "idle", error = null), liveCode = code,
             pending = emptyMap())
     }

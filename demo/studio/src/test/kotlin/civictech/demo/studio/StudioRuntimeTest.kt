@@ -86,10 +86,14 @@ class StudioRuntimeTest {
         }
     }
 
-    @Test fun `patch removes vanished ports and last pair unlink permits reverse edge`() {
+    @Test fun `patch refuses connected port removal and explicit last pair unlink permits reverse edge`() {
         StudioRuntime(temp).use { r ->
             val a = exec(r); val b = exec(r)
-            r.addEdge(a.id, b.id, "in")
+            val edge = r.addEdge(a.id, b.id, "in")
+            assertEquals(409, assertThrows(StudioException::class.java) {
+                r.patchNode(b.id, obj("config" to obj("command" to JsonPrimitive("printf done"))))
+            }.status)
+            r.deleteEdge(edge.id)
             val patched = r.patchNode(b.id, obj("config" to obj("command" to JsonPrimitive("printf done"))))
             assertTrue(patched.ports.isEmpty()); assertTrue(r.graph().edges.isEmpty())
             r.addEdge(b.id, a.id, "in") // Refused if the old kernel link was not removed.

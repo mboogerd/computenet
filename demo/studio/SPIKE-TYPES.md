@@ -138,3 +138,53 @@ round-trip; kernel journals explicitly refuse unsupported versions (`K/durabilit
 
 Validation: `./gradlew :demo:studio:test --rerun` executed **113 tests (15 spike), zero failures/errors/skips**.
 `32 actionable tasks: 1 executed, 31 up-to-date`; test task executed, with SPIKE.md's no-daemon/in-process workaround and outer sandbox permission. No repository-wide gate (spike scope).
+
+## Outcome
+
+Implemented Studio-level declaration inference, one discovery/substitution parser,
+transactional edit validation across gate chains, arrival/held-value checks and
+post-replay legacy-wire quarantine. The API and UI expose derived types and wire
+diagnostics. Physical kernel payload policies remain deferred because logical
+canvas ports still multiplex a physical link.
+
+NetworkNT 2.0.8 (Jackson 2 line, Studio-only, no YAML) validates output schemas and
+Claude structured output, Codex final files, and Python stdout before dedupe or
+publication. Draft 2020-12, an explicit supported-keyword subset, local acyclic
+definition refs, bounded size/depth/reference expansion, and a bounded compiled
+cache are documented in README. Unknown/unsupported schemas fail before storage.
+Program artifact hashes cover code and canonical schema; additive `liveSchema`
+checkpoint metadata survives preview/promotion and restart. Schema-only edits
+clear approval. Same-schema regeneration retains the promoted implementation.
+
+Flat lookup is intentionally preserved: JSON properties stay inside the string
+`new`; `{{x.new}}` supplies the whole JSON text and `{{x.new.severity}}` means a
+literal envelope field. No nested access or general schema implication is added.
+Connected input removal is refused until its wire is explicitly deleted. Config
+edits fence detached workers. Existing invalid edges are retained and diagnosed,
+while unrelated edits may preserve an existing quarantine.
+
+The throwaway `typespike` suite is removed; production inference, schema and
+integration tests replace it, including journal-byte equality on refusal, legacy
+recovery quarantine, synthetic CLI failures, and real sandboxed Python approval.
+Paid model adherence and cross-build kernel-journal interoperability remain
+unproven; the CLI tests use synthetic responses, not model calls.
+
+Validation: `:demo:studio:test --rerun` executed **119 tests**, zero failures,
+errors or skips; `:demo:studio:installDist` passed in the same gate (25 actionable
+tasks: three executed, 22 up-to-date). The final **12** focused schema/validation
+tests also executed and passed before that full run. All **53** kernel architecture tests
+executed with `--rerun` and passed (31 actionable tasks: nine executed, 22
+up-to-date), including module inventory, demo isolation and bypass ratchets.
+UI typecheck, **56** Vitest tests and production build passed. The adoption-matrix
+checker and its **eight** unit tests passed without regenerating FEATURE-STATUS.
+Gradle used SPIKE.md's no-daemon/in-process compiler workaround with outer
+execution permission for real sandbox-exec tests.
+
+The extra repository-wide `test` attempt exhausted Gradle Metaspace under the
+in-process compiler workaround. A retry with two workers and 2 GiB Metaspace
+completed the kernel task, then reproduced Beads-mirror's previously recorded
+`ReadySecondSeedDifferentialTest` seed-21 five-minute timeout and an
+`EchoSuppressionTwoNodeTest` timeout waiting for the listener's own workspace head.
+That failed broader run was stopped; it is not a green repository-wide gate.
+No Beads-mirror code or seeds were changed. Opt-in iroh cases were skipped by
+that run's normal profile, and some other module tasks used cached results.

@@ -12,8 +12,7 @@ import java.time.Duration
 
 internal const val JUDGE_DEFAULTS = """{"question":"Should {{in}} proceed?","output":"boolean","choices":[],"mode":"judge","threshold":0.5,"passPort":"","passChoices":[],"model":"","timeoutSec":60,"auto":true}"""
 private val judgeKeys = json.parseToJsonElement(JUDGE_DEFAULTS).jsonObject.keys
-internal fun judgePorts(config: JsonObject) = placeholder.findAll(config.string("question"))
-    .map { it.groupValues[1] }.distinct().toList()
+internal fun judgePorts(config: JsonObject) = infer(config.string("question")).keys.toList()
 internal fun judgeChoices(config: JsonObject, key: String): List<String> =
     (config[key] as? JsonArray)?.map {
         (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.content ?: bad("$key must contain strings")

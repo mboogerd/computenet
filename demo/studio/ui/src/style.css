@@ -156,3 +156,12 @@ dd { margin: 5px 0 0; overflow-wrap: anywhere; }
 .confirmation-dialog h2 { font-size: 16px; font-weight: 550; line-height: 1.6; overflow-wrap: anywhere; }
 .dialog-actions .danger { margin-top: 0; color: var(--red); background: var(--red-soft); border-color: var(--red); }
 .dialog-actions .danger:hover { filter: brightness(1.1); }
+
+.wire.quarantined .wire-line { stroke: var(--red); stroke-dasharray: 7 5; }
+.type-legend { position: absolute; top: 12px; left: 16px; display: flex; gap: 12px; background: var(--surface); padding: 7px 10px; border-radius: 5px; font-size: 10px; color: var(--muted); }
+.type-legend span { display: flex; gap: 5px; align-items: center; }
+.type-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.port.valid { box-shadow: 0 0 0 3px var(--green); }
+.status[class~="invalid"] { color: var(--red); }
+
+.node.wiring .port.input:not(.valid):hover { box-shadow: 0 0 0 1px var(--line); cursor: not-allowed; }

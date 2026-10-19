@@ -43,7 +43,9 @@ class StudioServer(val workspace: StudioWorkspace, port: Int, private val ui: Pa
 
     private fun api(x: HttpExchange, method: String, path: String) {
         val parts = path.trim('/').split('/')
-        fun body(): JsonObject = json.parseToJsonElement(x.requestBody.bufferedReader().use { it.readText() }).jsonObject
+        fun body(): JsonObject = try {
+            StudioSchemas.parseValue(x.requestBody.bufferedReader().use { it.readText() }).jsonObject
+        } catch (ex: IllegalStateException) { bad(ex.message ?: "invalid JSON body") }
         fun ok(value: String) = respond(x, 200, value)
         fun empty() { x.sendResponseHeaders(204, -1); x.close() }
         if (parts == listOf("api", "workflows")) {

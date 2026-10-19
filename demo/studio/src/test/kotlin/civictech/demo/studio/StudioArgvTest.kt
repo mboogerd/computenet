@@ -12,7 +12,7 @@ class StudioArgvTest {
         assertEquals(listOf("printf", "%s", "prefix {{in}} suffix", "", "a b", "literal \\\\ x"), tokens)
         val argv = tokens.map { substitute(it, mapOf("in" to change("old", "; rm -rf /"))) }
         assertEquals("prefix ; rm -rf / suffix", argv[2]); assertEquals(6, argv.size)
-        assertEquals("old|; rm -rf /|", substitute("{{in.old}}|{{in.new}}|{{missing}}", mapOf("in" to change("old", "; rm -rf /"))))
+        assertThrows(IllegalStateException::class.java) { substitute("{{in.old}}|{{in.new}}|{{missing}}", mapOf("in" to change("old", "; rm -rf /"))) }
         assertEquals("author", substitute("{{in.author-name}}", mapOf("in" to obj("author-name" to JsonPrimitive("author")))))
         assertEquals(listOf("echo", "x"), tokenize("echo \\\n x"))
         assertThrows(StudioException::class.java) { tokenize("echo 'oops") }

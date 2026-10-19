@@ -16,9 +16,10 @@ internal fun change(old: String?, new: String, repo: String? = null) = buildJson
 
 @Serializable
 data class StudioNode(val id: String, val kind: String, val title: String, val x: Double = 0.0,
-                      val y: Double = 0.0, val config: JsonObject, val ports: List<String>)
+                      val y: Double = 0.0, val config: JsonObject, val ports: List<String>, val types: NodeTypes = NodeTypes())
 @Serializable
-data class StudioEdge(val id: String, val from: String, val to: String, val port: String)
+data class StudioEdge(val id: String, val from: String, val to: String, val port: String,
+                      val status: String = "ok", val reason: String? = null)
 @Serializable
 data class RunSummary(val runId: String, val startedAt: String, val durationMs: Long,
                       val exitCode: Int, val costUsd: Double? = null, val outcome: String? = null)
@@ -49,7 +50,6 @@ class StudioException(val status: Int, message: String) : RuntimeException(messa
 internal fun conflict(message: String): Nothing = throw StudioException(409, message)
 internal fun bad(message: String): Nothing = throw StudioException(400, message)
 
-internal val placeholder = Regex("\\{\\{([A-Za-z_][A-Za-z0-9_]*)(?:\\.([^{}]+))?}}")
 internal val portName = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
 internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
@@ -86,14 +86,18 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
     if (kind == "exec" && config.string("preset") == "codex" && config.string("effort") !in setOf("low", "medium", "high")) bad("invalid effort")
     if (kind == "program" && config.string("generator") !in setOf("claude", "codex")) bad("invalid generator")
     if (kind == "beads" || (kind == "exec" && beadsPreset(config.string("preset")))) validateBeadsConfig(config, kind == "beads")
+    outputSchema(config)?.let { schema ->
+        if (kind != "program" && !(kind == "exec" && config.string("preset") in setOf("claude", "codex")))
+            conflict("outputSchema requires claude, codex or program")
+        StudioSchemas.compile(schema)
+    }
+    requirements(StudioNode("", kind, "", config = config, ports = inputPorts(kind, config)))
     return config
 }
 
 internal fun inputPorts(kind: String, config: JsonObject): List<String> = when (kind) {
     "judge" -> judgePorts(config)
-    "exec" -> placeholder.findAll(if (beadsPreset(config.string("preset"))) beadsFields(config.string("preset")).joinToString("\n") { config.string(it) }
-        else config.string(if (config.string("preset") == "custom") "command" else "prompt"))
-        .map { it.groupValues[1] }.distinct().toList()
+    "exec" -> infer(templateText(kind, config)).keys.toList()
     "program" -> {
         val ports = (config["inputs"] as? JsonArray)?.map {
             (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.content ?: bad("invalid input port")

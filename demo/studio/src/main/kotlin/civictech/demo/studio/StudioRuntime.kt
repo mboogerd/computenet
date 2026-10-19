@@ -24,7 +24,8 @@ import java.util.concurrent.*
 
 /** Graph and node state have one lock; kernel callbacks only enqueue onto intake. */
 class StudioRuntime internal constructor(val data: Path, private val sandbox: PythonSandbox,
-                                         private val judge: StudioJudge = TypeSafeStudioJudge()) : AutoCloseable {
+                                         private val judge: StudioJudge = TypeSafeStudioJudge(),
+                                         private val processes: StudioProcesses = StudioProcesses()) : AutoCloseable {
     constructor(data: Path) : this(data, PythonSandbox())
     private val lock = Any()
     private val scheduler = VirtualThreadScheduler("studio-host")
@@ -37,7 +38,6 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     private val intake = Executors.newSingleThreadExecutor(Thread.ofVirtual().name("studio-input").factory())
     private val workers = Executors.newVirtualThreadPerTaskExecutor()
     private val timers = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("studio-git").factory())
-    private val processes = StudioProcesses()
     private val nodes = linkedMapOf<String, Entry>()
     private val edges = linkedMapOf<String, StudioEdge>()
     private val links = mutableSetOf<Pair<String, String>>()
@@ -55,6 +55,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     /** Intake's working cache; changed() commits it to the authoritative cell before use. */
     private class Entry(var node: StudioNode, var state: NodeState, val ref: CellRef, val handle: String = node.id) {
         var liveCode: String? = null
+        var liveSchema: JsonObject? = null
         var shadow: Entry? = null
         var observer: StudioObserver? = null
         var fence = ProcessFence()
@@ -91,6 +92,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 val node = checkpoint.definition.node(metadata.nodes[id])
                 val e = Entry(node, checkpoint.state.copy(preview = null), ref, handle)
                 e.liveCode = checkpoint.liveCode
+                e.liveSchema = checkpoint.liveSchema
                 e.job = checkpoint.job
                 e.pending.putAll(checkpoint.pending)
                 nodes[id] = e
@@ -98,8 +100,9 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         }
         val livePairs = context.live().links.values.map { it.from to it.to }.toSet()
         metadata.edges.filter { edge ->
-            nodes[edge.from]?.ref to nodes[edge.to]?.let(::inputRef) in livePairs && edge.port in nodes[edge.to]!!.node.ports
+            nodes[edge.from]?.ref to nodes[edge.to]?.let(::inputRef) in livePairs
         }.forEach { edges[it.id] = it; links += it.from to it.to }
+        refreshTypes() // Replay topology unconditionally; quarantine only at the application boundary.
         nodes.values.forEach { e ->
             if (e.job?.phase == "started" || e.state.status in setOf("running", "queued", "generating")) {
                 e.job = e.job?.copy(phase = "interrupted")
@@ -166,7 +169,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 it.state.codeHash != it.state.approvedHash && it.shadow == null
         }.forEach(::ensureShadow)
     }
-    fun state(id: String): NodeState = synchronized(lock) { entry(id).state }
+    fun state(id: String): NodeState = synchronized(lock) { visibleState(entry(id)) }
     /** Drain accepted kernel deliveries, then the non-blocking callback queue (test barrier). */
     internal fun settleInputs() {
         host.quiescence().await(5_000)
@@ -176,7 +179,28 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         val task = synchronized(lock) { entry(id).gitTask }
         task?.get(65, TimeUnit.SECONDS)
     }
-    private fun snapshot() = StudioGraph(nodes.values.map { it.node }, edges.values.toList(), nodes.mapValues { it.value.state })
+    private fun typeView(proposed: List<StudioNode> = nodes.values.map { it.node },
+                         wires: List<StudioEdge> = edges.values.toList(),
+                         schemas: Map<String, JsonObject?> = nodes.mapValues { it.value.liveSchema }) =
+        typedGraph(proposed, wires, schemas)
+    private fun validateEdit(proposed: List<StudioNode> = nodes.values.map { it.node },
+                             wires: List<StudioEdge> = edges.values.toList(),
+                             schemas: Map<String, JsonObject?> = nodes.mapValues { it.value.liveSchema }) {
+        val checked = typeView(proposed, wires, schemas)
+        checked.edges.firstOrNull { edge -> edge.status == "quarantined" &&
+            edges[edge.id]?.let { it.status == "quarantined" && it.reason == edge.reason } != true
+        }?.let { conflict(it.reason!!) }
+    }
+    private fun refreshTypes() {
+        val checked = typeView()
+        checked.nodes.forEach { (id, types) -> nodes[id]?.let { it.node = it.node.copy(types = types) } }
+        checked.edges.forEach { edges[it.id] = it }
+    }
+    private fun visibleState(e: Entry): NodeState {
+        val reason = edges.values.firstOrNull { it.to == e.node.id && it.status == "quarantined" }?.reason
+        return if (reason == null) e.state else e.state.copy(status = "invalid input", error = "quarantined wire: $reason")
+    }
+    private fun snapshot() = StudioGraph(nodes.values.map { it.node }, edges.values.toList(), nodes.mapValues { visibleState(it.value) })
     private fun graphFrame(): String = buildJsonObject {
         put("type", "graph"); put("nodes", json.encodeToJsonElement(nodes.values.map { it.node })); put("edges", json.encodeToJsonElement(edges.values.toList()))
     }.toString()
@@ -191,7 +215,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     }
     private fun broadcast(frame: String) { listeners.forEach { it(frame) } }
     private fun changed(e: Entry, emit: Boolean = false) {
-        val checkpoint = StudioCheckpoint(e.node.definition(), e.state, e.job, e.pending.toMap(), liveCode = e.liveCode)
+        val checkpoint = StudioCheckpoint(e.node.definition(), e.state, e.job, e.pending.toMap(), liveCode = e.liveCode, liveSchema = e.liveSchema)
         api(e).commit.call.propagate(json.encodeToString(StudioCommit(checkpoint, e.acknowledge.toList(), if (emit) UUID.randomUUID().toString() else null)))
         host.quiescence().await(5_000)
         // Read back the authoritative cell state before publishing or launching a process.
@@ -205,7 +229,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 else if (e.state.output != owner.state.preview?.output) "running" else "idle",
                 owner.state.preview?.output, e.state.error))
             changed(owner)
-        } else broadcast(obj("type" to JsonPrimitive("state"), "node" to json.encodeToJsonElement(e.state)).toString())
+        } else broadcast(obj("type" to JsonPrimitive("state"), "node" to json.encodeToJsonElement(visibleState(e))).toString())
     }
     private fun stateChange() {
         if (++changes >= 100) checkpointLocked()
@@ -220,6 +244,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     }
     internal fun checkpoint() = synchronized(lock) { checkpointLocked() }
     private fun structural() {
+        refreshTypes()
         atomicWrite(data.resolve("graph.json"), json.encodeToString(CanvasMetadata(
             nodes.mapValues { (_, e) -> CanvasNode(e.node.x, e.node.y, e.node.title) }, edges.values.toList())))
         stateChange()
@@ -237,7 +262,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         nodes[id] = e
         structural(); changed(e)
         if (kind in setOf("git", "beads")) schedulePoll(e, 0)
-        node
+        e.node
     }
 
     fun patchNode(id: String, body: JsonObject): StudioNode = synchronized(lock) {
@@ -246,15 +271,32 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         val old = e.node
         val config = nodeConfig(old.kind, beadsPatchConfig(old, patch))
         val ports = inputPorts(old.kind, config)
-        e.node = old.copy(title = body.string("title", old.title),
+        val proposed = old.copy(title = body.string("title", old.title),
             x = (body["x"] as? JsonPrimitive)?.doubleOrNull ?: old.x,
             y = (body["y"] as? JsonPrimitive)?.doubleOrNull ?: old.y, config = config, ports = ports)
-        edges.values.filter { it.to == id && it.port !in ports }.map { it.id }.forEach(::removeEdgeLocked)
+        val proposedNodes = nodes.values.map { if (it === e) proposed else it.node }
+        val schemaChanged = old.kind == "program" && outputSchema(old.config) != outputSchema(config)
+        validateEdit(proposedNodes, schemas = nodes.mapValues { (key, value) ->
+            if (key == id && schemaChanged) outputSchema(config) else value.liveSchema
+        })
+        // All validation precedes fencing, state commits, topology changes and canvas writes.
+        if (patch != null) {
+            fence(e)
+            if (e.shadow != null) discardShadow(e)
+            e.version++
+        }
+        e.node = proposed
         e.pending.keys.retainAll(ports.toSet())
         e.state = e.state.copy(inputs = e.state.inputs.filterKeys { it in ports })
+        if (schemaChanged) e.state = e.state.copy(approvedHash = null,
+            codeHash = e.state.code?.let { artifactHash(it, outputSchema(config)) }, status = "stale", error = null, preview = null)
+        // Held-value checks must see the repaired declarations, including lifted quarantine.
+        refreshTypes()
         if (patch != null) {
-            e.version++
-            if (e.shadow != null) discardShadow(e)
+            // A held value must satisfy a newly edited template before any future launch.
+            val invalid = inputError(e, e.state.inputs)
+            if (invalid != null) e.state = e.state.copy(status = "invalid input", error = invalid)
+            else if (e.state.status == "invalid input") e.state = e.state.copy(status = "stale", error = null)
         }
         structural(); changed(e)
         if (patch != null && old.kind in setOf("git", "beads")) schedulePoll(e, 0)
@@ -278,13 +320,14 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
 
     fun addEdge(from: String, to: String, port: String): StudioEdge = synchronized(lock) {
         val e = StudioEdge("e" + UUID.randomUUID().toString().replace("-", ""), from, to, port)
-        addEdgeLocked(e); e
+        addEdgeLocked(e); edges.getValue(e.id)
     }
     private fun addEdgeLocked(edge: StudioEdge) {
         val from = entry(edge.from)
         val to = entry(edge.to)
         if (edge.port !in to.node.ports) conflict("input port does not exist")
         if (edges.values.any { it.to == edge.to && it.port == edge.port }) conflict("input port already connected")
+        validateEdit(wires = edges.values.toList() + edge)
         val pair = edge.from to edge.to
         edges[edge.id] = edge // Make the mapping visible before catch-up is enqueued.
         if (pair !in links) {
@@ -349,19 +392,32 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
 
     private fun fired(value: JsonObject) = JsonObject(value + ("fired" to JsonPrimitive(Instant.now().toString())))
 
-    private fun approved(e: Entry) = e.liveCode?.let { sha256(it) == e.state.approvedHash } == true
+    private fun approved(e: Entry) = e.liveCode?.let { artifactHash(it, e.liveSchema) == e.state.approvedHash } == true
 
     private fun accept(e: Entry, input: StudioMsg, allowRuns: Boolean) {
         val id = e.node.id
         val value = json.parseToJsonElement(input.change).jsonObject
         var any = false
-        edges.values.filter { it.from == input.fromNodeId && it.to == id }.forEach { edge ->
+        var invalid: String? = null
+        edges.values.filter { it.from == input.fromNodeId && it.to == id && it.status == "ok" }.forEach { edge ->
+            val error = runCatching { validateArrival(e, edge.port, value) }.exceptionOrNull()
+            if (error != null) {
+                e.pending.remove(edge.port)
+                e.state = e.state.copy(inputs = e.state.inputs - edge.port)
+                invalid = "invalid input: ${error.message}"
+                return@forEach
+            }
             if (e.state.inputs[edge.port] != value) {
                 val pending = e.pending[edge.port]
                 e.pending[edge.port] = if (pending == null) value else composeBeadsOrChange(pending, value)
                 e.state = e.state.copy(inputs = e.state.inputs + (edge.port to value))
                 any = true
             }
+        }
+        if (invalid != null) {
+            fence(e)
+            e.state = e.state.copy(status = "invalid input", error = invalid)
+            changed(e); return
         }
         if (!any) { changed(e); return }
         // A recovered unpromoted implementation is recreated lazily on new input.
@@ -382,11 +438,25 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         }
         changed(e)
     }
-    private fun ready(e: Entry) = e.node.ports.all { it in e.state.inputs }
+    private fun validateArrival(e: Entry, port: String, value: JsonObject) {
+        validateInput(value, requirements(e.node).getValue(port), port)
+        val source = edges.values.firstOrNull { it.to == e.node.id && it.port == port && it.status == "ok" }
+            ?.let { nodes[it.from]?.node?.types?.output }
+        if (source != null) {
+            validateInput(value, InputRequirement(kind = source.kind), port)
+            source.schema?.let { StudioSchemas.validate(it, value.string("new")) }
+        }
+    }
+    private fun inputError(e: Entry, inputs: Map<String, JsonObject>): String? = runCatching {
+        requirements(e.node).keys.forEach { port -> inputs[port]?.let { validateArrival(e, port, it) } }
+        check(edges.values.none { it.to == e.node.id && it.status == "quarantined" }) { "quarantined input wire" }
+    }.exceptionOrNull()?.let { "invalid input: ${it.message}" }
+    private fun ready(e: Entry) = e.node.ports.all { it in e.state.inputs } && inputError(e, e.state.inputs) == null
 
     fun run(id: String) = synchronized(lock) {
         val e = entry(id)
         if (e.node.kind !in setOf("exec", "program", "judge")) conflict("run requires an exec, program or judge node")
+        inputError(e, e.state.inputs)?.let { conflict(it) }
         if (!ready(e)) conflict("an input is missing")
         if (e.generating) conflict("node is generating code")
         if (e.busy) {
@@ -398,13 +468,15 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         val e = entry(id)
         if (e.node.kind != "program") conflict("generate requires a program node")
         if (e.busy) conflict("node is busy")
+        validateEdit()
         launch(e, generating = true)
     }
     fun approve(id: String, hash: String) = synchronized(lock) {
         val e = entry(id)
-        if (e.node.kind != "program" || e.state.code == null || sha256(e.state.code!!) != hash || e.state.codeHash != hash)
+        if (e.node.kind != "program" || e.state.code == null || artifactHash(e.state.code!!, outputSchema(e.node.config)) != hash || e.state.codeHash != hash)
             conflict("hash does not match current candidate")
         if (hash == e.state.approvedHash && e.shadow == null) return@synchronized
+        validateEdit(schemas = nodes.mapValues { (key, value) -> if (key == id) outputSchema(e.node.config) else value.liveSchema })
         val candidate = ensureShadow(e)
         if (candidate.state.codeHash != hash) conflict("hash does not match shadow candidate")
         // No detached completion may publish into a retired instance. Do not rely
@@ -426,12 +498,13 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         val promoted = checkpointOf(candidate.ref)
         candidate.state = promoted.state
         candidate.liveCode = promoted.liveCode
+        candidate.liveSchema = promoted.liveSchema
         candidate.job = promoted.job
         candidate.pending.clear()
         candidate.node = e.node
         e.shadow = null
         nodes[id] = candidate
-        changed(candidate)
+        structural(); changed(candidate)
         // A delivery can have reached the incumbent's durable inbox while its
         // runtime callback is still queued. Transfer and fold it before the one
         // explicit publish, including when the candidate was recreated on approve.
@@ -450,8 +523,9 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     }
     private fun installCodeLocked(e: Entry, answer: String) {
         val code = extractPython(answer)
+        validateEdit()
         discardShadow(e)
-        e.state = e.state.copy(code = code, codeHash = sha256(code),
+        e.state = e.state.copy(code = code, codeHash = artifactHash(code, outputSchema(e.node.config)),
             status = if (approved(e)) e.state.status else "stale", error = null)
         changed(e)
         if (e.state.codeHash != e.state.approvedHash) ensureShadow(e)
@@ -492,6 +566,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
             identity = IdentityBinding.NewInstanceOf(e.ref.id), journalId = "studio", shadow = true))).apply(context)
         val candidate = Entry(e.node, NodeState(e.node.id, inputs = e.state.inputs,
             code = e.state.code, codeHash = e.state.codeHash), context.handles.getValue(handle), handle)
+        candidate.liveSchema = outputSchema(e.node.config)
         candidate.liveCode = candidate.state.code // sandbox makes this non-effectful computation safe
         e.shadow = candidate
         val collector = StudioObserver { value ->
@@ -518,12 +593,17 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     }
 
     private fun launch(e: Entry, generating: Boolean = false) {
+        if (!generating) inputError(e, e.state.inputs + e.pending)?.let {
+            e.state = e.state.copy(status = "invalid input", error = it); changed(e); return
+        }
         if (!generating && e.node.kind == "program" && nodes[e.node.id]?.shadow !== e && !approved(e)) {
             e.state = e.state.copy(status = "failed", error = "code not approved"); changed(e); return
         }
         val inputs = e.state.inputs + e.pending
         e.pending.clear(); e.manualPending = false; e.busy = true; e.generating = generating
-        val node = e.node
+        val node = if (e.node.kind == "program" && !generating) e.node.copy(config = JsonObject(e.node.config +
+            ("outputSchema" to (e.liveSchema ?: JsonNull)))) else e.node
+        val version = e.version
         val code = e.liveCode
         e.fence = ProcessFence()
         val fence = e.fence
@@ -532,10 +612,10 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         e.job = JobRecord(runId, sha256(json.encodeToString(inputs.toSortedMap().toMap())), "started")
         changed(e) // synchronous durable started record BEFORE submitting the worker
         val previewRun = nodes[node.id]?.shadow === e
-        e.task = workers.submit { execute(e, node, inputs, code, runId, generating, fence, previewRun) }
+        e.task = workers.submit { execute(e, node, inputs, code, runId, generating, fence, previewRun, version) }
     }
 
-    private fun execute(e: Entry, node: StudioNode, inputs: Map<String, JsonObject>, code: String?, runId: String, generating: Boolean, fence: ProcessFence, previewRun: Boolean) {
+    private fun execute(e: Entry, node: StudioNode, inputs: Map<String, JsonObject>, code: String?, runId: String, generating: Boolean, fence: ProcessFence, previewRun: Boolean, version: Long) {
         val started = Instant.now()
         val dir = nodeDir(node.id).resolve(if (previewRun) "previews" else "runs").resolve(runId)
         var argv = emptyList<String>()
@@ -561,11 +641,13 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                     ?: inputs.values.firstNotNullOfOrNull { it.string("repo").takeIf(String::isNotBlank) }
                 path?.let(Path::of) ?: nodeDir(node.id)
             }
+            val schemaFile = if (!generating && preset == "codex" && outputSchema(config) != null)
+                dir.resolve("output-schema.json").also { atomicWrite(it, outputSchema(config).toString()) } else null
             val prompt = if (generating) generationPrompt(node, inputs) else substitute(config.string("prompt"), inputs)
             argv = when (preset) {
                 "custom" -> tokenize(config.string("command")).map { substitute(it, inputs) }
                 "claude" -> claudeArgv(config, prompt, noTools = generating)
-                "codex" -> codexArgv(config, prompt, dir.resolve("last.txt"), noTools = generating)
+                "codex" -> codexArgv(config, prompt, dir.resolve("last.txt"), noTools = generating, schemaFile = schemaFile)
                 "bd-comment", "bd-create" -> beadsWriteArgv(config, inputs)
                 "python" -> {
                     // Each execution owns a fresh scratch directory and immutable code bytes.
@@ -580,20 +662,19 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 if (preset == "python") mapOf("TMPDIR" to cwd.toRealPath().toString()) else if (beadsPreset(preset)) beadsEnvironment(config) else emptyMap(), fence)
             if (result.error == null) when (preset) {
                 "claude" -> {
-                    val envelope = json.parseToJsonElement(result.stdout).jsonObject
-                    check(!envelope.bool("is_error")) { envelope.string("result", "claude reported an error") }
-                    output = (envelope["result"] as? JsonPrimitive)?.content ?: error("claude response has no result")
-                    cost = (envelope["total_cost_usd"] as? JsonPrimitive)?.doubleOrNull
+                    val extracted = claudeOutput(result.stdout, !generating && outputSchema(config) != null)
+                    output = extracted.first; cost = extracted.second
                 }
                 "codex" -> output = Files.readString(dir.resolve("last.txt"))
                 else -> output = result.stdout
             }
             output = output.removeSuffix("\n")
+            if (!generating && result.error == null) outputSchema(config)?.let { StudioSchemas.validate(it, output) }
             }
         } catch (ex: Exception) { result = result.copy(error = ex.message ?: ex.javaClass.simpleName) }
         val detail = RunDetail(runId, started.toString(), java.time.Duration.between(started, Instant.now()).toMillis(),
             result.exitCode, cost, inputs, argv, cwd.toAbsolutePath().toString(), result.stdout, result.stderr, result.error,
-            if (node.kind == "judge") outcome ?: "failed" else null, judgment)
+            if (result.error != null) "failed" else outcome, judgment)
         // Run output I/O is deliberately outside the studio lock.
         try {
             Files.createDirectories(dir)
@@ -602,7 +683,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
             atomicWrite(dir.resolve("run.json"), json.encodeToString(detail))
         } catch (ex: Exception) { result = result.copy(error = "could not save run: ${ex.message}") }
         synchronized(lock) {
-            if (closed || !current(e) || e.job?.runId != runId || e.job?.phase != "started") return
+            if (closed || !current(e) || e.version != version || e.job?.runId != runId || e.job?.phase != "started") return
             e.busy = false; e.generating = false
             e.job = e.job!!.copy(phase = "completed", result = detail)
             e.state = e.state.copy(lastRun = detail.summary(), status = if (result.error != null) "failed" else if (outcome == "gated") "gated" else "idle", error = result.error)
@@ -634,6 +715,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         appendLine("Write a Python 3 program using only the standard library. Read exactly ONE JSON object from stdin.")
         appendLine("Its keys are input port names, and each value is a change object {\"old\": string or null, \"new\": string, ...extra}.")
         appendLine("Print output text to stdout. Exit non-zero on failure. Return the source in one ```python fenced block.")
+        outputSchema(node.config)?.let { appendLine("stdout must be JSON satisfying this schema: $it") }
         appendLine("Current inputs (examples, possibly truncated):")
         inputs.forEach { (port, value) -> appendLine("$port: ${value.toString().take(2000)}") }
     }

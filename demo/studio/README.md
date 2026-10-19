@@ -7,6 +7,80 @@ From the repository root, launch
 `demo/studio/build/install/studio/bin/studio --ui demo/studio/ui/dist`.
 Default data: `~/.local/share/computenet/studio/default`; default port: 18440.
 
+### Typed ports and output validation
+
+Every node in graph snapshots and SSE graph frames gains
+`types: {inputs: {port: {fields: ["new"], kind: null}}, output: {kind, extras, schema}}`.
+The vocabulary is `text`, `gitRange`, `issueSet`, `judgment`, `json`, and `any`.
+Text/custom/Beads writer execs produce text; Git produces gitRange; Beads sources
+produce issueSet; Jev judges produce judgment. A gate preserves its selected
+input's type, schema and extras and adds `gate`; disconnected gates resolve to any.
+Claude/Codex produce text unless `outputSchema` is configured. Programs expose
+the schema of their approved artifact, defaulting to text for legacy programs.
+Types are derived from declarations, never from the latest sample output.
+
+Input ports and requirements share the substitution parser. `{{c}}` and
+`{{c.new}}` require `new`; `{{c.repo}}` requires the envelope field `repo`.
+`{{c:gitRange}}` adds an explicit type constraint; repeated references union their
+fields and conflicting annotations are rejected. Flat lookup is preserved,
+including literal field names containing dots or hyphens. JSON schema properties
+describe the JSON **inside the string `new`**, not envelope extras: `{{c.new}}`
+returns that JSON text; `{{c.severity}}` requires an envelope field, and
+`{{c.new.severity}}` is a literal flat field name, not nested access. An absent
+field marks the node `invalid input` and launches nothing. Present null metadata
+still renders empty. Programs can declare optional `inputRequirements`, e.g.
+`{"in":{"kind":"gitRange","fields":["repo","new"]}}`; omitted inputs require any.
+
+Wiring and configuration edits validate the tentative whole graph, including
+downstream gate chains and the second logical wire sharing a physical link.
+Incompatible edits return 409 with the precise port requirement before journal
+or canvas writes. Removing a referenced input from a template requires deleting
+its wire first. Any/loose JSON producers receive arrival checks. Held values and
+catch-up are checked against current requirements and producer schemas before a
+run. Config edits fence obsolete workers so their completions cannot publish.
+No kernel payload link policy is installed.
+
+Historical topology always replays. Incompatible legacy wires remain visible as
+`{..., status: "quarantined", reason: "c: requires field 'repo'; text offers new, old"}`;
+valid wires have `status: "ok", reason: null`. Quarantined wires deliver nothing,
+and their held values cannot make the target runnable. Other nodes keep working.
+Delete the wire or fix its declarations to lift quarantine. Unrelated edits can
+retain an existing quarantine; new incompatibilities are refused. The canvas
+shows dashed red quarantine wires with reasons, compatible drag targets, port
+colors and a legend; the side panel shows derived types and a schema editor.
+
+Claude/Codex/program config accepts optional `outputSchema` (a JSON Schema object;
+null removes it). Studio pins NetworkNT **2.0.8** (Jackson 2 release line), only in
+this module, with YAML excluded. The dialect is **2020-12**. Accepted keywords:
+`$schema`, `$defs`, `$ref`, `type`, `properties`, `required`, `additionalProperties`,
+`items`, `enum`, `const`, `title`, `description`, `minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`,
+`minItems`, `maxItems`, `uniqueItems`, `minProperties`, `maxProperties`.
+Unknown keywords (including format, pattern and combinators) are refused at config
+time, as are malformed schemas. References are only local `#/$defs/name`, without
+escaped, percent-encoded or slashed names, recursion, or more than 16 reference hops/4096 expanded
+schema nodes. External, file and network refs are refused; no remote loader is
+enabled. Schemas are capped at 64 KiB UTF-8 and depth 32; JSON values at 1 MiB and
+depth 64. A synchronized LRU caches 128 compiled schemas. Studio checks envelope
+presence and nominal shapes separately; it does not attempt general schema subtyping.
+
+Claude gets `--json-schema <inline>`; structured responses require success,
+explicit `is_error: false`, and a non-null `structured_output`, with no narrative
+`result` fallback. Codex gets `--output-schema <file>` and its final `-o` file is
+validated. Python stdout uses the same validator. Validation precedes equality
+dedupe and publication: a bad output completes the ledger as failed with its
+error, retains the previous output, and emits nothing. CLI tests use synthetic
+fixtures; no model adherence claim or paid model calls are part of these checks.
+
+Program hashes cover code plus canonical output schema. Schema-less hashes retain
+the old code-only SHA-256. Changing the schema clears approval and creates a new
+candidate hash for preview/promotion, even when code is unchanged; Run remains
+blocked until promotion. Regenerated code with an unchanged schema continues to
+retain the approved implementation until promotion. Checkpoints add `liveSchema`
+alongside `liveCode`; promotion transfers both and recovery preserves the approved
+artifact. This is additive Studio metadata, not a new cross-build kernel journal
+compatibility guarantee.
+
 Create, open and remove workflows using the toolbar switcher. Each workflow runs
 independently in the backend, even when another is open in the UI. The URL hash
 `#/w/<id>` preserves the open workflow across reloads and browser navigation.

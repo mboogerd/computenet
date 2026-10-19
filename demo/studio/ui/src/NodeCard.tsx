@@ -3,6 +3,7 @@ import type { NodeState, StudioNode } from './types';
 import { outputPreview, PORT_GAP, PORT_TOP } from './model';
 import { JudgeCard } from './JudgeSettings';
 import { nodePath } from './api';
+import { portColor, requirementKind } from './portTypes';
 import { BeadsCard } from './StudioBeads';
 
 export type Action = (path: string, method?: string, body?: unknown) => Promise<boolean>;
@@ -34,7 +35,7 @@ export default function NodeCard(props: {
   const run = () => props.action(`${nodePath(props.workflowId, props.node.id)}/run`, 'POST');
   const unapproved = () => props.node.kind === 'program' &&
     !props.state?.approvedHash;
-  return <article class={`node ${props.selected ? 'selected' : ''}`} style={{ left: `${props.x}px`, top: `${props.y}px` }}
+  return <article class={`node ${props.selected ? 'selected' : ''} ${props.wiring ? 'wiring' : ''}`} style={{ left: `${props.x}px`, top: `${props.y}px` }}
     tabindex="0" onFocus={props.select} onPointerDown={event => {
       props.select();
       if (!(event.target as Element).closest('button, input, textarea, select')) event.currentTarget.focus({ preventScroll: true });
@@ -46,12 +47,13 @@ export default function NodeCard(props: {
     <div class="port-area" style={{ height: `${Math.max(1, props.node.ports.length) * PORT_GAP + 8}px` }}>
       <For each={props.node.ports}>{(port, index) => <div class="input-row" style={{ top: `${PORT_TOP + index() * PORT_GAP}px` }}>
         <button class={`port input ${props.wiring && props.validPort(port) ? 'valid' : ''} ${props.target === port ? 'target' : ''}`}
+          style={{ background: portColor(requirementKind(props.node.types?.inputs[port])) }}
           data-node={props.node.id} data-port={port} title={`Connect to ${props.node.title}: ${port}`}
           aria-label={`Input ${port}`} onPointerDown={event => event.stopPropagation()} />
         <span>{port}</span>
       </div>}</For>
       <div class="output-row" style={{ top: `${PORT_TOP}px` }}><span>out</span>
-        <button class="port output" title="Drag to an input to connect" aria-label={`Wire output of ${props.node.title}`} onPointerDown={props.wire} />
+        <button class="port output" style={{ background: portColor(props.node.types?.output.kind) }} title={`Output: ${props.node.types?.output.kind ?? 'any'}. Drag to an input to connect`} aria-label={`Wire output of ${props.node.title}`} onPointerDown={props.wire} />
       </div>
     </div>
     <div class="node-body">
@@ -79,6 +81,7 @@ export default function NodeCard(props: {
         <Show when={unapproved()}><p class="muted small">Code requires review and approval.</p></Show>
       </Show>
       <Show when={props.state?.preview?.status === 'idle'}><span class="preview-badge">preview ready</span></Show>
+      <Show when={props.state?.error}><p class="error-box">{props.state?.error}</p></Show>
       <div class="preview-label">LATEST OUTPUT</div>
       <pre class="output-preview">{outputPreview(props.state?.output?.new) || 'No output yet'}</pre>
     </div>

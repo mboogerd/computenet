@@ -2003,3 +2003,36 @@ need demo-local glue. Cycle admission itself is working as specified.
 subscriber loop. A studio-level way to declare a `CycleHead` (for example, a
 "loop" cell with a damping witness) is future work; this demo adds no such
 declaration.
+
+## F-30 — Studio payload schemas need instance contracts and logical port admission
+
+**Observation** (`:demo:studio`, `demo/studio/SPIKE-TYPES.md` §1):
+`kernel/src/main/kotlin/civictech/cell/port/PortNatures.kt:24` projects natures
+by the owner's class; the stamping seam at `:15`/`:33` is internal and the public
+port natures at `:41` are read-only. `nature/src/main/kotlin/civictech/nature/ContractDescriptor.kt:52`
+defines a closed nature-axis enum, and
+`kernel/src/main/kotlin/civictech/cell/nature/NatureNegotiation.kt:45` has a fixed
+subsumption lattice. The handshake payload check compares the erased contract API
+class (`kernel/src/main/kotlin/civictech/cell/link/Handshake.kt:76`, `:97`), so two
+`Propagate<String>` instances cannot distinguish text, a Git range, or JSON schemas.
+
+**Why it's a gap**: there is no public per-instance payload/schema contract or
+extensible payload nature axis reconciled at handshake. `INSTANCE_SCOPING` is
+interest slicing, not a payload type. Per-port policies can refuse before link
+installation (`kernel/src/main/kotlin/civictech/cell/link/LinkSupport.kt:39`,
+`Handshake.kt:301`), but Studio multiplexes logical canvas input names onto one
+physical inlet/link per node pair. Its second logical edge bypasses handshake
+(spike baseline `demo/studio/src/main/kotlin/civictech/demo/studio/StudioRuntime.kt:288`,
+`:313`), so that policy alone cannot protect logical ports or downstream gate chains.
+These line citations are the spike's recorded evidence; production line numbers
+have moved during implementation.
+
+**Workaround**: Studio derives logical input/output declarations, validates every
+tentative graph edit before journal writes, validates loose producers on arrival,
+and quarantines historical incompatible wires after topology replay. All payloads
+keep the string change envelope. No fake nature axis, generated class per schema,
+or kernel policy is introduced.
+
+**Proposed shape**: a public, cold/reconstructible instance payload contract and
+logical-to-physical port mapping reconciled during admission, recovery and
+promotion. The kernel design and policy integration remain deferred.

@@ -1,5 +1,5 @@
 export type Kind = 'text' | 'git' | 'exec' | 'program' | 'beads' | 'judge';
-export type Config = Record<string, string | number | boolean | string[]>;
+export type Config = Record<string, string | number | boolean | string[] | Record<string, unknown> | null>;
 export interface StudioNode {
   id: string;
   kind: Kind;
@@ -8,8 +8,12 @@ export interface StudioNode {
   y: number;
   config: Config;
   ports: string[];
+  types?: { inputs: Record<string, InputRequirement>; output: PortType };
 }
-export interface Edge { id: string; from: string; to: string; port: string }
+export type TypeKind = 'text' | 'gitRange' | 'issueSet' | 'judgment' | 'json' | 'any';
+export interface PortType { kind: TypeKind; extras?: string[]; schema?: Record<string, unknown> | null }
+export interface InputRequirement { fields: string[]; kind: TypeKind | null }
+export interface Edge { id: string; from: string; to: string; port: string; status?: 'ok' | 'quarantined'; reason?: string | null }
 export interface Change { old: string | null; new: string; [key: string]: unknown }
 export interface RunSummary {
   runId: string;
@@ -38,7 +42,7 @@ export interface PreviewState {
 }
 export interface NodeState {
   id: string;
-  status: 'idle' | 'stale' | 'queued' | 'running' | 'generating' | 'failed' | 'gated';
+  status: 'idle' | 'stale' | 'queued' | 'running' | 'generating' | 'failed' | 'gated' | 'invalid input';
   output: Change | null;
   inputs: Record<string, Change>;
   error: string | null;

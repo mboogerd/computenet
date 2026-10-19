@@ -11,6 +11,7 @@ import { beadsPresetConfig, isBeadsPreset } from './beadsModel';
 export default function Panel(props: { workflowId: string; node: StudioNode; state?: NodeState; action: Action; close: () => void; remove: () => void; toast: (message: string) => void }) {
   const [title, setTitle] = createSignal('');
   const [config, setConfig] = createSignal<Config>({});
+  const [schema, setSchema] = createSignal('');
   const [saving, setSaving] = createSignal(false);
   const [confirmation, setConfirmation] = createSignal<Confirmation>();
   const [runId, setRunId] = createSignal<string>();
@@ -19,7 +20,7 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
   createEffect(() => {
     const [id, name, settings] = JSON.parse(signature()) as [string, string, Config];
     void id;
-    setTitle(name); setConfig(settings);
+    setTitle(name); setConfig(settings); setSchema(settings.outputSchema ? JSON.stringify(settings.outputSchema, null, 2) : '');
   });
   const set = (key: string, value: Config[string]) => setConfig(old => ({ ...old, [key]: value }));
   const base = () => nodePath(props.workflowId, props.node.id);
@@ -33,7 +34,15 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
   });
   const save = async () => {
     setSaving(true);
-    try { return await props.action(base(), 'PATCH', { title: title(), config: config() }); }
+    try {
+      const supportsSchema = props.node.kind === 'program' || (props.node.kind === 'exec' && ['claude', 'codex'].includes(String(config().preset)));
+      let outputSchema: unknown = null;
+      if (supportsSchema && schema().trim()) {
+        try { outputSchema = JSON.parse(schema()); }
+        catch { props.toast('outputSchema must be valid JSON'); return false; }
+      }
+      return await props.action(base(), 'PATCH', { title: title(), config: { ...config(), ...(props.node.kind === 'program' || props.node.kind === 'exec' ? { outputSchema: supportsSchema ? outputSchema : null } : {}) } });
+    }
     finally { setSaving(false); }
   };
   const field = (key: string, label: string, type = 'text', hint?: string) => <label class="field">
@@ -60,6 +69,7 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
     <div class="panel-heading"><div><span class="eyebrow">CELL SETTINGS</span><h2>{props.node.title}</h2></div><button onClick={props.close} aria-label="Close settings">×</button></div>
     <Status state={props.state} />
     <Show when={props.state?.error}><p class="error-box">{props.state?.error}</p></Show>
+    <section><h3>Derived types</h3><pre>{JSON.stringify(props.node.types ?? {}, null, 2)}</pre></section>
     <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <label class="field"><span>Title</span><input value={title()} onInput={event => setTitle(event.currentTarget.value)} required /></label>
       <Show when={props.node.kind === 'git'}>
@@ -83,7 +93,7 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
           {select('tools', 'Tools', ['readonly', 'none'])}
         </Show>
         <Show when={preset() === 'codex'}>{select('effort', 'Effort', ['low', 'medium', 'high'])}<p class="muted small">Sandbox: read-only</p></Show>
-        <p class="hint">Templates accept <code>{'{{port}}'}</code>, <code>{'{{port.old}}'}</code>, <code>{'{{port.new}}'}</code>, <code>{'{{port.repo}}'}</code>. Replace “port” with an input name. Missing values become empty strings.</p>
+        <p class="hint">Templates accept <code>{'{{port}}'}</code>, <code>{'{{port.old}}'}</code>, <code>{'{{port.new}}'}</code>, <code>{'{{port.repo}}'}</code>. Replace “port” with an input name. Optional type annotation: <code>{'{{port:gitRange}}'}</code>. Missing fields fail before launch. Fields are flat; JSON stays text in new.</p>
         <Show when={!isBeadsPreset(preset())}>{field('cwd', 'Working directory', 'text', 'Leave empty for the server default')}</Show>
       </Show>
       <Show when={props.node.kind === 'program'}>
@@ -97,6 +107,10 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
       <Show when={props.node.kind === 'program' || props.node.kind === 'exec' || props.node.kind === 'judge'}>
         {field('timeoutSec', 'Timeout (seconds)', 'number')}
         <label class="toggle"><input type="checkbox" checked={Boolean(config().auto)} onChange={event => set('auto', event.currentTarget.checked)} />Run automatically when inputs change</label>
+      </Show>
+      <Show when={props.node.kind === 'program' || (props.node.kind === 'exec' && (preset() === 'claude' || preset() === 'codex'))}>
+        <label class="field"><span>Output schema (JSON, optional)</span><textarea rows="8" value={schema()} onInput={event => setSchema(event.currentTarget.value)} />
+          <small>Draft 2020-12. The server validates supported keywords. Program schema changes require preview and promotion.</small></label>
       </Show>
       <button class="primary save" type="submit" disabled={saving()}>{saving() ? 'Saving…' : 'Save settings'}</button>
     </form>
