@@ -21,13 +21,14 @@ data class StudioNode(val id: String, val kind: String, val title: String, val x
 data class StudioEdge(val id: String, val from: String, val to: String, val port: String)
 @Serializable
 data class RunSummary(val runId: String, val startedAt: String, val durationMs: Long,
-                      val exitCode: Int, val costUsd: Double? = null)
+                      val exitCode: Int, val costUsd: Double? = null, val outcome: String? = null)
 @Serializable
 data class RunDetail(val runId: String, val startedAt: String, val durationMs: Long,
                      val exitCode: Int, val costUsd: Double? = null,
                      val inputs: Map<String, JsonObject>, val argv: List<String>, val cwd: String,
-                     val stdout: String, val stderr: String, val error: String? = null) {
-    fun summary() = RunSummary(runId, startedAt, durationMs, exitCode, costUsd)
+                     val stdout: String, val stderr: String, val error: String? = null,
+                     val outcome: String? = null, val judgment: StudioJudgment? = null) {
+    fun summary() = RunSummary(runId, startedAt, durationMs, exitCode, costUsd, outcome)
 }
 @Serializable
 data class PreviewState(val codeHash: String, val status: String = "idle",
@@ -38,7 +39,7 @@ data class NodeState(val id: String, val status: String = "idle", val output: Js
                      val runCount: Int = 0, val lastRun: RunSummary? = null,
                      val text: String = "", val ref: String? = null, val code: String? = null,
                      val codeHash: String? = null, val approvedHash: String? = null,
-                     val preview: PreviewState? = null)
+                     val preview: PreviewState? = null, val judgment: StudioJudgeState? = null)
 @Serializable
 data class StudioGraph(val nodes: List<StudioNode>, val edges: List<StudioEdge>,
                        val state: Map<String, NodeState> = emptyMap())
@@ -53,6 +54,7 @@ internal val portName = Regex("[A-Za-z_][A-Za-z0-9_]*")
 internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
     val defaults = when (kind) {
         "text" -> "{}"
+        "judge" -> JUDGE_DEFAULTS
         "git" -> """{"repo":"","branch":"","intervalSec":60,"fetch":true}"""
         "program" -> """{"prompt":"","inputs":["in"],"generator":"claude","auto":true,"timeoutSec":120}"""
         "exec" -> {
@@ -68,6 +70,7 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
         else -> bad("unknown node kind: $kind")
     }
     val config = JsonObject(json.parseToJsonElement(defaults).jsonObject + supplied)
+    if (kind == "judge") validateJudge(config)
     if (kind == "exec" && config.string("preset") == "custom") tokenize(config.string("command"))
     if (kind in setOf("exec", "program") && config.long("timeoutSec", 0) <= 0) bad("timeoutSec must be positive")
     if (kind == "git" && config.long("intervalSec", 0) <= 0) bad("intervalSec must be positive")
@@ -83,6 +86,7 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
 }
 
 internal fun inputPorts(kind: String, config: JsonObject): List<String> = when (kind) {
+    "judge" -> judgePorts(config)
     "exec" -> placeholder.findAll(config.string(if (config.string("preset") == "custom") "command" else "prompt"))
         .map { it.groupValues[1] }.distinct().toList()
     "program" -> {

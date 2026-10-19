@@ -23,7 +23,8 @@ import java.util.UUID
 import java.util.concurrent.*
 
 /** Graph and node state have one lock; kernel callbacks only enqueue onto intake. */
-class StudioRuntime internal constructor(val data: Path, private val sandbox: PythonSandbox) : AutoCloseable {
+class StudioRuntime internal constructor(val data: Path, private val sandbox: PythonSandbox,
+                                         private val judge: StudioJudge = TypeSafeStudioJudge()) : AutoCloseable {
     constructor(data: Path) : this(data, PythonSandbox())
     private val lock = Any()
     private val scheduler = VirtualThreadScheduler("studio-host")
@@ -381,7 +382,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
 
     fun run(id: String) = synchronized(lock) {
         val e = entry(id)
-        if (e.node.kind !in setOf("exec", "program")) conflict("run requires an exec or program node")
+        if (e.node.kind !in setOf("exec", "program", "judge")) conflict("run requires an exec, program or judge node")
         if (!ready(e)) conflict("an input is missing")
         if (e.generating) conflict("node is generating code")
         if (e.busy) {
@@ -538,7 +539,17 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         var result = ProcessResult(-1, "", "", "run did not start")
         var output = ""
         var cost: Double? = null
+        var judgment: StudioJudgment? = null
+        var outcome: String? = null
         try {
+            if (node.kind == "judge") {
+                val response = judge.judge(node.config, inputs)
+                judgment = response.judgment
+                cost = response.costUsd
+                outcome = if (node.config.string("mode") == "gate")
+                    if (judgePasses(node.config, response.judgment)) "passed" else "gated" else "judged"
+                result = ProcessResult(0, json.encodeToString(response.judgment), "", null)
+            } else {
             val config = node.config
             val preset = if (generating) config.string("generator", "claude") else if (node.kind == "program") "python" else config.string("preset")
             cwd = if (node.kind == "program") { if (generating) nodeDir(node.id) else dir.resolve("work") } else {
@@ -573,9 +584,11 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 else -> output = result.stdout
             }
             output = output.removeSuffix("\n")
+            }
         } catch (ex: Exception) { result = result.copy(error = ex.message ?: ex.javaClass.simpleName) }
         val detail = RunDetail(runId, started.toString(), java.time.Duration.between(started, Instant.now()).toMillis(),
-            result.exitCode, cost, inputs, argv, cwd.toAbsolutePath().toString(), result.stdout, result.stderr, result.error)
+            result.exitCode, cost, inputs, argv, cwd.toAbsolutePath().toString(), result.stdout, result.stderr, result.error,
+            if (node.kind == "judge") outcome ?: "failed" else null, judgment)
         // Run output I/O is deliberately outside the studio lock.
         try {
             Files.createDirectories(dir)
@@ -587,9 +600,18 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
             if (closed || !current(e) || e.job?.runId != runId || e.job?.phase != "started") return
             e.busy = false; e.generating = false
             e.job = e.job!!.copy(phase = "completed", result = detail)
-            e.state = e.state.copy(lastRun = detail.summary(), status = if (result.error == null) "idle" else "failed", error = result.error)
+            e.state = e.state.copy(lastRun = detail.summary(), status = if (result.error != null) "failed" else if (outcome == "gated") "gated" else "idle", error = result.error)
             if (result.error == null) {
-                if (generating) installCodeLocked(e, output)
+                if (judgment != null) {
+                    val prior = e.state.judgment
+                    e.state = e.state.copy(judgment = StudioJudgeState(judgment,
+                        (prior?.passed ?: 0) + if (outcome == "passed") 1 else 0,
+                        (prior?.gated ?: 0) + if (outcome == "gated") 1 else 0))
+                    val value = judgedChange(node.config, inputs, prior?.last?.answer, judgment)
+                    if (value != null && e.state.output?.get("new") != value["new"]) publish(e, value)
+                    else changed(e)
+                }
+                else if (generating) installCodeLocked(e, output)
                 else if (e.state.output?.get("new")?.jsonPrimitive?.contentOrNull != output)
                     publish(e, change(e.state.output?.get("new")?.jsonPrimitive?.contentOrNull, output))
                 else changed(e)

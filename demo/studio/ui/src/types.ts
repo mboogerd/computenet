@@ -1,4 +1,4 @@
-export type Kind = 'text' | 'git' | 'exec' | 'program';
+export type Kind = 'text' | 'git' | 'exec' | 'program' | 'judge';
 export type Config = Record<string, string | number | boolean | string[]>;
 export interface StudioNode {
   id: string;
@@ -17,6 +17,7 @@ export interface RunSummary {
   durationMs: number;
   exitCode: number;
   costUsd: number | null;
+  outcome?: 'judged' | 'passed' | 'gated' | 'failed' | null;
 }
 export interface RunDetail extends RunSummary {
   inputs: Record<string, Change>;
@@ -25,7 +26,10 @@ export interface RunDetail extends RunSummary {
   stdout: string;
   stderr: string;
   error: string | null;
+  judgment?: Judgment | null;
 }
+export interface Judgment { answer: string; probability: number | null; reason: string | null }
+export interface JudgeState { last: Judgment; passed: number; gated: number }
 export interface PreviewState {
   codeHash: string;
   status: 'idle' | 'running' | 'failed';
@@ -34,7 +38,7 @@ export interface PreviewState {
 }
 export interface NodeState {
   id: string;
-  status: 'idle' | 'stale' | 'queued' | 'running' | 'generating' | 'failed';
+  status: 'idle' | 'stale' | 'queued' | 'running' | 'generating' | 'failed' | 'gated';
   output: Change | null;
   inputs: Record<string, Change>;
   error: string | null;
@@ -46,6 +50,7 @@ export interface NodeState {
   codeHash?: string | null;
   approvedHash?: string | null;
   preview?: PreviewState | null;
+  judgment?: JudgeState | null;
 }
 export interface Graph { nodes: StudioNode[]; edges: Edge[]; state: Record<string, NodeState> }
 export type Frame =

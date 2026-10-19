@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
 import type { NodeState, StudioNode } from './types';
 import { outputPreview, PORT_GAP, PORT_TOP } from './model';
+import { JudgeCard } from './JudgeSettings';
 import { nodePath } from './api';
 
 export type Action = (path: string, method?: string, body?: unknown) => Promise<boolean>;
@@ -64,7 +65,8 @@ export default function NodeCard(props: {
         <p class="repo" title={String(props.node.config.repo ?? '')}>{String(props.node.config.repo || 'Select cell to set repository')}</p>
         <div class="actions"><code>{props.state?.ref?.slice(0, 7) || 'No ref yet'}</code><button onClick={() => props.action(`${nodePath(props.workflowId, props.node.id)}/fire`, 'POST')}>Fire</button></div>
       </Show>
-      <Show when={props.node.kind === 'exec' || props.node.kind === 'program'}>
+      <Show when={props.node.kind === 'judge'}><JudgeCard config={props.node.config} state={props.state} /></Show>
+      <Show when={props.node.kind === 'exec' || props.node.kind === 'program' || props.node.kind === 'judge'}>
         <div class="actions"><button class={props.state?.status === 'stale' ? 'stale-run' : 'primary'} disabled={unapproved()}
           title={unapproved() ? 'Generate and approve the code in the side panel first' : 'Run with current inputs'} onClick={run}>
           {props.state?.status === 'stale' ? 'Inputs changed — Run' : 'Run'}

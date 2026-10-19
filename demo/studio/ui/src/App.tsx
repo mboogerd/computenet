@@ -245,6 +245,7 @@ export default function App() {
         <button onClick={() => add('text')}>+ Text</button><button onClick={() => add('git')}>+ Git repo</button>
         <button onClick={() => add('exec', 'custom')}>+ Command</button><button onClick={() => add('exec', 'claude')}>+ Claude</button>
         <button onClick={() => add('exec', 'codex')}>+ Codex</button><button onClick={() => add('program')}>+ Programmable</button>
+        <button onClick={() => add('judge')}>+ Jev</button>
       </div></Show>
       <Show when={available()}><span class={`connection ${connection()}`}><i />{connection()}</span></Show>
     </header>

@@ -2,6 +2,7 @@ import { createEffect, createMemo, createResource, createSignal, For, Show } fro
 import { nodePath, request } from './api';
 import type { Config, NodeState, RunDetail, RunSummary, StudioNode } from './types';
 import { Status, type Action } from './NodeCard';
+import JudgeSettings from './JudgeSettings';
 import { promotionAction } from './model';
 import ConfirmationDialog, { type Confirmation } from './ConfirmationDialog';
 
@@ -85,7 +86,8 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
           <small>Comma-separated names, for example: in, change</small></label>
         {select('generator', 'Generator', ['claude', 'codex'])}
       </Show>
-      <Show when={props.node.kind === 'program' || props.node.kind === 'exec'}>
+      <Show when={props.node.kind === 'judge'}><JudgeSettings config={config()} ports={props.node.ports} set={set} /></Show>
+      <Show when={props.node.kind === 'program' || props.node.kind === 'exec' || props.node.kind === 'judge'}>
         {field('timeoutSec', 'Timeout (seconds)', 'number')}
         <label class="toggle"><input type="checkbox" checked={Boolean(config().auto)} onChange={event => set('auto', event.currentTarget.checked)} />Run automatically when inputs change</label>
       </Show>
@@ -118,7 +120,7 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
       <Show when={!runs.loading} fallback={<p class="muted small">Loading runs…</p>}>
         <Show when={runs()?.length} fallback={<p class="muted small">No runs yet.</p>}>
           <div class="run-list"><For each={runs()}>{run => <button class={runId() === run.runId ? 'active' : ''} onClick={() => setRunId(run.runId)}>
-            <span>{new Date(run.startedAt).toLocaleString()}</span><small>{run.durationMs} ms · exit {run.exitCode}{run.costUsd != null ? ` · $${run.costUsd.toFixed(4)}` : ''}</small>
+            <span>{new Date(run.startedAt).toLocaleString()}</span><small>{run.durationMs} ms · {run.outcome ?? `exit ${run.exitCode}`}{run.costUsd != null ? ` · $${run.costUsd.toFixed(4)}` : ''}</small>
           </button>}</For></div>
         </Show>
       </Show>
@@ -126,8 +128,10 @@ export default function Panel(props: { workflowId: string; node: StudioNode; sta
       <Show when={detail()}>{run => <div class="run-detail">
         <h4>Run detail</h4><dl><dt>Run</dt><dd>{run().runId}</dd><dt>Argv</dt><dd><pre>{JSON.stringify(run().argv, null, 2)}</pre></dd>
           <dt>Working directory</dt><dd>{run().cwd || 'Default'}</dd><dt>Exit code</dt><dd>{run().exitCode}</dd>
+          <dt>Outcome</dt><dd>{run().outcome ?? (run().exitCode === 0 ? 'completed' : 'failed')}</dd>
           <dt>Duration</dt><dd>{run().durationMs} ms</dd><dt>Cost</dt><dd>{run().costUsd == null ? 'Not reported' : `$${run().costUsd}`}</dd></dl>
         <Show when={run().error}><p class="error-box">{run().error}</p></Show>
+        <Show when={run().judgment}><h4>Judgment</h4><pre>{JSON.stringify(run().judgment, null, 2)}</pre></Show>
         <h4>Inputs</h4><pre>{JSON.stringify(run().inputs, null, 2)}</pre>
         <h4>Stdout</h4><pre>{run().stdout || '(empty)'}</pre><h4>Stderr</h4><pre>{run().stderr || '(empty)'}</pre>
       </div>}</Show>
