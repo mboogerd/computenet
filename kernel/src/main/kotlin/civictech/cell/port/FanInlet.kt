@@ -20,34 +20,6 @@ import civictech.cell.port.PortRef
 import java.util.IdentityHashMap
 
 /**
- * Per-inlet wave-completeness policy (spec 20/22 §Bridged frontier / Completeness
- * over silent or stuck edges, CP-A4): buffers the reactive data waves arriving on
- * an inlet until each wave's edge frontier is complete, then releases them, in
- * per-source counter order, to the inlet's served handler. The [PolicyTier.ALIGN]
- * member of the inlet policy chain (PN-9); opt in via [FanInlet.install] (or the
- * deprecated [FanInlet.frontierPolicy] sugar). The sugar cell
- * [civictech.cell.consistency.GlitchFreeCell] installs one over an inlet→outlet
- * pass-through.
- *
- * A frontier registers its own generic-protocol handlers (topology-order,
- * progress, suspension) when [attach]ed, so edge and watermark markers reach it
- * through the ordinary [ProtocolSupport] delivery path — identical whether the
- * arm is in-process or bridged (spec 40/41 point 4).
- */
-interface InletFrontier : InletPolicy {
-    /**
-     * The host-checkpoint view of this frontier's transient holding tier. A
-     * frontier that retains an invocation after [InletPolicy.offer] returns
-     * exposes it here until it releases or drops it, so a durable host can carry
-     * the accepted frame even though it has left the host scheduler and is not
-     * yet reflected in cell state. The empty default preserves custom
-     * pass-through frontiers; retaining implementations must override it to
-     * participate in the durability contract.
-     */
-    fun checkpointPending(): List<Invocation> = emptyList()
-}
-
-/**
  * An aggregating input port that supports multiple concurrent producers.
  *
  * Its "Fan-In" nature comes from allowing many upstream cells to hold its [Use]
@@ -119,8 +91,8 @@ class FanInlet<Api : Any>(
     private val parked = ParkQueue<Invocation>()
 
     /**
-     * Host acceptance positions for invocations retained in an ALIGN policy or
-     * [parked]. A direct in-process call can reach the same tiers but has no host
+     * Host acceptance positions for invocations retained in the cold [parked]
+     * tail. A direct in-process call can reach the same tail but has no host
      * acceptance position and therefore no journal frame for a checkpoint to
      * carry. Identity keys distinguish byte-identical repeated calls.
      */
@@ -134,8 +106,8 @@ class FanInlet<Api : Any>(
 
     /**
      * The inbound policy chain (PN-9, spec 12 §Policies): an ordered set of
-     * [InletPolicy] stages run in fixed [PolicyTier] order (ADMIT →
-     * ALIGN → ACTIVATE), install order irrelevant. Each stage is [attach]ed once
+     * [InletPolicy] stages run in fixed [PolicyTier] order (ADMIT → ACTIVATE),
+     * install order irrelevant. Each stage is [attach]ed once
      * with a stable release that indirects through [Stage.downstream]; [rewire]
      * only re-links the downstream slots when a stage is added, so no policy is
      * ever double-attached (double protocol-handler registration).
@@ -165,13 +137,9 @@ class FanInlet<Api : Any>(
 
     /**
      * Install an [InletPolicy] on this inlet (PN-9). Install order is irrelevant;
-     * the chain always runs in tier order. At most one [PolicyTier.ALIGN] policy
-     * is allowed (spec 12 §Policies) — a second throws.
+     * the chain always runs in tier order.
      */
     fun install(policy: InletPolicy) {
-        require(!(policy.tier == PolicyTier.ALIGN && stages.any { it.policy.tier == PolicyTier.ALIGN })) {
-            "spec 12 §Policies: at most one ALIGN policy per inlet"
-        }
         val stage = Stage(policy)
         stages += stage
         // Attach once; the release indirects through the (later re-wired) slot.
@@ -188,13 +156,13 @@ class FanInlet<Api : Any>(
         rewire()
     }
 
-    /** True iff a policy of [tier] is installed (spec 34 region detection keys on ALIGN). */
+    /** True iff a policy of [tier] is installed. */
     fun hasPolicy(tier: PolicyTier): Boolean = stages.any { it.policy.tier == tier }
 
     /**
      * Edge-event fan-out (PN-9): multiple policies on one inlet may care about
-     * `EdgeOpen`/`EdgeClose` (an ALIGN frontier tracks edges; a PullOnOpen issues
-     * a StateRequest) — but [ProtocolSupport] keeps a single handler per protocol
+     * `EdgeOpen`/`EdgeClose` (for example, a PullOnOpen issues a StateRequest) —
+     * but [ProtocolSupport] keeps a single handler per protocol
      * id. This inlet owns that one [Protocols.TopologyOrder] handler and fans the
      * event to every registered observer, in registration order, so policies
      * compose without a global protocol-handler semantic change.
@@ -226,21 +194,17 @@ class FanInlet<Api : Any>(
 
     /** Drop transient buffered state across every installed policy (RESTART). */
     fun resetPolicies() {
-        checkpointPolicyPending().forEach(checkpointOrder::remove)
         stages.forEach { it.policy.reset() }
     }
 
     /**
      * Offer one host-accepted invocation through this inlet while preserving
-     * [hostSequence] if an ALIGN policy or the ACTIVATE tail retains it. Returns
+     * [hostSequence] if the ACTIVATE tail retains it. Returns
      * `false` only for a hot inlet with no policy chain, where the caller must
      * use its ordinary suspend-aware dispatch path; otherwise this method has
-     * consumed the offer, whether it delivered, parked, retained, or dropped it.
-     *
-     * The position is installed before the policy offer, rather than stamped at
-     * the cold terminal. A frontier may release the invocation much later — on
-     * an edge/progress event or while a sibling arm is being offered — and the
-     * original acceptance position must survive that different call stack.
+     * consumed the offer, whether it delivered, parked, or dropped it. The
+     * position is installed before the policy offer so the cold terminal can
+     * retain the original acceptance position for checkpoint replay.
      */
     internal fun offerHosted(invocation: Invocation, hostSequence: Long): Boolean {
         val entry = chainEntry
@@ -262,14 +226,8 @@ class FanInlet<Api : Any>(
         return true
     }
 
-    private fun checkpointPolicyPending(): List<Invocation> = stages
-        .asSequence()
-        .mapNotNull { it.policy as? InletFrontier }
-        .flatMap { it.checkpointPending().asSequence() }
-        .toList()
-
     private fun checkpointHeld(invocation: Invocation): Boolean =
-        parked.snapshot().any { it === invocation } || checkpointPolicyPending().any { it === invocation }
+        parked.snapshot().any { it === invocation }
 
     /**
      * Forget the host acceptance position after a retaining policy removes an
@@ -281,9 +239,9 @@ class FanInlet<Api : Any>(
         checkpointOrder.remove(invocation)
     }
 
-    /** Journaled policy-held and cold-tail entries with their original host acceptance positions. */
+    /** Journaled cold-tail entries with their original host acceptance positions. */
     internal fun checkpointParked(): List<Pair<Long, Invocation>> =
-        (checkpointPolicyPending() + parked.snapshot()).mapNotNull { invocation ->
+        parked.snapshot().mapNotNull { invocation ->
             checkpointOrder[invocation]?.let { it to invocation }
         }
 
@@ -303,20 +261,8 @@ class FanInlet<Api : Any>(
      */
     fun drainParked(): List<Invocation> = drainColdTail()
 
-    /**
-     * Deprecated ALIGN sugar (PN-9): assigning a frontier is now shorthand for
-     * [install]. Kept for the many call sites that set a [WaveFrontier] directly;
-     * new code should [install] policies (which composes across tiers).
-     */
-    @Deprecated("Install policies via install(); frontierPolicy is ALIGN-tier sugar", ReplaceWith("install(value)"))
-    var frontierPolicy: InletFrontier? = null
-        set(value) {
-            field = value
-            if (value != null) install(value)
-        }
-
     /** Chain entry point: captures each call as a wave-stamped [Invocation] and offers it to the chain head. */
-    private val frontierGate: Api by lazy {
+    private val chainGate: Api by lazy {
         Proxy.fromClass(clazz) { _, method, args ->
             chainEntry?.invoke(Invocation.of(method, args, CurrentContext.get()))
             null
@@ -329,17 +275,16 @@ class FanInlet<Api : Any>(
         // inlet. Record the distinction before dispatch: downstream emissions
         // can synchronously ask whether this owner is a structural root.
         entryObservation?.observe(reactive = CurrentContext.get() != null)
-        if (chainEntry != null) frontierGate else (activeImplementation?.call ?: parkingImplementation)
+        if (chainEntry != null) chainGate else (activeImplementation?.call ?: parkingImplementation)
     }
 
     /**
      * Targeted delivery (PN-9 decision: **policy-exempt**). [at] delivers a
      * catch-up/pull-reply to one requester — a topology-versioned baseline
-     * ([civictech.cell.MessageContext.baseline]), never a wave position. The
-     * ALIGN frontier already releases such deliveries immediately (offer's
-     * baseline fast-path); routing [at] through the chain would be wrong (ADMIT
-     * could drop, GATE could hold, ALIGN could reorder a baseline — none
-     * admissible for state transfer). So [at] bypasses the policy chain and
+     * ([civictech.cell.MessageContext.baseline]), never a wave position. Routing
+     * [at] through the chain would be wrong: ADMIT could drop and a future hold
+     * policy could retain a baseline, neither admissible for state transfer. So
+     * [at] bypasses the policy chain and
      * dispatches straight to the handler.
      */
     override fun at(portRef: PortRef): Api {

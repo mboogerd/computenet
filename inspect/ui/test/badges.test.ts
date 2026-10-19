@@ -14,9 +14,8 @@ describe('colorGlyph', () => {
 });
 
 describe('manifestBadge', () => {
-  it('uses the ticket-named short letters for the four called-out manifests', () => {
+  it('uses the ticket-named short letters for the three called-out manifests', () => {
     expect(manifestBadge('DURABLE')).toBe('D');
-    expect(manifestBadge('GLITCH_FREE')).toBe('GF');
     expect(manifestBadge('REPLICATED')).toBe('R');
     expect(manifestBadge('PARTITIONED')).toBe('PT');
   });

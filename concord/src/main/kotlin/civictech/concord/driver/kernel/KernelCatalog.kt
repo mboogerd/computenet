@@ -5,7 +5,6 @@ import civictech.cell.CellRef
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.ManagedHost
 import civictech.cell.data.Aggregator
-import civictech.cell.data.op.CoalescingCombineCell
 import civictech.cell.data.op.CountCell
 import civictech.cell.data.CounterCell
 import civictech.cell.data.op.FilterCell
@@ -26,13 +25,11 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.WaterlineCell
 import civictech.cell.data.Windows
-import civictech.cell.observe.AlignedCompositeCell
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.concord.value.Value
 import java.io.Serializable
-import java.util.Collections
 
 /**
  * The neutral cell-catalog → kernel-cell binding (W1-A/W3-0, CONCORD-PLAN §1.4
@@ -51,36 +48,14 @@ import java.util.Collections
  */
 internal object KernelCatalog {
 
-    /**
-     * How a view cell's materialized value is folded back into a [Value].
-     * [COMPOSITE] is an `aligned-view`: its sink ([RecordedComposite]) has
-     * already rendered each member with the member's own kind, so the read is a
-     * `MapVal` of those renderings.
-     */
-    enum class ViewKind { NONE, SET, VALUE, MAP, COUNT, LIST, COMPOSITE }
+    /** How a view cell's materialized value is folded back into a [Value]. */
+    enum class ViewKind { NONE, SET, VALUE, MAP, COUNT, LIST }
 
     /** The outcome of building one catalog cell: the kernel [Cell] plus (for views) the sink to read. */
     data class Built(
         val cell: Cell,
         val sink: ObservationSink<*>? = null,
         val viewKind: ViewKind = ViewKind.NONE,
-        /**
-         * `glitch-free: true` was requested: the driver spawns a downstream
-         * [civictech.cell.consistency.GlitchFreeCell] and routes [cell]'s output
-         * through it, so downstream links read the wave-aligned outlet.
-         */
-        val glitchFree: Boolean = false,
-        /**
-         * The built cell coalesces **at the operator** — it emits one delta per
-         * *completed* input wave, so the requested `glitch-free` semantics are
-         * already its own (`CoalescingCombineCell`, `[22-GF-01]`). Two
-         * consequences the driver reads off this flag: no downstream
-         * [civictech.cell.consistency.GlitchFreeCell] wrapper is spawned (there is
-         * no torn stream left to buffer — see [build]), and the cell's fan-in is a
-         * single unrestricted `inlet` rather than the plain form's `left`/`right`
-         * port pair (see [inletName]).
-         */
-        val waveAligned: Boolean = false,
         /**
          * For a view cell: the live observation stream, appended to
          * **synchronously on the folding thread** — see [RecordedView] for why the
@@ -108,11 +83,6 @@ internal object KernelCatalog {
         // FU-6: a view/cell declaring `inlet-mode: single-writer` binds a strict
         // point-to-point (single-writer) FanInlet, so a second writer's connect is Rejected.
         val singleWriter = (params["inlet-mode"] as? Value.StrVal)?.value == "single-writer"
-        // `glitch-free: true` (scenario.md: "request wave-aligned semantics on a
-        // fan-in cell"). Read here as well as at the bottom of this function
-        // because one binding — the scalar `combine-latest` — has two honest
-        // kernel forms and the param selects between them.
-        val glitchFreeRequested = (params["glitch-free"] as? Value.BoolVal)?.value == true
         // `lateness: L` (scenario.md §lateness, spec 24 §Lateness and waterlines,
         // computenet-t4od7.1): legal only on the catalog ids whose kernel cell
         // takes a `Windows.Lateness` — anywhere else it would be silently
@@ -201,31 +171,17 @@ internal object KernelCatalog {
             )
             "group-by" -> Built(groupBy(KernelFunctions.aggregator(agg)))
             "partition" -> Built(partitioned(KernelFunctions.aggregator(agg)))
-            // The scalar `combine-latest fn: sum` has TWO bound forms, selected by
-            // the existing `glitch-free` descriptor param (no new catalog id, no new
-            // field):
-            //  - plain (`glitch-free` absent/false) → the driver adapter
-            //    [ScalarSumCombineCell]: it folds each arm's arrival straight into
-            //    the running sum, so it is order-independent at quiescence
-            //    (`final-view` holds) but deliberately NOT wave-aligned — a torn
-            //    intermediate sum is observable mid-wave (`CTL-GF-01`). It combines
-            //    two *independent* inlets, the shape `24-OP-COMBINE-01` drives.
-            //  - `glitch-free: true` → the kernel's [CoalescingCombineCell]
-            //    (D-COMBINE): version-buffered, emitting exactly one delta per
-            //    *completed* input wave, so no torn sum is ever observable
-            //    (`24-OP-COMBINE-02`, `[22-GF-01]`). Wave-alignment is a property of
-            //    a fork-join: its completeness set is every open Consume inlink, so
-            //    this form belongs on arms of one forked source (as any wave-aligned
-            //    fan-in does), not on two independent sources.
+            // The scalar `combine-latest fn: sum` binds to the driver adapter
+            // [ScalarSumCombineCell]. It folds each arm's arrival straight into
+            // the running sum, so it is order-independent at quiescence but not
+            // wave-aligned, and combines two independent inlets
+            // (`24-OP-COMBINE-01`). Unknown descriptor params are ignored at this
+            // catalog seam like they are throughout the lenient scenario schema.
             "combine-latest" -> when (fn) {
-                "sum" -> {
-                    if (glitchFreeRequested) Built(CoalescingCombineCell(), waveAligned = true)
-                    else Built(ScalarSumCombineCell())
-                }
+                "sum" -> Built(ScalarSumCombineCell())
                 else -> throw UnsupportedCatalogBinding(
                     "combine-latest with fn='$fn' has no honest kernel binding — only the scalar fn=sum " +
-                        "arm is bound (plain → ScalarSumCombineCell, order-independent at quiescence but not " +
-                        "wave-aligned; `glitch-free: true` → the kernel's wave-coalescing CoalescingCombineCell). " +
+                        "arm is bound (ScalarSumCombineCell, order-independent at quiescence but not wave-aligned). " +
                         "Combining with any other pure function is unbound.",
                 )
             }
@@ -262,17 +218,6 @@ internal object KernelCatalog {
             "tagged-map-view" -> observeCell(View.taggedMap<Any?, Any?>(), ViewKind.MAP, singleWriter)
             "count-view" -> observeCell(View.count<Any?>(), ViewKind.COUNT, singleWriter)
             "list-view" -> observeCell(listView(), ViewKind.LIST, singleWriter)
-            // `aligned-view` (KE2 §5.8, [22-OBS-01]/[22-OBS-02]): ONE kernel
-            // AlignedCompositeCell over the named member folds of `views:` (the
-            // runner lowers it to `params["views"] = MapVal(name -> StrVal(id))`).
-            // Each member name is also the cell's inlet port for that member, so a
-            // link into it must name `inlet:` (see [inletName]). Members bind the
-            // same folds their standalone ids do; the composite is published once
-            // per completed wave, so no read of it ever mixes waves. The
-            // observation stream is captured by [RecordedComposite] (listener +
-            // drain barrier), not at a fold — see its KDoc for why.
-            "aligned-view" -> alignedView(params)
-
             // ---- cycles -----------------------------------------------------
             // A CycleHead: its `feedbackInput` (a FeedbackInlet) is the only inlet a
             // cycle-closing edge may land on (spec 21 §Cycles). Two catalog ids
@@ -300,16 +245,7 @@ internal object KernelCatalog {
 
             else -> throw UnsupportedCatalogBinding("no kernel binding for catalog cell type '$type'")
         }
-        // `glitch-free: true` (spec 20/22): flag the built cell so the driver spawns
-        // a downstream kernel GlitchFreeCell wrapper and routes this operator's
-        // output through it — the wave-completeness gate the kernel packages
-        // (GlitchFreeOperatorSuiteTest construction). The wrap lives in the driver
-        // (it needs a real host link so the frontier sees EdgeOpen/Progress), not
-        // here — build only records the request via [Built.glitchFree]. A cell that
-        // already coalesces at the operator ([Built.waveAligned]) is exempt: its
-        // outlet carries one delta per completed wave, so a wrapper would re-buffer
-        // an already wave-aligned stream rather than align anything.
-        return if (glitchFreeRequested && !built.waveAligned) built.copy(glitchFree = true) else built
+        return built
     }
 
     /** The catalog ids whose kernel cell takes a `Windows.Lateness` (scenario.md §lateness). */
@@ -458,56 +394,6 @@ internal object KernelCatalog {
     }
 
     /**
-     * Binds `aligned-view`: `params["views"]` must be a non-empty `MapVal` of
-     * view name -> member view id. Only the member ids whose standalone fold is
-     * a plain [View] bind here (`set-view`, `map-view`, `count-view`,
-     * `value-view`); anything else — `list-view`, `tagged-map-view`, a nested
-     * `aligned-view`, an unknown id — is refused by name rather than bound to a
-     * fold that does not mean what the scenario says.
-     *
-     * The cell is constructed by the `views =` named argument only, and the
-     * binding touches only `current()`, `onChange`, `inlets` and `close()`, so
-     * additive constructor params on [AlignedCompositeCell] do not reach it.
-     */
-    private fun alignedView(params: Map<String, Value>): Built {
-        val members = (params["views"] as? Value.MapVal)?.entries
-            ?: throw UnsupportedCatalogBinding(
-                "aligned-view requires a `views:` map of view name -> member view id " +
-                    "(set-view | map-view | count-view | value-view); got ${params["views"]}",
-            )
-        if (members.isEmpty()) {
-            throw UnsupportedCatalogBinding("aligned-view requires a non-empty `views:` map; got {}")
-        }
-        val folds = LinkedHashMap<String, View<*, *>>()
-        val kinds = LinkedHashMap<String, ViewKind>()
-        for ((name, idValue) in members) {
-            val id = (idValue as? Value.StrVal)?.value
-                ?: throw UnsupportedCatalogBinding(
-                    "aligned-view member '$name' must name a member view id as a string; got $idValue",
-                )
-            val (fold, kind) = when (id) {
-                "set-view" -> View.set<Any?>() to ViewKind.SET
-                "map-view" -> View.map<Any?, Any?>() to ViewKind.MAP
-                "count-view" -> View.count<Any?>() to ViewKind.COUNT
-                "value-view" -> scalarView() to ViewKind.VALUE
-                else -> throw UnsupportedCatalogBinding(
-                    "aligned-view member '$name' names '$id', which has no aligned-view binding — only " +
-                        "set-view, map-view, count-view and value-view fold into an aligned composite",
-                )
-            }
-            folds[name] = fold
-            kinds[name] = kind
-        }
-        val cell = AlignedCompositeCell(views = folds)
-        // Appended on the sink's dispatcher thread, read on the runner thread
-        // after [RecordedComposite.drain]: the successful kernel barrier wait
-        // supplies the happens-before edge; the synchronized list is belt and braces.
-        val log: MutableList<Value> = Collections.synchronizedList(mutableListOf())
-        val sink = RecordedComposite(cell, kinds, log)
-        return Built(cell, sink, ViewKind.COMPOSITE, observations = log)
-    }
-
-    /**
      * The kernel inlet port name a scenario link's [scenarioInlet] targets on a
      * cell of catalog [targetType]. The neutral `left`/`right` inlets of a
      * single-port fan-in (`union`/`intersect`/`quorum-set`) collapse to the
@@ -516,27 +402,13 @@ internal object KernelCatalog {
      * given name or defaults to `inlet` — which lets a cycle edge name
      * `feedbackInput` and a seed edge default to `inlet`.
      *
-     * [waveAligned] is the target's [Built.waveAligned]: the wave-coalescing
-     * `combine-latest` ([CoalescingCombineCell]) is a genuine single-port
-     * unrestricted fan-in like `quorum-set`, so *both* neutral arms collapse onto
-     * its one `inlet` — each still its own link, hence its own expected edge in
-     * the cell's completeness set.
-     *
-     * An `aligned-view` has one inlet per member view, named after it, and no
-     * port called `inlet`: a link into one must name its member, so a missing
-     * [scenarioInlet] is refused here rather than defaulted to a port that does
-     * not exist.
      */
-    fun inletName(targetType: String, scenarioInlet: String?, waveAligned: Boolean = false): String = when {
-        targetType == "aligned-view" -> scenarioInlet ?: throw UnsupportedCatalogBinding(
-            "a link into an aligned-view names `inlet:` as one of its view names — the cell has one inlet " +
-                "per member view and no port called `inlet`",
-        )
+    fun inletName(targetType: String, scenarioInlet: String?): String = when {
         // union/quorum-set are single fan-in ports (one `inlet`, left/right merge on it);
         // intersect is NOT — IntersectSetCell exposes distinct `left`/`right` ports (its
         // contract has no `inlet` port), so it routes through the two-input branch.
         targetType == "union" || targetType == "quorum-set" -> "inlet"
-        targetType == "combine-latest" -> if (waveAligned) "inlet" else scenarioInlet ?: "left"
+        targetType == "combine-latest" -> scenarioInlet ?: "left"
         targetType == "intersect" || targetType == "join" ||
             targetType == "semi-join" || targetType == "lookup-join" -> scenarioInlet ?: "left"
         else -> scenarioInlet ?: "inlet"
@@ -689,11 +561,6 @@ internal object KernelCatalog {
         ViewKind.SET -> Value.ListVal((current as Set<*>).map { Value.of(it) }.sortedBy { it.toString() })
         ViewKind.LIST -> Value.ListVal((current as List<*>).map { Value.of(it) })
         ViewKind.MAP, ViewKind.COUNT -> Value.of(current)
-        // Already rendered member by member by RecordedComposite.current().
-        ViewKind.COMPOSITE -> {
-            @Suppress("UNCHECKED_CAST")
-            Value.MapVal(current as Map<String, Value>)
-        }
         ViewKind.NONE -> error("readView on a non-view cell")
     }
 }

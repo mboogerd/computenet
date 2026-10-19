@@ -2,14 +2,9 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.control.AttentionBand
-import civictech.cell.control.AttentionSupport
-import civictech.cell.control.NonSuspendable
 import civictech.cell.control.StallNotice
 import civictech.cell.link.Linked
 import civictech.cell.link.LinkRole
-import civictech.cell.port.FanInlet
-import civictech.cell.port.PolicyTier
 import civictech.cell.port.Port
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
@@ -79,52 +74,10 @@ internal fun upstreamConsumeAncestors(cells: Map<CellRef, Cell>, start: CellRef)
 }
 
 /**
- * Session delta 3 (spec 34 decision 3): the unit of attention suspension
- * is the **glitch-free region** — the local downstream wave-frontier join(s)
- * plus their transitive local upstream contributors, bounded by further
- * frontier cells (the frontier, spec 22). Parking one diamond branch would
- * stall waves at the join; parking the whole region cannot. Returns null
- * (veto) if any member is [NonSuspendable] or still attended. A cell with no
- * local downstream join is its own region (per-cell parking, as before).
- * Cross-host region members are invisible here by design — remote branches
- * remain the WAIT/DEGRADE fallback's job.
- *
- * A "join" is any cell carrying a [FanInlet.frontierPolicy] (CP-A4), not a
- * `GlitchFreeCell` specifically — the sugar cell and a plain opt-in cell are
- * treated identically, keying on the policy rather than the class.
+ * Attention suspension parks one cell at a time. The surrounding topology does
+ * not widen the suspension unit; callers apply the ordinary per-cell vetoes.
  */
-internal fun suspensionRegionOf(cells: Map<CellRef, Cell>, cellRef: CellRef): Set<CellRef>? {
-    val joins = mutableSetOf<CellRef>()
-    bfs(cells, cellRef, downstream = true) { ref, cell ->
-        if (hasFrontierPolicy(cell)) {
-            joins += ref
-            false // the join bounds the walk; regions don't chain through it
-        } else true
-    }
-    if (joins.isEmpty()) return setOf(cellRef)
-    val region = mutableSetOf<CellRef>()
-    joins.forEach { join ->
-        region += join
-        bfs(cells, join, downstream = false) { ref, cell ->
-            if (hasFrontierPolicy(cell)) false // another region's join: frontier
-            else {
-                region += ref
-                true
-            }
-        }
-    }
-    val vetoed = region.any { ref ->
-        val cell = cells[ref] ?: return@any false
-        cell is NonSuspendable || AttentionSupport.of(cell).band > AttentionBand.NONE
-    }
-    return if (vetoed) null else region
-}
-
-/** A cell is a wave-frontier join iff one of its inlets carries an ALIGN policy (CP-A4, PN-9). */
-internal fun hasFrontierPolicy(cell: Cell): Boolean {
-    val ports = PortRegistry.of(cell)
-    return ports.names().any { name -> (ports[name] as? FanInlet<*>)?.hasPolicy(PolicyTier.ALIGN) == true }
-}
+internal fun suspensionRegionOf(cells: Map<CellRef, Cell>, cellRef: CellRef): Set<CellRef>? = setOf(cellRef)
 
 /**
  * Local link-graph walk from [start] (exclusive). [visit] returns whether

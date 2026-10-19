@@ -225,7 +225,7 @@ class BatchEvaluatorTest {
     @Test
     fun `a self-join answers the two-hop fold on a fixed edge set`() {
         val edges = rows(row(1, 2), row(2, 3), row(2, 4), row(3, 1), row(5, 5))
-        // The GatingEvidenceTest.selfJoinMinus fold shape, with nothing blocked and no filter.
+        // The self-join-minus fold shape, with nothing blocked and no filter.
         val expected = edges.flatMap { first ->
             edges.filter { it.values[0] == first.values[1] }.map { Row(listOf(first.values[0], it.values[1])) }
         }.toSet()

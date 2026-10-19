@@ -2,32 +2,21 @@ package civictech.cell.replication
 
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.Propagate
-import civictech.cell.data.SetCell
-import civictech.cell.data.SetOps
-import civictech.cell.data.WatermarkCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.cell.port.FanOutlet
-import civictech.cell.port.LinkFrom
 import civictech.cell.link.Interest
-import civictech.cell.link.LinkResult
 import civictech.cell.nature.NatureNegotiation
-import civictech.cell.port.PortRef
 import civictech.cell.nature.Reconciliation
 import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
-import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
 import civictech.testkit.forEachSeed
 import civictech.nature.MergeClass
 import civictech.nature.NatureAxis
 import civictech.nature.NatureVector
 import io.kotest.matchers.booleans.shouldBeTrue
-import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
@@ -54,7 +43,7 @@ import civictech.cell.data.op.MergeableGroupByCell
  * The board (the union of every live instance's aggregates) equals the batch
  * group-by of every input, and no overlap key is ever counted twice.
  *
- * Controls, all diverging:
+ * Controls, both diverging:
  *  - **(a)** epoch-blind adoption ([InstanceSet.lastWriterWins]) forks a *moved
  *    range*: two peers that learn a repartition's assignments in different orders
  *    end on different interests, where the epoch-max join ([InstanceSet.epochMaxUnion])
@@ -63,15 +52,6 @@ import civictech.cell.data.op.MergeableGroupByCell
  *    `MERGE_IDEMPOTENCE` — *and*, run anyway (a counted `+` accumulator), the
  *    board double-counts every overlap key: the concrete harm the refusal prevents,
  *    "refused, not silently wrong."
- *  - **(c)** PN-0c reverted (a departing replica's delivered-watermark row not
- *    closed on evict) wedges a settlement-gated board on failover: post-failover
- *    waves never settle. Because PN-0c is only observable through a *replica-fed
- *    frontier*, and MergeableGroupByCell's aggregate gossip re-mints wave identity
- *    per member (an aggregate merge is not origin-addressable — verified: each
- *    peer's watermark row is keyed by its own re-emission source, not a shared
- *    origin), this arm exercises the failover on the origin-tagged tagged-set
- *    family ([SetCell]) — the same instance-set mesh, the substrate on which the
- *    delivered-watermark frontier (PN-7) is defined.
  */
 class ShardedReplicationTest {
 
@@ -296,103 +276,4 @@ class ShardedReplicationTest {
         shardA.merge(shardB, ::maxOf).puts[3] shouldBe 1     // safe: overlap folded once
     }
 
-    // ------------------------------------------------------------------
-    // CONTROL (c): PN-0c reverted -> failover wedges a settlement-gated board
-    // (over the origin-tagged tagged-set family; see class KDoc for why).
-    // ------------------------------------------------------------------
-
-    interface SetInletProxy {
-        val inlet: Use<SetOps<String>>
-    }
-    interface SetDeltaInletProxy {
-        val inlet: Use<Propagate<SetDelta<String>>>
-    }
-
-    private val propagateSetDelta =
-        @Suppress("UNCHECKED_CAST") (Propagate::class.java as Class<Propagate<SetDelta<String>>>)
-
-    private val originTags: (Invocation) -> Collection<Timestamp> = { inv ->
-        (inv.args.firstOrNull() as? SetDelta<*>)?.let { it.adds.values.flatten() + it.dels.values.flatten() }
-            ?: emptyList()
-    }
-
-    private fun reroute(outlet: FanOutlet<Propagate<SetDelta<String>>>, inletRef: PortRef, routed: Propagate<SetDelta<String>>) {
-        outlet.unsubscribe(inletRef)
-        outlet.subscribe(Use.fixed(routed, inletRef))
-    }
-
-    /** A shard's two replicas over gossip; a glitch-free board settles on the replica
-     *  frontier over the ORIGINAL member set; one replica fails over mid-run. */
-    private fun runFailover(seed: Long, closeOnEvict: Boolean): List<String> {
-        val controller = SimulationController(seed)
-        val peers = List(3) { Peer(controller) }
-        for (i in peers.indices) for (j in i + 1 until peers.size) Peering.loopback(peers[i].side, peers[j].side)
-        val logicalId = UUID.randomUUID()
-
-        val r0 = SetCell<String>(CellRef(logicalId, 0)).also { peers[0].replication.replicate(it, peers[0].host) }
-        val r1 = SetCell<String>(CellRef(logicalId, 1)).also { peers[1].replication.replicate(it, peers[1].host) }
-        val r2 = SetCell<String>(CellRef(logicalId, 2)).also { peers[2].replication.replicate(it, peers[2].host) }
-        controller.runToIdle()
-
-        val p0 = peers[0]
-        val gf = GlitchFreeCell(propagateSetDelta)
-        p0.host.managementInlet.call.spawn(gf)
-        val routedGf = p0.host.lookup<SetDeltaInletProxy>(gf.ref)!!.inlet.call
-        @Suppress("UNCHECKED_CAST")
-        val r0Out = r0.outlet as FanOutlet<Propagate<SetDelta<String>>>
-        @Suppress("UNCHECKED_CAST")
-        val gfInletFrom = gf.inlet as LinkFrom<Propagate<SetDelta<String>>>
-        (r0Out.linkTo(gfInletFrom) is LinkResult.Connected).shouldBeTrue()
-        reroute(r0Out, gf.inlet.ref, routedGf)
-
-        val members = listOf(r0.ref, r1.ref, r2.ref) // original view: the consumer has not learned of the departure.
-        val frontier = ReplicaFrontier { source, counter, _ ->
-            val companion = p0.replication.watermarkOf(logicalId) ?: return@ReplicaFrontier false
-            val rows = companion.rows()
-            val closed = companion.closed()
-            members.all { ref ->
-                val slot = WatermarkCell.slotId(p0.replication.watermarkRef(ref))
-                slot in closed || (rows[slot]?.get(source) ?: Long.MIN_VALUE) >= counter
-            }
-        }
-        gf.useReplicaFrontier(frontier, originTags)
-        p0.replication.onWatermarkAdvance(logicalId) { gf.recheck() }
-
-        val released = mutableListOf<String>()
-        gf.outlet.subscribe(Use.fixed(Propagate<SetDelta<String>> { delta ->
-            delta.adds.keys.forEach { released += it }
-        }, PortRef.generate()))
-
-        val op0 = (HostedCellProxy.create(r0.ref, p0.registry, SetInletProxy::class.java) as SetInletProxy).inlet.call
-        val op1 = (HostedCellProxy.create(r1.ref, peers[1].registry, SetInletProxy::class.java) as SetInletProxy).inlet.call
-        val op2 = (HostedCellProxy.create(r2.ref, peers[2].registry, SetInletProxy::class.java) as SetInletProxy).inlet.call
-
-        listOf(op0, op1, op2).forEachIndexed { i, op -> op.add("pre$i") }
-        controller.runToIdle()
-
-        peers[2].replication.evict(r2, peers[2].host, closeDepartedRow = closeOnEvict).shouldBeTrue()
-        controller.runToIdle()
-
-        (0 until 5).map { "post$it" }.forEach { op0.add(it); controller.runToIdle() }
-        controller.runToIdle()
-        return released
-    }
-
-    @Test
-    fun `control c - failover keeps the board settling once PN-0c closes the departed row - 100 seeds`() {
-        forEachSeed(0L until 100L) { seed ->
-            val released = runFailover(seed, closeOnEvict = true)
-            released shouldContainAll (0 until 3).map { "pre$it" }
-            released shouldContainAll (0 until 5).map { "post$it" }
-        }
-    }
-
-    @Test
-    fun `control c - reverting PN-0c wedges the board on failover, on every seed`() {
-        forEachSeed(0L until 100L) { seed ->
-            val released = runFailover(seed, closeOnEvict = false)
-            released shouldContainAll (0 until 3).map { "pre$it" }
-            (0 until 5).map { "post$it" }.filter { it in released }.isEmpty().shouldBeTrue()
-        }
-    }
 }

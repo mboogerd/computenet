@@ -34,7 +34,7 @@ data class PortAddress(val cell: CellRef, val port: String)
  * G-39 phase B): unlike an ad-hoc `Use.fixed` subscription, this link has
  * real identity — [id]/[from]/[to] survive repeated frames for the same
  * logical edge — so [ProtocolSupport] bookkeeping keyed by link id
- * (`Attention.linkLevels`, `GlitchFreeCell.edges`) behaves as it would for
+ * (for example, `Attention.linkLevels`) behaves as it would for
  * an in-process link.
  *
  * [fromPort]/[toPort] are null until a delivery on the destination host
@@ -123,7 +123,7 @@ fun defaultProtocolCapabilities(): Set<ProtocolId> =
  * establishment apart from an actual reconnect: the [bridgeFrom] call would
  * read as "superseding" the [bridgeTo] call's own record and close the
  * producer half it had just opened, on every first-time bridge — measured as
- * `GlitchFreeBridgedDiamondTest`/`InletFrontierPolicyTest` regressions before
+ * bridged first-install regressions before
  * this was added. Supersession is therefore scoped to repeats of the SAME
  * call ([bridgeTo] superseding an earlier [bridgeTo] over the same pair,
  * [bridgeFrom] likewise), never across the two.

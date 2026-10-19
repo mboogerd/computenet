@@ -63,9 +63,6 @@ data class FailureSignature(val kind: KClass<out RunOutcome>, val terminal: Stri
         fun of(outcome: RunOutcome): FailureSignature? = when (outcome) {
             RunOutcome.Success -> null
             is RunOutcome.Mismatch -> FailureSignature(RunOutcome.Mismatch::class, outcome.terminal)
-            is RunOutcome.WavePrefixViolation ->
-                FailureSignature(RunOutcome.WavePrefixViolation::class, outcome.terminal)
-
             is RunOutcome.DeadLetterFailure -> FailureSignature(RunOutcome.DeadLetterFailure::class, null)
             is RunOutcome.NonQuiescence -> FailureSignature(RunOutcome.NonQuiescence::class, null)
             is RunOutcome.ModelEvaluationFailure ->

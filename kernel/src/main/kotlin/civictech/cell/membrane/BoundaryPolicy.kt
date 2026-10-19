@@ -183,9 +183,8 @@ object ProjectionRegistry {
  * feature needed no new frontier or link semantics: if a projected value is a
  * distinct logical value, then a **suppressed** projection is simply "this arm
  * has no value in its own domain for this wave" — the same shape as any arm
- * that does not contribute to a wave, whose disposition the model already
- * decided (the I-18 edge-will-not-deliver classification -> `WaveFrontier`
- * RE-SCOPE + a surfaced `GlitchViolation`, landed `computenet-usd.3.1`). Under
+ * that does not contribute to a wave. The former edge-will-not-deliver
+ * classification was retired with wave completeness. Under
  * stance (i) the same graph would instead have been *ill-formed from the
  * start*, and the runtime's job would have been to reject it — a strictly
  * larger, and unbuildable, obligation.

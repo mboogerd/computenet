@@ -99,8 +99,8 @@ tasks.withType<Test>().configureEach {
     // Gradle build, and it runs ALONE for the last ~139s of it — every other test
     // task, `:inspect:test` and `:demo:exchange:test` included, has finished by then,
     // so 3 of the runner's 4 vCPUs idle while the build waits on one JVM. The classes
-    // that dominate it are deterministic seed sweeps (ShardedReplicaFrontierTest,
-    // UnknownJoinerFenceTest, AlignedObserveTest: 100-200 seeds each), i.e. CPU-bound
+    // that dominate it are deterministic seed sweeps (replication GC, evolution,
+    // and durability sweeps: 100-200 seeds each), i.e. CPU-bound
     // work that spare cores turn directly into wall time. Locally, two forks: the task
     // goes 83.6s -> 64.0s standalone (repeated: 65.1, 65.5, 64.7) and 84.5s -> 64.1s
     // inside the whole fast lane, which takes the lane itself from 135.9s to 120.0s.

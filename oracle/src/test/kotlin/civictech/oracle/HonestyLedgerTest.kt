@@ -333,7 +333,6 @@ class HonestyLedgerTest {
         "`OrMapCell` / `TaggedMapDelta`",
         "`MergeableGroupByCell`",
         "Window close / eviction",
-        "`CoalescingCombineCell`",
         "`WatermarkCell`",
         "`WaterlineCell`",
     )
@@ -431,11 +430,8 @@ class HonestyLedgerTest {
      * The `counter`/`pnCounter` coverage note (computenet-gff7): the ledger's own section
      * text, from its `###` heading to the next one.
      *
-     * Scoped to the section rather than asserted against the whole ledger, because the words
-     * that matter here — `CoalescingCombineCell` above all — also occur in that cell's own
-     * exclusion entry further down. A whole-ledger `mustState("CoalescingCombineCell")` would
-     * stay green with this section deleted outright, which is precisely the silent-deletion
-     * path this file exists to close.
+     * Scoped to the section rather than asserted against the whole ledger so deleting the
+     * section outright cannot be masked by similar prose elsewhere in the file.
      */
     private fun counterCoverageNote(): String {
         val ledger = exclusionLedger()
@@ -476,13 +472,14 @@ class HonestyLedgerTest {
         withClue(
             "The same two clauses every exclusion entry carries — a reason evidenced against " +
                 "kernel source, and a recorded DISPUTES conclusion — bind this note too. Its " +
-                "reason is specifically that the ONE cell serving Propagate<CounterDelta> on an " +
-                "inlet is CoalescingCombineCell, which this ledger already excludes: the note is " +
-                "an exclusion's consequence, and without that citation it is an assertion rather " +
-                "than a reason.",
+                "reason is specifically that no kernel cell serves Propagate<CounterDelta> on an " +
+                "inlet since GFR.3, and the source grep proving it is recorded rather than " +
+                "left as an unsupported assertion.",
         ) {
-            note.mustState("CoalescingCombineCell")
-            note.mustState("kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt")
+            note.mustState("no kernel cell serves `Propagate<CounterDelta>` on an inlet")
+            note.mustState("git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main")
+            note.mustState("host/TypedLink.kt")
+            note.mustState("not a `Serve` declaration")
             note.mustState("DISPUTES audit: no filing")
         }
     }
@@ -598,8 +595,9 @@ class HonestyLedgerTest {
     /**
      * The BS-9 pin, inverted the same way the `ORA2 §DIFF-08` one above was, and for the same
      * reason: `computenet-0zbq` built the diamond that entry's own `Resolves` clause named — a
-     * tagged map reaching a fan-in through two paths, with the wave-prefix oracle observing that
-     * fan-in — so the entry had to go with it. What replaces the pin on its text is a pin on its
+     * tagged map reaching a fan-in through two paths, with the since-retired wave-prefix oracle
+     * (GFR.3; see git history) observing that fan-in — so the entry had to go with it. What
+     * replaces the pin on its text is a pin on its
      * **absence** plus a pin on the closure the ledger now carries, which is what stops the
      * deletion from being a silent one and stops the diamond from quietly disappearing again.
      *
@@ -648,7 +646,7 @@ class HonestyLedgerTest {
                 "can exhibit a tear the oracle rejects. Prose without them restates the claim the " +
                 "filing existed to refuse.",
         ) {
-            sweep.mustState("civictech.oracle.tagged.TaggedWavePrefixTest")
+            sweep.mustState("the since-retired `TaggedWavePrefixTest` (GFR.3; see git history before this change)")
             sweep.mustState("join")
             sweep.mustState("NO_MATCHING_PREFIX")
         }

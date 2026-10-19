@@ -18,8 +18,8 @@ package civictech.cell.data.delta
  *   never-suspended slot must read as **bottom**, strictly below any real
  *   counter/epoch; treating "absent" as `0L` there would let a freshly-joined,
  *   not-yet-caught-up member's row look delivered-through-zero instead of
- *   not-yet-known, corrupting the covering-quorum read
- *   ([civictech.cell.replication.Replication.replicaFrontier]).
+ *   not-yet-known, corrupting the causal-stability read
+ *   ([civictech.cell.replication.Replication.stableFrontier]).
  */
 internal fun <K> mergeMax(a: Map<K, Long>, b: Map<K, Long>, identity: Long): Map<K, Long> =
     (a.keys + b.keys).associateWith { maxOf(a[it] ?: identity, b[it] ?: identity) }

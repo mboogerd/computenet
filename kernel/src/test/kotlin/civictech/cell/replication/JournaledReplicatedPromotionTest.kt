@@ -4,9 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Stateful
-import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.data.Replicable
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -28,10 +25,7 @@ import civictech.cell.host.JournalRecords
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.cell.link.LinkResult
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.LinkFrom
-import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.wire.Peering
@@ -55,10 +49,6 @@ class JournaledReplicatedPromotionTest {
 
     interface SetInletProxy {
         val inlet: Use<SetOps<String>>
-    }
-
-    interface SetDeltaInletProxy {
-        val inlet: Use<Propagate<SetDelta<String>>>
     }
 
     private enum class Mode { REUSE_REF, FRESH_REF }
@@ -148,24 +138,6 @@ class JournaledReplicatedPromotionTest {
         }
     }
 
-    /** The origin add/del tags a released SetDelta invocation depends on. */
-    private val originTags: (civictech.cell.proxy.Invocation) -> Collection<Timestamp> = { invocation ->
-        (invocation.args.firstOrNull() as? SetDelta<*>)
-            ?.let { it.adds.values.flatten() + it.dels.values.flatten() }
-            ?: emptyList()
-    }
-
-    private fun reroute(
-        outlet: FanOutlet<Propagate<SetDelta<String>>>,
-        inletRef: PortRef,
-        routed: Propagate<SetDelta<String>>,
-    ) {
-        outlet.unsubscribe(inletRef)
-        outlet.subscribe(Use.fixed(routed, inletRef))
-    }
-
-    private data class Observation(val element: String, val allMembersDelivered: Boolean)
-
     private data class JournalFact(
         val event: TopoEvent.Promote,
         val checkpointBeforePromotion: Boolean,
@@ -173,7 +145,6 @@ class JournaledReplicatedPromotionTest {
 
     private data class Run(
         val memberships: List<Set<String>>,
-        val surfaced: List<Observation>,
         val universe: Set<String>,
         val recoveredCandidate: CandidateSetCell?,
         val liveFactoryWasCandidate: Boolean,
@@ -247,34 +218,6 @@ class JournaledReplicatedPromotionTest {
         controller.runToIdle()
         val current = refs.map(::replica).toMutableList()
 
-        // The consumer lives on never-crashed peer 2 and draws its stable arm
-        // there; only the replica objects at peers 0 and 1 roll beneath it.
-        val glitchFree = GlitchFreeCell(
-            @Suppress("UNCHECKED_CAST")
-            (Propagate::class.java as Class<Propagate<SetDelta<String>>>),
-        )
-        peers[2].host.managementInlet.call.spawn(glitchFree)
-        val routed = peers[2].host.lookup<SetDeltaInletProxy>(glitchFree.ref)!!.inlet.call
-        @Suppress("UNCHECKED_CAST")
-        val stableOutlet = current[2].outlet as FanOutlet<Propagate<SetDelta<String>>>
-        @Suppress("UNCHECKED_CAST")
-        val glitchInlet = glitchFree.inlet as LinkFrom<Propagate<SetDelta<String>>>
-        (stableOutlet.linkTo(glitchInlet) is LinkResult.Connected).shouldBeTrue()
-        reroute(stableOutlet, glitchFree.inlet.ref, routed)
-
-        val observations = mutableListOf<Observation>()
-        glitchFree.outlet.subscribe(Use.fixed(Propagate<SetDelta<String>> { delta ->
-            val element = delta.adds.keys.firstOrNull() ?: return@Propagate
-            val liveByRef = current.associateBy { it.ref }
-            val delivered = peers[2].registry.replicasOf(logicalId)
-                .mapNotNull(liveByRef::get)
-                .all { element in membership(it) }
-            observations += Observation(element, delivered)
-        }, PortRef.generate()))
-        val frontier: ReplicaFrontier = peers[2].replication.replicaFrontier(logicalId)
-        glitchFree.useReplicaFrontier(frontier, originTags)
-        peers[2].replication.onWatermarkAdvance(logicalId) { glitchFree.recheck() }
-
         val ops = peers.mapIndexed { index, peer -> operations(peer, refs[index]) }.toMutableList()
         var recoveredCandidate: CandidateSetCell? = null
         var liveFactoryWasCandidate = true
@@ -346,7 +289,6 @@ class JournaledReplicatedPromotionTest {
 
         return Run(
             memberships = current.map(::membership),
-            surfaced = observations,
             universe = universe,
             recoveredCandidate = recoveredCandidate,
             liveFactoryWasCandidate = liveFactoryWasCandidate,
@@ -360,7 +302,6 @@ class JournaledReplicatedPromotionTest {
         forEachSeed(0L until 100L) { seed ->
             val run = runRoll(seed, Mode.REUSE_REF, crashPeer0 = true)
             run.memberships.forEach { it shouldBe run.universe }
-            run.surfaced.forEach { it.allMembersDelivered.shouldBeTrue() }
             val recoveredCandidate = run.recoveredCandidate.shouldBeInstanceOf<CandidateSetCell>()
             recoveredCandidate.version shouldBe 2
             run.liveFactoryWasCandidate.shouldBeTrue()
@@ -375,7 +316,7 @@ class JournaledReplicatedPromotionTest {
     }
 
     private fun diverges(run: Run): Boolean =
-        run.memberships.any { it != run.universe } || run.surfaced.any { !it.allMembersDelivered }
+        run.memberships.any { it != run.universe }
 
     @Test
     fun `control b - a fresh ref still diverges on the journaled mesh`() {
@@ -383,5 +324,6 @@ class JournaledReplicatedPromotionTest {
             diverges(runRoll(candidate, Mode.FRESH_REF, crashPeer0 = false))
         }
         (seed != null).shouldBeTrue()
+        println("JournaledReplicatedPromotion control b divergent seed=$seed")
     }
 }

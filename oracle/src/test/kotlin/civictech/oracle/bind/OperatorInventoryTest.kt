@@ -290,7 +290,7 @@ class OperatorInventoryTest {
      * `Windows` (window-boundary helpers), and `BoundedWalk.kt`'s internal `KeyWalk`/
      * `EntryOrder`/`PageBudget`. Those are exactly as real as `civictech.cell.data.op`'s own
      * non-cell helper names already in `operator-inventory.txt` (`FrontierBuilder`,
-     * `GatedFold`, `OperatorEntry`, `OperatorWalk`, `PagedEntry`, `SubState`, `TaggedEntry`,
+     * `OperatorEntry`, `OperatorWalk`, `PagedEntry`, `SubState`, `TaggedEntry`,
      * `KeyedEntry`, `GroupEntry`, `AdvertisedLedger`, `MintedLedger`, `JoinLedger`,
      * `PresenceLanes`) — this gate diffs the package's whole compiled surface the same way
      * [OperatorInventoryTest]'s does, not a hand-picked subset of "the cells", so a human still

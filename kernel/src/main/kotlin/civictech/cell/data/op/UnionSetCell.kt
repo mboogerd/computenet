@@ -1,13 +1,10 @@
 package civictech.cell.data.op
 
-import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
-import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
-import civictech.cell.Timestamp
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
@@ -75,29 +72,14 @@ interface UnionSetApi<E> {
  * and those writers re-assert them on every catch-up, so the tombstones must
  * outlive the fold that applied them.
  *
- * With [emitOnFrontier] enabled, input deltas are held until every open input
- * edge has settled their shared-source wave and the effective deltas are
- * merged into one output emission. The default remains the eager,
- * zero-coordination union. A frontier-gated [SemiJoinCell] can require
- * settlement and refuse the eager outlet by name, so a topology relying on
- * transitive alignment need not silently weaken the edge between them.
  */
 class UnionSetCell<E>(
     ref: CellRef = CellRef(UUID.randomUUID()),
-    /** Opt-in shared-source wave settlement before this fan-in advances its output edge. */
-    emitOnFrontier: Boolean = false,
-) : UnionSetCellBase<E>(ref), Stateful, ReBaselineEmitting, FrontierGateable {
-    override val frontierGated: Boolean = emitOnFrontier
+) : UnionSetCellBase<E>(ref), Stateful, ReBaselineEmitting {
 
     private val op = TaggedSetOperator<E>(retainTombstones = true)
-    private var gate: FanInSettlementGate<SetDelta<E>>? = null
-
-    /** Waves held by the opt-in settlement gate; always zero when eager. Diagnostic only. */
-    val bufferedWaves: Int get() = gate?.bufferedWaves ?: 0
 
     init {
-        FanInSettlementCapabilities.register(outlet, "UnionSetCell", frontierGated)
-        if (emitOnFrontier) gate = FanInSettlementGate(inlet, ::flush)
         // late-join catch-up (G-22): live tags as a delta-from-empty, plus the
         // retained tombstones (D-UNION) — a re-linking peer that kept its own
         // copy of a removed element's add-tag learns the del from this stream
@@ -119,7 +101,6 @@ class UnionSetCell<E>(
     override fun onInlet(value: SetDelta<E>) {
         val context = CurrentContext.get()
         val notice = context?.reBaseline
-        if (gate?.offer(FanInGatedFold { fold(value, notice) }) == true) return
         emit(fold(value, notice))
     }
 
@@ -128,26 +109,12 @@ class UnionSetCell<E>(
         notice: civictech.cell.ReBaselineNotice?,
     ): SetDelta<E> = if (notice != null) op.state.applyReBaseline(value, notice) else op.state.apply(value)
 
-    /** Fold one completed input wave, then advance the outlet exactly once. */
-    private fun flush(
-        timestamp: Timestamp,
-        context: MessageContext?,
-        folds: List<FanInGatedFold<SetDelta<E>>>,
-    ) {
-        val effective = folds.fold(SetDelta<E>()) { merged, fold -> merged.merge(fold.apply()) }
-        CurrentContext.with(context ?: MessageContext(timestamp, outlet.ref)) { emit(effective) }
-    }
-
     private fun emit(effective: SetDelta<E>) {
         op.emitOrAbsorb(
             effective,
             propagate = { outlet.call.propagate(it) },
             absorbAck = { outlet.absorbAck() }, // diamond-fan-in duplicate deduped — ack the swallowed wave (CP-A3)
         )
-    }
-
-    override fun onDeactivate(ctx: CellContext) {
-        gate?.clear()
     }
 
     override fun snapshot(): Serializable = op.snapshot()
@@ -162,7 +129,6 @@ class UnionSetCell<E>(
     }
 
     companion object {
-        fun <E> create(emitOnFrontier: Boolean = false): UnionSetApi<E> =
-            UnionSetCell(emitOnFrontier = emitOnFrontier)
+        fun <E> create(): UnionSetApi<E> = UnionSetCell()
     }
 }

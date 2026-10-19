@@ -27,14 +27,13 @@ import org.junit.jupiter.api.Test
  * graph that opts into neither reconciles exactly as today.
  *
  * Why the opt-in and not bare `PullOnOpen`: pull-on-open is *not* by itself a
- * hard dependency on serving. A [civictech.cell.consistency.GlitchFreeCell]
- * installs `PullOnOpen()` on every ALIGN inlet against ordinary non-serving
- * upstreams (MapperCell/SourceCell/another glitch-free outlet) and converges via
- * its frontier — the StateRequest is opportunistic, tolerated-unanswered. That
- * profile (plain non-serving producer + `PullOnOpen`) is byte-for-byte the same
+ * hard dependency on serving. Callers may install `PullOnOpen()` against
+ * ordinary non-serving upstreams when the StateRequest is opportunistic and
+ * tolerated unanswered. That profile (plain non-serving producer +
+ * `PullOnOpen`) is byte-for-byte the same
  * as scenario (ii) below, so the two are only distinguishable by the consumer
  * *declaring* its dependence — hence `requireServing`. Default false keeps every
- * existing install DEFAULT on the axis ⇒ byte-identical (glitch-free unaffected).
+ * existing install DEFAULT on the axis ⇒ byte-identical.
  *
  * Wired onto a non-serving producer, the consumer's `StateRequest` is answered by
  * no one and its state starves *silently* today; as a link-flow axis this becomes

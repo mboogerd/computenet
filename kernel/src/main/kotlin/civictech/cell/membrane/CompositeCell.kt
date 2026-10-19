@@ -383,9 +383,9 @@ abstract class CompositeCell(
                         // this suppression belongs to a TARGETED delivery
                         // (`FanOutlet.at`) rather than a broadcast. Only that
                         // one consumer was starved; classifying the outlet's
-                        // other Consume links would advance their watermarks
-                        // and surface a GlitchViolation for a wave nothing was
-                        // withheld from. Null — every broadcast, and any
+                        // other Consume links would receive a suspension notice
+                        // for a wave nothing was withheld from. Null — every
+                        // broadcast, and any
                         // targeted frame whose scope a nested emission already
                         // consumed — keeps the whole-fan-out walk.
                         stallDeniedEdges(
@@ -492,12 +492,8 @@ abstract class CompositeCell(
  * `SupervisionPolicy.PROPAGATE` arm already emits for a dead-lettered
  * invocation, sent by the same means (`Protocols.sendDownstream(link,
  * Protocols.Suspension, ...)`, the walk in
- * `civictech.cell.host.notifyDownstream`), so a glitch-free join needs no new
- * vocabulary: [civictech.cell.consistency.WaveFrontier] RE-SCOPEs past the
- * lost contribution — advancing only the poisoned wave's watermark on that
- * edge, leaving the edge open, and surfacing a
- * [civictech.cell.consistency.GlitchViolation] — instead of waiting forever.
- * The `Progress` absorb-ack route was considered and rejected: an absorb-ack
+ * `civictech.cell.host.notifyDownstream`). The `Progress` absorb-ack route was
+ * considered and rejected: an absorb-ack
  * asserts the wave's contribution *is* reflected downstream, which is false
  * for a refusal.
  *
@@ -516,11 +512,9 @@ abstract class CompositeCell(
  * [context] is the refused crossing's ambient [MessageContext], and the notice
  * is emitted **only** when that context names a wave position:
  *
- * - a `null` context is unwaved traffic, which passes a frontier anyway;
+ * - a `null` context is unwaved traffic;
  * - a non-null [MessageContext.baseline] is a catch-up baseline — "never a
- *   wave position" (20/21 §Pull, 93 I-24), released immediately by
- *   [civictech.cell.consistency.WaveFrontier] and excluded from every wave
- *   set, so there is nothing to rescue.
+ *   wave position" (20/21 §Pull, 93 I-24), so there is nothing to rescue.
  *
  * Neither may fall through to a *timestampless* terminal stall: that is
  * RE-SCOPE's other branch, which closes the edge outright (the unlink
@@ -538,13 +532,9 @@ abstract class CompositeCell(
  *
  * ## Residual: emitting the notice is not the same as it being handled
  *
- * A consumer only benefits if it handles `Protocols.Suspension`.
- * [civictech.cell.consistency.WaveFrontier] does;
- * [civictech.cell.data.op.CoalescingCombineCell] — the only landed cell that
- * forms a per-wave *combination* — deliberately does not, so a denied wave
- * there is retired only by a later watermark or `EdgeClose`. That is the gap
- * behind `[SEC1-28]`'s UNVERIFIED filing in `concord/corpus/DISPUTES.md`
- * (resolve-condition (b)), not something this classification closes.
+ * A consumer only benefits if it handles `Protocols.Suspension`. The former
+ * measurement of frontier handling was retired with wave completeness; this
+ * classifier remains until the downstream Suspension fan-out is removed.
  */
 private fun stallDeniedEdges(ports: Sequence<Port>, context: MessageContext?, target: PortRef? = null) {
     if (context == null || context.baseline != null) return
@@ -553,14 +543,14 @@ private fun stallDeniedEdges(ports: Sequence<Port>, context: MessageContext?, ta
         val linked = port as? Linked ?: return@forEach
         linked.linking.links.forEach { link ->
             // Outbound Consume links only: an inbound link is not starved by
-            // this refusal, and an Observe-role edge never gates a wave
-            // (PN-10, `WaveFrontier.expectedLocalEdges`) — telling it would
-            // buy nothing and surface a spurious GlitchViolation.
+            // this refusal, and an Observe-role edge is not a consuming edge
+            // (PN-10) — telling it would buy nothing and surface a spurious
+            // suspension notice.
             //
             // And, when [target] names one (computenet-oenm), only THAT link:
             // a suppressed `FanOutlet.at` delivery had exactly one recipient,
             // so the other Consume links of the same outlet are not starved and
-            // would take the same spurious GlitchViolation an Observe edge
+            // would take the same spurious suspension notice an Observe edge
             // would. A null [target] is a broadcast — every Consume link, as
             // before.
             if (target != null && link.to != target) return@forEach

@@ -153,7 +153,8 @@ class ScriptGeneratorTest {
      * `computenet-i3vo`: **no emitted remove leaves its element live** — the constraint stated
      * over *every* remove rather than over the unobserved flavour alone.
      *
-     * The predicate is the one `WavePrefixTest.kernelEffectiveModelInertRemoves` names: the
+     * The predicate is the one the since-retired
+     * `WavePrefixTest.kernelEffectiveModelInertRemoves` named (GFR.3; see git history): the
      * element is live in [Membership] over the source's prior slice *and still live* once the
      * remove is folded in. Such a step takes effect in the kernel — `SetCell.inletHandler.remove`
      * retracts `liveTags(element)` without consulting the removing writer's causal history — and

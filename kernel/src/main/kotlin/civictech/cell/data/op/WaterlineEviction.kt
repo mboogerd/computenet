@@ -82,9 +82,8 @@ internal object WaterlineEviction {
     }
 
     /**
-     * A gated cell's flush-time counterpart of [lateSplit]: [value] was
-     * admitted at arrival, but a floor rise has since passed some of its adds
-     * while the wave sat in the `WaveGate`. Those rows are **evicted before
+     * A deferred fold's counterpart of [lateSplit]: [value] was admitted at
+     * arrival, but a floor rise has since passed some of its adds. Those rows are **evicted before
      * they land** — removed from the adds, not forwarded late and not counted
      * as dropped, because they were admitted, not late — exactly what the
      * ungated cell under the same arrival order does (admit, then evict at the

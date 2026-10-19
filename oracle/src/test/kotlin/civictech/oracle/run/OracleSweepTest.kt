@@ -162,7 +162,8 @@ class OracleSweepTest {
      * computenet-4ru.16 registered `keyBy` and thereby made the eleven pair-shaped entries
      * *generable*; `PairShapeBootstrapTest` pins that they are generated. What no committed
      * test did was **run** one: every differential-execution suite in this module —
-     * [OracleSweepTest]'s own BS-1 above, [DivergenceControlTest], [WavePrefixTest],
+     * [OracleSweepTest]'s own BS-1 above, [DivergenceControlTest], the since-retired
+     * `WavePrefixTest` (GFR.3; see git history),
      * `PinnedSeedsTest`, [GeneratedCaseExecutionTest], [FailureTaxonomyTest], the shrinker
      * suites — names an explicit set-algebra vocabulary and none names `keyBy` or any
      * pair-shaped id, so ~40% of the operator algebra was reachable and unexecuted. This test
@@ -357,74 +358,11 @@ class OracleSweepTest {
     }
 
     /**
-     * The cross-task seam between this file and computenet-4ru.8.5, closed at feature review:
-     * a sweep failure of the kind computenet-4ru.8.5 added — [RunOutcome.WavePrefixViolation] —
-     * must be rendered field by field like a [RunOutcome.Mismatch] is, **never** through
-     * `toString`. It carries a `script` field too, so the `else` branch dumped every event of the
-     * case once per failing seed, which is the exact failure `OracleSweep.describe` exists to
-     * prevent.
-     *
-     * Measured before the fix (2026-08-19, Darwin arm64): driving
-     * `WavePrefixTest.generatedSweepConfig` (`sourceCount = 1`, `scriptLength = 30`) through
-     * [OracleSweep.run] over seeds `0 until 60` printed five `WavePrefixViolation` failures at
-     * ~1.9-2.0 kB each with the whole `Script(...)` inline, against ~0.57 kB and no script for the
-     * two `Mismatch` failures in the same sweep. Latent on the BS-1 config above — `sourceCount =
-     * 4` means [WavePrefixOracle.appliesTo] admits 0 of its 200 seeds — but [OracleSweep.run]
-     * passes no [WavePrefixOption], so any single-source sweep config inherits
-     * [WavePrefixOption.DEFAULT] and reaches it.
-     *
-     * Asserted on a fabricated outcome rather than on a generated seed deliberately: the rendering
-     * is what is under test, and pinning generator seeds here would make this test fail for
-     * reasons that have nothing to do with it. Every expected value below is a literal written
-     * into the fabricated value, not recomputed from production code.
-     */
-    @Test
-    fun `a sweep renders a wave-prefix violation field by field, never dumping the script`() {
-        val violation = RunOutcome.WavePrefixViolation(
-            seed = 46L,
-            terminal = "terminal-0",
-            kind = RunOutcome.WavePrefixViolation.Kind.REGRESSED,
-            renderedGraphSpec = "spawn source-0 : set",
-            script = Script(
-                listOf(
-                    SourceScript(
-                        SourceId("source-0"),
-                        List(30) { ScriptEvent.Add(WriterId("writer-0"), "buried-script-event-$it") },
-                    ),
-                ),
-            ),
-            observed = ModelState.SetState(setOf("a")),
-            observationIndex = 7,
-            matchedFloor = 4,
-            regressedTo = 2,
-            nearestPrefixes = mapOf(4 to ModelState.SetState(setOf("a", "b"))),
-        )
-
-        val rendered = OracleSweep.describe(violation)
-
-        // The load-bearing half: no script, at all. One event name is enough to prove it — if the
-        // script is rendered, every one of the thirty is.
-        rendered shouldNotContain "buried-script-event"
-        rendered shouldNotContain "script="
-        // And the evidence a reader actually needs is present.
-        rendered shouldContain "WavePrefixViolation("
-        rendered shouldContain "terminal=terminal-0"
-        rendered shouldContain "kind=REGRESSED"
-        rendered shouldContain "observationIndex=7"
-        rendered shouldContain "matchedFloor=4"
-        rendered shouldContain "regressedTo=2"
-        rendered shouldContain "spec=spawn source-0 : set"
-        // A kind that carries no script is still fine through `toString`.
-        OracleSweep.describe(RunOutcome.NonQuiescence(seed = 1L, stepBudget = 7)) shouldBe
-            "NonQuiescence(seed=1, stepBudget=7)"
-    }
-
-    /**
      * The rough edge 4ru.1.4's reviewer flagged and this task fixes: [OracleSweep.describe] used
      * to fall through to the `else -> outcome.toString()` branch for both mesh verdicts, dumping
-     * a whole [Script] into a report line exactly like the wave-prefix kind did before it got its
-     * own branch. Same evidence as that test: no buried script text, and the fields a reader
-     * actually needs.
+     * a whole [Script] into a report line exactly like the since-retired wave-prefix kind did
+     * before GFR.3 (see git history). Same evidence as that test: no buried script text, and the
+     * fields a reader actually needs.
      */
     @Test
     fun `a sweep renders both mesh verdicts field by field, never dumping the script`() {

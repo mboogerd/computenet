@@ -8,14 +8,10 @@ import java.util.concurrent.CountDownLatch
 import kotlin.test.Test
 
 /**
- * The harness-integrity gate behind `CTL-GF-01` (computenet-dqy.18).
- *
- * `CTL-GF-01` is a **control**: the corpus runner asserts it FAILS a declared
- * check, because the graph asks for the plain (non-wave-aligned) scalar combine
- * over a fork-join diamond and then asserts wave-aligned semantics of it. The
- * torn, odd intermediate sum that makes that assertion false is only visible on
- * the *observation stream*, so the control is only a control while the driver's
- * observation log is complete.
+ * The harness-integrity gate for complete, run-identical observation capture
+ * (computenet-dqy.18). It was introduced for `CTL-GF-01`, a control retired by
+ * GFR.3; the capture property remains independently required by the surviving
+ * observation checks and by every future check that reads the stream.
  *
  * It was not. The log used to be collected through
  * [civictech.cell.observe.ObservationSink.onChange], and the kernel's
@@ -26,16 +22,15 @@ import kotlin.test.Test
  * dispatcher thread had managed to append — 92 to 101 entries run to run on an
  * idle machine, and **zero** when the dispatcher was starved by an oversubscribed
  * one (reproduced by re-running this graph's sweep alongside 2000 runnable
- * threads: every one of the 20 runs read an empty log). An empty log makes
- * `observations-all-satisfy` vacuously true, every check passes, and the control
- * silently stops controlling — exactly the CI failure at `CorpusRunner.kt:142`.
+ * threads: every one of the 20 runs read an empty log). An empty log makes a
+ * universally quantified observation check vacuously true, exactly the CI
+ * failure that exposed the capture defect.
  *
  * The fix records the stream at the fold ([RecordedView]) instead, on the thread
- * that applies the delta. This test pins the property that makes the control
- * honest: the stream is **whole** and **identical on every run**, so the odd
- * intermediate is always there to be caught. It deliberately asserts the exact
- * expected sequence rather than "an odd value appears somewhere" — a weaker
- * assertion would pass again on a truncated log.
+ * that applies the delta. These tests pin the stream as **complete** and
+ * **identical on every run**. The scalar fixture deliberately asserts its exact
+ * expected sequence rather than a sampled property; a weaker assertion could
+ * pass again on a truncated log.
  */
 class ObservationLogCaptureTest {
 
@@ -45,7 +40,7 @@ class ObservationLogCaptureTest {
         const val INCREMENTS = 50
     }
 
-    /** `CTL-GF-01`'s graph: one counter source forked through two identity arms into the plain summing combine. */
+    /** One counter source forked through two identity arms into the summing combine. */
     private fun diamond(seed: Long): KernelDriver = KernelDriver(seed).apply {
         spawn("", "n", "counter-source", emptyMap())
         spawn("", "l", "map", mapOf("fn" to Value.StrVal("identity")))
@@ -60,10 +55,10 @@ class ObservationLogCaptureTest {
     }
 
     @Test
-    fun `the observation stream is whole and run-identical, so CTL-GF-01's torn sum is always observed`() {
-        // Each increment reaches the combine down both arms in turn, so the plain
-        // (non-coalescing) form emits +1 twice per increment: the view walks every
-        // integer from its catch-up 0 up to 2 * INCREMENTS, torn odd values included.
+    fun `the observation stream is complete and run-identical across schedules`() {
+        // Each increment reaches the combine down both arms in turn, so it emits
+        // +1 twice per increment: the view walks every integer from its catch-up
+        // 0 up to 2 * INCREMENTS, odd intermediate values included.
         val expected = (0..(2 * INCREMENTS)).map { Value.IntVal(it.toLong()) }
 
         val logs = (0 until RUNS).map { run ->
@@ -75,9 +70,7 @@ class ObservationLogCaptureTest {
 
         logs.forEachIndexed { run, log ->
             inRun(run) { log shouldBe expected }
-            // The control's provocation, named explicitly: a wave-aligned combine
-            // would never publish an odd partial sum, and CTL-GF-01 exists to catch
-            // the plain form doing so.
+            // Pin every intermediate, not merely the final quiescent value.
             inRun(run) {
                 log.filterIsInstance<Value.IntVal>().filter { it.value % 2L != 0L } shouldHaveSize INCREMENTS
             }

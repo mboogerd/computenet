@@ -112,9 +112,9 @@ class StableRefs(val namespace: String, val instanceId: Long = 0) {
  * rig-side heuristic ("we are not at the last step, so presumably something is in flight")
  * would be a guess dressed as an observation.
  *
- * Kernel state that *is* published can be wrapped directly:
- * `AlignedCompositeCell.bufferedWaves` is precisely "waves held awaiting the shared frontier",
- * i.e. partially delivered — see [partialWaves].
+ * Graph state that *is* published can be wrapped directly: a graph's held-wave queue is
+ * precisely "waves held awaiting their release condition", i.e. partially delivered — see
+ * [partialWaves].
  *
  * ## The contract
  *

@@ -5,13 +5,11 @@ package civictech.query.plan
  * (`[QRY1-PLAN-05]`) and key-preservation (`[QRY1-PLAN-06]`, cab.3-D2) — as propagation
  * rules stated once, here, rather than inline at each construction site in [Planner].
  *
- * They live in their own file because they are *read* by features that never call the
- * planner: the lowering feature's `emitOnFrontier` gating (`[QRY1-LOWER-08]`, the
- * shared-source diamond of BS-6) reads [provenanceOf], and the rejection feature's
- * `[QRY1-SEM-02]`/`BAG_SEMANTICS_REQUIRED` decision reads the key-preservation pair and
- * names [KeyAnalysis.preservedKey] in its message (BS-7). Those features need the *reasoning*
- * below, not just the values, so the reasoning is written down next to the code that
- * implements it and nowhere else.
+ * They live in their own file because they are read by features that never call the planner:
+ * the rejection feature's `[QRY1-SEM-02]`/`BAG_SEMANTICS_REQUIRED` decision reads the
+ * key-preservation pair and names [KeyAnalysis.preservedKey] in its message (BS-7). Those
+ * features need the reasoning below, not just the values, so the reasoning is written down next
+ * to the code that implements it and nowhere else.
  *
  * ## What each analysis claims
  *

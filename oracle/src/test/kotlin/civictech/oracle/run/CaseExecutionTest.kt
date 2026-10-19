@@ -3,15 +3,12 @@ package civictech.oracle.run
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.WaveFrontier
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.port.FanInlet
-import civictech.cell.port.PolicyTier
 import civictech.cell.port.registerPort
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
@@ -38,19 +35,13 @@ import java.util.UUID
 
 /**
  * computenet-vpiz — what [CaseExecution.assemble] does at a **host cut**: it bridges the edge
- * for real, so the cut is invisible to a wave-frontier join.
+ * for real, so the target inlet sees the same link identity on either side of the cut.
  *
  * ## The equality this file exists to pin
  *
- * `[22-GF-03]`: "WHERE a frontier edge is bridged across a host boundary, a glitch-free join
- * SHALL compute an identical completeness condition and preserve the diamond guarantee across
- * the cut." A frontier's completeness condition ranges over its inlet's **edge set**, which is
- * folded from per-link `EdgeOpen`/`EdgeClose` — and watermarks, `Progress(thru)` absorb-acks
- * and stall markers all travel per-link. So "identical completeness condition" is, concretely,
- * *the same links on the same inlet either side of the cut*, and that is what
- * [`a cross-host connect registers the same target-side link a same-host connect does`] and
- * [`an ALIGN-tier join computes the same completeness condition across the cut as in-process`]
- * assert, on graphs that differ only in the host ordinal the sink is placed on.
+ * Cross-host and same-host links must register the same target-side edge set. Link identity is
+ * what topology ordering, delivered watermarks, and `Progress(thru)` key on; the test below pins
+ * the same link count on graphs that differ only in the host ordinal the sink is placed on.
  *
  * ## What this replaced
  *
@@ -58,16 +49,11 @@ import java.util.UUID
  * to be issued as a bare `Propagate` handle resolved from the `LocationRegistry` and wrapped in
  * `Use.fixed`, on the SOURCE host only — so the target inlet registered **0** links against a
  * same-host connect's **1**. The data plane was unaffected, which is exactly why the gap was
- * invisible until something read link identity; a frontier there would have folded its
- * completeness condition over an edge set missing its only arm. computenet-xj0v shipped a named
- * refusal at assemble time as an interim tripwire. computenet-vpiz replaces it with the bridged
+ * invisible until something read link identity. computenet-xj0v shipped a named refusal at
+ * assemble time as an interim tripwire. computenet-vpiz replaces it with the bridged
  * link pair the refusal stood in for (`civictech.cell.wire`'s `bridgeTo`/`bridgeFrom`, which are
  * in `:kernel` and so available here — `ORA1 §API-04` bars `:wire`, a different module and a
  * different package), and this file's refusal tests became the positive equality above.
- *
- * Nothing the generator can draw exercises the frontier path today: no registered catalog
- * operator carries `GlitchFree` or installs an ALIGN policy. Hence the hand-built [AlignedJoin]
- * here — the smallest cell that puts an ALIGN-tier policy on the far side of the cut.
  *
  * ## The second thing this file pins: the tagged wiring (computenet-6v7y)
  *
@@ -119,27 +105,6 @@ class CaseExecutionTest {
                     received += value
                 }
             })
-        }
-    }
-
-    /**
-     * The same sink with a [WaveFrontier] installed on its inlet — the general opt-in form
-     * ("any plain cell can opt into the same completeness gate", [GlitchFreeCell]'s KDoc),
-     * deliberately used here in preference to [GlitchFreeCell] itself so the equality is pinned
-     * to the **policy tier** rather than to the sugar class. [alignedSugarJoinIsBridgedToo]
-     * covers the sugar class as well.
-     */
-    private class AlignedJoin(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-        val received = mutableListOf<SetDelta<Any?>>()
-        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Any?>>>())
-
-        init {
-            inlet.serve(object : Propagate<SetDelta<Any?>> {
-                override fun propagate(value: SetDelta<Any?>) {
-                    received += value
-                }
-            })
-            inlet.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
         }
     }
 
@@ -195,9 +160,9 @@ class CaseExecutionTest {
     // ------------------------------------------------------------------ the measurement
 
     /**
-     * The core of `[22-GF-03]` at its cheapest: the same graph either side of the cut registers
-     * the **same** target-side link count, on otherwise identical cells, with an identical data
-     * plane. Before computenet-vpiz this test read `shouldBeEmpty()` on the cross-host side —
+     * The same graph either side of the cut registers the **same** target-side link count, on
+     * otherwise identical cells, with an identical data plane. Before computenet-vpiz this test
+     * read `shouldBeEmpty()` on the cross-host side —
      * 1 same-host, 0 across the cut — which is precisely the truncated edge set the bridge
      * removes.
      */
@@ -220,7 +185,7 @@ class CaseExecutionTest {
             "and so does the cross-host one, now that it is wired as a bridged link pair " +
                 "(bridgeTo on the source outlet, bridgeFrom on the target inlet): the arm has " +
                 "link identity, so EdgeOpen/EdgeClose, per-source watermarks and Progress(thru) " +
-                "absorb-acks have something to travel on [22-GF-03]",
+                "have an edge to key on",
         ) {
             remote.inlet.linking.links.size shouldBe coHosted.inlet.linking.links.size
         }
@@ -250,104 +215,9 @@ class CaseExecutionTest {
     private fun shapeOf(delta: SetDelta<Any?>): Pair<Set<Any?>, Set<Any?>> =
         delta.adds.keys.toSet() to delta.dels.keys.toSet()
 
-    // -------------------------------------------------- the [22-GF-03] equality, across the cut
-
     /**
-     * The reproduction this bead exists for, in its positive form: the same graph, with the sink
-     * carrying an ALIGN-tier policy, once co-hosted with its upstream and once across the cut.
-     * The frontier's completeness condition ranges over its inlet's edge set, so "identical
-     * completeness condition" is the same edge set — and the bridged arm is in it.
-     *
-     * Under computenet-xj0v the cross-host half of this threw `IllegalStateException` at
-     * assemble time (the interim refusal); before that it assembled with the frontier folding
-     * over an edge set of size 0.
-     */
-    @Test
-    fun `an ALIGN-tier join computes the same completeness condition across the cut as in-process`() {
-        lateinit var coHosted: AlignedJoin
-        val sameHostWorld = SimWorld(seed = 1L)
-        val sameHostCase = caseWith({ ref -> AlignedJoin(ref).also { coHosted = it } }, sinkHost = 0)
-        val sameHostAssembly = CaseExecution.assemble(sameHostCase, sameHostWorld)
-
-        lateinit var bridged: AlignedJoin
-        val crossHostWorld = SimWorld(seed = 1L)
-        val crossHostCase = caseWith({ ref -> AlignedJoin(ref).also { bridged = it } }, sinkHost = 1)
-        val crossHostAssembly = CaseExecution.assemble(crossHostCase, crossHostWorld)
-
-        withClue("non-vacuity: both sinks really do carry the ALIGN-tier policy [22-GF-03] is about") {
-            coHosted.inlet.hasPolicy(PolicyTier.ALIGN) shouldBe true
-            bridged.inlet.hasPolicy(PolicyTier.ALIGN) shouldBe true
-        }
-        withClue("the in-process frontier waits on exactly the one arm feeding it") {
-            coHosted.inlet.linking.links.size shouldBe 1
-        }
-        withClue(
-            "and so does the bridged one: the completeness condition is computed over an edge " +
-                "set of the same size, INCLUDING the cross-host arm [22-GF-03]",
-        ) {
-            bridged.inlet.linking.links.size shouldBe coHosted.inlet.linking.links.size
-        }
-
-        drive(sameHostCase, sameHostWorld, sameHostAssembly)
-        drive(crossHostCase, crossHostWorld, crossHostAssembly)
-
-        withClue("non-vacuity: the WAIT-mode frontier released the waves in-process") {
-            coHosted.received.shouldNotBeEmpty()
-        }
-        withClue(
-            "and released the same waves, in the same order, across the cut — a frontier folding " +
-                "over a truncated edge set would have held them forever",
-        ) {
-            bridged.received.map(::shapeOf) shouldBe coHosted.received.map(::shapeOf)
-        }
-    }
-
-    /** The sugar cell (`GlitchFreeCell`) gets the same bridged arm — it installs the same policy. */
-    @Test
-    fun alignedSugarJoinIsBridgedToo() {
-        lateinit var sugar: GlitchFreeCell<*>
-        val world = SimWorld(seed = 1L)
-        val case = caseWith(
-            { ref -> GlitchFreeCell(Propagate::class.java, ref).also { sugar = it } },
-            sinkHost = 1,
-        )
-
-        CaseExecution.assemble(case, world)
-
-        withClue("non-vacuity: the sugar cell carries the ALIGN-tier policy") {
-            sugar.inlet.hasPolicy(PolicyTier.ALIGN) shouldBe true
-        }
-        withClue("and its inlet sees the bridged arm across the cut") {
-            sugar.inlet.linking.links.size shouldBe 1
-        }
-    }
-
-    /**
-     * The in-process baseline the equality above is measured against, standing on its own: the
-     * ALIGN-tier fan-in co-hosted with its upstream assembles, links, and runs. It is what makes
-     * "the same completeness condition" a comparison rather than a coincidence — a bridge that
-     * registered two links, or none, would still have to differ from this.
-     */
-    @Test
-    fun `the same ALIGN-tier fan-in links and runs when it shares a host with its upstream`() {
-        lateinit var join: AlignedJoin
-        val world = SimWorld(seed = 1L)
-        val case = caseWith({ ref -> AlignedJoin(ref).also { join = it } }, sinkHost = 0)
-
-        val assembly = CaseExecution.assemble(case, world)
-
-        withClue("a same-host connect into the frontier registers the arm it must wait for") {
-            join.inlet.linking.links.size shouldBe 1
-        }
-        drive(case, world, assembly)
-        withClue("and the wave still reaches the join, so the control is not vacuous") {
-            join.received.shouldNotBeEmpty()
-        }
-    }
-
-    /**
-     * The complementary control: a cross-host connect into an inlet with **no** ALIGN policy
-     * still delivers. Every case the generator can draw today lands here, so this is what keeps
+     * A cross-host connect into an ordinary inlet still delivers. Every case the generator can
+     * draw today lands here, so this is what keeps
      * the bridged pair from silently breaking the ordinary multi-host data path — the bridged
      * link carries protocol frames, and payloads still ride the registry-resolved handle.
      */
@@ -578,9 +448,9 @@ class CaseExecutionTest {
      * `incs={s:5}`, `incs={s:8}`, `decs={s:2}`. Pointwise max reads 8 − 2 = 6; a fold that
      * *summed* those arrivals the way [ScalarTerminalFold] sums `CounterDelta.amount` would read
      * 5 + 8 − 2 = 11. Measured on review by mutating [PnCounterTerminalFold]'s merge to
-     * pointwise addition while leaving its type and the dispatch above intact: this test fails
-     * (`WavePrefixViolation`, `observed=ScalarState(13)` against prefixes `{1=5, 2=8}`) while the
-     * identity assertion above still passes. So a differently-typed-but-still-summing
+     * pointwise addition while leaving its type and the dispatch above intact: before GFR.3,
+     * the retired intermediate-state oracle observed `ScalarState(13)` between prefix values 5
+     * and 8 while the identity assertion above still passed. So a differently-typed-but-still-summing
      * substitution is caught here, and caught by the runner's agreement with the reference
      * model rather than only by the literal below.
      */

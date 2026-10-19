@@ -36,10 +36,8 @@ import civictech.nature.PullService
  * key space, and is likewise unaffected.
  *
  * The counter *is* consumed and `waveState().highWater` *does* rise — but the
- * resulting gaps in the broadcast counter sequence are invisible to every
- * wave-plane observer: `WaveFrontier` keys pending waves by *arrived* timestamp
- * and settles edges by `>=`, nothing enumerates expected counters, and a
- * baseline arm is released immediately and admitted to no completeness set.
+ * resulting gaps in the broadcast counter sequence are invisible: nothing
+ * enumerates expected counters, and a baseline is not a live wave position.
  * The single production reader of `waveState()` is
  * [civictech.cell.evolve.Evolution]'s preserved-epoch transfer
  * (`adoptWaveState`), for which counting the reply is **required rather than

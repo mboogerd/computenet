@@ -5,10 +5,6 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.graph.CellFactory
-import civictech.cell.graph.ConnectStep
-import civictech.cell.graph.GraphSpec
-import civictech.cell.graph.SpawnStep
 import civictech.cell.host.DeadLetter
 import civictech.cell.data.SetOps
 import civictech.cell.host.HostedCellProxy
@@ -16,14 +12,6 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.oracle.bind.CoreOperators
-import civictech.oracle.bind.OperatorCatalog
-import civictech.oracle.gen.CaseScript
-import civictech.oracle.gen.CaseStep
-import civictech.oracle.gen.CaseTopology
-import civictech.oracle.gen.GeneratedCase
-import civictech.oracle.gen.TerminalSpec
-import civictech.oracle.gen.TopologyNode
 import civictech.oracle.model.Membership
 import civictech.oracle.model.ModelState
 import civictech.oracle.model.Script
@@ -35,12 +23,9 @@ import civictech.oracle.model.WriterId
 import civictech.testkit.SimWorld
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldNotBeEmpty
-import io.kotest.matchers.comparables.shouldBeGreaterThan
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.UUID
 
@@ -53,20 +38,6 @@ import java.util.UUID
  * [RunOutcome.DeadLetterFailure]: agreement under message loss is luck, not evidence.
  */
 class FailureTaxonomyTest {
-
-    // The generated-case precedence tests below (computenet-qm0o) are the only ones in this
-    // file that need the operator catalog — WavePrefixViolation is reachable only through
-    // DifferentialRunner.run's GeneratedCase path, never through check()'s BYO path (its
-    // checker is always null; see DifferentialRunner's KDoc on `check`'s `checker = null`).
-    @BeforeEach
-    fun registerCatalog() {
-        CoreOperators.registerAll()
-    }
-
-    @AfterEach
-    fun resetCatalog() {
-        OperatorCatalog.reset()
-    }
 
     private val source = SourceId("s")
     private val writer = WriterId("w")
@@ -268,50 +239,15 @@ class FailureTaxonomyTest {
     }
 
     // ============================================================================================
-    // computenet-qm0o: the five-kind precedence order is
-    //   NonQuiescence > DeadLetterFailure > ModelEvaluationFailure > WavePrefixViolation > Mismatch
+    // computenet-qm0o: the four-kind precedence order is
+    //   NonQuiescence > DeadLetterFailure > ModelEvaluationFailure > Mismatch
     // (DifferentialRunner's "Kind precedence" KDoc), implemented purely as the RETURN ORDER
     // inside execute(). DeadLetterFailure > Mismatch is already provoked above, and
-    // WavePrefixViolation > Mismatch is provoked by WavePrefixTest's "the subset knob at 1 ..."
-    // test. The seven tests below provoke every remaining adjacent pair, each putting BOTH
+    // The tests below provoke every remaining adjacent pair, each putting BOTH
     // conditions genuinely in force in one run so a reordering of execute()'s return statements
     // reddens exactly this test — never asserting on a message substring, only on the
     // RunOutcome's kind.
     // ============================================================================================
-
-    private fun factory(id: String) = OperatorCatalog.entry(id)!!.kernel
-
-    /** [source]'s script slice as a [CaseScript] of plain adds — the generated-path counterpart of [addScript]. */
-    private fun caseAddScript(count: Int): CaseScript =
-        CaseScript((0 until count).map { CaseStep.Op(source, ScriptEvent.Add(writer, "e$it")) })
-
-    /**
-     * The smallest possible [GeneratedCase]: one `set` source, read directly at "terminal" with
-     * no operator in between. `WavePrefixOracle.appliesTo` only cares about source and host
-     * count, not shape, so this trivial case is eligible for wave-prefix checking exactly like
-     * `WavePrefixTest`'s diamond, without any of the diamond's reconvergence machinery — nothing
-     * here needs a torn composite, only a terminal whose value is easy to reason about exactly.
-     */
-    private fun trivialGeneratedCase(script: CaseScript, seed: Long): GeneratedCase = GeneratedCase(
-        seed = seed,
-        topology = CaseTopology(
-            nodes = listOf(TopologyNode("src", CoreOperators.Ids.SET, emptyList(), source)),
-            terminals = listOf(TerminalSpec("terminal", "src")),
-            placement = mapOf("src" to 0),
-        ),
-        spec = GraphSpec(listOf(SpawnStep("src", factory(CoreOperators.Ids.SET)))),
-        script = script,
-        removeAudit = emptyList(),
-    )
-
-    /**
-     * Wrong at every prefix AND at quiescence: it answers `{"nope"}` for every script, including
-     * the empty one. Neither [trivialGeneratedCase] nor [poisonedGeneratedCase] ever adds the
-     * literal element `"nope"`, so ANY real observation of "terminal" — at any wave, complete or
-     * torn by [PoisonCell] eating a delta — is a genuine [RunOutcome.WavePrefixViolation]
-     * candidate, never an accidental match.
-     */
-    private val alwaysWrongTerminal = Reference { mapOf("terminal" to ModelState.SetState(setOf("nope"))) }
 
     // ------------------------------------------------------------ NonQuiescence > DeadLetterFailure
 
@@ -407,41 +343,6 @@ class FailureTaxonomyTest {
         ).shouldBeInstanceOf<RunOutcome.ModelEvaluationFailure>()
     }
 
-    // -------------------------------------------------------- NonQuiescence > WavePrefixViolation
-
-    @Test
-    fun `NonQuiescence outranks WavePrefixViolation - budget exhaustion on a wrongly-modelled generated case is reported as NonQuiescence`() {
-        val case = trivialGeneratedCase(caseAddScript(60), seed = 42L)
-        var checker: WavePrefixOracle.Checker? = null
-
-        val outcome = DifferentialRunner.run(
-            case = case,
-            reference = alwaysWrongTerminal,
-            stepBudget = 10,
-            wavePrefix = WavePrefixOption.ALWAYS,
-            onWavePrefixChecker = { checker = it },
-        )
-
-        val nonQuiescence = outcome.shouldBeInstanceOf<RunOutcome.NonQuiescence>()
-        nonQuiescence.seed shouldBe 42L
-        nonQuiescence.stepBudget shouldBe 10
-        // Non-vacuity: alwaysWrongTerminal never matches a real observation (see its KDoc), so
-        // any observation taken here is a violation the correct order preempts. Without this,
-        // "NonQuiescence" could be reported even though the checker never ran at all.
-        withClue("the checker must actually have taken an observation - a would-be violation - or this proves nothing about precedence") {
-            checker.shouldNotBeNull().observations shouldBeGreaterThan 0
-        }
-    }
-
-    @Test
-    fun `the same wrongly-modelled generated case with an ample budget is WavePrefixViolation, so the budget alone is what flips the precedence test above`() {
-        DifferentialRunner.run(
-            case = trivialGeneratedCase(caseAddScript(60), seed = 42L),
-            reference = alwaysWrongTerminal,
-            wavePrefix = WavePrefixOption.ALWAYS,
-        ).shouldBeInstanceOf<RunOutcome.WavePrefixViolation>()
-    }
-
     // -------------------------------------------------- DeadLetterFailure > ModelEvaluationFailure
 
     @Test
@@ -463,127 +364,6 @@ class FailureTaxonomyTest {
         val failure = outcome.shouldBeInstanceOf<RunOutcome.DeadLetterFailure>()
         failure.seed shouldBe 9L
         failure.deadLetters.shouldNotBeEmpty()
-    }
-
-    // ------------------------------------------------- DeadLetterFailure > WavePrefixViolation
-
-    /**
-     * Throws on every delivery it receives — not just the first, unlike [DeadLetterEmitter].
-     * [DeadLetterEmitter] manually calls `host.deadLetterOutlet.call.propagate(...)`, which needs
-     * a captured [ManagedHost]; a [GeneratedCase]'s [GraphSpec] is built before any [SimWorld]
-     * (and therefore any host) exists, so nothing here can capture one. Instead this relies on
-     * the ordinary invocation-failure path every hosted delivery already goes through
-     * (`ManagedHost.deliver`'s own `catch (e: Throwable)`, confirmed against
-     * `kernel/src/test/kotlin/civictech/cell/host/LifecycleAndDeadLetterTest.kt`'s
-     * `ThrowingCell`): a host-mediated send that synchronously fans out through a `connect()`
-     * link into a cell whose port handler throws is caught right there and reported as a real
-     * [DeadLetter], with no manual publish call needed.
-     */
-    private class PoisonCell(override val ref: CellRef) : Cell {
-        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
-
-        init {
-            inlet.serve(object : Propagate<SetDelta<String>> {
-                override fun propagate(value: SetDelta<String>) {
-                    error("synthetic failure from FailureTaxonomyTest.PoisonCell to provoke a real dead letter")
-                }
-            })
-        }
-    }
-
-    /**
-     * [trivialGeneratedCase] plus a [PoisonCell] fanned off "src" — added to [GeneratedCase.spec]
-     * directly rather than through a `buildGraph` lambda, because [WavePrefixViolation] is
-     * reachable only through [DifferentialRunner.run]'s generated-case path (`check()`'s
-     * `checker` is always `null`), and `run()` builds its own graph from `case.spec` with no
-     * caller-supplied hook to add an extra cell. Topology is untouched — "poison" is not a
-     * topology node, so [CaseExecution.referenceModelFor] never has to resolve a catalog id for
-     * it, and [WavePrefixOracle.appliesTo]'s source/host-count check (which reads topology, not
-     * spec) is unaffected.
-     */
-    private fun poisonedGeneratedCase(script: CaseScript, seed: Long): GeneratedCase {
-        val base = trivialGeneratedCase(script, seed)
-        return base.copy(
-            spec = GraphSpec(
-                base.spec.steps + listOf(
-                    SpawnStep("poison", CellFactory { ref -> PoisonCell(ref) }),
-                    ConnectStep("src", "outlet", "poison", "inlet"),
-                ),
-            ),
-        )
-    }
-
-    @Test
-    fun `DeadLetterFailure outranks WavePrefixViolation - a real dead letter on a wrongly-modelled generated case is reported as DeadLetterFailure`() {
-        val case = poisonedGeneratedCase(caseAddScript(4), seed = 11L)
-        var checker: WavePrefixOracle.Checker? = null
-
-        val outcome = DifferentialRunner.run(
-            case = case,
-            reference = alwaysWrongTerminal,
-            wavePrefix = WavePrefixOption.ALWAYS,
-            onWavePrefixChecker = { checker = it },
-        )
-
-        val failure = outcome.shouldBeInstanceOf<RunOutcome.DeadLetterFailure>()
-        failure.seed shouldBe 11L
-        failure.deadLetters.shouldNotBeEmpty()
-        // Non-vacuity: see alwaysWrongTerminal's KDoc — any observation at all is a genuine
-        // would-be violation, so this proves the WavePrefixViolation condition was truly in
-        // force too, not merely that a dead letter happened to occur.
-        withClue("the checker must actually have taken an observation - a would-be violation - or this proves nothing about precedence") {
-            checker.shouldNotBeNull().observations shouldBeGreaterThan 0
-        }
-    }
-
-    // ------------------------------------------------ ModelEvaluationFailure > WavePrefixViolation
-
-    @Test
-    fun `ModelEvaluationFailure outranks WavePrefixViolation - a reference that throws only on the full script is reported as ModelEvaluationFailure even though every prefix already glitched`() {
-        // The trap this pair exists to catch (DifferentialRunner's "Kind precedence" KDoc):
-        // WavePrefixViolation is returned AFTER reference.evaluate(script) specifically so a
-        // reference that throws only on the FULL script is still reported as a broken oracle.
-        // A reference that throws on every call (BS-11's shape; WavePrefixTest's "a reference
-        // that throws on a prefix is a broken oracle, not a glitch") would fail the checker's
-        // own construction in run() - BEFORE the graph is even built, DifferentialRunner.kt
-        // ~line 242 - and would prove nothing about the ordering inside execute() this pair
-        // targets, because no checker (and therefore no violation) would ever exist.
-        //
-        // So this reference must SUCCEED on every prefix call WavePrefixOracle.prefixesOf makes
-        // while building the checker (there are exactly opCount + 1 of them, all made eagerly,
-        // before any driving happens - CaseScript.toScript()/WavePrefixOracle.prefixesOf), and
-        // throw only on the NEXT call - the one and only reference.evaluate(script) execute()
-        // itself makes, against the full script. Every successful call answers the same wrong
-        // constant alwaysWrongTerminal does, so the checker genuinely records a violation during
-        // driving (proving WavePrefixViolation's condition really holds), while the run overall
-        // is reported as ModelEvaluationFailure.
-        val opCount = 3
-        val case = trivialGeneratedCase(caseAddScript(opCount), seed = 77L)
-        var calls = 0
-        val wrongEveryPrefix = mapOf("terminal" to ModelState.SetState(setOf("nope")))
-        val trap = Reference { _ ->
-            calls++
-            if (calls > opCount + 1) error("boom: full-script evaluation reached (call #$calls)")
-            wrongEveryPrefix
-        }
-
-        var checker: WavePrefixOracle.Checker? = null
-        val outcome = DifferentialRunner.run(
-            case = case,
-            reference = trap,
-            wavePrefix = WavePrefixOption.ALWAYS,
-            onWavePrefixChecker = { checker = it },
-        )
-
-        val failure = outcome.shouldBeInstanceOf<RunOutcome.ModelEvaluationFailure>()
-        failure.seed shouldBe 77L
-        withClue(
-            "the checker must have been built (every PREFIX call succeeded) and have recorded a " +
-                "real violation during driving, or this run never put WavePrefixViolation's " +
-                "condition in force and proves nothing about the trap",
-        ) {
-            checker.shouldNotBeNull().observations shouldBeGreaterThan 0
-        }
     }
 
     // ------------------------------------------------------------- ModelEvaluationFailure > Mismatch

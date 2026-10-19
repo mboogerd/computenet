@@ -17,8 +17,7 @@ import java.util.concurrent.CompletableFuture
  * read is explicitly not a subscription (see
  * [civictech.cell.BoundedRead]'s header), so it sits with the other
  * app-facing read surface rather than inside the push-side
- * [civictech.cell.observe.Observe] / [civictech.cell.observe.AlignedObserve]
- * machinery.
+ * [civictech.cell.observe.Observe] machinery.
  *
  * Routing mirrors `readState`'s own internal ordering — the migration arm
  * first, because a held ref may still be present on its current host, and a

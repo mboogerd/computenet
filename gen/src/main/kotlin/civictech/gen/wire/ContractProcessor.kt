@@ -18,7 +18,6 @@ import civictech.nature.PortDirection
 import civictech.nature.ProtocolDescriptor
 import civictech.nature.ProtocolDirection
 import civictech.nature.StableHash
-import civictech.nature.WaveParticipation
 import com.google.devtools.ksp.KspExperimental
 import com.google.devtools.ksp.getAnnotationsByType
 import com.google.devtools.ksp.getVisibility
@@ -912,10 +911,6 @@ class ContractProcessor(
         // off inlets is what preserves today's behavior verbatim — the exchange
         // demo's durable→volatile links never acquire a new requirement.
         if (port.direction == PortDirection.OUT) {
-            // WAVED: a glitch-free cell emits aligned waves on its outlets.
-            if (isSubtype(cell.asStarProjectedType(), KernelFqn.GLITCH_FREE_MARKER)) {
-                levels += NATURE_WAVE to "WAVED"
-            }
             // INTEREST_SCOPED: the outlet carries a `Scoped` delta the linker can slice.
             if (api != null && carriesMarker(port.apiType, KernelFqn.SCOPED_MARKER)) {
                 levels += NATURE_SCOPING to "INTEREST_SCOPED"
@@ -933,7 +928,6 @@ class ContractProcessor(
     private fun manifestOf(cell: KSClassDeclaration): List<String> {
         val type = cell.asStarProjectedType()
         val tags = mutableListOf<String>()
-        if (isSubtype(type, KernelFqn.GLITCH_FREE_MARKER)) tags += "GLITCH_FREE"
         if (isSubtype(type, KernelFqn.STATEFUL_MARKER)) tags += "DURABLE"
         if (isSubtype(type, KernelFqn.GOSSIPING_MARKER) || isSubtype(type, KernelFqn.REBASELINE_MARKER)) tags += "REPLICATED"
         if (isSubtype(type, KernelFqn.PARTITIONED_MARKER)) tags += "PARTITIONED"
@@ -1006,7 +1000,6 @@ class ContractProcessor(
             const val SCOPED_MARKER = "civictech.cell.link.Scoped"
             const val STATEFUL_MARKER = "civictech.cell.Stateful"
             const val REBASELINE_MARKER = "civictech.cell.ReBaselineEmitting"
-            const val GLITCH_FREE_MARKER = "civictech.cell.consistency.GlitchFree"
             const val PARTITIONED_MARKER = "civictech.cell.partition.Partitioned"
         }
 
@@ -1034,7 +1027,6 @@ class ContractProcessor(
         val NATURE_MERGE: ClassName = MergeClass::class.asClassName()
         val NATURE_OWNERSHIP: ClassName = Ownership::class.asClassName()
         val NATURE_MONOTONICITY: ClassName = Monotonicity::class.asClassName()
-        val NATURE_WAVE: ClassName = WaveParticipation::class.asClassName()
         val NATURE_SCOPING: ClassName = InstanceScoping::class.asClassName()
         val MANIFEST: ClassName = Manifest::class.asClassName()
     }

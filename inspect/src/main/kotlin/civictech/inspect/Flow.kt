@@ -52,8 +52,7 @@ internal interface FlowBinding {
  *
  * [FanOutlet.observe] is the Observe-role attachment in its payload-agnostic
  * shape: uncounted by the SPSC funnel, never an expected sibling of a
- * wave-completeness set ([civictech.cell.consistency.WaveFrontier] filters
- * [civictech.cell.link.LinkRole.Consume]), always admitted, and fired *before*
+ * downstream consume attachment, always admitted, and fired *before*
  * the outlet's consumers — the same storage and the same firing position as a
  * contract-typed [FanOutlet.tap]. Attaching a `Propagate` **consumer** instead
  * — the only other way to see traffic from outside the graph — would be a
@@ -404,10 +403,9 @@ internal class FlowCollector(
          * - `baseline != null` — a catch-up baseline is a topology-versioned
          *   state-as-delta reply carrying a merge-tag frontier, and is
          *   explicitly *not* a wave position (spec 20/21 §Pull, 20/22
-         *   §Interaction, 93 I-24; a glitch-free consumer must not admit it to
-         *   any wave-completeness set). Reading its timestamp as "the wave this
-         *   edge just carried" would be the exact lie the frontier exists to
-         *   prevent.
+         *   §Interaction, 93 I-24; a downstream wave comparison must not treat
+         *   it as a live wave. Reading its timestamp as "the wave this edge just
+         *   carried" would be the exact lie the frontier exists to prevent.
          * - `reBaseline != null` — a RESTART re-baseline *is* a fresh
          *   origination and so does carry a real wave position, of a
          *   **brand-new epoch**. Refusing it is stricter than the letter of the

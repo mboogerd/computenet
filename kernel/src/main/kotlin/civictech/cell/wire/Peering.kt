@@ -1260,8 +1260,7 @@ object Peering {
      * They exist because a loopback's frame plane was otherwise unreachable:
      * `egress.outlet.subscribe(hostIngress(...))` was hard-wired here, so
      * every test that needed to lose, duplicate or delay a frame had to
-     * re-implement the bridge by hand (`BridgedGraphTest`,
-     * `GlitchFreeBridgedDiamondTest`). One seam per direction rather than one
+     * re-implement the bridge by hand (`BridgedGraphTest`). One seam per direction rather than one
      * for the pair, because **a partition can be one-way** and the two
      * directions of a peering are independent links.
      *

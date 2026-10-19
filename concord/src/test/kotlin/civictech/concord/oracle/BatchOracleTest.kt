@@ -194,8 +194,7 @@ class BatchOracleTest {
     }
 
     @Test
-    fun `combine-latest sums the latest of each inlet (glitch-free diamond)`() {
-        // The 22-GF-DIAMOND-01 shape: n forked through two identity arms into a summing join.
+    fun `combine-latest sums the latest of each inlet (fork-join diamond)`() {
         val sc = scenario(
             cells = listOf(
                 cell("n", "counter-source"),

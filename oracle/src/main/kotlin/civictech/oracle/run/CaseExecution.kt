@@ -279,8 +279,8 @@ object CaseExecution {
     }
 
     /**
-     * Wires a cross-host [ConnectStep] as a **real bridged link pair** (computenet-vpiz,
-     * `[22-GF-03]`), on top of the data-plane handle [assemble] already issues.
+     * Wires a cross-host [ConnectStep] as a **real bridged link pair** (computenet-vpiz), on top
+     * of the data-plane handle [assemble] already issues.
      *
      * ## What this replaces, and why it had to
      *
@@ -288,13 +288,10 @@ object CaseExecution {
      * from the [LocationRegistry], wrapped in [Use.fixed], issued on the SOURCE host — so the
      * **target inlet registered no link at all**: 1 link for a same-host connect, 0 across the
      * cut, measured on otherwise identical cells (`CaseExecutionTest`, re-deriving
-     * computenet-g25w). Link identity is what every frontier bookkeeping is keyed by:
-     * [civictech.cell.consistency.WaveFrontier] folds its edge set from per-link
-     * `EdgeOpen`/`EdgeClose`, and watermarks, `Progress(thru)` absorb-acks and stall markers all
-     * travel per-link. A wave-frontier join fed across that cut would have folded its
-     * completeness condition over an edge set *missing the cross-host arm* — the opposite of
-     * `[22-GF-03]`. computenet-xj0v shipped a named refusal as an interim tripwire; this is the
-     * bridge that refusal stood in for, so the refusal is gone.
+     * computenet-g25w). Link identity is what `Progress(thru)`, delivered watermarks and
+     * topology ordering key on: `EdgeOpen`/`EdgeClose` and the associated protocol frames all
+     * travel per-link. computenet-xj0v shipped a named refusal as an interim tripwire; this is
+     * the bridge that refusal stood in for, so the refusal is gone.
      *
      * ## Why no bridge *cells* are needed here
      *
@@ -303,12 +300,10 @@ object CaseExecution {
      * one process sharing **one** [LocationRegistry], and `LocationRegistry::deliver` is already
      * an [InvocationSink] that routes a [civictech.cell.proxy.HostedPortInvocation] to whichever
      * host owns the ref — so it is the egress for both halves, and protocol frames reach the
-     * peer endpoint without a codec round trip. That is the only simplification against
-     * `kernel/src/test/kotlin/civictech/cell/consistency/GlitchFreeBridgedDiamondTest.kt`, which
-     * builds this same `[22-GF-03]` shape from `:kernel` alone; the link types, the handshake
-     * and the `EdgeOpen` path are identical. **What is therefore NOT exercised here is the wire
-     * codec**: this harness pins cross-host *link identity and frontier bookkeeping*, not frame
-     * encoding, and a genuinely serialized cut would need the bridge cell pair.
+     * peer endpoint without a codec round trip. The link types, handshake and `EdgeOpen` path
+     * are otherwise the same as a transport-backed edge. **What is therefore NOT exercised here
+     * is the wire codec**: this harness pins cross-host *link identity and protocol bookkeeping*,
+     * not frame encoding, and a genuinely serialized cut would need the bridge cell pair.
      *
      * ## The pair, and which half does what
      *
@@ -318,8 +313,7 @@ object CaseExecution {
      * consumer's inlet registers the reverse half, so an upstream emission walking
      * `inlet.linking.links` finds an edge to route back over — and so the inlet reports the
      * arm at all. Data still rides the [Use.fixed] handle [assemble] issues: a bridged link
-     * carries protocol frames, not payloads (its `toPort` is null on the producer side), which
-     * is exactly the split `GlitchFreeBridgedDiamondTest` uses.
+     * carries protocol frames, not payloads (its `toPort` is null on the producer side).
      *
      * Both halves go through the shared `handshake`, so inlet link policies and the peer
      * allowlist fire on this edge as on a local one — a [LinkResult.Rejected] here is a real

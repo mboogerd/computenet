@@ -9,7 +9,8 @@ import org.opentest4j.AssertionFailedError
  * / `ExchangeScaffoldTest.await`, the three copies that share this exact shape.
  * The 5ms granularity matters where the await sits inside a per-seed loop: at
  * 100ms every seed whose delivery races the check paid a full sleep quantum,
- * which quantized whole sweeps (seen in `AlignedObserveTest`, ~35ms/seed).
+ * which quantized whole sweeps; `StableFrontierChurnSweepTest` is a surviving
+ * high-cardinality consumer of this shared helper.
  */
 fun awaitUntil(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
     val deadline = System.currentTimeMillis() + timeoutMs

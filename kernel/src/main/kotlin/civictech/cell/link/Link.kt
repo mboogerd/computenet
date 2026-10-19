@@ -17,11 +17,10 @@ interface Link {
 
     /**
      * Consume vs Observe (spec 20/23 §Taps, 10/12 §Cardinality rule 2; PN-10).
-     * A **Consume** link bears the consume-once/release obligation and is
-     * counted by the completeness frontier ([civictech.cell.consistency.WaveFrontier]);
-     * an **Observe** link (a negotiated `tap`/`streamTo`) announces itself so it
-     * negotiates like any edge, yet is **never** an expected sibling — it must
-     * not gate a wave's release. Defaults to [LinkRole.Consume]: zero caller
+     * A **Consume** link bears the consume-once/release obligation. An
+     * **Observe** link (a negotiated `tap`/`streamTo`) announces itself so it
+     * negotiates like any edge without becoming a consuming edge. Defaults to
+     * [LinkRole.Consume]: zero caller
      * churn, byte-for-byte today's behavior for every existing link.
      */
     val role: LinkRole get() = LinkRole.Consume

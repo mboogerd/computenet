@@ -71,18 +71,18 @@ import java.util.UUID
  * ## Why the assertions below are not vacuous
  *
  * Two independent self-checks, because a promotion test that silently promoted
- * nothing — or a glitch assertion that could not fail — would look identical to
+ * nothing — or a stream-intact assertion that could not fail — would look identical to
  * a passing one:
  *
  *  1. **The candidate really is the module's class.** Every arm asserts
  *     `candidate.javaClass.classLoader === handle.classLoader`, so a candidate
  *     accidentally resolved through the host's own loader fails here rather than
  *     passing as "a module cell was promoted".
- *  2. **The glitch assertion can fail.** `control - the promotion's own gate is
+ *  2. **The stream-intact assertion can fail.** `control - the promotion's own gate is
  *     what discharges the buffered window` runs the identical sequence with the
  *     promotion handed a gate that is *not* the one in the traffic path. The
  *     parked window is then never greened, downstream loses every delta from the
- *     swap onward, and [Rig.assertGlitchFree] — the same predicate — throws.
+ *     swap onward, and [Rig.assertStreamIntact] — the same predicate — throws.
  */
 class B14ModulePromotionTest {
 
@@ -213,7 +213,7 @@ class B14ModulePromotionTest {
         }
 
         /**
-         * Glitch-freedom across the swap, asserted rather than assumed:
+         * Stream integrity across the swap, asserted rather than assumed:
          * downstream must have observed **exactly one** add-delta per element
          * handed to the graph, in that order, carrying no removals — nothing
          * torn (each delta names one element), nothing duplicated, nothing lost.
@@ -226,7 +226,7 @@ class B14ModulePromotionTest {
          * [assertSwapObserved], so this predicate cannot quietly absorb "the swap
          * never happened".
          */
-        fun assertGlitchFree() {
+        fun assertStreamIntact() {
             withClue("one add-delta per element, in order — nothing torn, duplicated or missing") {
                 view.observed.map { it.adds.keys.singleOrNull()?.lowercase() } shouldBe emitted.toList()
             }
@@ -282,7 +282,7 @@ class B14ModulePromotionTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `a module-supplied candidate promotes over a host-classpath incumbent, glitch-free`() {
+    fun `a module-supplied candidate promotes over a host-classpath incumbent with no delta lost, duplicated or torn`() {
         withFlowModule { _, handle ->
             val rig = Rig(handle)
 
@@ -307,7 +307,7 @@ class B14ModulePromotionTest {
             withClue("the promoted candidate is live on the host") {
                 rig.registry.locate(rig.candidate.ref).shouldNotBeNull()
             }
-            rig.assertGlitchFree()
+            rig.assertStreamIntact()
             rig.assertSwapObserved()
             withClue("the parked window was replayed to the candidate, not to the retired incumbent") {
                 rig.observedElements() shouldBe (BEFORE + IN_FLIGHT + AFTER)
@@ -316,7 +316,7 @@ class B14ModulePromotionTest {
     }
 
     /**
-     * Non-vacuousness control for [Rig.assertGlitchFree] — the same predicate,
+     * Non-vacuousness control for [Rig.assertStreamIntact] — the same predicate,
      * observed FAILING when the promotion is not the thing driving the gate the
      * traffic crosses.
      *
@@ -345,8 +345,8 @@ class B14ModulePromotionTest {
                 seen shouldBe BEFORE
                 (IN_FLIGHT + AFTER).forEach { seen shouldNotContain it }
             }
-            withClue("so the glitch-free predicate the promoted arm relies on demonstrably fails here") {
-                shouldThrow<AssertionError> { rig.assertGlitchFree() }
+            withClue("so the stream-intact predicate the promoted arm relies on demonstrably fails here") {
+                shouldThrow<AssertionError> { rig.assertStreamIntact() }
             }
         }
     }

@@ -114,8 +114,8 @@ import java.io.Serializable
  * - **(a) extended.** The eight-probe generated measurement is *kept and still asserted*, with
  *   its assertion inverted: it now pins that the population contains **no** such step. That
  *   makes it a second, independent instrument on computenet-i3vo's post-condition — a
- *   differential between two references, where `WavePrefixTest`'s
- *   `kernelEffectiveModelInertRemoves` is a predicate over scripts — and a generator regression
+ *   differential between two references, where the since-retired `WavePrefixTest` (GFR.3; see
+ *   git history) held `kernelEffectiveModelInertRemoves`, a predicate over scripts — and a generator regression
  *   that reintroduces the step class reddens both.
  *
  * The tripwire direction inverts with it. Before, test 2 went red when a `SetCell` remove became
@@ -262,9 +262,9 @@ class DivergenceControlTest {
      * naive value fold deletes it. `ScriptGenerator`'s post-condition (computenet-i3vo) is
      * exactly the statement that no emitted remove leaves its element live. So this measurement
      * is a **second, independent instrument on that post-condition**: it observes the step class
-     * through the disagreement it causes between two references, where
-     * `WavePrefixTest.kernelEffectiveModelInertRemoves` observes it as a predicate over the
-     * script. Both must stay empty, and a regression that reintroduces the step class reddens
+     * through the disagreement it causes between two references, where the since-retired
+     * `WavePrefixTest.kernelEffectiveModelInertRemoves` observed it as a predicate over the
+     * script (GFR.3; see git history). Both must stay empty, and a regression that reintroduces the step class reddens
      * both — from opposite directions.
      *
      * **A red here is a generator regression, not a kernel one.** The response is to repair
@@ -282,9 +282,9 @@ class DivergenceControlTest {
      *   differing case, a green naive column and a red real one. The instrument discriminates;
      *   it is this population that no longer contains anything to discriminate.
      * - The real column is asserted to fail with nothing at all — not merely with no
-     *   [RunOutcome.Mismatch]. A [RunOutcome.NonQuiescence], [RunOutcome.DeadLetterFailure],
-     *   [RunOutcome.ModelEvaluationFailure] or [RunOutcome.WavePrefixViolation] would mean a
-     *   broken probe config, and would be caught here rather than silently counted as agreement.
+     *   [RunOutcome.Mismatch]. A [RunOutcome.NonQuiescence], [RunOutcome.DeadLetterFailure] or
+     *   [RunOutcome.ModelEvaluationFailure] would mean a broken probe config, and would be caught
+     *   here rather than silently counted as agreement.
      */
     @Test
     fun `the naive fold and the real reference agree across the whole generated population`() {
@@ -313,7 +313,8 @@ class DivergenceControlTest {
      * writer-concurrent script the naive arrival-order fold agrees with the kernel and the
      * spec-faithful reference does not.
      *
-     * Three events, no generator and no seed — `WavePrefixTest`'s
+     * Three events, no generator and no seed — the since-retired `WavePrefixTest`'s (GFR.3;
+     * see git history)
      * `a remove of an element another writer added is applied by the kernel and ignored by the
      * model` (computenet-eeys), run here through [probe]'s own two-column comparison instead of
      * against a hand-written expectation:
@@ -325,16 +326,16 @@ class DivergenceControlTest {
      * That is BS-12's equation with its two sides swapped, which is the whole finding this file
      * records: the wrong oracle BS-12 asked for is the one that matches this kernel. The
      * single-writer control below fixes that it is writer *concurrency* and not repetition — the
-     * same control `WavePrefixTest` uses, kept here so a change that makes both cases agree
+     * same control that retired test used, kept here so a change that makes both cases agree
      * cannot be mistaken for this instrument going quiet.
      *
      * **This is the tripwire test 2 used to be.** It reddens the moment a `SetCell` remove
      * becomes writer-scoped and the naive fold becomes genuinely wrong — at which point BS-12 is
      * implementable and this file should be replaced by the real control rather than repaired.
      *
-     * The diamond topology is reproduced rather than imported: `WavePrefixTest.diamondCase` is
-     * `private` to a file this item does not claim, the same reason [baseConfig] reproduces
-     * `OracleSweepTest.baselineConfig`'s shape.
+     * The diamond topology was originally reproduced from the since-retired
+     * `WavePrefixTest.diamondCase` (GFR.3; see git history), the same reason [baseConfig]
+     * reproduces `OracleSweepTest.baselineConfig`'s shape.
      */
     @Test
     fun `the naive fold agrees with the kernel where the real reference does not`() {
@@ -394,12 +395,6 @@ class DivergenceControlTest {
      * substituted for every set source, once with the catalog-resolved real reference passed
      * **explicitly**.
      *
-     * Passing the real reference explicitly rather than letting [DifferentialRunner.run]
-     * resolve it (`reference = null`) is deliberate: a substituted reference defaults
-     * [WavePrefixOption] to `OFF` while a resolved one defaults it to `DEFAULT`, so leaving it
-     * null would make wave-prefix checking the *second* difference between the columns and the
-     * comparison would no longer be attributable to the reference alone.
-     *
      * The differing-seed set is computed from the two models' terminal states directly, not
      * from the two outcomes: it states that the substitution changes the *expected* answer,
      * independently of what the kernel produced.
@@ -448,8 +443,7 @@ class DivergenceControlTest {
 
     /**
      * The same [measure] comparison over one hand-built script on the BS-8 diamond — the shape
-     * `WavePrefixTest` uses for computenet-eeys, reproduced because its `diamondCase` is
-     * `private` to a file this item does not claim.
+     * the since-retired `WavePrefixTest` used for computenet-eeys (GFR.3; see git history).
      *
      * `filter` + `flatMapSet` reconverging at a `union` is not decoration: two identical arms
      * carry identical element sets, so `add("ab")` contributing `{ab}` through one arm and
@@ -524,10 +518,7 @@ class DivergenceControlTest {
     private companion object {
         /**
          * The single source the hand-built cases drive. Named, not generated: `SourceId` is what
-         * [CaseStep.Op] routes on, and the diamond has exactly one source by construction (a
-         * scope choice of these cases, not a gate: since computenet-2hur
-         * `WavePrefixOracle.appliesTo` admits multi-source too — and nothing here prefix-checks
-         * anyway).
+         * [CaseStep.Op] routes on, and the diamond has exactly one source by construction.
          */
         val HAND_BUILT_SOURCE: SourceId = SourceId("s")
 
