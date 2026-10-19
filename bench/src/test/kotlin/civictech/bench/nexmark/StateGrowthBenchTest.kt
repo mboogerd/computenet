@@ -25,7 +25,9 @@ class StateGrowthBenchTest {
                         scale = scale,
                         policy = lateness,
                         drive = Drive.SIM,
-                        batchSize = 100,
+                        // Keep the 10k/100k event scales while reducing the
+                        // number of SIM phases for this retained-state probe.
+                        batchSize = 1_000,
                         // The prescribed compareEvery=10 exceeded the ten-minute
                         // probe budget on this SIM host at 100k events; 50 keeps
                         // the same scale while remaining a bounded evidence run.
