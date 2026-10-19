@@ -54,10 +54,11 @@ data class GeneratedGraph(
  * ## Vocabulary honesty
  *
  * Operators come exclusively from [OperatorCatalog] registrations named in
- * [GeneratorConfig.vocabulary]. Everything the `ORA1 §HONEST-02` ledger excludes — `ListCell`,
- * `MergeableGroupByCell`, `CoalescingCombineCell`, window close/eviction
- * (`civictech.oracle.model.MapCellModel`'s module KDoc) — is unregistered, and therefore
- * unemittable here by construction rather than by a filter that could be forgotten.
+ * [GeneratorConfig.vocabulary]. Everything the `ORA1 §HONEST-02` ledger excludes from
+ * catalog generation — `ListCell`, `MergeableGroupByCell`, and window close/eviction
+ * (`civictech.oracle.model.MapCellModel`'s module KDoc) — is unregistered. Bare-scalar
+ * consumption has no kernel operator at all. All are therefore unemittable here by construction
+ * rather than by a filter that could be forgotten.
  *
  * `OrMapCell` is a partial exception, and it is why this paragraph used to (wrongly) list it
  * alongside the fully-absent operators above: `civictech.oracle.bind.TaggedOperators` DOES
