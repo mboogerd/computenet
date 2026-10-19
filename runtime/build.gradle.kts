@@ -1,5 +1,5 @@
 plugins {
-    id("buildsrc.convention.kotlin-jvm")
+    id("buildsrc.convention.ksp-cell")
     alias(libs.plugins.kotlin.plugin.serialization)
 }
 
