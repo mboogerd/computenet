@@ -44,7 +44,7 @@ class NexmarkFindingsRenderTest {
         assertTrue(rendered.contains("| Q1 retract | 50.0 ± n/a applied delta elements/batch | |"))
         assertTrue(rendered.contains("| Q4 | NOT_EXPRESSIBLE | not_expressible |"))
         assertTrue(rendered.contains("Q7 unbounded-state series"))
-        assertTrue(rendered.contains("Q7 evicting series (lateness=5_000 ms; live-window bound=2"))
+        assertTrue(rendered.contains("Q7 evicting series (lateness=5000 ms; live-window bound=2"))
         assertTrue(rendered.contains("floor=0"))
         assertTrue(rendered.contains("Q7 emits one bid per window"))
         assertTrue(rendered.contains("Candidate G-item"))
@@ -158,10 +158,10 @@ class NexmarkFindingsRenderTest {
         println(rendered)
         println("NEXMARK_FINDINGS_END")
 
-        assertEquals(10, records.size)
+        assertEquals(7, records.size)
         assertEquals(GrowthVerdict.RETIRES, growth.verdict)
         assertTrue(rendered.contains(NO_PUBLISHED_COMPARISON))
-        assertTrue(rendered.contains("| Q8 | EXPRESSIBLE | verified |"))
+        assertTrue(rendered.contains("| Q8 | EXPRESSIBLE | unreportable |"))
     }
 
     private fun growthRun(

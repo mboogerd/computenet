@@ -118,7 +118,7 @@ object NexmarkFindings {
             appendLine("Q7 unbounded-state series (batches, liveWindows, floor):")
             appendSeries(growth.unboundedSeries)
             appendLine(
-                "Q7 evicting series (lateness=5_000 ms; live-window bound=${growth.bound ?: "n/a"}; " +
+                "Q7 evicting series (lateness=5000 ms; live-window bound=${growth.bound ?: "n/a"}; " +
                     "batches, liveWindows, floor):",
             )
             appendSeries(growth.evictingSeries)
