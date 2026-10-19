@@ -225,7 +225,8 @@ defect fixes. Verified, per this section's own warning:
   is the two value-equal-swallow cells: `CombineLatestCell` (the divergence
   20/22 flags at `:219-221`) and `LookupJoinCell` (same `MapDiffPublisher`
   shape, unflagged, equally bound by the MUST). Both go to E2-GATE.
-- **E2.3's first half is landed** — `cell.consistency.WaveFrontier` (CP-A4;
+- **E2.3's first half is landed** — `WaveFrontier` (deleted by GFR.3,
+  computenet-xk0k0; CP-A4;
   now also carrying E3.4 replica-fed gates, PN-7 interest scoping, PN-9
   policy tiers, PN-10 observe-role exclusion), `GlitchFreeCell` delegating.
   The sink half (`AlignedCompositeCell`/`observeAligned`) does not exist

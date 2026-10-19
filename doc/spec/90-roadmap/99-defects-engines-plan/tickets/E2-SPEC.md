@@ -26,7 +26,8 @@ section in that file. Expect it to be there; leave it alone.
 honestly documented as **point-consistent per outlet**, not wave-aligned — a
 read may pair `common` at wave `t` with `filtered` at wave `t-1`. The
 `observeAll` KDoc (`Observe.kt:535-554`) names the two blockers to the
-wave-aligned composite: (1) name erasure — `cell.consistency.GlitchFreeCell`
+wave-aligned composite: (1) name erasure — `GlitchFreeCell` (deleted by GFR.3,
+computenet-xk0k0)
 replays raw deltas to one outlet, erasing which *named* source each came from
 (`:541-544`); (2) absorbing edges that never advance watermarks (`:545-551`).
 E2.1's four rules dissolve both at the spec level.
@@ -139,7 +140,7 @@ Content: rules 1 and 2 above, the balanced-transfer benchmark naming, and the
 research citations. Follow the chapter's existing register — normative prose
 with decided/implemented honesty markers, RFC-2119 verbs where a rule binds.
 Connect to what exists: the section should say that
-`cell.consistency.WaveFrontier` is the landed completeness fold this section
+`WaveFrontier` (deleted by GFR.3, computenet-xk0k0) is the landed completeness fold this section
 governs, and that the aligned composite sink itself is specified here ahead
 of its implementation (96 E2.3).
 

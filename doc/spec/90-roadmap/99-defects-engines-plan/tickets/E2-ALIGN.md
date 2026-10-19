@@ -28,7 +28,8 @@ future `observeAligned` sink — 96 §E2.3 — written before its implementation
 prerequisites the guarantee is built from are **already landed** (verified by
 the R-ENG checkpoint against the live repo, 2026-07-30):
 
-- **The completeness primitive**: `cell.consistency.WaveFrontier`
+- **The completeness primitive**: `WaveFrontier` (deleted by GFR.3,
+  computenet-xk0k0)
   (`kernel/src/main/kotlin/civictech/cell/consistency/WaveFrontier.kt:58`,
   CP-A4) — the per-inlet wave-completeness fold: per-edge per-source
   watermarks advancing on a real delta, a metadata-plane `Progress`
