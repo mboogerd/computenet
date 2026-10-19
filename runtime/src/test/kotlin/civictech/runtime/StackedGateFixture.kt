@@ -8,7 +8,6 @@ import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.Aggregators
 import civictech.cell.data.Gossiping
 import civictech.cell.data.SetApi
@@ -73,7 +72,6 @@ object StackedGateFixture {
     enum class Node { A, B }
 
     data class Variant(
-        val pointConsistent: Boolean = false,
         val journalOff: Boolean = false,
         val replicationOff: Boolean = false,
         val nonTotalRouting: Boolean = false,
@@ -82,7 +80,6 @@ object StackedGateFixture {
     ) : Serializable {
         /** The oracle clause each single-flag negative control is expected to break. */
         fun expectedFailureClauses(): Set<String> = buildSet {
-            if (pointConsistent) add("(ii)")
             if (journalOff) add("(i)")
             if (replicationOff || nonTotalRouting) add("(i)")
             if (droppingConsumer) add("(iii)")
@@ -193,9 +190,6 @@ object StackedGateFixture {
                         ),
                     )
                 }
-                if (!variant.pointConsistent) {
-                    add(SpawnStep("aligned", FixtureFactory(Kind.ALIGNED, seed, variant)))
-                }
                 add(SpawnStep("invariant", FixtureFactory(Kind.INVARIANT, seed, variant), journalId = durable))
                 add(SpawnStep("consumer", FixtureFactory(Kind.CONSUMER, seed, variant), journalId = durable))
                 add(
@@ -208,14 +202,8 @@ object StackedGateFixture {
                 add(ConnectStep("gate", "dataOutlet", "rows", "inlet", staged))
                 add(ConnectStep("gate", "dataOutlet", "total", "inlet", staged))
                 if (!variant.unguardedSwap) add(ConnectStep("gate", "dataOutlet", "totalV2", "inlet", staged))
-                if (variant.pointConsistent) {
-                    add(ConnectStep("rows", "outlet", "invariant", "inlet"))
-                    add(ConnectStep("total", "outlet", "invariant", "inlet"))
-                } else {
-                    add(ConnectStep("rows", "outlet", "aligned", "inlet"))
-                    add(ConnectStep("total", "outlet", "aligned", "inlet"))
-                    add(ConnectStep("aligned", "outlet", "invariant", "inlet"))
-                }
+                add(ConnectStep("rows", "outlet", "invariant", "inlet"))
+                add(ConnectStep("total", "outlet", "invariant", "inlet"))
             }
         }
         return GraphSpec(steps)
@@ -374,92 +362,63 @@ object StackedGateFixture {
         override fun importFrom(prior: Serializable) { total = prior as Long }
     }
 
-    class AlignedInvariantCell(override val ref: CellRef) : Cell, Stateful {
+    class InvariantBoardCell(override val ref: CellRef) : Cell, Stateful {
         val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<String, Long>>>())
         val violations = registerPort("violations", FanOutlet.create<Propagate<Violation>>())
         private val rows = linkedMapOf<String, Long>()
         private var total = 0L
-        private var hasOpenGroup = false
-        private var open: Timestamp? = null
-        private var openTotalPuts = 0
-        private var openRegionMutations = 0
         private val recentViolations = ArrayDeque<String>()
         var observationCount = 0
+            private set
+        var evaluationCount = 0
             private set
         var violationCount = 0
             private set
 
         init {
-            inlet.serve(Propagate(::observe))
-        }
-
-        private fun observe(delta: MapDelta<String, Long>) {
-            observationCount++
-            val context = CurrentContext.get()
-            val timestamp = context?.timestamp
-            if (hasOpenGroup && timestamp != open) checkOpen()
-            hasOpenGroup = true
-            open = timestamp
-            openTotalPuts += delta.puts.keys.count { it == "total" }
-            openRegionMutations += delta.puts.keys.count { it != "total" }
-            openRegionMutations += delta.removals.count { it != "total" }
-            apply(delta)
+            inlet.serve(Propagate(::apply))
         }
 
         private fun apply(delta: MapDelta<String, Long>) {
+            observationCount++
             delta.puts.forEach { (key, value) -> if (key == "total") total = value else rows[key] = value }
             delta.removals.forEach { key -> if (key == "total") total = 0 else rows.remove(key) }
         }
 
-        private fun checkOpen() {
-            if (!hasOpenGroup) return
+        /** Called by the orchestrator only after it has drained the graph to quiescence. */
+        fun evaluate() {
+            evaluationCount++
             val rowTotal = rows.values.sum()
-            if (openTotalPuts != 1 || openRegionMutations < 1 || rowTotal != total) {
+            if (rowTotal != total) {
                 violationCount++
-                recentViolations.addLast(
-                    "wave=$open totalPuts=$openTotalPuts regionMutations=$openRegionMutations total=$total rows=$rows",
-                )
+                recentViolations.addLast("evaluation=$evaluationCount total=$total rows=$rows")
                 while (recentViolations.size > 12) recentViolations.removeFirst()
                 violations.call.propagate(
                     Violation("stacked-total", "total $total != row sum $rowTotal", rows.toMap()),
                 )
             }
-            hasOpenGroup = false
-            open = null
-            openTotalPuts = 0
-            openRegionMutations = 0
         }
 
-        fun close() = checkOpen()
-
-        fun diagnostic(): String = "total=$total rows=$rows recent=$recentViolations"
+        fun diagnostic(): String =
+            "total=$total rows=$rows evaluations=$evaluationCount recent=$recentViolations"
 
         fun matches(expectedRows: Map<String, Long>): Boolean = rows == expectedRows && total == expectedRows.values.sum()
 
         private data class Snapshot(
             val rows: LinkedHashMap<String, Long>,
             val total: Long,
-            val hasOpenGroup: Boolean,
-            val open: Timestamp?,
-            val openTotalPuts: Int,
-            val openRegionMutations: Int,
+            val evaluations: Int,
             val violations: Int,
         ) : Serializable
 
         override fun snapshot(): Serializable =
-            Snapshot(
-                LinkedHashMap(rows), total, hasOpenGroup, open,
-                openTotalPuts, openRegionMutations, violationCount,
-            )
+            Snapshot(LinkedHashMap(rows), total, evaluationCount, violationCount)
 
         override fun restore(state: Serializable) {
             val saved = state as Snapshot
             rows.apply { clear(); putAll(saved.rows) }
             total = saved.total
-            hasOpenGroup = saved.hasOpenGroup
-            open = saved.open
-            openTotalPuts = saved.openTotalPuts
-            openRegionMutations = saved.openRegionMutations
+            evaluationCount = saved.evaluations
             violationCount = saved.violations
         }
     }
@@ -548,7 +507,7 @@ object StackedGateFixture {
             }
             if (observation.violationCount != 0 || !observation.invariantMatchesExpected) {
                 add(
-                    "(ii) aligned invariant recorded ${observation.violationCount} violation(s) " +
+                    "(ii) quiescent invariant recorded ${observation.violationCount} violation(s) " +
                         "or did not reach the batch state",
                 )
             }
@@ -675,7 +634,7 @@ object StackedGateFixture {
             promote()
             apply(script.afterPromotion)
             controller.runToIdle()
-            b.cell<AlignedInvariantCell>("invariant").close()
+            b.cell<InvariantBoardCell>("invariant").evaluate()
             val p1 = observe(recovered = false)
 
             peering.partition()
@@ -699,7 +658,7 @@ object StackedGateFixture {
             runOwnedBatch(script.batch2)
             apply(script.afterRecovery)
             controller.runToIdle()
-            b.cell<AlignedInvariantCell>("invariant").close()
+            b.cell<InvariantBoardCell>("invariant").evaluate()
             val p2 = observe(recovered = true)
             return Checkpoints(p1, p2)
         }
@@ -806,9 +765,9 @@ object StackedGateFixture {
         }
 
         private fun promote() {
-            b.cell<AlignedInvariantCell>("invariant").close()
+            val invariant = b.cell<InvariantBoardCell>("invariant")
+            invariant.evaluate()
             if (variant.unguardedSwap) {
-                val downstream = if (variant.pointConsistent) "invariant" else "aligned"
                 GraphSpec(
                     listOf(
                         SpawnStep(
@@ -817,13 +776,12 @@ object StackedGateFixture {
                             journalId = journal(variant, Node.B),
                         ),
                         ConnectStep("gate", "dataOutlet", "totalV2", "inlet"),
-                        UnlinkStep("total", "outlet", downstream, "inlet"),
-                        ConnectStep("totalV2", "outlet", downstream, "inlet"),
+                        UnlinkStep("total", "outlet", "invariant", "inlet"),
+                        ConnectStep("totalV2", "outlet", "invariant", "inlet"),
                     ),
                 ).apply(b.context)
             } else {
-                val invariant = b.cell<AlignedInvariantCell>("invariant")
-                check(variant.pointConsistent || invariant.violationCount == 0) {
+                check(invariant.violationCount == 0) {
                     "default invariant failed before promotion: ${invariant.diagnostic()}"
                 }
                 val judge = PromotionJudge(
@@ -834,13 +792,10 @@ object StackedGateFixture {
                     ),
                 )
                 judge.observeCandidateWave()
-                val downstream = if (variant.pointConsistent) "invariant" else "aligned"
-                runCatching {
-                    b.context.promote(
-                        b.ref("gate"), b.ref("total"), b.ref("totalV2"), "outlet",
-                        listOf(b.ref(downstream) to "inlet"), judge,
-                    )
-                }.onFailure { if (!variant.pointConsistent) throw it }
+                b.context.promote(
+                    b.ref("gate"), b.ref("total"), b.ref("totalV2"), "outlet",
+                    listOf(b.ref("invariant") to "inlet"), judge,
+                )
             }
             controller.runToIdle()
         }
@@ -856,8 +811,8 @@ object StackedGateFixture {
                 membershipA = membershipA,
                 membershipB = membershipB,
                 converged = convergence?.converged() ?: true,
-                violationCount = b.cell<AlignedInvariantCell>("invariant").violationCount,
-                invariantMatchesExpected = b.cell<AlignedInvariantCell>("invariant").matches(batch(live)),
+                violationCount = b.cell<InvariantBoardCell>("invariant").violationCount,
+                invariantMatchesExpected = b.cell<InvariantBoardCell>("invariant").matches(batch(live)),
                 fates = fates.toList(),
                 shadowEffects = shadowEffects + b.cell<GateShadowConsumerCell>("shadowConsumer").effects,
                 recoveredCandidate = !recovered || b.cell<Cell>("totalV2") is TotalCellV2,
@@ -866,7 +821,7 @@ object StackedGateFixture {
                     it in b.cell<GateConsumerCell>("consumer").taken
                 },
                 invariantDiagnostic = buildString {
-                    val invariant = b.cell<AlignedInvariantCell>("invariant")
+                    val invariant = b.cell<InvariantBoardCell>("invariant")
                     val candidate = b.cell<TotalCellV2>("totalV2")
                     append(invariant.diagnostic())
                     append(" observations=").append(invariant.observationCount)
@@ -897,7 +852,7 @@ object StackedGateFixture {
     }
 
     private enum class Kind {
-        ORDERS, BOARD, LEAKY_BOARD, RELAY, GATE, ROWS, TOTAL_V1, TOTAL_V2, ALIGNED, INVARIANT,
+        ORDERS, BOARD, LEAKY_BOARD, RELAY, GATE, ROWS, TOTAL_V1, TOTAL_V2, INVARIANT,
         CONSUMER, SHADOW_CONSUMER,
     }
 
@@ -912,8 +867,7 @@ object StackedGateFixture {
                 Kind.ROWS -> GroupByCell(ref, ::regionOf, Aggregators.sumOf(::amountOf))
                 Kind.TOTAL_V1 -> TotalCellV1(ref)
                 Kind.TOTAL_V2 -> TotalCellV2(ref)
-                Kind.ALIGNED -> GlitchFreeCell(propagateMapDelta, ref)
-                Kind.INVARIANT -> AlignedInvariantCell(ref)
+                Kind.INVARIANT -> InvariantBoardCell(ref)
                 Kind.CONSUMER -> GateConsumerCell(Script(seed).faultingIds, variant.droppingConsumer, ref)
                 Kind.SHADOW_CONSUMER -> GateShadowConsumerCell(ref)
             }
@@ -926,9 +880,6 @@ object StackedGateFixture {
 
     @Suppress("UNCHECKED_CAST")
     private val propagateSetDelta = Propagate::class.java as Class<Propagate<SetDelta<String>>>
-
-    @Suppress("UNCHECKED_CAST")
-    private val propagateMapDelta = Propagate::class.java as Class<Propagate<MapDelta<String, Long>>>
 
     private val captured = ConcurrentHashMap<CellRef, Cell>()
 
