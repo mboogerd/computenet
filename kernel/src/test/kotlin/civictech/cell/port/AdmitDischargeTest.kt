@@ -22,7 +22,7 @@ import java.util.UUID
  * consumer, so a drop here was unrecoverable loss. `mintAck`'s three silent
  * `?: return` exits also went uncounted; the one that matters in practice —
  * no open link matching the invocation's `sourcePort` — means the ack is
- * never minted and a downstream `WaveFrontier` stalls forever.
+ * never minted and downstream progress accounting stalls forever.
  */
 class AdmitDischargeTest {
 

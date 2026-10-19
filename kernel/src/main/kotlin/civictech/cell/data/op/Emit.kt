@@ -5,8 +5,8 @@ package civictech.cell.data.op
  * §Completeness over silent or stuck edges, G-40): propagate a non-empty
  * delta, or absorb-ack the swallowed wave so a downstream glitch-free join's
  * per-source watermark still advances past a wave this operator silently
- * consumed. Without the ack, a `GlitchFreeCell` downstream of an absorbing
- * arm can stall forever on a membership-neutral final wave.
+ * consumed. Without the ack, a downstream settlement consumer of an absorbing
+ * arm can stall on a membership-neutral final wave.
  *
  * One free function so every operator's emit-or-absorb check funnels through
  * the same logic: [TaggedSetOperator.emitOrAbsorb] and

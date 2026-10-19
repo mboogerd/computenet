@@ -4,8 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.WaveFrontier
 import civictech.cell.data.Aggregators
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
@@ -112,14 +110,6 @@ class GeneratedInletPolicyTest {
 
         seen shouldBe listOf(MapDelta(mapOf(0L to 1L, 10L to 1L), emptySet()))
     }
-
-    @Test
-    fun `WaveFrontier installed directly on a generated Serve-Propagate inlet delivers`() =
-        deliversThrough(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
-
-    @Test
-    fun `a WaveFrontier arm on a generated Serve-Propagate inlet delivers`() =
-        deliversThrough(WaveFrontier(GlitchFreeCell.WaveMode.WAIT).arm())
 
     @Test
     fun `Admit on a generated Serve-Propagate inlet delivers`() =

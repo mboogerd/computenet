@@ -1,9 +1,6 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -12,13 +9,9 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.LinkFrom
-import civictech.cell.link.LinkResult
-import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
-import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
 import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
@@ -40,25 +33,23 @@ import civictech.cell.data.delta.SetDelta
  * candidate re-syncs by the same anti-entropy catch-up a recovered replica uses.
  * The surviving replicas play the retained incumbent.
  *
- * Three-peer mesh; a glitch-free consumer on peer 0 gates on the merged
- * replica frontier; peers 1–2 keep writing while peer 0 is promoted, then the
+ * Three-peer mesh; peers 1–2 keep writing while peer 0 is promoted, then the
  * roll continues to peer 1.
  *
- * **Invariant** (100 seeds): all replicas converge to the batch union, and the
- * [GlitchFreeCell.useReplicaFrontier] consumer never surfaces an element some
- * current replica-set member has not delivered — across both swaps.
+ * **Invariant** (100 seeds): all replicas converge to the batch union across
+ * both swaps, and [Replication.stableFrontier] never certifies a locally
+ * minted tag before every open member has delivered its element.
  *
  * **Controls** (must diverge — the two halves of the one root cause the reused
  * CellRef prevents):
  *  - (a) `NO_TAG_CARRY` — the T2 fresh-epoch fallback: the candidate does not
  *    continue the incumbent's tag lane (tag counter restarts under the same
- *    ref-derived `tagSource`), so a fresh mint **collides** with an
- *    already-emitted tag — the double-count PRECHECK refuses for a replicated
- *    cell.
+ *    ref-derived `tagSource`), so it re-mints counters at or below the
+ *    high-water every peer's delivered row already holds. The stable frontier
+ *    then certifies a tag before another member has delivered its element,
+ *    violating the stability read that tombstone GC trusts.
  *  - (b) `FRESH_REF` — a candidate with a distinct `instanceId`: it re-mints
- *    the delivered-watermark slot, orphaning the incumbent's row, so the
- *    replica-frontier read tears (a member surfaces an undelivered element) or
- *    the set fails to converge.
+ *    the identity lanes and the set fails to converge.
  */
 class ReplicatedPromotionTest {
 
@@ -66,14 +57,7 @@ class ReplicatedPromotionTest {
         val inlet: Use<SetOps<String>>
     }
 
-    interface SetDeltaInletProxy {
-        val inlet: Use<Propagate<SetDelta<String>>>
-    }
-
     enum class Mode { REUSE_REF, NO_TAG_CARRY, FRESH_REF }
-
-    private val propagateSetDelta =
-        @Suppress("UNCHECKED_CAST") (Propagate::class.java as Class<Propagate<SetDelta<String>>>)
 
     private class Peer(controller: SimulationController) {
         val registry = LocationRegistry()
@@ -83,28 +67,10 @@ class ReplicatedPromotionTest {
         val replication = Replication(registry)
     }
 
-    /** The origin add/del tags a released [SetDelta] invocation depends on. */
-    private val originTags: (Invocation) -> Collection<Timestamp> = { inv ->
-        (inv.args.firstOrNull() as? SetDelta<*>)?.let { it.adds.values.flatten() + it.dels.values.flatten() }
-            ?: emptyList()
-    }
-
-    private fun reroute(
-        outlet: FanOutlet<Propagate<SetDelta<String>>>,
-        inletRef: PortRef,
-        routed: Propagate<SetDelta<String>>,
-    ) {
-        outlet.unsubscribe(inletRef)
-        outlet.subscribe(Use.fixed(routed, inletRef))
-    }
-
-    /** One released join output: the element and whether every current member had delivered it. */
-    private data class Obs(val element: String, val allMembersDelivered: Boolean)
-
     private data class Run(
         val memberships: List<Set<String>>,
-        val surfaced: List<Obs>,
         val universe: Set<String>,
+        val overCertified: Int,
     )
 
     private fun runRoll(seed: Long, mode: Mode): Run {
@@ -121,40 +87,6 @@ class ReplicatedPromotionTest {
             SetCell<String>(CellRef(logicalId, i.toLong())).also { peer.replication.replicate(it, peer.host) }
         }.toMutableList()
         controller.runToIdle()
-
-        // glitch-free consumer on peer 0, drawing one arm from peer 0's replica.
-        val gf = GlitchFreeCell(propagateSetDelta)
-        peers[0].host.managementInlet.call.spawn(gf)
-        val routedGf = peers[0].host.lookup<SetDeltaInletProxy>(gf.ref)!!.inlet.call
-
-        fun linkArm(replica: SetCell<String>) {
-            @Suppress("UNCHECKED_CAST")
-            val out = replica.outlet as FanOutlet<Propagate<SetDelta<String>>>
-            @Suppress("UNCHECKED_CAST")
-            val gfInletFrom = gf.inlet as LinkFrom<Propagate<SetDelta<String>>>
-            (out.linkTo(gfInletFrom) is LinkResult.Connected).shouldBeTrue()
-            reroute(out, gf.inlet.ref, routedGf)
-        }
-        // Draw the (single) consumer arm from peer 2 — the peer that is NEVER
-        // promoted — so the arm link is stable across both swaps and the frontier
-        // still gates over the full three-member set. (Re-linking an arm to a
-        // freshly-promoted candidate would surface its catch-up baseline, a
-        // harness artifact unrelated to the property under test.)
-        linkArm(current[2])
-
-        val observations = mutableListOf<Obs>()
-        gf.outlet.subscribe(Use.fixed(Propagate<SetDelta<String>> { delta ->
-            val element = delta.adds.keys.firstOrNull() ?: return@Propagate
-            val members = peers[0].registry.replicasOf(logicalId)
-            // "delivered" == the element is live in every current member's replica object.
-            val liveIn = current.associateBy { it.ref }
-            val delivered = members.mapNotNull { liveIn[it] }.all { element in it.membership() }
-            observations += Obs(element, delivered)
-        }, PortRef.generate()))
-
-        val frontier: ReplicaFrontier = peers[0].replication.replicaFrontier(logicalId)
-        gf.useReplicaFrontier(frontier, originTags)
-        peers[0].replication.onWatermarkAdvance(logicalId) { gf.recheck() }
 
         val ops = peers.mapIndexed { i, peer ->
             (HostedCellProxy.create(current[i].ref, peer.registry, SetInletProxy::class.java) as SetInletProxy).inlet.call
@@ -184,6 +116,7 @@ class ReplicatedPromotionTest {
         }
 
         val universe = mutableSetOf<String>()
+        var overCertified = 0
         val alphabet = listOf("apple", "banana", "cherry", "date", "elder", "fig", "grape")
         val totalOps = 40
         for (op in 1..totalOps) {
@@ -192,46 +125,63 @@ class ReplicatedPromotionTest {
             val who = rnd.nextInt(3)
             val element = "$op-" + alphabet[rnd.nextInt(alphabet.size)]
             // add-only: the batch union is exactly the added set, and "delivered"
-            // == "present in membership" is a well-posed oracle (a removed element
-            // would read as undelivered though it WAS delivered — the reason the
-            // sibling GlitchFreeReplicaFrontierTest is add-only too).
+            // == "present in membership" is a well-posed oracle.
             ops[who].add(element); universe += element
+            var guardSteps = 0
+            while (element !in current[who].membership() && guardSteps < 200) {
+                controller.step()
+                guardSteps++
+            }
+            val mintingReplicaHoldsElement = element in current[who].membership()
+            val minted = current[who].tagLaneHighWater()
+            val source = UUID.nameUUIDFromBytes(
+                "set-tags:${current[who].ref.id}:${current[who].ref.instanceId}".toByteArray(),
+            )
+            val stable = peers[who].replication.stableFrontier(logicalId).perSource[source] ?: Long.MIN_VALUE
+            if (
+                mintingReplicaHoldsElement &&
+                minted <= stable &&
+                current.any { element !in it.membership() }
+            ) {
+                overCertified++
+            }
             repeat(rnd.nextInt(4)) { controller.step() }
         }
         controller.runToIdle()
 
-        return Run(current.map { it.membership() }, observations, universe)
+        return Run(current.map { it.membership() }, universe, overCertified)
     }
 
     @Test
-    fun `rolling promotion across the replica set converges and surfaces no undelivered element - 100 seeds`() {
+    fun `rolling promotion across the replica set converges - 100 seeds`() {
         forEachSeed(0L until 100L) { seed ->
             val run = runRoll(seed, Mode.REUSE_REF)
             // convergence: every replica holds the full batch union of adds.
             run.memberships.forEach { it shouldBe run.universe }
-            // safety: nothing surfaced before every current member delivered it.
-            run.surfaced.forEach { it.allMembersDelivered.shouldBeTrue() }
+            run.overCertified shouldBe 0
         }
     }
 
-    /** A run diverges from the fix iff a replica lost part of the batch union or the frontier tore. */
+    /** A run diverges if membership is incomplete or stability certifies an undelivered tag. */
     private fun diverges(run: Run): Boolean =
-        run.memberships.any { it != run.universe } || run.surfaced.any { !it.allMembersDelivered }
+        run.memberships.any { it != run.universe } || run.overCertified > 0
 
     // Both controls make an existential claim (SOME seed diverges), so the scans
     // stop at the first diverging witness; if no seed in the range diverges any
     // more, the control fails — the retune-the-harness signal.
 
     @Test
-    fun `control a - T2 fresh-epoch (no tag carry) diverges - the restarted tag lane tears the frontier`() {
+    fun `control a - no tag carry over-certifies the restarted tag lane`() {
         val seed = (0L until 100L).firstOrNull { diverges(runRoll(it, Mode.NO_TAG_CARRY)) }
         (seed != null).shouldBeTrue()
+        println("ReplicatedPromotion control a divergent seed=$seed")
     }
 
     @Test
-    fun `control b - fresh CellRef diverges - orphaned watermark tears the replica frontier`() {
+    fun `control b - fresh CellRef diverges on membership`() {
         val seed = (0L until 100L).firstOrNull { diverges(runRoll(it, Mode.FRESH_REF)) }
         (seed != null).shouldBeTrue()
+        println("ReplicatedPromotion control b divergent seed=$seed")
     }
 
     @Test

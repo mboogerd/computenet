@@ -32,9 +32,8 @@ import java.util.*
  *
  * **Four independent lattices** (T11-F self-documentation — SRP audit: this
  * class carries four settlement concerns with no prior enumeration), each
- * grow-only/pointwise-monotone in its own right and each added by a distinct
- * fix as the cross-replica settlement read ([civictech.cell.consistency.ReplicaQuorum])
- * hardened:
+ * grow-only/pointwise-monotone in its own right and consumed independently by
+ * the causal-stability read ([civictech.cell.consistency.CausalStability]):
  *
  *  1. **`rows`** — the base per-(replica, source) delivered-counter map (spec
  *     40/42 E3.2, the reason this class exists): [advance]/[applyRemote]
@@ -52,7 +51,7 @@ import java.util.*
  *
  * **The rule for a fifth lane**: don't add one here. Each lane above answers a
  * different "what do I know about this replica slot" question, and
- * [civictech.cell.consistency.ReplicaQuorum.frontier] already reads all four
+ * [civictech.cell.consistency.CausalStability.stableFrontier] reads all four
  * independently — a fifth
  * settlement concern (e.g. a future per-slot property unrelated to delivery/
  * departure/suspension/membership) is a signal this cell is doing more than
@@ -92,9 +91,9 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     /**
      * Covering member slots the companion has learned of (FU-2): every replica that
      * has [announceMember]ed its existence, merged over the mesh. The
-     * converged-membership barrier ([civictech.cell.consistency.ReplicaQuorum.frontier])
-     * holds a keyed wave while this set names a slot the settling node's
-     * [civictech.cell.host.InstanceIndex.instancesOf] view has not yet accounted for.
+     * causal-stability read ([civictech.cell.consistency.CausalStability.stableFrontier])
+     * includes this set when deriving the open slots, even when the local
+     * [civictech.cell.host.InstanceIndex.instancesOf] view has not yet accounted for one.
      */
     fun members(): Set<UUID> = members.toSet()
 

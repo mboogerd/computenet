@@ -13,9 +13,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * E3.5 (`computenet-9sm.3.1`): [CausalStability.stableFrontier] against a
  * hand-built watermark/membership state — no
  * [civictech.cell.host.LocationRegistry] or
- * [civictech.cell.replication.Replication] mesh, the same idiom
- * [ReplicaQuorumTest] uses (its `companion(...)` helper is private, so it is
- * copied here rather than widened).
+ * [civictech.cell.replication.Replication] mesh. The local `companion(...)`
+ * helper keeps the state construction explicit.
  *
  * Pins spec `doc/spec/40-distribution/42-replication.md` [42-WM-05] (the
  * pointwise MIN over every open membership row, absent row = bottom) and

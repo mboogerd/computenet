@@ -33,17 +33,6 @@
 # civictech.cell.control imports civictech.cell.host.* (verified by grep),
 # so the edge is genuinely gone, not just relocated.
 #
-# T11-D: consistency -> data ADDED — Replication.replicaFrontier moved into
-# consistency/ReplicaQuorum.kt (the settlement predicate belongs with
-# ReplicaFrontier/WaveFrontier, its interface and consumer, both already in
-# .consistency); the predicate reads WatermarkCell.rows/closed/suspended/
-# members/slotId, so the file needs civictech.cell.data.WatermarkCell. No
-# file under civictech.cell.data imports civictech.cell.consistency.* (also
-# verified by grep), so this is a new one-way edge and no new 2-cycle. (It is
-# not cycle-free in the transitive sense — data -> link -> nature ->
-# consistency already closed a loop back — but per G-63 every non-leaf package
-# is in one SCC regardless, so no reachability changes here.)
-#
 # V1C-KERNEL: cell -> link ADDED -- BoundedRead.kt (the bounded state read's
 # types) lives at civictech.cell, beside Stateful.kt, because it is a *cell
 # capability* rather than an app-facing view, and StateRead reuses
@@ -57,26 +46,6 @@
 # zero-edge alternative, if this ever needs revisiting, is moving Interest
 # itself down to civictech.cell -- it imports nothing but java.io.Serializable
 # -- which is a deliberate relocation for a ticket that owns link/, not this one.
-#
-# E2-ALIGN: observe -> control and observe -> protocol ADDED --
-# observe/AlignedObserve.kt (the wave-aligned multi-view sink, spec 20/22
-# [22-OBS-02]) folds the wave-completeness condition at cell scope, which is
-# exactly the frontier machinery those two packages own: it registers a
-# Protocols.Progress handler and reads civictech.cell.control.Progress
-# (the CP-A3 absorb-ack that retires an absorbing arm), and it tracks
-# EdgeOpen/EdgeClose through civictech.cell.protocol's ProtocolSupport /
-# Protocols. Both edges are unavoidable for ANY cell that computes
-# completeness -- consistency/WaveFrontier.kt and data/op/CoalescingCombineCell.kt
-# carry the identical pair (consistency -> control, consistency -> protocol;
-# data -> control, data -> protocol are all already baselined) -- and the
-# ticket forbids modifying cell.consistency, so mirroring the fold in observe/
-# is the decided route (D-COMBINE precedent). No new cycle: nothing under
-# civictech.cell.control or .protocol imports civictech.cell.observe (verified
-# by grep, and observe has no inbound baseline edge at all), so observe stays a
-# sink package and both additions are one-way. The zero-edge alternative would
-# be composing an installed WaveFrontier per inlet, which cannot express one
-# frontier spanning several inlets -- the structural reason CoalescingCombineCell
-# records in its own KDoc.
 #
 # SEC1-10: evolve -> link ADDED -- Promotion.promote re-authorizes each
 # downstream rebind at PRECHECK ("promotion IS a rebind and MUST re-authorize",
@@ -122,16 +91,6 @@
 # exactly as cell <-> link and cell <-> port already do, and G-63's single
 # non-leaf SCC is unchanged.
 #
-# computenet-4vmyx.1: observe -> consistency ADDED -- observe/AlignedObserve.kt
-# (the aligned sink) now mirrors the suspension lane: WAIT /
-# DEGRADE on a recoverable stall, RE-SCOPE on a terminal one (spec 20/22
-# §Completeness over silent or stuck edges, KE2 §5.3). It takes its mode as
-# its mode and reports a re-scope as a violation -- reusing the frontier's own
-# vocabulary rather than minting a duplicate enum and exception in observe/,
-# which would let the two modes drift. The zero-edge alternative is exactly
-# that duplicate. No new cycle: nothing under civictech.cell.consistency
-# imports civictech.cell.observe (verified by grep), so the edge is one-way
-# and observe stays a sink package.
 # INT3 write authority: replication -> membrane ADDED — AuthorityState reuses
 # the existing SignatureVerifier seam implemented by :identity. Duplicating a
 # verifier in replication would create two meanings for the same signature
@@ -163,11 +122,6 @@ cell -> proxy
 consistency -> cell
 consistency -> control
 consistency -> data
-consistency -> host
-consistency -> link
-consistency -> port
-consistency -> protocol
-consistency -> proxy
 control -> cell
 control -> link
 control -> port
@@ -223,14 +177,11 @@ nature -> cell
 nature -> data
 nature -> partition
 observe -> cell
-observe -> consistency
-observe -> control
 observe -> data
 observe -> graph
 observe -> host
 observe -> link
 observe -> port
-observe -> protocol
 partition -> cell
 partition -> control
 partition -> data

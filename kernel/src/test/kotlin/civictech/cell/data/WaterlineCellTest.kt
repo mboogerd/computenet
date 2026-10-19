@@ -7,7 +7,6 @@ import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.host.ManagedHost
@@ -341,66 +340,6 @@ class WaterlineCellTest {
             for (seed in 0L until 100L) seededRun(seed, fallingFloorSubject())
         }
         println("B8 falling-floor control first failure: ${err.message}")
-    }
-
-    // ---------------------------------------------------------------------
-    // Absorb-ack diamond ([KE4-16], CP-A3) — shapes copied from OperatorAbsorbAckTest.
-
-    private class RawLongSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-        val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Long>>>())
-        fun send(vararg events: Long) =
-            outlet.call.propagate(SetDelta(adds = events.associate { it to setOf(Timestamp(UUID.randomUUID(), 1L)) }))
-    }
-
-    /** The always-real sibling arm: a distinct negative marker per wave. */
-    private class AlwaysEmitWaterline(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-        @Suppress("UNCHECKED_CAST")
-        val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<Long>>>))
-        val outlet = registerPort("outlet", FanOutlet.create<Propagate<WaterlineDelta>>())
-        private var n = 0L
-        init {
-            inlet.onEach { outlet.call.propagate(WaterlineDelta(-1000L - n++)) }
-        }
-    }
-
-    private class Observer<T>(clazz: Class<Propagate<T>>, override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-        val inlet = registerPort("inlet", FanInlet(clazz))
-        val received = mutableListOf<T>()
-        init { inlet.onEach { received += it } }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private val waterlineApi = Propagate::class.java as Class<Propagate<WaterlineDelta>>
-
-    @Test
-    fun `a wave that does not move the floor is absorb-acked so a downstream glitch-free join settles it`() {
-        val controller = SimulationController()
-        val host = ManagedHost(scheduler = controller.scheduler())
-
-        val source = RawLongSource()
-        val opArm = WaterlineCell(lateness = lateness)
-        val passArm = AlwaysEmitWaterline()
-        val gf = GlitchFreeCell(waterlineApi)
-        val observer = Observer(waterlineApi)
-        listOf(source, opArm, passArm, gf, observer).forEach { host.managementInlet.call.spawn(it) }
-
-        source.outlet.linkTo(opArm.inlet as LinkFrom<Propagate<SetDelta<Long>>>)
-        source.outlet.linkTo(passArm.inlet as LinkFrom<Propagate<SetDelta<Long>>>)
-        opArm.outlet.linkTo(gf.inlet as LinkFrom<Propagate<WaterlineDelta>>)
-        passArm.outlet.linkTo(gf.inlet as LinkFrom<Propagate<WaterlineDelta>>)
-        gf.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
-        controller.runToIdle()
-
-        source.send(10)
-        controller.runToIdle()
-        observer.received shouldBe listOf(WaterlineDelta(5), WaterlineDelta(-1000))
-
-        // t=7 is below the source's maximum: the floor does not move, the
-        // waterline arm absorbs; only its ack lets the join settle the wave.
-        source.send(7)
-        controller.runToIdle()
-        opArm.floor() shouldBe 5L
-        observer.received shouldBe listOf(WaterlineDelta(5), WaterlineDelta(-1000), WaterlineDelta(-1001))
     }
 
     // ---------------------------------------------------------------------

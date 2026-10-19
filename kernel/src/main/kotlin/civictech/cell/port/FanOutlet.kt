@@ -530,8 +530,8 @@ class FanOutlet<Api : Any>(
         // over-broad here: a suppressed targeted delivery starves exactly one
         // consumer, the target, while the walk told every consumer of this
         // outlet that its edge would not deliver. Downstream that is a spurious
-        // watermark advance plus a `GlitchViolation` on links nothing was
-        // withheld from. The corner is reachable through supported API and not
+        // suspension notice on links nothing was withheld from. The corner is
+        // reachable through supported API and not
         // merely in principle — [at] is `Use`'s targeted-delivery method,
         // public on the very outlet object `mediateOutlet` exposes — but it is
         // NOT reachable through any of today's in-kernel [at] callers, which is

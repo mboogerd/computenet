@@ -1201,7 +1201,7 @@ open class ManagedHost(
     internal fun interestRegistry(): LocationRegistry? = registry
 
     /**
-     * Test seam for `DurableGlitchFreeReplayTest`'s control (PN-2); forwards to
+     * Test seam for `DurableQuorumReplayTest`'s control (PN-2); forwards to
      * [HostDurability.replayAsBaseline] (RS-8.2). Production always replays as
      * baseline; see [HostDurability]'s KDoc for the full semantics.
      */
@@ -1977,7 +1977,7 @@ open class ManagedHost(
         return AttentionSupport.of(cell).band
     }
 
-    // suspensionRegionOf, hasFrontierPolicy, bfs, notifyDownstream: moved to
+    // suspensionRegionOf, bfs, notifyDownstream: moved to
     // TopologyWalks.kt (RS-8.4) — same package, so every existing bare call
     // site (notifyDownstream(...) below and in deliver()/resume()/suspend())
     // still resolves unchanged; suspensionRegionOf is wired into
@@ -2020,8 +2020,8 @@ open class ManagedHost(
                     // A wire-originated link (G-35 phase B, `WireEdgeLink`)
                     // carries no local Port object yet — decode only knows
                     // ids/refs. Patch in this delivery's real local endpoint
-                    // so identity-gated handlers (Attention.wire(),
-                    // GlitchFreeCell) see the same port they'd see from an
+                    // so identity-gated handlers such as Attention.wire() see
+                    // the same port they'd see from an
                     // in-process link, while the rest (protocolBridge,
                     // capabilities) still comes from the wire-constructed
                     // link for further hops. Other Link implementations
@@ -3149,8 +3149,7 @@ open class ManagedHost(
      * **Wave-neutral, like [snapshotOf] and for the same reason: it is not a
      * message.** It never enters `FanOutlet.call`/`at`, so no wave counter
      * moves and `waveState()` is unchanged; it fires no tap, so no delivered
-     * watermark advances; it is never offered to a `WaveFrontier`, so it arms
-     * no join and joins no completeness set; it reaches no inlet, so it cannot
+     * watermark advances; it reaches no inlet, so it cannot
      * advance an `Effectful` processed frontier; it installs no link, so no
      * `PullOnOpen` fires and no attention is raised (P6). This is exactly what
      * a `StateRequest` pull *cannot* offer an instrument — not because a pull

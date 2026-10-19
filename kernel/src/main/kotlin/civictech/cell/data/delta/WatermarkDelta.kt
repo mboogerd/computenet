@@ -36,9 +36,9 @@ data class WatermarkDelta(
      * [civictech.cell.data.WatermarkCell.resume] to the next even). Only a
      * slot's own owner writes it, so the max-merge is a genuine monotone join
      * (single-writer, alternating) that converges over the gossip mesh exactly
-     * as [rows]/[closed] do — the covering-quorum read
-     * ([civictech.cell.replication.Replication.replicaFrontier] `degrade`) drops
-     * an odd-epoch member from the quorum and restores it when the epoch turns
+     * as [rows]/[closed] do — the causal-stability read
+     * ([civictech.cell.replication.Replication.stableFrontier] `degrade`) drops
+     * an odd-epoch member from the open set and restores it when the epoch turns
      * even. `closed` is the degenerate terminal case (an epoch that never turns
      * even again). Defaulted empty ⇒ pre-PN-19 deltas round-trip unchanged.
      */
@@ -55,11 +55,10 @@ data class WatermarkDelta(
      * as its delivered frontier, so it converges more completely than the
      * point-to-point topology announcements that feed
      * [civictech.cell.host.InstanceIndex.instancesOf] (which mirror only
-     * direct peers). A settling node whose companion lists a member slot its own
-     * `instancesOf` view has not accounted for holds every keyed wave
-     * ([civictech.cell.replication.Replication.replicaFrontier] `membershipBarrier`)
-     * — the same conservative asymmetry the R13 creation fence gives a *known*
-     * rowless member, extended to an *unknown* one. Union-merged (grow-only), so it
+     * direct peers). [civictech.cell.replication.Replication.stableFrontier]
+     * includes a companion-announced member even when the local `instancesOf`
+     * view has not accounted for it, conservatively treating a missing row as
+     * bottom. Union-merged (grow-only), so it
      * gossips over the mesh with no second protocol; defaulted empty ⇒ pre-FU-2
      * deltas round-trip unchanged.
      */

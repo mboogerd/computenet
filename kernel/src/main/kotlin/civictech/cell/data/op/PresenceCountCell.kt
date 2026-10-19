@@ -33,8 +33,8 @@ import civictech.cell.data.delta.TagState
  * so the presence count — the number of distinct live source links asserting an
  * element — is exact.
  *
- * Link identity is obtained exactly as [civictech.cell.consistency.GlitchFreeCell]
- * obtains it (spec 12, 20/22):
+ * Link identity is obtained from `EdgeOpen`/`EdgeClose` and the ambient message
+ * context (spec 12, 20/22):
  *  - **EdgeOpen/EdgeClose** arrive on the inlet's `TopologyOrder` protocol
  *    sub-channel, so the lane set tracks the live-link frontier ([liveSources]).
  *  - a reactive delta carries [MessageContext.sourcePort] — the immediate
@@ -88,7 +88,7 @@ internal class PresenceLanes<E> {
      * Folds [delta] into the lane it arrived on and returns the elements whose
      * per-lane membership the fold touched — the recompute frontier. An
      * unattributable delivery (no matching lane) folds nowhere and touches
-     * nothing, mirroring GlitchFreeCell's drop of a delta with no open edge.
+     * nothing.
      */
     fun fold(ctx: MessageContext?, delta: SetDelta<E>): Set<E> =
         foldEffective(ctx, delta).let { it.adds.keys + it.dels.keys }

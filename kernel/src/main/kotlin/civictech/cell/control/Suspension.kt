@@ -5,12 +5,8 @@ import civictech.gen.wire.Protocol
 import civictech.nature.ProtocolDirection
 
 /**
- * Recoverability of a stall determines a glitch-free join's disposition
- * (spec 20/22 "Completeness over silent or stuck edges", 30/34 decision 3,
- * decided in 93 I-18): WAIT (park-not-drop) or DEGRADE (frontier-shrink)
- * apply only to recoverable causes; RE-SCOPE (advance past the poisoned
- * wave, surface a GlitchViolation) is the only admissible disposition for
- * terminal ones.
+ * Recoverability classifies whether the condition can later clear. The
+ * downstream Suspension protocol remains until its fan-out is retired.
  */
 @kotlinx.serialization.Serializable
 enum class StallReason(val recoverable: Boolean) {
@@ -31,9 +27,8 @@ enum class StallReason(val recoverable: Boolean) {
      *
      * **`recoverable = true` (9sm.5-D3).** WAIT parks on the edge and DEGRADE
      * shrinks the frontier past it — the same disposition an attention-park
-     * gets. RE-SCOPE is **never** chosen for it: nothing about the stalled
-     * slot's contribution is poisoned, only late, so advancing past the wave
-     * and raising a `GlitchViolation` would be a lie about the data.
+     * gets. Nothing about the stalled slot's contribution is poisoned, only
+     * late, so the notice remains diagnostic.
      *
      * **"Frozen", not "dead".** This reason is a *diagnostic*, never a
      * failure verdict: no failure detector, lease or timeout stands behind it
