@@ -11,7 +11,6 @@ import civictech.cell.port.Subscribe
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
-import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.view.MapDiffPublisher
 
@@ -50,11 +49,8 @@ interface LookupJoinApi<K, V, J, D, R> {
  * comes from the publisher. A wave whose recompute leaves **every** touched
  * fact unchanged — the commonest case being a dimension delta that no live fact
  * references, or one whose new value `combine` ignores — emits nothing at all
- * and therefore **absorb-acks** it (`cell.control.absorbAck`, CP-A3, via
- * [emitOrAbsorb]) so a downstream glitch-free join's per-source watermark still
- * advances past the wave this cell silently swallowed (spec 20/22 §Completeness
- * over silent or stuck edges; the second, unflagged half of 96 §E2.2's
- * value-equal-swallow residual, closed).
+ * and therefore emits nothing. Multi-input derived state may be observed
+ * between input deliveries.
  *
  * Single writer of its output stream, like [GroupByCell] / [CombineLatestCell]:
  * the enriched map is a deterministic function of the two convergent inputs, so
@@ -138,22 +134,14 @@ class LookupJoinCell<K, V, J, D, R>(
     }
 
     /**
-     * Effective-only emit, or absorb-ack the wave this cell swallowed (CP-A3,
-     * spec 20/22 §Completeness over silent or stuck edges): a value-equal
-     * recompute — or an empty `touched` set, the dimension delta that no live
-     * fact references — leaves the publisher with nothing to emit, and without
-     * the ack a downstream glitch-free join could only settle this arm from a
-     * *later* real change. [civictech.cell.control.absorbAck] itself skips
-     * baseline and spontaneous (context-free) emissions, so the per-link
-     * `onLinked` catch-up unicast above needs no special-casing.
+     * Effective-only emit: a value-equal recompute — or an empty `touched` set,
+     * the dimension delta that no live fact references — leaves the publisher
+     * with nothing to emit. The per-link `onLinked` catch-up unicast above
+     * remains separate.
      */
     private fun emitChanges(touched: Set<K>) {
         val delta = publisher.publish(touched, ::recompute)
-        emitOrAbsorb(
-            delta == null,
-            emit = { outlet.call.propagate(delta!!) },
-            absorbAck = { outlet.absorbAck() },
-        )
+        delta?.let { outlet.call.propagate(it) }
     }
 
     override fun snapshot(): Serializable = arrayListOf(HashMap(facts), HashMap(dims))

@@ -40,7 +40,8 @@ import java.util.UUID
  * seeds `0 until 50`: 207 in-delta collisions, generated sweep caught on 22 of 50 seeds).
  *
  * Test scope only: `NoCellClassArchitectureTest` gates `query/src/main` (`[QRY1-LOWER-03]`).
- * It emits on every delta (never absorbs a wave), because `absorbAck` is kernel-internal.
+ * It emits every delta, including ineffective ones, to make the deliberately
+ * incorrect last-wins lowering observable.
  */
 class LastWinsProjectCell(
     private val transform: RowProjection,

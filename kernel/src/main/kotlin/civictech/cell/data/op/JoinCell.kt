@@ -12,7 +12,6 @@ import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
-import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.MapDelta
 
 @CellBase
@@ -89,8 +88,6 @@ class JoinCell<K, V, W>(
     private fun emit(puts: Map<K, Pair<V, W>>, removals: Set<K>) {
         if (puts.isNotEmpty() || removals.isNotEmpty()) {
             outlet.call.propagate(MapDelta(puts, removals))
-        } else {
-            outlet.absorbAck() // a key present on only one side — ack the swallowed wave (CP-A3)
         }
     }
 

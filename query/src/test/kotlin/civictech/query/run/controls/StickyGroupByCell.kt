@@ -30,7 +30,8 @@ import java.util.UUID
  * refuses any other [AggregateSpec].
  *
  * Test scope only: `NoCellClassArchitectureTest` gates `query/src/main` (`[QRY1-LOWER-03]`).
- * It emits on every delta (never absorbs a wave), because `absorbAck` is kernel-internal.
+ * It emits every delta, including ineffective ones, to keep the deliberately
+ * sticky control behavior observable.
  */
 class StickyGroupByCell(
     private val key: RowKey?,

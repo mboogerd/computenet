@@ -25,8 +25,8 @@
 # hand-written class drags its generated `*Base`/`*Ports`/`*Api` names along with it, and those
 # also carry `CLASS_KIND`, so renames are equally unaffected and still redden the gate, as they
 # must. Both edges computenet-4ru.15 left open are closed by this rule change — mutation-proven on
-# computenet-4ru.19 — and the checked-in list below is unchanged by the switch: the same 5 file
-# facades (EmitKt, FlatMapSetCellKt, JoinSetCellKt, OperatorPagingKt, SemiJoinCellKt) are identified
+# computenet-4ru.19 — and the checked-in list below is unchanged by the switch: 4 file facades
+# (FlatMapSetCellKt, JoinSetCellKt, OperatorPagingKt, SemiJoinCellKt) are identified
 # either way in this package today.
 #
 # 82 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
