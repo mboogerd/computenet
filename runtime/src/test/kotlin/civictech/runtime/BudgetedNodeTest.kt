@@ -53,7 +53,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 private class RuntimeBudgetMembrane(ref: CellRef) : CompositeCell(ref) {
     private val source = SetCell<String>()
 
-    val exposure = mediateOutlet(
+    val attention = mediateOutlet(
         "attention",
         "outlet",
         source.outlet,
@@ -333,7 +333,7 @@ class BudgetedNodeTest {
                     PortRef.generate(),
                 ),
             )
-            ProtocolSupport.of(aMembrane.exposure).handle(Protocols.Attention) { _, message ->
+            ProtocolSupport.of(aMembrane.attention).handle(Protocols.Attention) { _, message ->
                 observed += message as Attention
             }
 
