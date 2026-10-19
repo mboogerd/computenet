@@ -17,6 +17,9 @@ include(":testkit")
 // ([BEN1-01]).
 include(":bench")
 include(":oracle")
+// computenet-gl2i7: executable model of the composition design notes in
+// doc/integration/2026-10-04-composition/. A leaf that depends on no other project.
+include(":composition-model")
 include(":query")
 
 include(":kernel")
