@@ -22,14 +22,16 @@ data class StudioEdge(val id: String, val from: String, val to: String, val port
                       val status: String = "ok", val reason: String? = null)
 @Serializable
 data class RunSummary(val runId: String, val startedAt: String, val durationMs: Long,
-                      val exitCode: Int, val costUsd: Double? = null, val outcome: String? = null)
+                      val exitCode: Int, val costUsd: Double? = null, val outcome: String? = null, val status: String = "completed")
 @Serializable
 data class RunDetail(val runId: String, val startedAt: String, val durationMs: Long,
                      val exitCode: Int, val costUsd: Double? = null,
                      val inputs: Map<String, JsonObject>, val argv: List<String>, val cwd: String,
                      val stdout: String, val stderr: String, val error: String? = null,
-                     val outcome: String? = null, val judgment: StudioJudgment? = null) {
-    fun summary() = RunSummary(runId, startedAt, durationMs, exitCode, costUsd, outcome)
+                     val outcome: String? = null, val judgment: StudioJudgment? = null,
+                     val status: String = "completed", val pid: Long? = null,
+                     val processes: List<RecordedProcess> = emptyList(), val warnings: List<String> = emptyList()) {
+    fun summary() = RunSummary(runId, startedAt, durationMs, exitCode, costUsd, outcome, status)
 }
 @Serializable
 data class PreviewState(val codeHash: String, val status: String = "idle",
@@ -58,7 +60,7 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
         "judge" -> JUDGE_DEFAULTS
         "git" -> """{"repo":"","branch":"","intervalSec":60,"fetch":true}"""
         "beads" -> beadsDefaults
-        "program" -> """{"prompt":"","inputs":["in"],"generator":"claude","auto":true,"timeoutSec":120}"""
+        "program" -> """{"prompt":"","inputs":["in"],"generator":"claude","auto":true,"timeoutSec":120,"maxPromptBytes":1048576}"""
         "exec" -> {
             val preset = supplied.string("preset", "custom")
             val fields = when (preset) {
@@ -68,7 +70,7 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
                 "bd-comment", "bd-create" -> beadsPresetDefaults(preset)
                 else -> bad("unknown exec preset: $preset")
             }
-            """{"preset":"$preset","auto":${preset == "custom"},"timeoutSec":600,"cwd":"",$fields}"""
+            """{"preset":"$preset","auto":${preset == "custom"},"timeoutSec":600,"maxPromptBytes":1048576,"cwd":"",$fields}"""
         }
         else -> bad("unknown node kind: $kind")
     }
@@ -76,6 +78,7 @@ internal fun nodeConfig(kind: String, supplied: JsonObject): JsonObject {
     if (kind == "judge") validateJudge(config)
     if (kind == "exec" && config.string("preset") == "custom") tokenize(config.string("command"))
     if (kind in setOf("exec", "program") && config.long("timeoutSec", 0) <= 0) bad("timeoutSec must be positive")
+    if (kind in setOf("exec", "program") && config.long("maxPromptBytes", 0) <= 0) bad("maxPromptBytes must be positive")
     if (kind == "git" && config.long("intervalSec", 0) <= 0) bad("intervalSec must be positive")
     if (kind == "git" && config.string("repo").let { it.isNotBlank() && !java.io.File(it).isAbsolute }) bad("repo must be absolute")
     if (kind == "exec" && config.string("preset") == "claude") {

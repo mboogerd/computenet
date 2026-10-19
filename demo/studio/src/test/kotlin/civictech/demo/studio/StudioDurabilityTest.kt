@@ -103,6 +103,11 @@ class StudioDurabilityTest {
             assertEquals("started", started.phase)
             assertEquals(64, started.inputsHash.length)
             val image = crashImage(r, "started-crash")
+            // This journal-only image tests interrupted state independently of orphan
+            // cleanup. Let the original finish before opening its copied PID ledger;
+            // StudioProcessBugsTest covers recovery killing a still-live orphan tree.
+            Files.writeString(release, "go")
+            done(r, target.id, "held")
             StudioRuntime(image).use { restored ->
                 restored.settleInputs()
                 val state = restored.state(target.id)
@@ -120,8 +125,6 @@ class StudioDurabilityTest {
                 assertEquals("previous run interrupted", restored.state(target.id).error)
                 assertEquals(listOf("launch"), Files.readAllLines(marker))
             }
-            Files.writeString(release, "go")
-            done(r, target.id, "held")
         }
     }
 

@@ -346,3 +346,52 @@ and `costUsd` are null when absent. HTTP 429/529 retry up to four attempts with
 exponential backoff inside one timeout budget; other errors fail immediately.
 Raw HTTP bodies, headers and transport exception messages are never run artifacts.
 Default tests inject fake HTTP responses and make no real TypeSafe calls.
+
+### Process runner records and limits
+
+Claude `-p` receives its prompt from stdin with no positional prompt; Codex exec
+uses `-- -`. Live agent runs and Python generation both use a redirected UTF-8
+input file, never shell interpolation or a prompt argv element. `maxPromptBytes`
+on exec/program nodes defaults to **1,048,576 UTF-8 bytes** and must be positive.
+The check includes substituted inputs and generation instructions. Exceeding it
+records a clear failed run before starting the CLI. Custom command argv limits
+remain the operating system's limits.
+
+Output files retain the original bytes. Run details decode stdout/stderr and
+Codex's final-message file with replacement characters for malformed UTF-8;
+`warnings` names each affected file. Decoding warnings preserve the process exit
+code and do not themselves fail a run.
+
+A run is listed before execution with `status: "running"`, `exitCode: -1`, inputs
+and startedAt; argv/cwd are recorded before process launch. After launch `pid` and
+`processes` contain PID, OS start instant, executable and available arguments.
+The fsynced job ledger mirrors the running detail; descendants are sampled every
+100 ms while waiting, with newly observed identities persisted. Completed run
+records use `status: "completed"`; run summaries also expose status.
+
+Startup, before polling or launching workers, marks running artifacts
+`status/outcome: "interrupted"`, with exitCode -1. Node recovery remains stale
+with “previous run interrupted”, without automatic retry. A matching recorded
+PID is killed only if its OS start instant, executable and recorded arguments
+still match. Missing identity information refuses cleanup. Recovery sweeps live
+runs and disposable previews, including older artifacts; late raw file writes
+cannot turn an interrupted run into success. Fenced workers cannot overwrite
+terminal records or publish obsolete output.
+
+Timeout cleanup force-kills the parent and waits for death before signalling
+children, then sweeps descendants captured before/after the kill, in parent-first
+order. Timeouts always fail with exitCode -1 and publish no stdout. This prevents
+a shell's post-sleep commands from running because its sleep was killed first.
+There is no grace period for the parent to continue. This is best-effort cleanup:
+SIGKILL cannot undo effects already issued, and OS scheduling leaves a window
+between the deadline and delivery of the kill. JDK ProcessBuilder has no process
+group launch support and macOS ships no setsid. A descendant that daemonizes or
+forks/reparents between observations can escape. A JVM crash between OS process
+creation and persisting its identity also leaves an unrecorded orphan; command
+changes after the last sample conservatively refuse cleanup. These limits need
+OS containment/a supervisor for a stronger guarantee. External effects may have
+happened before interruption; inspect them before retrying.
+
+Git polling errors set source status to `failed`, include repository and requested
+ref (or `<auto>` plus the attempted resolved command), and return to `idle` after
+the next successful observation.

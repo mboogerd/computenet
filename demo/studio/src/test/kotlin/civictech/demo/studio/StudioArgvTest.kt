@@ -29,24 +29,24 @@ class StudioArgvTest {
 
     @Test fun `claude argv confines tools turns budget and prompt`() {
         val cfg = nodeConfig("exec", buildJsonObject { put("preset", "claude"); put("model", "model"); put("maxTurns", 3); put("maxBudgetUsd", 0.5) })
-        val args = claudeArgv(cfg, "prompt ; rm -rf /")
+        val args = claudeArgv(cfg)
         fun value(flag: String) = args[args.indexOf(flag) + 1]
         assertEquals("Read,Grep,Glob", value("--tools")); assertEquals("none", value("--permission-prompts"))
         assertEquals("3", value("--max-turns")); assertEquals("0.5", value("--max-budget-usd")); assertEquals("model", value("--model"))
         assertTrue(args.containsAll(listOf("--safe-mode", "--restricted", "--strict-mcp-config", "--no-session-persistence")))
-        assertEquals(listOf("--", "prompt ; rm -rf /"), args.takeLast(2))
-        val none = claudeArgv(cfg, "generate", noTools = true)
+        assertEquals(listOf("--"), args.takeLast(1))
+        val none = claudeArgv(cfg, noTools = true)
         assertEquals("", none[none.indexOf("--tools") + 1])
     }
 
     @Test fun `claude string budget renders as a number argument`() {
         val cfg = nodeConfig("exec", buildJsonObject { put("preset", "claude"); put("maxBudgetUsd", "1.5") })
-        val args = claudeArgv(cfg, "prompt")
+        val args = claudeArgv(cfg)
         assertEquals("1.5", args[args.indexOf("--max-budget-usd") + 1])
     }
 
     @Test fun `codex blank model preserves user configured default`() {
-        val args = codexArgv(nodeConfig("exec", buildJsonObject { put("preset", "codex"); put("model", "") }), "prompt", Path.of("/tmp/last.txt"))
+        val args = codexArgv(nodeConfig("exec", buildJsonObject { put("preset", "codex"); put("model", "") }), Path.of("/tmp/last.txt"))
         assertFalse("--ignore-user-config" in args)
         assertFalse("--strict-config" in args)
         assertFalse("-m" in args)
@@ -56,12 +56,12 @@ class StudioArgvTest {
     @Test fun `codex argv is ephemeral read only and codegen disables command tools`() {
         val cfg = nodeConfig("exec", buildJsonObject { put("preset", "codex"); put("model", "model"); put("effort", "high") })
         val out = Path.of("/tmp/last.txt")
-        val args = codexArgv(cfg, "prompt", out)
+        val args = codexArgv(cfg, out)
         assertEquals("read-only", args[args.indexOf("-s") + 1]); assertTrue("model_reasoning_effort=\"high\"" in args)
         assertFalse("--ignore-user-config" in args); assertFalse("--strict-config" in args)
         assertEquals("model", args[args.indexOf("-m") + 1])
         assertTrue("--ephemeral" in args); assertEquals(out.toString(), args[args.indexOf("-o") + 1])
-        assertEquals(listOf("--", "prompt"), args.takeLast(2))
-        assertTrue(codexArgv(cfg, "generate", out, noTools = true).containsAll(listOf("shell_tool", "unified_exec")))
+        assertEquals(listOf("--", "-"), args.takeLast(2))
+        assertTrue(codexArgv(cfg, out, noTools = true).containsAll(listOf("shell_tool", "unified_exec")))
     }
 }

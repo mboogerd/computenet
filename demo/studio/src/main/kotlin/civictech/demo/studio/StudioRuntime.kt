@@ -76,6 +76,9 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
     init { synchronized(lock) {
         Files.createDirectories(data)
         atomicWrite(profile, PythonSandbox.PROFILE)
+        // Recover artifacts before any poll/worker can launch. Includes older fenced
+        // jobs and disposable previews, not only each node's latest ledger entry.
+        recoverRunArtifacts()
         // Nothing can launch work, poll git, or accept HTTP writes before this fence.
         context.recover(journal).awaitApplied()
         val metadataFile = data.resolve("graph.json")
@@ -105,6 +108,15 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         refreshTypes() // Replay topology unconditionally; quarantine only at the application boundary.
         nodes.values.forEach { e ->
             if (e.job?.phase == "started" || e.state.status in setOf("running", "queued", "generating")) {
+                e.job?.takeIf { it.phase == "started" }?.let { job ->
+                    // Started in the fsynced ledger wins even if the process wrote a
+                    // completed artifact just before crashing ahead of its state commit.
+                    val running = job.running ?: RunDetail(job.runId,
+                        Instant.ofEpochMilli(job.runId.substringBefore('-').toLongOrNull() ?: 0).toString(),
+                        0, -1, inputs = e.state.inputs, argv = emptyList(), cwd = nodeDir(e.node.id).toString(),
+                        stdout = "", stderr = "", status = "running")
+                    interruptRun(running, runDir(e.node.id, job.runId, false))
+                }
                 e.job = e.job?.copy(phase = "interrupted")
                 e.state = e.state.copy(status = "stale", error = "previous run interrupted")
                 changed(e)
@@ -116,6 +128,47 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         nodes.values.forEach(::attach)
         nodes.values.filter { it.node.kind in setOf("git", "beads") }.forEach { schedulePoll(it, 0) }
     } }
+
+    private fun runDir(id: String, runId: String, preview: Boolean) =
+        nodeDir(id).resolve(if (preview) "previews" else "runs").resolve(runId)
+
+    private fun interruptRun(running: RunDetail, dir: Path) {
+        destroyRecorded(running.processes)
+        fun captured(name: String) = if (Files.isRegularFile(dir.resolve(name))) readOutput(dir.resolve(name)) else DecodedOutput("")
+        val out = captured("stdout.txt"); val err = captured("stderr.txt")
+        val detail = running.copy(status = "interrupted", outcome = "interrupted", exitCode = -1,
+            error = "previous run interrupted", stdout = out.text, stderr = err.text,
+            durationMs = java.time.Duration.between(Instant.parse(running.startedAt), Instant.now()).toMillis(),
+            warnings = (running.warnings + out.warnings + err.warnings).distinct())
+        atomicWrite(dir.resolve("run.json"), json.encodeToString(detail))
+    }
+
+    private fun recoverRunArtifacts() {
+        val root = data.resolve("nodes")
+        if (!Files.exists(root)) return
+        Files.walk(root, 4).use { paths -> paths.filter { file ->
+            val relative = root.relativize(file)
+            relative.nameCount == 4 && relative.getName(1).toString() in setOf("runs", "previews") &&
+                file.fileName.toString() == "run.json" && Files.isRegularFile(file)
+        }.forEach { file ->
+            val detail = json.decodeFromString<RunDetail>(Files.readString(file))
+            if (detail.status == "running") interruptRun(detail, file.parent)
+        } }
+    }
+
+    /** Called outside ProcessFence's monitor: runtime lock -> fence is the only lock order. */
+    private fun recordRunning(e: Entry, runId: String, version: Long, preview: Boolean,
+                              update: (RunDetail) -> RunDetail) = synchronized(lock) {
+        if (closed || !current(e) || e.version != version || e.job?.runId != runId || e.job?.phase != "started")
+            throw IllegalStateException("run fenced")
+        val prior = checkNotNull(e.job!!.running)
+        val next = update(prior)
+        if (next != prior) {
+            e.job = e.job!!.copy(running = next)
+            changed(e) // fsynced authority before the plain-file mirror
+            atomicWrite(runDir(e.node.id, runId, preview).resolve("run.json"), json.encodeToString(next))
+        }
+    }
 
     private fun checkpointOf(ref: CellRef): StudioCheckpoint =
         json.decodeFromString(host.snapshotOf(ref).get(5, TimeUnit.SECONDS) as String)
@@ -540,6 +593,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
         e.fence.cancel(); e.task?.cancel(true)
         e.busy = false; e.generating = false; e.manualPending = false
         if (e.job?.phase == "started") {
+            e.job!!.running?.let { interruptRun(it, runDir(e.node.id, it.runId, nodes[e.node.id]?.shadow === e)) }
             e.job = e.job!!.copy(phase = "interrupted")
             e.state = e.state.copy(status = "stale", error = "run fenced for replacement")
             changed(e)
@@ -605,19 +659,27 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
             ("outputSchema" to (e.liveSchema ?: JsonNull)))) else e.node
         val version = e.version
         val code = e.liveCode
-        e.fence = ProcessFence()
-        val fence = e.fence
         val runId = "${Instant.now().toEpochMilli()}-${UUID.randomUUID()}"
-        e.state = e.state.copy(status = if (generating) "generating" else "running", error = null, runCount = e.state.runCount + 1)
-        e.job = JobRecord(runId, sha256(json.encodeToString(inputs.toSortedMap().toMap())), "started")
-        changed(e) // synchronous durable started record BEFORE submitting the worker
         val previewRun = nodes[node.id]?.shadow === e
+        e.fence = ProcessFence { observed ->
+            recordRunning(e, runId, version, previewRun) { prior ->
+                val merged = (prior.processes + observed).associateBy { it.pid }.values.toList()
+                prior.copy(pid = prior.pid ?: observed.firstOrNull()?.pid, processes = merged)
+            }
+        }
+        val fence = e.fence
+        e.state = e.state.copy(status = if (generating) "generating" else "running", error = null, runCount = e.state.runCount + 1)
+        val placeholder = RunDetail(runId, Instant.now().toString(), 0, -1, inputs = inputs, argv = emptyList(),
+            cwd = nodeDir(node.id).toAbsolutePath().toString(), stdout = "", stderr = "", status = "running")
+        e.job = JobRecord(runId, sha256(json.encodeToString(inputs.toSortedMap().toMap())), "started", running = placeholder)
+        changed(e) // synchronous durable started record BEFORE submitting the worker
+        atomicWrite(runDir(node.id, runId, previewRun).resolve("run.json"), json.encodeToString(placeholder))
         e.task = workers.submit { execute(e, node, inputs, code, runId, generating, fence, previewRun, version) }
     }
 
     private fun execute(e: Entry, node: StudioNode, inputs: Map<String, JsonObject>, code: String?, runId: String, generating: Boolean, fence: ProcessFence, previewRun: Boolean, version: Long) {
-        val started = Instant.now()
-        val dir = nodeDir(node.id).resolve(if (previewRun) "previews" else "runs").resolve(runId)
+        val started = synchronized(lock) { Instant.parse(checkNotNull(e.job!!.running).startedAt) }
+        val dir = runDir(node.id, runId, previewRun)
         var argv = emptyList<String>()
         var cwd = nodeDir(node.id)
         var result = ProcessResult(-1, "", "", "run did not start")
@@ -644,10 +706,11 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
             val schemaFile = if (!generating && preset == "codex" && outputSchema(config) != null)
                 dir.resolve("output-schema.json").also { atomicWrite(it, outputSchema(config).toString()) } else null
             val prompt = if (generating) generationPrompt(node, inputs) else substitute(config.string("prompt"), inputs)
+            if (preset in setOf("claude", "codex")) checkPrompt(config, prompt)
             argv = when (preset) {
                 "custom" -> tokenize(config.string("command")).map { substitute(it, inputs) }
-                "claude" -> claudeArgv(config, prompt, noTools = generating)
-                "codex" -> codexArgv(config, prompt, dir.resolve("last.txt"), noTools = generating, schemaFile = schemaFile)
+                "claude" -> claudeArgv(config, noTools = generating)
+                "codex" -> codexArgv(config, dir.resolve("last.txt"), noTools = generating, schemaFile = schemaFile)
                 "bd-comment", "bd-create" -> beadsWriteArgv(config, inputs)
                 "python" -> {
                     // Each execution owns a fresh scratch directory and immutable code bytes.
@@ -657,35 +720,46 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 }
                 else -> error("invalid preset")
             }
+            recordRunning(e, runId, version, previewRun) { it.copy(argv = argv, cwd = cwd.toAbsolutePath().toString()) }
             result = processes.run(argv, cwd, dir, config.long("timeoutSec", 120),
-                if (preset == "python") json.encodeToString(inputs) else null,
+                when (preset) { "python" -> json.encodeToString(inputs); "claude", "codex" -> prompt; else -> null },
                 if (preset == "python") mapOf("TMPDIR" to cwd.toRealPath().toString()) else if (beadsPreset(preset)) beadsEnvironment(config) else emptyMap(), fence)
             if (result.error == null) when (preset) {
                 "claude" -> {
                     val extracted = claudeOutput(result.stdout, !generating && outputSchema(config) != null)
                     output = extracted.first; cost = extracted.second
                 }
-                "codex" -> output = Files.readString(dir.resolve("last.txt"))
+                "codex" -> {
+                    val decoded = readOutput(dir.resolve("last.txt"))
+                    output = decoded.text
+                    result = result.copy(warnings = result.warnings + decoded.warnings)
+                }
                 else -> output = result.stdout
             }
             output = output.removeSuffix("\n")
             if (!generating && result.error == null) outputSchema(config)?.let { StudioSchemas.validate(it, output) }
             }
         } catch (ex: Exception) { result = result.copy(error = ex.message ?: ex.javaClass.simpleName) }
-        val detail = RunDetail(runId, started.toString(), java.time.Duration.between(started, Instant.now()).toMillis(),
-            result.exitCode, cost, inputs, argv, cwd.toAbsolutePath().toString(), result.stdout, result.stderr, result.error,
-            if (result.error != null) "failed" else outcome, judgment)
-        // Run output I/O is deliberately outside the studio lock.
-        try {
-            Files.createDirectories(dir)
-            if (!Files.exists(dir.resolve("stdout.txt"))) Files.writeString(dir.resolve("stdout.txt"), result.stdout)
-            if (!Files.exists(dir.resolve("stderr.txt"))) Files.writeString(dir.resolve("stderr.txt"), result.stderr)
-            atomicWrite(dir.resolve("run.json"), json.encodeToString(detail))
-        } catch (ex: Exception) { result = result.copy(error = "could not save run: ${ex.message}") }
         synchronized(lock) {
+            // Fence BEFORE writing artifacts as well as before publication. An obsolete
+            // completion must never replace an interrupted run with a late success.
             if (closed || !current(e) || e.version != version || e.job?.runId != runId || e.job?.phase != "started") return
+            val running = checkNotNull(e.job!!.running)
+            var detail = RunDetail(runId, started.toString(), java.time.Duration.between(started, Instant.now()).toMillis(),
+                result.exitCode, cost, inputs, argv, cwd.toAbsolutePath().toString(), result.stdout, result.stderr, result.error,
+                if (result.error != null) "failed" else outcome, judgment,
+                pid = running.pid, processes = running.processes, warnings = result.warnings)
+            try {
+                Files.createDirectories(dir)
+                if (!Files.exists(dir.resolve("stdout.txt"))) Files.writeString(dir.resolve("stdout.txt"), result.stdout)
+                if (!Files.exists(dir.resolve("stderr.txt"))) Files.writeString(dir.resolve("stderr.txt"), result.stderr)
+                atomicWrite(dir.resolve("run.json"), json.encodeToString(detail))
+            } catch (ex: Exception) {
+                result = result.copy(error = "could not save run: ${ex.message}")
+                detail = detail.copy(error = result.error, outcome = "failed")
+            }
             e.busy = false; e.generating = false
-            e.job = e.job!!.copy(phase = "completed", result = detail)
+            e.job = e.job!!.copy(phase = "completed", result = detail, running = null)
             e.state = e.state.copy(lastRun = detail.summary(), status = if (result.error != null) "failed" else if (outcome == "gated") "gated" else "idle", error = result.error)
             if (result.error == null) {
                 if (judgment != null) {
@@ -740,11 +814,11 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                 if (closed || nodes[id] !== e) return@synchronized
                 e.pollBusy = false
                 if (version == e.version) {
-                    if (error != null) { e.state = e.state.copy(error = error); changed(e) }
+                    if (error != null) { e.state = e.state.copy(status = "failed", error = error); changed(e) }
                     else if (e.node.kind == "beads") {
                         val watch = beadsWatch(config)
                         val previous = e.state.beads?.takeIf { it.watch == watch }?.set
-                        e.state = e.state.copy(beads = BeadsState(watch, sha!!), error = null,
+                        e.state = e.state.copy(status = "idle", beads = BeadsState(watch, sha!!), error = null,
                             output = if (previous == null) null else e.state.output)
                         if (previous != null && previous != sha) {
                             val value = beadsChange(previous, sha!!, config.string("workspace"))
@@ -753,7 +827,7 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
                         else changed(e)
                     } else {
                         val previous = e.state.ref
-                        e.state = e.state.copy(ref = sha, error = null)
+                        e.state = e.state.copy(status = "idle", ref = sha, error = null)
                         if (previous != null && previous != sha) {
                             val value = change(previous, sha!!, config.string("repo"))
                             publish(e, if (e.firePending) fired(value) else value)
@@ -770,13 +844,14 @@ class StudioRuntime internal constructor(val data: Path, private val sandbox: Py
 
     private fun gitRef(config: JsonObject): String {
         val repo = config.string("repo")
-        check(repo.isNotBlank()) { "repo is empty" }
+        val requested = config.string("branch").ifBlank { "<auto>" }
+        check(repo.isNotBlank()) { "git repo '$repo', ref '$requested': repo is empty" }
         fun git(vararg args: String): String {
             // Poll logs are separate from user runs; git never holds the state lock.
             val dir = Files.createTempDirectory(data, ".git-poll-")
             try {
                 val r = processes.run(listOf("git", "-C", repo) + args, data, dir, 60)
-                check(r.error == null) { r.error ?: "git failed" }
+                check(r.error == null) { "git repo '$repo', ref '$requested' (${args.joinToString(" ")}): ${r.error}" }
                 return r.stdout.trim()
             } finally { dir.toFile().deleteRecursively() }
         }

@@ -221,3 +221,27 @@ The repository-wide `test` run caught the corrected notification ratchet and als
 hit an out-of-scope five-minute timeout in Beads-mirror's
 `ReadySecondSeedDifferentialTest` (seed 21). The broader run was stopped after that
 failure; it is not a green repository-wide gate. No Beads-mirror files were changed.
+
+
+## Process-runner follow-up
+
+The latest-job ledger now also contains the running artifact and verified process
+identities. A plain-file placeholder exists before worker submission and records
+argv before launch, then PID/start instant/command and sampled descendants after
+launch. Startup reconciles both the ledger and running artifacts, terminates only
+matching identities, and persists interrupted records before any new work starts.
+Completion is fenced before artifact writes as well as state publication. This
+extends the part A interrupted-job evidence to run history and real child cleanup;
+it does not establish exactly-once external effects or OS crash containment.
+README's process-runner section documents the launch-to-record gap, descendant
+sampling/reparenting limits, parent-first timeout termination and prompt limits.
+
+Validation: six focused regression tests first failed against the original runner
+(including the timeout canary and missing running artifact), then passed after the
+fixes. The final `:demo:studio:test --rerun :demo:studio:installDist` gate executed
+128 tests, including nine new regression checks, with zero failures/errors/skips.
+Both requested tasks executed; 25 actionable tasks: eight executed, 17 up-to-date.
+The no-daemon/in-process compiler workaround was used; outer execution permission
+allowed real ProcessHandle tree inspection and macOS sandbox tests. Agent tests
+use real Python stdin/argv probes in place of paid CLIs; installed CLI help was
+checked for stdin support. UI sources were unchanged.

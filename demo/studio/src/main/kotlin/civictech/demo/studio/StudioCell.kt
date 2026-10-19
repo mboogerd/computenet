@@ -19,7 +19,7 @@ internal data class StudioMsg(val fromNodeId: String, val change: String, val em
 
 @Serializable
 internal data class JobRecord(val runId: String, val inputsHash: String, val phase: String,
-                              val result: RunDetail? = null)
+                              val result: RunDetail? = null, val running: RunDetail? = null)
 
 @Serializable
 internal data class StudioDefinition(val id: String, val kind: String, val config: kotlinx.serialization.json.JsonObject) {
