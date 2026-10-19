@@ -209,3 +209,66 @@ one atomic operation, and recovery never implicitly reruns it; explicit Run or a
 new automatic input publishes it. Tests exercise clean restart and fsynced journal
 crash images, not process termination at every instruction, storage failure at
 every kernel boundary, or OS power loss. Kernel files are unchanged.
+
+
+### Jev judgments and gates
+
+Add **+ Jev**, then place a `judge` cell before Claude/Codex to avoid expensive
+runs for changes that do not qualify. Set `TYPESAFE_API_KEY` in the server's
+environment before launching Studio. The key is never a node setting and is not
+written to the journal, canvas metadata, run artifacts or logs. Unknown judge
+configuration fields (including credential fields) are rejected before storage.
+A missing key or API failure records a failed, completed job without output.
+
+Example gate config:
+
+```json
+{
+  "question": "Is this CI failure caused by the diff rather than flakiness? Diff: {{diff}} Log: {{log}}",
+  "output": "probability",
+  "mode": "gate",
+  "threshold": 0.7,
+  "passPort": "diff",
+  "auto": true
+}
+```
+
+Input ports are the distinct placeholder roots in question order, using the same
+substitution rules as exec prompts. Every input still holds a change object
+`{"old": null, "new": "text", ...extra}`. Defaults are `output: "boolean"`,
+`mode: "judge"`, `threshold: 0.5`, `passPort: ""` (first input), `choices: []`,
+`passChoices: []`, `model: ""` (`jev-latest`), `timeoutSec: 60`, and `auto: true`.
+Choice output requires 1–255 distinct nonblank strings in `choices`; choice gates
+pass only answers listed in `passChoices` (empty means pass none). Boolean output
+maps Jev's Noul probability to true at 0.5; probability output retains the numeric
+value as text. Choice probability is the selected option’s probability, not its
+confidence. Probability gates use the inclusive configured threshold.
+
+Judge mode emits this change (the first `old` is null):
+
+```json
+{"old": "false", "new": "true", "probability": 0.91, "reason": null}
+```
+
+Gate mode passes the selected input's original `old`, `new` and extra fields,
+adding/replacing only `gate: {"probability": 0.91, "reason": null}`. A rejected
+judgment emits nothing, retains held inputs and the previous output, and records
+status/outcome `gated`. Like exec/program, equal output `new` text suppresses
+publication while retaining the completed run. Input bursts during a running
+judgment compose into one follow-up judgment (first pending `old`, latest `new`).
+Manual Run and the auto toggle work like exec. Re-link and recovery dedupe held
+inputs; interrupted jobs recover as stale without calling Jev again.
+
+The side panel edits choices one per line and shows run outcomes and judgments.
+State gains `judgment: {last: {answer, probability, reason}, passed, gated}`; gate
+counters count completed decisions, including passes suppressed as equal output.
+Run details gain `judgment` and `outcome` (`judged`, `passed`, `gated`, `failed`);
+run summaries gain `outcome`. Existing fields retain their meanings. Duration is
+end-to-end request/retry latency. `costUsd` is populated only for an explicit API
+`costUsd`/`cost_usd` amount; token usage is not converted into a guessed cost.
+The [System One API](https://docs.typesafe.ai/api) currently returns Noul/Choice
+answers and token usage, without promising explanation text or USD cost. `reason`
+and `costUsd` are null when absent. HTTP 429/529 retry up to four attempts with
+exponential backoff inside one timeout budget; other errors fail immediately.
+Raw HTTP bodies, headers and transport exception messages are never run artifacts.
+Default tests inject fake HTTP responses and make no real TypeSafe calls.
