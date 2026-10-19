@@ -32,7 +32,11 @@ object Queries {
             eventPayload = if (eventPayload == Any::class.java) Event::class.java else eventPayload,
         )
 
-        NexmarkQuery.Q3,
+        NexmarkQuery.Q3 -> Q3Builder(
+            policy = policy,
+            eventPayload = if (eventPayload == Any::class.java) Event::class.java else eventPayload,
+        )
+
         NexmarkQuery.Q4,
         NexmarkQuery.Q5,
         NexmarkQuery.Q6,
