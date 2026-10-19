@@ -2,6 +2,7 @@ import { createEffect, createMemo, createResource, createSignal, For, Show } fro
 import { nodePath, request } from './api';
 import type { Config, NodeState, RunDetail, RunSummary, StudioNode } from './types';
 import { Status, type Action } from './NodeCard';
+import { promotionAction } from './model';
 
 export default function Panel(props: { node: StudioNode; state?: NodeState; action: Action; close: () => void; remove: () => void; toast: (message: string) => void }) {
   const [title, setTitle] = createSignal('');
@@ -89,10 +90,20 @@ export default function Panel(props: { node: StudioNode; state?: NodeState; acti
       <button class="primary save" type="submit" disabled={saving()}>{saving() ? 'Saving…' : 'Save settings'}</button>
     </form>
     <Show when={props.node.kind === 'program'}>
-      <section><h3>Generated program</h3><p class="muted small">Unapproved code never runs. Generating a new version clears approval.</p>
+      <section><h3>Generated program</h3><p class="muted small">New code runs in a sandboxed preview. The live cell keeps its promoted version until you promote a replacement.</p>
         <button disabled={saving() || props.state?.status === 'generating'} onClick={async () => { if (await save()) await props.action(`${base()}/generate`, 'POST'); }}>Save &amp; Generate</button>
         <label class="field"><span>Python source · read-only</span><textarea class="code" rows="12" readonly value={props.state?.code ?? ''} placeholder="Generate a program to review its source here." /></label>
-        <Show when={unapproved()}><button class="approve" onClick={() => props.action(`${base()}/approve`, 'POST', { hash: props.state?.codeHash })}>Review the code above, then Approve</button></Show>
+        <Show when={props.state?.preview}>{preview => <div class="output-comparison">
+          <div><h4>Live output</h4><pre>{props.state?.output?.new ?? 'No output yet'}</pre></div>
+          <div><h4>Preview (sandboxed, not sent downstream)</h4><p class={`preview-status ${preview().status}`}>{preview().status}</p>
+            <pre>{preview().output?.new ?? 'No preview output yet'}</pre>
+            <Show when={preview().error}><p class="error-box">{preview().error}</p></Show>
+          </div>
+        </div>}</Show>
+        <Show when={unapproved()}><button class="approve" disabled={promotionAction(props.state) === 'disabled'} onClick={() => {
+          if (promotionAction(props.state) === 'confirm' && !confirm('This sandboxed preview failed. Promote this version anyway?')) return;
+          void props.action(`${base()}/approve`, 'POST', { hash: props.state?.codeHash });
+        }}>Promote this version</button></Show>
         <Show when={props.state?.codeHash && !unapproved()}><p class="approved">Current code approved</p></Show>
       </section>
     </Show>

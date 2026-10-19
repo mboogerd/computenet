@@ -26,6 +26,12 @@ export interface RunDetail extends RunSummary {
   stderr: string;
   error: string | null;
 }
+export interface PreviewState {
+  codeHash: string;
+  status: 'idle' | 'running' | 'failed';
+  output: Change | null;
+  error: string | null;
+}
 export interface NodeState {
   id: string;
   status: 'idle' | 'stale' | 'queued' | 'running' | 'generating' | 'failed';
@@ -39,6 +45,7 @@ export interface NodeState {
   code?: string | null;
   codeHash?: string | null;
   approvedHash?: string | null;
+  preview?: PreviewState | null;
 }
 export interface Graph { nodes: StudioNode[]; edges: Edge[]; state: Record<string, NodeState> }
 export type Frame =

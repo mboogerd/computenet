@@ -60,6 +60,22 @@ class StudioHttpTest {
         }
     }
 
+    @Test fun `HTTP approval rejects an unreviewed hash and promotes the matching candidate`() {
+        StudioRuntime(temp.resolve("approval")).use { r ->
+            val p = r.addNode(obj("kind" to JsonPrimitive("program")))
+            r.installCode(p.id, "print('candidate')") // no held input, so no process starts
+            StudioServer(r, 0).start().use { s ->
+                val path = "/api/nodes/${p.id}/approve"
+                assertEquals(409, request(s.boundPort, "POST", path, contentType = "application/json", body = """{"hash":"wrong"}""").first)
+                assertNull(r.state(p.id).approvedHash)
+                val hash = r.state(p.id).codeHash!!
+                assertEquals(204, request(s.boundPort, "POST", path, contentType = "application/json", body = """{"hash":"$hash"}""").first)
+                assertEquals(hash, r.state(p.id).approvedHash)
+                assertNull(r.state(p.id).preview)
+            }
+        }
+    }
+
     @Test fun `unexpected storage failure returns 500 and logs to stderr while malformed JSON returns 400`() {
         val data = temp.resolve("data")
         StudioRuntime(data).use { r ->

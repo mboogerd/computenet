@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyGraph, inputPoint, outputPoint, outputPreview, reduceFrame, wirePath } from '../src/model';
+import { emptyGraph, inputPoint, outputPoint, outputPreview, promotionAction, reduceFrame, wirePath } from '../src/model';
 import type { NodeState, StudioNode } from '../src/types';
 
 const node: StudioNode = { id: 'n1', kind: 'text', title: 'Source', x: 120, y: 80, config: {}, ports: [] };
@@ -65,5 +65,27 @@ describe('output preview', () => {
   it('also bounds very long individual lines', () => {
     expect(outputPreview('x'.repeat(321))).toBe('x'.repeat(320) + '…');
     expect(outputPreview('x'.repeat(320))).toHaveLength(320);
+  });
+});
+
+describe('sandboxed preview', () => {
+  const preview = { codeHash: 'new-hash', status: 'idle' as const, output: { old: null, new: 'candidate output' }, error: null };
+  it('reduces preview frames without changing the live output, clears on promotion and restores on reconnect', () => {
+    const candidate = { ...state, codeHash: preview.codeHash, approvedHash: 'old-hash', preview };
+    const graph = reduceFrame(emptyGraph(), { type: 'state', node: candidate });
+    expect(graph.state.n1.output).toEqual(state.output);
+    expect(graph.state.n1.preview).toEqual(preview);
+    const promoted = { ...candidate, approvedHash: preview.codeHash, preview: null };
+    expect(reduceFrame(graph, { type: 'state', node: promoted }).state.n1.preview).toBeNull();
+    expect(reduceFrame(emptyGraph(), { type: 'snapshot', nodes: [node], edges: [], state: graph.state }).state.n1.preview).toEqual(preview);
+  });
+  it('allows idle promotion, requires confirmation for failure, and blocks running or mismatched previews', () => {
+    const candidate = { ...state, codeHash: preview.codeHash, preview };
+    expect(promotionAction(candidate)).toBe('ready');
+    expect(promotionAction({ ...candidate, preview: { ...preview, status: 'failed' } })).toBe('confirm');
+    expect(promotionAction({ ...candidate, preview: { ...preview, status: 'running' } })).toBe('disabled');
+    expect(promotionAction({ ...candidate, codeHash: 'different' })).toBe('disabled');
+    expect(promotionAction({ ...candidate, approvedHash: preview.codeHash })).toBe('disabled');
+    expect(promotionAction(state)).toBe('disabled');
   });
 });

@@ -137,3 +137,9 @@ dd { margin: 5px 0 0; overflow-wrap: anywhere; }
   :root { color-scheme: dark; color: #d3dce8; background: #171d26; --canvas: #171d26; --surface: #222b37; --soft: #1c2430; --text: #d3dce8; --muted: #93a3b8; --line: #354254; --dot: #354052; --accent: #689de9; --accent-soft: #2c3f5a; --amber: #f0bc64; --amber-soft: #493920; --red: #f18991; --red-soft: #442b35; --green: #7bc8a5; --shadow: 0 4px 18px #0002, 0 1px 3px #0003; }
   .primary { color: #152337; } .primary:hover { color: #152337; } .wire-line { stroke: #657d9b; }
 }
+
+.preview-badge { display: inline-block; margin-top: 10px; padding: 3px 6px; border-radius: 4px; color: var(--green); background: var(--soft); font-size: 10px; }
+.output-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.output-comparison pre { background: var(--soft); padding: 8px; max-height: 240px; overflow: auto; }
+.preview-status { font-size: 11px; color: var(--muted); margin: 6px 0; }
+.preview-status.failed { color: var(--red); }

@@ -68,12 +68,33 @@ internal fun extractPython(answer: String): String = Regex("```python[^\n]*\n(.*
 
 internal data class ProcessResult(val exitCode: Int, val stdout: String, val stderr: String, val error: String?)
 
+/** Cancellation closes the launch race as well as killing an already-started child. */
+internal class ProcessFence {
+    private var cancelled = false
+    private var process: Process? = null
+    @Synchronized fun start(builder: ProcessBuilder): Process {
+        check(!cancelled) { "run fenced" }
+        return builder.start().also { process = it }
+    }
+    @Synchronized fun cancel() { cancelled = true; process?.let(::destroyTree) }
+}
+
+internal class PythonSandbox(private val binary: Path = Path.of("/usr/bin/sandbox-exec")) {
+    fun command(work: Path, profile: Path): List<String> {
+        check(Files.isExecutable(binary)) { "sandbox-exec unavailable: $binary; refusing to run programmable Python" }
+        return listOf(binary.toString(), "-f", profile.toAbsolutePath().toString(), "-D", "WORK=${work.toRealPath()}", "python3", "cell.py")
+    }
+    companion object {
+        const val PROFILE = "(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (subpath (param \"WORK\")) (literal \"/dev/null\"))"
+    }
+}
+
 internal class StudioProcesses : AutoCloseable {
-    private val active = ConcurrentHashMap.newKeySet<Process>()
+    internal val active = ConcurrentHashMap.newKeySet<Process>()
     @Volatile private var closed = false
 
     /** All streams are files; a child cannot deadlock by filling a pipe. */
-    fun run(argv: List<String>, cwd: Path, dir: Path, timeoutSec: Long, stdin: String? = null): ProcessResult {
+    fun run(argv: List<String>, cwd: Path, dir: Path, timeoutSec: Long, stdin: String? = null, environment: Map<String, String> = emptyMap(), fence: ProcessFence = ProcessFence()): ProcessResult {
         Files.createDirectories(cwd)
         Files.createDirectories(dir)
         val stdout = dir.resolve("stdout.txt")
@@ -88,8 +109,10 @@ internal class StudioProcesses : AutoCloseable {
             // A file also bounds the wait when a child never reads its stdin.
             val input = dir.resolve("stdin.json")
             Files.writeString(input, stdin ?: "")
-            p = ProcessBuilder(argv).directory(cwd.toFile()).redirectInput(input.toFile())
-                .redirectOutput(stdout.toFile()).redirectError(stderr.toFile()).start()
+            val builder = ProcessBuilder(argv).directory(cwd.toFile()).redirectInput(input.toFile())
+                .redirectOutput(stdout.toFile()).redirectError(stderr.toFile())
+            builder.environment().putAll(environment)
+            p = fence.start(builder)
             active += p
             if (closed) { destroyTree(p); error = "studio closed" }
             else if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) {

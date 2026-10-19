@@ -30,7 +30,7 @@ export default function NodeCard(props: {
   const submit = () => props.action(`${nodePath(props.node.id)}/submit`, 'POST', { text: text() });
   const run = () => props.action(`${nodePath(props.node.id)}/run`, 'POST');
   const unapproved = () => props.node.kind === 'program' &&
-    (!props.state?.codeHash || props.state.codeHash !== props.state.approvedHash);
+    !props.state?.approvedHash;
   return <article class={`node ${props.selected ? 'selected' : ''}`} style={{ left: `${props.x}px`, top: `${props.y}px` }}
     tabindex="0" onFocus={props.select} onPointerDown={event => {
       props.select();
@@ -72,6 +72,7 @@ export default function NodeCard(props: {
         </div>
         <Show when={unapproved()}><p class="muted small">Code requires review and approval.</p></Show>
       </Show>
+      <Show when={props.state?.preview?.status === 'idle'}><span class="preview-badge">preview ready</span></Show>
       <div class="preview-label">LATEST OUTPUT</div>
       <pre class="output-preview">{outputPreview(props.state?.output?.new) || 'No output yet'}</pre>
     </div>

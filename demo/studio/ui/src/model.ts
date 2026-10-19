@@ -1,4 +1,4 @@
-import type { Frame, Graph, StudioNode } from './types';
+import type { Frame, Graph, NodeState, StudioNode } from './types';
 
 export const emptyGraph = (): Graph => ({ nodes: [], edges: [], state: {} });
 
@@ -35,4 +35,10 @@ export function outputPreview(text: string | null | undefined, maxLines = 4, max
   const lines = text.split('\n');
   const visible = lines.slice(0, maxLines).join('\n');
   return visible.slice(0, maxChars) + (lines.length > maxLines || visible.length > maxChars ? '…' : '');
+}
+
+/** A failed candidate needs an explicit user confirmation in the panel. */
+export function promotionAction(state?: NodeState): 'ready' | 'confirm' | 'disabled' {
+  if (!state?.preview || state.preview.codeHash !== state.codeHash || state.codeHash === state.approvedHash) return 'disabled';
+  return state.preview.status === 'idle' ? 'ready' : state.preview.status === 'failed' ? 'confirm' : 'disabled';
 }

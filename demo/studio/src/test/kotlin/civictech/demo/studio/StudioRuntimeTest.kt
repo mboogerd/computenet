@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
@@ -168,7 +170,8 @@ class StudioRuntimeTest {
         }
     }
 
-    @Test fun `program approval checks code hash python runs and regeneration clears approval`() {
+    @EnabledOnOs(OS.MAC)
+    @Test fun `program promotion checks code hash and regeneration retains the live implementation`() {
         StudioRuntime(temp).use { r ->
             val a = node(r, "text"); val p = node(r, "program"); val b = exec(r)
             r.addEdge(a.id, p.id, "in"); r.addEdge(p.id, b.id, "in")
@@ -180,10 +183,13 @@ class StudioRuntimeTest {
             r.approve(p.id, r.state(p.id).codeHash!!); done(r, b.id, "PYTHON")
             assertEquals(1, r.state(p.id).runCount)
             assertEquals("PYTHON", output(r, p.id))
-            assertEquals(listOf("python3", "cell.py"), r.runDetail(p.id, r.state(p.id).lastRun!!.runId).argv)
+            assertEquals(listOf("python3", "cell.py"), r.runDetail(p.id, r.state(p.id).lastRun!!.runId).argv.takeLast(2))
+            val approved = r.state(p.id).approvedHash
             r.installCode(p.id, "print('new')")
-            assertNull(r.state(p.id).approvedHash)
-            r.run(p.id); assertEquals("code not approved", r.state(p.id).error)
+            assertEquals(approved, r.state(p.id).approvedHash)
+            r.run(p.id)
+            awaitUntil("approved implementation ran again") { r.state(p.id).runCount == 2 && r.state(p.id).status == "idle" }
+            assertEquals("PYTHON", output(r, p.id))
         }
     }
 
@@ -213,6 +219,7 @@ class StudioRuntimeTest {
         }
     }
 
+    @EnabledOnOs(OS.MAC)
     @Test fun `unchanged exec and program results record runs without publishing downstream`() {
         for (kind in listOf("exec", "program")) {
             val data = temp.resolve(kind)
@@ -245,6 +252,7 @@ class StudioRuntimeTest {
         }
     }
 
+    @EnabledOnOs(OS.MAC)
     @Test fun `unapproved auto program is stale even before all inputs arrive`() {
         StudioRuntime(temp).use { r ->
             val source = node(r, "text")
@@ -258,14 +266,17 @@ class StudioRuntimeTest {
         }
     }
 
-    @Test fun `approval keeps manual programs waiting for run`() {
+    @EnabledOnOs(OS.MAC)
+    @Test fun `promotion publishes once even for manual programs`() {
         StudioRuntime(temp).use { r ->
             val source = node(r, "text")
             val p = node(r, "program", buildJsonObject { put("auto", false) })
             r.addEdge(source.id, p.id, "in"); r.submit(source.id, "held"); r.settleInputs()
             r.installCode(p.id, "print('manual')"); r.approve(p.id, r.state(p.id).codeHash!!)
-            assertEquals(0, r.state(p.id).runCount)
-            r.run(p.id); done(r, p.id, "manual")
+            done(r, p.id, "manual")
+            assertEquals(1, r.state(p.id).runCount)
+            r.run(p.id)
+            awaitUntil("explicit manual run") { r.state(p.id).runCount == 2 && r.state(p.id).status == "idle" }
         }
     }
 

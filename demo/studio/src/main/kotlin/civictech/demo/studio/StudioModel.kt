@@ -30,11 +30,15 @@ data class RunDetail(val runId: String, val startedAt: String, val durationMs: L
     fun summary() = RunSummary(runId, startedAt, durationMs, exitCode, costUsd)
 }
 @Serializable
+data class PreviewState(val codeHash: String, val status: String = "idle",
+                        val output: JsonObject? = null, val error: String? = null)
+@Serializable
 data class NodeState(val id: String, val status: String = "idle", val output: JsonObject? = null,
                      val inputs: Map<String, JsonObject> = emptyMap(), val error: String? = null,
                      val runCount: Int = 0, val lastRun: RunSummary? = null,
                      val text: String = "", val ref: String? = null, val code: String? = null,
-                     val codeHash: String? = null, val approvedHash: String? = null)
+                     val codeHash: String? = null, val approvedHash: String? = null,
+                     val preview: PreviewState? = null)
 @Serializable
 data class StudioGraph(val nodes: List<StudioNode>, val edges: List<StudioEdge>,
                        val state: Map<String, NodeState> = emptyMap())
@@ -90,3 +94,10 @@ internal fun inputPorts(kind: String, config: JsonObject): List<String> = when (
     }
     else -> emptyList()
 }
+
+/** Plain-file canvas metadata only. Factories/state own all executable configuration. */
+@Serializable
+internal data class CanvasNode(val x: Double, val y: Double, val title: String)
+@Serializable
+internal data class CanvasMetadata(val nodes: Map<String, CanvasNode> = emptyMap(),
+                                   val edges: List<StudioEdge> = emptyList())
