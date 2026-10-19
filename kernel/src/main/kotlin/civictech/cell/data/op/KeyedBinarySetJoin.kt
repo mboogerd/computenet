@@ -7,7 +7,7 @@ import civictech.cell.data.delta.TagState
 /**
  * Shared skeleton for a keyed binary set join (spec 24): the two [TagState]
  * ledgers (one per side), the per-side key index and its byte-identical
- * [index] update, and the copy-pasted emit-or-absorb check shared by
+ * [index] update, and the copy-pasted empty-delta check shared by
  * [JoinSetCell] and [SemiJoinCell]. Composed, not inherited — see
  * [TaggedSetOperator]'s KDoc for why (each operator must extend its own
  * KSP-generated `XxxCellBase`).
@@ -50,16 +50,16 @@ class KeyedBinarySetJoin<A, B, K> {
     }
 
     /**
-     * The copy-pasted apply/effective/ack shape (CP-A3), byte-identical across
+     * The copy-pasted effective-delta shape, byte-identical across
      * [JoinSetCell] and [SemiJoinCell]: [propagate] a non-empty delta built
-     * from [adds]/[dels], else [absorbAck] the swallowed wave. Preserves the
-     * exact current condition. T05 finding 2: delegates to the shared
-     * [emitOrAbsorb] free function.
+     * from [adds]/[dels], and otherwise does nothing. Preserves the exact
+     * current condition.
      */
-    fun <Out> emitOrAbsorb(
+    fun <Out> emitIfNonEmpty(
         adds: Map<Out, Set<Timestamp>>,
         dels: Map<Out, Set<Timestamp>>,
         propagate: (SetDelta<Out>) -> Unit,
-        absorbAck: () -> Unit,
-    ) = emitOrAbsorb(adds.isEmpty() && dels.isEmpty(), { propagate(SetDelta(adds, dels)) }, absorbAck)
+    ) {
+        if (adds.isNotEmpty() || dels.isNotEmpty()) propagate(SetDelta(adds, dels))
+    }
 }

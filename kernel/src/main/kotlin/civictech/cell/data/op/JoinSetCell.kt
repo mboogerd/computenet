@@ -13,7 +13,6 @@ import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
-import civictech.cell.control.absorbAck
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
@@ -156,29 +155,25 @@ class JoinSetCell<A, B, K, C>(
     override fun onLeft(value: SetDelta<A>) {
         // [24-WL-07] guard at arrival (3vd7k-D4)
         val admitted = guardLeft(value)
-        lateRight.absorbAck() // every delivery acks both late outlets, so a linked consumer's frontier advances
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
         foldLeft(join.leftState.apply(admitted), adds, dels)
-        join.emitOrAbsorb(
+        join.emitIfNonEmpty(
             adds,
             dels,
             propagate = { outlet.call.propagate(it) },
-            absorbAck = { outlet.absorbAck() }, // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
         )
     }
 
     override fun onRight(value: SetDelta<B>) {
         val admitted = guardRight(value)
-        lateLeft.absorbAck()
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
         foldRight(join.rightState.apply(admitted), adds, dels)
-        join.emitOrAbsorb(
+        join.emitIfNonEmpty(
             adds,
             dels,
             propagate = { outlet.call.propagate(it) },
-            absorbAck = { outlet.absorbAck() }, // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
         )
     }
 
@@ -224,16 +219,11 @@ class JoinSetCell<A, B, K, C>(
     private fun guardLeft(value: SetDelta<A>): SetDelta<A> {
         val lateness = leftLateness
         val current = floor
-        if (lateness == null || current == null) {
-            lateLeft.absorbAck()
-            return value
-        }
+        if (lateness == null || current == null) return value
         val (admitted, dropped) = WaterlineEviction.lateSplit(lateness, current, value)
         if (dropped.isNotEmpty()) {
             droppedBelowFloorLeft += dropped.size
             lateLeft.call.propagate(SetDelta(adds = dropped))
-        } else {
-            lateLeft.absorbAck()
         }
         return admitted
     }
@@ -242,16 +232,11 @@ class JoinSetCell<A, B, K, C>(
     private fun guardRight(value: SetDelta<B>): SetDelta<B> {
         val lateness = rightLateness
         val current = floor
-        if (lateness == null || current == null) {
-            lateRight.absorbAck()
-            return value
-        }
+        if (lateness == null || current == null) return value
         val (admitted, dropped) = WaterlineEviction.lateSplit(lateness, current, value)
         if (dropped.isNotEmpty()) {
             droppedBelowFloorRight += dropped.size
             lateRight.call.propagate(SetDelta(adds = dropped))
-        } else {
-            lateRight.absorbAck()
         }
         return admitted
     }
@@ -263,9 +248,6 @@ class JoinSetCell<A, B, K, C>(
         val current = floor
         if (current != null && delta.floor <= current) {
             // [24-WL-03] fixpoint: a non-raising floor changes nothing — ack the wave on all three outlets
-            outlet.absorbAck()
-            lateLeft.absorbAck()
-            lateRight.absorbAck()
             return
         }
         floor = delta.floor
@@ -297,14 +279,11 @@ class JoinSetCell<A, B, K, C>(
         }
         refusedEvictions += refusedNow.size
         refused = refusedNow
-        join.emitOrAbsorb(
+        join.emitIfNonEmpty(
             adds,
             dels,
             propagate = { outlet.call.propagate(it) },
-            absorbAck = { outlet.absorbAck() }, // nothing passed, or every passed row refused / pairless
         )
-        lateLeft.absorbAck()
-        lateRight.absorbAck()
     }
 
     private fun reconcile(

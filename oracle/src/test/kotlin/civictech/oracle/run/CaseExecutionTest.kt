@@ -40,7 +40,7 @@ import java.util.UUID
  * ## The equality this file exists to pin
  *
  * Cross-host and same-host links must register the same target-side edge set. Link identity is
- * what topology ordering, delivered watermarks, and `Progress(thru)` key on; the test below pins
+ * what topology ordering and delivered watermarks key on; the test below pins
  * the same link count on graphs that differ only in the host ordinal the sink is placed on.
  *
  * ## What this replaced
@@ -182,10 +182,10 @@ class CaseExecutionTest {
             coHosted.inlet.linking.links.size shouldBe 1
         }
         withClue(
-            "and so does the cross-host one, now that it is wired as a bridged link pair " +
+                "and so does the cross-host one, now that it is wired as a bridged link pair " +
                 "(bridgeTo on the source outlet, bridgeFrom on the target inlet): the arm has " +
-                "link identity, so EdgeOpen/EdgeClose, per-source watermarks and Progress(thru) " +
-                "have an edge to key on",
+                "link identity, so EdgeOpen/EdgeClose and per-source watermarks have an edge " +
+                "to key on",
         ) {
             remote.inlet.linking.links.size shouldBe coHosted.inlet.linking.links.size
         }
