@@ -24,7 +24,7 @@ class Q3ReferenceTest {
 
         assertInstanceOf(NexmarkRecord.Verified::class.java, record)
         val expected = NexmarkReference.evaluate(NexmarkQuery.Q3, batches, null).result
-        assertTrue(expected.rows.isNotEmpty(), "Q3 produced no rows for seed 7")
+        assertTrue(expected.rows.isNotEmpty(), "Q3 produced no rows")
         assertEquals(
             expected.rows,
             observed.last().rows,
