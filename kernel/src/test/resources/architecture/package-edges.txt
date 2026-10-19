@@ -122,11 +122,6 @@ cell -> proxy
 consistency -> cell
 consistency -> control
 consistency -> data
-consistency -> host
-consistency -> link
-consistency -> port
-consistency -> protocol
-consistency -> proxy
 control -> cell
 control -> link
 control -> port
