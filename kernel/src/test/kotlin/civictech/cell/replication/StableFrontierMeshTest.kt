@@ -113,7 +113,7 @@ class StableFrontierMeshTest {
             val opC = mesh.ops(mesh.c, mesh.rc)
 
             // Tap EVERY peer's companion outlet and CAPTURE every emitted
-            // WatermarkDelta (the onWatermarkAdvance tap shape, capturing
+            // WatermarkDelta (capturing
             // instead of discarding) — before any write, so nothing is missed.
             val captured: List<MutableList<WatermarkDelta>> = mesh.peers.map { peer ->
                 val companion = peer.replication.watermarkOf(logicalId)!!

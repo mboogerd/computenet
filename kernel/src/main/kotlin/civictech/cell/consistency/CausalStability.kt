@@ -19,17 +19,9 @@ import java.util.UUID
  * conservative direction and the point (no local read may run ahead of the
  * true global frontier).
  *
- * **Why a sibling class and not a method on [ReplicaQuorum]** (decision
- * 9sm.3-D1, epic R7). The two reads are the same primitive at two freshness
- * levels — one wave against all covering members ([ReplicaQuorum.frontier],
- * a per-wave hot predicate) versus all sources against all open members
- * (this class, a checkpoint-time GC trigger). They have different consumers,
- * different call frequencies and different policy surfaces, so they get one
- * class each over the same injected reads rather than one class with two
- * moods.
- *
- * **Three injected reads, not [ReplicaQuorum]'s four** (decision 9sm.3-D4).
- * Interest is deliberately **not** applied: stability is per logical id, not
+ * **Three injected reads** (decision 9sm.3-D4): the companion watermark, live
+ * membership, and the derived companion ref for each member. Interest is
+ * deliberately **not** applied: stability is per logical id, not
  * per key, so there is no key to scope an [civictech.cell.link.Interest]
  * against. A disjoint-interest member's absent column correctly reads as
  * bottom for the sources it never delivers — which means a sharded (PN-6)
@@ -129,12 +121,11 @@ class CausalStability(
      * that *every* open slot has a row for; a bottom source is absent from
      * [TagFrontier.perSource], never present as `Long.MIN_VALUE` and never
      * as `0`. The degenerate cases — no companion, empty open slot set — are
-     * therefore `TagFrontier(emptyMap())`, mirroring [ReplicaQuorum]'s "an
-     * empty covering subset always holds (never a vacuous release)".
+     * therefore `TagFrontier(emptyMap())`; an empty open set never produces a
+     * vacuous frontier.
      *
      * @param degrade when true, a recoverably-suspended slot (odd epoch) is
-     *   dropped from the open set — the same PN-19 quorum-shrink switch
-     *   [ReplicaQuorum.frontier] carries, spelled the same way.
+     *   dropped from the open set.
      */
     fun stableFrontier(logicalId: UUID, degrade: Boolean = false): TagFrontier {
         val companion = watermarkOf(logicalId) ?: return TagFrontier(emptyMap())

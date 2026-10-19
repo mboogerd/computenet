@@ -6,7 +6,6 @@ import civictech.cell.graph.TypedRef
 import civictech.cell.host.HostManagementApi
 import civictech.cell.port.Use
 import civictech.query.ast.AggregateKind
-import civictech.query.lower.LoweringDiagnostic
 import civictech.query.lower.LoweringResult
 import civictech.query.plan.GroupAggregate
 import civictech.query.plan.LogicalPlan
@@ -20,8 +19,7 @@ import java.io.Serializable
  * itself (for diagnosis/display), the [spec] the plan lowered to, the EDB source and root
  * output handle tables ([sourceHandles], [outputHandles] — copied from
  * [LoweringResult.Lowered] rather than re-derived, so `CompiledQuery` and the lowering it
- * came from can never disagree), an [OutputShape] per root, and the non-fatal
- * [diagnostics] the lowering produced. `Serializable` end to end (`[QRY1-API-06]`'s
+ * came from can never disagree), and an [OutputShape] per root. `Serializable` end to end (`[QRY1-API-06]`'s
  * in-process half) so a compiled query can be persisted or shipped and re-applied later.
  *
  * Deliberately carries no live refs (cab.4-D7): [applyTo] is the only way to get one, and it
@@ -33,7 +31,6 @@ data class CompiledQuery(
     val sourceHandles: Map<String, String>,
     val outputHandles: Map<String, String>,
     val outputShapes: Map<String, OutputShape>,
-    val diagnostics: List<LoweringDiagnostic>,
 ) : Serializable {
 
     /**
@@ -69,7 +66,6 @@ data class CompiledQuery(
                 sourceHandles = lowered.sourceHandles,
                 outputHandles = lowered.outputHandles,
                 outputShapes = outputShapes,
-                diagnostics = lowered.diagnostics,
             )
         }
 

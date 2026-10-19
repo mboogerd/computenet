@@ -85,9 +85,8 @@ internal fun FanInlet<*>.relayAbsorbAcks(vararg otherInlets: FanInlet<*>) {
 }
 
 /**
- * Relays absorb-acks through a transparent **fan-in** hop using the same
- * per-open-inlink completeness fold as `WaveFrontier` (spec 20/22
- * `[22-LIVE-01]`). [this] and [otherInlets] form one input frontier;
+ * Relays absorb-acks through a transparent **fan-in** hop using a per-open-inlink
+ * settlement fold. [this] and [otherInlets] form one input frontier;
  * [outputs] are the data outlets whose waved handler obeys the uniform
  * emit-or-[absorbAck] rule.
  *
@@ -256,8 +255,7 @@ private class SettledAbsorbAckRelay(
     /** Observe one waved data invocation while leaving its delivery order untouched. */
     fun offer(inlet: FanInlet<*>, invocation: Invocation, release: (Invocation) -> Unit) {
         val ctx = invocation.context
-        if (ctx == null || ctx.baseline != null || aligned()) {
-            if (aligned()) resetPending()
+        if (ctx == null || ctx.baseline != null) {
             release(invocation)
             return
         }
@@ -293,13 +291,7 @@ private class SettledAbsorbAckRelay(
 
     fun resetPending() = synchronized(lock) { pending.clear() }
 
-    private fun aligned(): Boolean = inlets.any { it.hasPolicy(PolicyTier.ALIGN) }
-
     private fun onProgress(link: Link, progress: Progress) {
-        if (aligned()) {
-            resetPending()
-            return
-        }
         val deliveries = synchronized(lock) {
             val edge = edges[link.id]
             if (edge == null || !edge.open || edge.link.role != LinkRole.Consume) {

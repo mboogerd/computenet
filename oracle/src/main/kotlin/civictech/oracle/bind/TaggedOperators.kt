@@ -126,13 +126,12 @@ import java.io.Serializable
  * `[KE1-18]`..`[KE1-21]` each part of its shape makes true.
  *
  * What this registration supplied, and what then closed on top of it: BS-9 / `ORA2 §DIFF-07`'s
- * tagged wave-prefix *diamond* was blocked on a tagged outlet reaching a fan-in through two
- * paths, and this entry is the bridge that was missing. computenet-0zbq built the diamond over
- * it — `orMap` fanning out through two `untag` arms into a `join` fan-in, observed by
- * [civictech.oracle.run.WavePrefixOracle] unchanged
- * (`civictech.oracle.tagged.TaggedWavePrefixTest`) — so the `concord/corpus/DISPUTES.md` entry
- * that had been left standing for it is deleted, and the closure now lives in
- * `civictech.oracle.run.OracleSweep`'s ledger KDoc where
+ * historical tagged wave-prefix *diamond* was blocked on a tagged outlet reaching a fan-in
+ * through two paths, and this entry is the bridge that was missing. Before GFR.3 retired
+ * `civictech.oracle.run.WavePrefixOracle` and
+ * `civictech.oracle.tagged.TaggedWavePrefixTest`, computenet-0zbq built the diamond over it —
+ * `orMap` fanning out through two `untag` arms into a `join` fan-in. The closure now lives as
+ * history in `civictech.oracle.run.OracleSweep`'s ledger KDoc where
  * [civictech.oracle.HonestyLedgerTest] pins it.
  *
  * `SingleInstanceOrMapModel` itself lives in `civictech.oracle.model`

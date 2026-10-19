@@ -87,23 +87,6 @@ class RelayFanInRegressionTest {
         }
     }
 
-    private class EventProbe(
-        clazz: Class<Propagate<SetDelta<String>>>,
-        override val ref: CellRef = CellRef(UUID.randomUUID()),
-    ) : Cell {
-        val inlet = registerPort("inlet", FanInlet(clazz))
-        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
-
-        init {
-            inlet.onEach { delta ->
-                events += "D${CurrentContext.get()!!.timestamp.counter}:${delta.adds.keys}"
-            }
-            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message ->
-                events += "P${(message as Progress).thru}"
-            }
-        }
-    }
-
     private class WaveEventProbe(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
         val dataWaves = mutableListOf<Timestamp>()
@@ -177,11 +160,8 @@ class RelayFanInRegressionTest {
     }
 
     /**
-     * Five independently scheduled hosts expose the ordering that a one-host
-     * FIFO cannot: one branch absorbs odd waves while another branch still has
-     * data for them. Every send is drained before the next, so a failure is the
-     * relay's per-in-edge completeness bug, not the separate multi-wave hazard
-     * tracked by computenet-xas2g.
+     * Five independently scheduled hosts exercise eager fan-in scheduling while
+     * preserving each element's source wave and delivering it exactly once.
      */
     private fun runFanIn(seed: Long, waves: Int): List<String> {
         val controller = SimulationController(seed)
@@ -199,17 +179,15 @@ class RelayFanInRegressionTest {
             leftKey = { it },
             rightKey = { it },
             negated = false,
-            emitOnFrontier = true,
         )
         val seen = mutableListOf<Seen>()
         val observer = Observer(setApi, seen)
-        val probe = EventProbe(setApi)
 
         sourceHost.managementInlet.call.spawn(source)
         filteredHost.managementInlet.call.spawn(filtered)
         passHost.managementInlet.call.spawn(pass)
         leftHost.managementInlet.call.spawn(left)
-        listOf(quorum, join, observer, probe).forEach(joinHost.managementInlet.call::spawn)
+        listOf(quorum, join, observer).forEach(joinHost.managementInlet.call::spawn)
 
         source.outlet.subscribe(
             Use.fixed(filteredHost.lookup<RelaySetInletProxy>(filtered.ref)!!.inlet.call, PortRef.generate()),
@@ -229,8 +207,6 @@ class RelayFanInRegressionTest {
         @Suppress("UNCHECKED_CAST")
         left.outlet.linkTo(join.left as LinkFrom<Propagate<SetDelta<String>>>)
         join.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
-        @Suppress("UNCHECKED_CAST")
-        join.outlet.linkTo(probe.inlet as LinkFrom<Propagate<SetDelta<String>>>)
         controller.runToIdle()
 
         val tagSource = UUID.randomUUID()
@@ -247,7 +223,6 @@ class RelayFanInRegressionTest {
         }
 
         val problems = mutableListOf<String>()
-        if (join.bufferedWaves != 0) problems += "seed $seed buffered=${join.bufferedWaves}"
         val emissions = seen.flatMap { result ->
             result.delta.adds.keys.map { element -> element to result.timestamp.counter }
         }
@@ -257,19 +232,11 @@ class RelayFanInRegressionTest {
                 problems += "seed $seed element $element emitted at $emittedAt (expected [$counter])"
             }
         }
-        val events = synchronized(probe.events) { probe.events.toList() }
-        for (counter in 1..waves) {
-            val hasProgress = "P$counter" in events
-            val hasData = events.any { it.startsWith("D$counter:") }
-            if (hasProgress && hasData) {
-                problems += "seed $seed wave $counter emitted both Progress and data: $events"
-            }
-        }
         return problems
     }
 
     @Test
-    fun `a fan-in hop does not relay one in-edge Progress as whole-hop settlement`() {
+    fun `an eager join emits each fan-in element exactly once under its source wave`() {
         val problems = (0L until 300L).flatMap { runFanIn(it, waves = 8) }
         println("RELAY_FAN_IN_PROBE failures=${problems.size} first=${problems.take(4)}")
         withClue(problems.take(4).joinToString("\n")) {

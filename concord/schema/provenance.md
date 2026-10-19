@@ -10,11 +10,11 @@ Requirement ids live **in the spec chapters** under `doc/spec/`, not in a new
 document. A chapter already carries RFC-2119 language; W1-C adds a stable id and,
 where a statement is vague, tightens it into one of the five EARS templates.
 
-**Id form:** `«chapter»-«slug»-«nn»` — e.g. `21-PROP-01`, `22-GF-01`,
+**Id form:** `«chapter»-«slug»-«nn»` — e.g. `21-PROP-01`, `24-WL-10`,
 `13-LINK-05`, `42-REPL-04`.
 
 - `«chapter»` is the two-digit spec chapter (`21`, `22`, `24`, `13`, …).
-- `«slug»` is a short uppercase topic slug (`PROP`, `GF`, `LINK`, `CATCHUP`).
+- `«slug»` is a short uppercase topic slug (`PROP`, `WL`, `LINK`, `CATCHUP`).
 - `«nn»` is a zero-padded ordinal within the slug.
 - Ids are **immutable once assigned** and **deprecated-never-reused**.
 
@@ -24,7 +24,7 @@ where a statement is vague, tightens it into one of the five EARS templates.
 |---|---|---|
 | Ubiquitous | *The X SHALL …* | `[21-PROP-01]` The graph SHALL deliver every accepted delta to every transitively linked consumer, such that at quiescence each consumer's fold equals the source's accepted-op fold. |
 | Event-driven | *WHEN «trigger», the X SHALL …* | `[21-CATCHUP-02]` WHEN a subscriber links to an outlet after deltas have flowed, the outlet SHALL bring it current such that its fold is indistinguishable from an early subscriber's. |
-| State-driven | *WHILE «state», the X SHALL …* | `[22-GF-01]` WHILE a wave from a single source is partially delivered across a fork-join, a glitch-free cell SHALL NOT expose derived state that mixes pre- and post-wave inputs. |
+| State-driven | *WHILE «state», the X SHALL …* | `[24-WL-10]` WHILE a pipeline's waterline is derivable from a monotone (or near-monotone) event-time attribute, the post-quiescence state of every evicting cell SHALL equal a batch recompute over that cell's late-filtered input — its input with every `[24-WL-07]`-dropped add removed — under the restriction matching its eviction unit (`[24-WL-06]`): for a window-keyed cell, both sides restricted to window keys `k` with `keyTime(k)` strictly above the final floor — recompute in batch, then drop every window the final floor has passed; for a member of the join family, the batch side recomputed over the late-filtered input with every row the cell evicted also removed — the rows of its lateness-declaring inlets whose `timeFn` lies strictly below the final floor, less any whose eviction `[24-WL-17]` refused — and compared with the whole post-quiescence state (State-driven). |
 | Unwanted behavior | *IF «condition», THEN the X SHALL …* | `[13-LINK-05]` IF a connect violates the inlet's admission policy, THEN the link SHALL be rejected with a stated reason and the existing topology SHALL be unaffected. |
 | Optional feature | *WHERE «capability», the X SHALL …* | `[42-REPL-04]` WHERE replication is supported, replicas of one logical cell SHALL converge to equal folds regardless of which replica accepted each write. |
 
@@ -100,7 +100,7 @@ emits `doc/spec/CONCORDANCE.md`:
 ```
 | Requirement | Scenarios              | Last run            |
 | 21-CATCHUP-02 | 21-CATCHUP-01, 24-GEN-01 | ✅ 39e9636         |
-| 22-GF-01      | 22-GF-DIAMOND-01         | ✅ 39e9636         |
+| 24-WL-10      | 24-WL-JOIN-01, 24-WL-LATE-01 | ✅ 39e9636     |
 | 42-REPL-04    | 42-REPL-01               | — (dist, not in gate) |
 ```
 
@@ -158,8 +158,7 @@ exclusion is the audit trail.
 
 ## Note on the pilot `covers:` ids
 
-The four W0 pilots carry provisional `covers:` ids (`24-OP-03`, `21-PROP-01`,
-`22-GF-01`) so they are not orphans. These are **placeholders** until W1-C lands
-real EARS ids in chapters 21/22/24; W2 reconciles the pilots' `covers:` against
-the assigned ids. A pilot id that W1-C does not mint becomes a dangling-lint hit
-that W2 must fix — that is the intended forcing function.
+The four W0 pilots originally carried provisional `covers:` ids so they were not
+orphans. W1-C assigned the real EARS ids in chapters 21/22/24, and W2 reconciled
+the pilots' `covers:` against those ids. A provisional id that W1-C did not mint
+became a dangling-lint hit for W2 — the intended forcing function.

@@ -153,8 +153,8 @@ object Proxy {
      *
      * The walk derives this from the non-consuming state predicates on [Owned] and [Leased],
      * so an already-discharged obligation is neither propagated nor swallowed: it is counted,
-     * the same counted-tripwire shape `civictech.cell.port.InletPolicy.unackedDrops` and
-     * `civictech.cell.consistency.WaveFrontier.unmatchedDrops` use for their own silent exits.
+     * the same counted-tripwire shape
+     * `civictech.cell.port.InletPolicy.unackedDrops` uses for silent exits.
      * A host or test that requires the invariant asserts this stays at its prior value.
      *
      * Process-wide and monotonic — it is a tripwire, not a per-invocation result — so read it

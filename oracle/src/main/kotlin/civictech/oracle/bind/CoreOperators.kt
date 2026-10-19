@@ -247,23 +247,18 @@ object CoreOperators {
          * acceptance clause offers exactly this fork). Closing it needs a registered operator
          * consuming `Scalar`, and a scalar edge in this catalog carries
          * `Propagate<CounterDelta>` — the type `CounterCell.outlet`, `PnCounterCell.outlet`
-         * (as `PnCounterDelta`) and `CountCell.outlet` emit. Exactly ONE cell in the whole
-         * kernel serves that type on an inlet: `CoalescingCombineCell`
-         * (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
-         * `inlet: Serve<Propagate<CounterDelta>>`); every other operator inlet under
-         * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`. And that one cell is
-         * already **excluded by name** from the vocabulary by the `ORA1 §HONEST-02` ledger in
-         * `civictech.oracle.model.MapCellModel`'s file KDoc, because its observable is a
-         * wave-completion fold the script vocabulary cannot name — a batch model of it would
-         * silently assume the completeness condition it cannot check.
+         * (as `PnCounterDelta`) and `CountCell.outlet` emit. Since GFR.3 retired the former
+         * scalar-combining operator, no kernel cell serves `Propagate<CounterDelta>` on an
+         * inlet (observed: `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main`
+         * returns only `host/TypedLink.kt`'s generic-invariance KDoc, not a `Serve`
+         * declaration).
          *
          * So the scalar hole is not the pair-shaped hole computenet-4ru.16 closed. That one was
          * repairable inside the catalog: `keyBy` reuses an already-registered kernel cell
          * (`FlatMapSetCell`) and an already-registered model, adding only a function. There is
          * no such reuse here — a scalar consumer would have to be a NEW kernel cell in
-         * `civictech.cell.data.op`, written for the oracle's benefit and used by nothing else,
-         * or the one existing cell whose exclusion is already reasoned and pinned. Registering
-         * either would trade a *visible* coverage gap for a dishonest green.
+         * `civictech.cell.data.op`, written for the oracle's benefit and used by nothing else.
+         * Registering it would trade a *visible* coverage gap for a dishonest green.
          *
          * `counter`/`pnCounter` therefore stay registered — the pairing is real and
          * `CounterSourceModel`/`PnCounterSourceModel` remain the reference a future consumer
@@ -307,8 +302,8 @@ object CoreOperators {
          * `MapCellSourceModel.MultiWriterMapSliceException` for an out-of-band multi-writer
          * slice rather than returning a guessed winner. See `MapCellModel.kt`'s KDoc for the
          * full reasoning and for the honesty-ledger exclusions this task also closes out
-         * (`ListCell`, `OrMapCell`, `MergeableGroupByCell`, window close/eviction,
-         * `CoalescingCombineCell`; `ORA1 §HONEST-02`). */
+         * (`ListCell`, `OrMapCell`, `MergeableGroupByCell`, window close/eviction;
+         * `ORA1 §HONEST-02`). */
         OperatorCatalog.register(
             id = Ids.MAP,
             shape = ShapeRule.source(SCALAR_MAP),
@@ -471,11 +466,8 @@ object CoreOperators {
          * semijoin and antijoin separately while the kernel is one cell with a `negated` flag,
          * so they are two entries over one class.
          *
-         * `emitOnFrontier` ([24-OP-SEMIJOIN-04]) is deliberately left at its default and has
-         * no model counterpart: the gate changes WHEN the cell emits — coalescing a wave to
-         * its net enter/exit set so a transient enter-then-exit is never observed — not what is
-         * observable once both inputs are idle, which is the only thing a batch reference
-         * states ([24-OP-SEMIJOIN-03]). A gated and an ungated cell agree at quiescence. */
+         * The cell runs ungated. The batch model states only what is observable once both inputs
+         * are idle ([24-OP-SEMIJOIN-03]). */
         OperatorCatalog.register(
             id = Ids.SEMI_JOIN,
             shape = ShapeRule.binary(PAIR_SET, PAIR_SET, PAIR_SET),
@@ -538,9 +530,8 @@ object CoreOperators {
          * its KDoc is the contract, and the canonical combine below is total, so every key
          * either side holds appears in the output, null-extended on the absent side. A
          * `combine` returning null would drop the key — that filtering half of the contract is
-         * exercised by `JoinModelTest` rather than by this entry, which stays a plain outer
-         * combine. `emitOnFrontier` is left at its default for the reason the semijoin entries
-         * give. */
+         * exercised by `JoinModelTest` rather than by this entry, which stays a plain, ungated
+         * outer combine. */
         OperatorCatalog.register(
             id = Ids.COMBINE_LATEST,
             shape = ShapeRule.binary(SCALAR_MAP, SCALAR_MAP, SCALAR_MAP),

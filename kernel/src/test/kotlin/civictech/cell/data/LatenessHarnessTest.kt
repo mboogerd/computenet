@@ -33,7 +33,7 @@ import java.util.UUID
  * One writer: one outlet, so one wave `sourceId` (`[22-SRC-01]`). [emit] is one
  * [FanOutlet.originate] — a fresh `(sourceId, counter)` fanned, as the SAME
  * `SetDelta`, to every link in attachment order (the
- * `GroupByEvictionGlitchFreeTest` shape).
+ * the grouped-eviction test shape).
  */
 internal class LatenessSource<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
     @Suppress("UNCHECKED_CAST")
@@ -366,8 +366,7 @@ class LatenessHarnessTest {
      * fh1fo-D2) and to its side's data inlet, so both sides share one floor
      * (`JoinSetCell` has one `waterline` inlet); `WaterlineCell.outlet ->
      * JoinSetCell.waterline`. Both sides declare the same
-     * `Lateness(EvTime, lateness)`. Ungated, no exclusives, no
-     * `emitOnFrontier` (the task's non-goals).
+     * `Lateness(EvTime, lateness)`. Eagerly emitted, with no exclusive payloads.
      *
      * Consumer A folds `JoinSetCell.outlet` through a [Relay] (identity unless
      * the B14 control is selected); [raw] records every outlet delta

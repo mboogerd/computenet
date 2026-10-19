@@ -42,10 +42,6 @@
 #
 # Lines starting with '#' and blank lines are ignored by the diff.
 AdvertisedLedger
-CoalescingCombineApi
-CoalescingCombineCell
-CoalescingCombineCellBase
-CoalescingCombineCellPorts
 CombineLatestApi
 CombineLatestCell
 CombineLatestCellBase
@@ -55,10 +51,6 @@ CountCellPorts
 CountSetApi
 CountSetCellBase
 ExclusiveEvictionRefused
-FanInGatedFold
-FanInSettlementCapabilities
-FanInSettlementCapability
-FanInSettlementGate
 FilterCell
 FilterCellPorts
 FilterSetApi
@@ -68,8 +60,6 @@ FlatMapSetCell
 FlatMapSetCellBase
 FlatMapSetCellPorts
 FrontierBuilder
-FrontierGateable
-GatedFold
 GroupByApi
 GroupByCell
 GroupByCellBase
@@ -126,4 +116,3 @@ UntagCell
 UntagCellBase
 UntagCellPorts
 WaterlineEviction
-WaveGate

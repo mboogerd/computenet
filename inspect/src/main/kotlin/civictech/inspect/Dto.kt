@@ -619,13 +619,10 @@ data class ErrorCounters(
  * Computed by [WaveHealth] on the inspector's own scheduler thread by
  * correlating two things it already holds — the last wave observed on a tapped
  * producing outlet ([FlowCollector]) and the frontier stamp of a cell a client
- * explicitly observed ([StampedView.frontier]). Real detection needs per-source
- * per-edge watermarks, `Progress` absorb-acks and typed `Stall` markers that do
- * not exist (`doc/spec/20-dataflow-semantics/22-consistency.md` §Completeness
- * over silent or stuck edges, **G-40**), so every row says so: [heuristic] is
- * always `true` and the word "heuristic" always opens [description]. No row
- * asserts that a wave *is* lost, that a cell *is* stuck, or that glitch-freedom
- * *is* violated.
+ * explicitly observed ([StampedView.frontier]). The inspector has no stronger
+ * protocol-level liveness signal, so every row says so: [heuristic] is always
+ * `true` and the word "heuristic" always opens [description]. No row asserts
+ * that a wave *is* lost or that a cell *is* stuck.
  */
 @Serializable
 data class WaveHealthRow(

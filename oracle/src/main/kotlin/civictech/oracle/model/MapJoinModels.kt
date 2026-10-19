@@ -89,10 +89,8 @@ object JoinModel : OperatorModel, Serializable {
  *   about it. The kernel guards this explicitly (`if (k in leftMap || k in rightMap)`); here it
  *   is structural.
  *
- * **`emitOnFrontier` has no model counterpart**, for the reason `JoinModels.kt` gives for
- * `SemiJoinCell`: the gate decides when a null-extension may ride the outlet, not what the
- * settled output is. A gated and an ungated cell agree at quiescence, which is the only place
- * a batch reference speaks.
+ * `CombineLatestCell` runs ungated. This batch reference states the settled output, which is the
+ * only point at which a batch reference speaks.
  */
 class CombineLatestModel(private val combine: KeyedCombiner) : OperatorModel, Serializable {
 

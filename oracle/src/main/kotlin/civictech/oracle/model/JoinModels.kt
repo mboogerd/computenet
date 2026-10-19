@@ -22,16 +22,12 @@ import java.io.Serializable
  * epic computenet-4ru's design D2 — a model that reproduced the mint ledger would agree with
  * the implementation about a shared bug.
  *
- * ## Why `emitOnFrontier` is absent from this file
+ * ## Why emission timing is absent from this file
  *
- * `SemiJoinCell(emitOnFrontier = true)` (`[24-OP-SEMIJOIN-04]`) changes **when** the cell
- * emits, not what is observable once both inputs are idle: the gate coalesces a wave to its
- * net enter/exit set, so a transient enter-then-exit never reaches the outlet, and a settled
- * membership is unchanged either way. A batch reference is a statement about quiescence
+ * `SemiJoinCell` runs ungated. A batch reference is a statement about quiescence
  * (`[24-OP-SEMIJOIN-03]`: "WHILE both input streams are idle, output membership SHALL be a
- * deterministic function of the converged add-wins input memberships"), so the flag has no
- * model counterpart, and both polarities register once — see `CoreOperators` for the same
- * statement at the registration site.
+ * deterministic function of the converged add-wins input memberships"), so both polarities
+ * register once — see `CoreOperators` for the same statement at the registration site.
  */
 
 // ---------------------------------------------------------------------------

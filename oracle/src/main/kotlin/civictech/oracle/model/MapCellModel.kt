@@ -71,23 +71,19 @@ import java.io.Serializable
  * **The outcome that holds is: not fixed, and deliberately so** — computenet-gff7's first
  * acceptance clause offered "register a `Scalar`-consuming operator, or record the decision not
  * to", and this is that record. A scalar edge in this catalog carries
- * `Propagate<CounterDelta>`, and exactly ONE cell in the kernel serves that type on an inlet:
- * `CoalescingCombineCell` (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
- * `inlet: Serve<Propagate<CounterDelta>>`). Every other operator inlet under
- * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`; `CounterCell.inlet` is
- * `Use<CounterOps>` and `PnCounterCell.deltaInlet` is the replication seam, not an operator
- * input. And that one cell is **excluded by this very ledger**, in its own entry below, for a
- * reason that has not weakened: its observable is a wave-completion fold the script vocabulary
- * cannot name.
+ * `Propagate<CounterDelta>`. Since GFR.3 retired the former scalar-combining operator, **no
+ * kernel cell serves `Propagate<CounterDelta>` on an inlet** (observed:
+ * `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main` returns only
+ * `host/TypedLink.kt`'s generic-invariance KDoc, not a `Serve` declaration).
+ * `CounterCell.inlet` is `Use<CounterOps>` and `PnCounterCell.deltaInlet` is the replication
+ * seam, not an operator input.
  *
  * That is why this note belongs here rather than under "unreachable by shape-typed generation"
  * above. That class is a generator-coverage defect repaired by changing the generator; this one
  * cannot be repaired that way at all. The generator is behaving correctly — there is genuinely
- * nothing to link a counter into — and the only in-catalog repairs are to register the cell
- * this ledger excludes (writing the batch model the exclusion exists to forbid) or to add a new
- * kernel cell to `civictech.cell.data.op` existing solely so the oracle has a scalar consumer.
- * It is an exclusion's consequence, not an independent oversight, which makes it this ledger's
- * subject by transitivity. Contrast the pair-shaped hole, which *was* repairable in-catalog:
+ * nothing to link a counter into — and the only in-catalog repair is to add a new kernel cell to
+ * `civictech.cell.data.op` existing solely so the oracle has a scalar consumer. Contrast the
+ * pair-shaped hole, which *was* repairable in-catalog:
  * `keyBy` reuses an already-registered cell (`FlatMapSetCell`) and an already-registered model,
  * adding only a function. No such reuse exists for `Scalar`.
  *
@@ -191,7 +187,7 @@ import java.io.Serializable
  *   eviction is deferred — it now reads *"Watermark-driven eviction below the waterline floor
  *   is opt-in per inlet — declare it with `Windows.Lateness`"* — and `GroupByCell`/join-family
  *   eviction is built and tested (`WaterlineCellTest`, `WaterlineChurnTest`,
- *   `GroupByEvictionTest`, `JoinFamilyEvictionTest`, `GroupByEvictionGlitchFreeTest`). This
+ *   `GroupByEvictionTest`, `JoinFamilyEvictionTest`). This
  *   bullet is therefore **excluded**, not unbuilt: the reason is the same one `WaterlineCell`'s
  *   own entry below gives — a batch script reference has no expression for the live-wave
  *   `sourceId`/timestamp the floor is folded from — but `BatchOracle` (the *concord* batch
@@ -206,46 +202,21 @@ import java.io.Serializable
  *   or completeness-set member) remains disputed, while `[24-WL-15]` (a schema gap: no script
  *   verb reaches `retire(sourceId)`), `[24-WL-17]` and `[24-WL-18]` (driver-binding gaps: no
  *   catalog id emits an `Owned`/`Replicable` set stream into an evicting cell) remain open `gap`
- *   rows for reasons unrelated to this exclusion — plus a fifth, undropped, B16 entry recording
- *   a glitch-free-wrap scenario that was designed and deliberately not authored. None of the
- *   five concludes eviction itself goes unchecked; each names the kernel test that checks it
+ *   rows for reasons unrelated to this exclusion. None of them concludes eviction itself goes
+ *   unchecked; each names the kernel test that checks it
  *   directly instead (for example `[24-WL-04]`'s `WaterlineCellTest` pin, `[24-WL-15]`'s
  *   `WaterlineChurnTest` pins).
  *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
  *   not touch lateness.
  *
- * - **`CoalescingCombineCell`.** Named in epic §3.1's inventory but not in `ORA1 §MODEL-02`'s
- *   minimum list; **excluded**, per the bead's default direction. Verified against its own
- *   KDoc (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`): the cell's
- *   whole reason to exist is a **wave-completion fold** — buffering each in-flight wave's
- *   per-arm contributions against a completeness condition computed from open/closed
- *   `Consume` edges, per-edge per-source watermarks, and per-source flushed high-water marks —
- *   none of which the reference model's script vocabulary ([Script], [ScriptEvent]) can even
- *   *name*: there is no edge, no wave, no link-open/close event a script can carry. That is
- *   not merely "the model ignores WHEN, same as `emitOnFrontier`" (the reasoning
- *   `CoreOperators` gives for `SemiJoinCell`/`CombineLatestCell`, where WHEN and WHAT are
- *   genuinely independent): here WHETHER a contribution is ever counted depends on completion
- *   the model has no way to verify, and the cell's own KDoc documents a case where completion
- *   never happens for a given contribution — `onDeactivate` "drops" the transient version
- *   buffer on restart, so *"a partially collected wave was never observed downstream"*. A
- *   script-only reference has no restart, no edge, and no wave-completion event to decide
- *   whether a given contribution's wave ever completes, so it cannot honestly certify what
- *   this cell's quiescent total is — approximating it as a plain sum-of-contributions would be
- *   silently assuming the very completeness condition the model cannot check.
- *   *DISPUTES audit: no filing.* The cell's wave-completion behaviour is checked where waves
- *   exist — `concord/corpus`'s `24-OP-COMBINE-02` asserts scalar glitch-freedom positively over
- *   the real `CoalescingCombineCell` (see the `24-OP-COMBINE-01`/`CTL-GF-01` entry in
- *   `DISPUTES.md`, resolved). What is absent here is a *batch* check of it, which is this
- *   ledger's subject and not a gap in the requirement's coverage.
- *
  * - **`WatermarkCell`.** (computenet-fx5b, resolving the pointer this bullet used to be.)
  *   Verified against its own KDoc
  *   (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`): it is a *replicable
  *   delivered-watermark lattice (spec 40/42, E3.2)*, whose four independent grow-only/
- *   pointwise-monotone lanes (`rows`, `closed`, `suspendEpoch`, `members`) exist to let
- *   `civictech.cell.consistency.ReplicaQuorum.frontier` decide, across a mesh of replicas,
- *   whether a covering quorum has settled — a cross-replica settlement read, not a data
- *   transformation. Its own KDoc says so directly: instances "converge by delta gossip over
+ *   pointwise-monotone lanes (`rows`, `closed`, `suspendEpoch`, `members`) are each read by
+ *   `civictech.cell.consistency.CausalStability.stableFrontier` to decide, across a mesh of
+ *   replicas, which waves every open member has delivered — a cross-replica settlement read,
+ *   not a data transformation. Its own KDoc says so directly: instances "converge by delta gossip over
  *   `deltaInlet` exactly like the tagged-set family and `PnCounterCell`", and unlike every
  *   registered source cell **"there is no `@Contract`"** — nothing here is spawned or driven
  *   through the generated `*Base`/`*Ports` machinery `OperatorCatalog.register`'s `CellFactory`
@@ -269,7 +240,9 @@ import java.io.Serializable
  *   (`kernel/src/test/kotlin/civictech/cell/data/WatermarkCellTest.kt`,
  *   `WatermarkCellBoundedReadTest.kt`,
  *   `kernel/src/test/kotlin/civictech/cell/replication/DeliveredWatermarkTest.kt`), and by
- *   `civictech.cell.consistency.ReplicaQuorum`'s own tests where it is actually consumed.
+ *   `civictech.cell.consistency.CausalStability`'s own tests
+ *   (`kernel/src/test/kotlin/civictech/cell/consistency/CausalStabilityTest.kt`), where it is
+ *   actually consumed.
  *
  * - **`WaterlineCell`.** (computenet-sjqat, KE4.2.) Verified against its own KDoc
  *   (`kernel/src/main/kotlin/civictech/cell/data/Waterline.kt`): the event-time waterline of

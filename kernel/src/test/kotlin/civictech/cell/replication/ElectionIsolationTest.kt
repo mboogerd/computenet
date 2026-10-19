@@ -509,8 +509,8 @@ class ElectionIsolationTest {
          * completes at 5 and holds at 6.
          */
         fun pair(p: Peer): Pair<Boolean, Boolean> {
-            val f = mergeable.getValue(p).replicaFrontier(meshId)
-            return f.completeAt(wave, 5L, null) to f.completeAt(wave, 6L, null)
+            val counter = mergeable.getValue(p).stableFrontier(meshId).perSource[wave] ?: Long.MIN_VALUE
+            return (counter >= 5L) to (counter >= 6L)
         }
         fun readAll() = listOf(pair(p0), pair(p1), pair(p2))
 

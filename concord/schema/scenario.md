@@ -117,7 +117,6 @@ optional descriptor param the driver binds. The v1 named params:
 | `fn` | pure-function id (filter/map/join/group-by cells) — see `function-catalog.md` |
 | `agg` | aggregator id (`count`\|`sum`\|`min`\|`max`) a `group-by`/`partition` folds each group with — see `function-catalog.md`. **Optional, default `count`** (W3-0) |
 | `k` | the `k` of a `quorum-set`'s k-of-n admission — an element is emitted once `k` of the `n` live source links assert it. **Optional, default `n`** (all live sources ⇒ an intersection) (W3-0) |
-| `glitch-free` | request wave-aligned semantics on a fan-in cell (`true`) |
 | `inlet-mode` | inlet admission policy (`single-writer`, `fan-in`) |
 | `host` | host placement (dist profile) |
 | `journal` | non-empty journal name for a cell/controller on `host: dur` — see below |
@@ -126,8 +125,12 @@ optional descriptor param the driver binds. The v1 named params:
 | `interest` | interest-scoped instance-set assignment (dist profile); on a `host: dur` `replica-of` cell only total interest is legal — see below |
 | `family` | keyed-family declaration (dist profile) — see below |
 | `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
-| `views` | member map of an `aligned-view`: `{name: set-view\|map-view\|count-view\|value-view, …}`; each name is also an inlet port name (`computenet-5ubdv`, additive) |
 | `lateness` | event-time lateness `L`, a non-negative integer, on `window` (tumbling), `join`, `semi-join`, `intersect` or `waterline` — see below (`computenet-t4od7`, additive) |
+
+The former alignment-request descriptor was retired by GFR.3 (ADR); the
+lenient parser now ignores its obsolete key like any unknown key. The former
+composite member-map descriptor was retired by GFR.3 (ADR); the lenient parser
+now ignores its obsolete key like any unknown key.
 
 `agg`, `k`, and `window` are **additive** (W3-0 / R2-B): existing files deserialize
 unchanged (all optional; `window` absent on every non-`window` cell). The parser
@@ -360,9 +363,6 @@ declaration is not a replica declaration and carries no `replica-of` identity.
 
 `{from, to, inlet?, outlet?, role?}`. `role` selects consume vs observe
 (23-ownership). Endpoints are cell `id`s.
-
-A link into an `aligned-view` **must** name `inlet:` as one of that cell's
-`views:` names; there is no default inlet on it.
 
 ## `script` — the step verbs
 
@@ -903,8 +903,6 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | interest-refusals | `{type: interest-refusals, family: f, count: 1}` | exactly N declarations made for this family completed with a typed spawn/budget refusal |
 | no-dead-letters | `{type: no-dead-letters}` | zero dead letters across all hosts |
 | effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) — unkeyed, per key the script *fed* it (see below) |
-| observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
-| composite-whole-waves | `{type: composite-whole-waves, view: c, source: s, members?: [items, evens]}` | every composite on the `aligned-view` `c`'s stream has all checked members at their arm-derived folds of **one common** op prefix of `s` (see below) |
 | wave-plane-unchanged | `{type: wave-plane-unchanged, cell: s}` | every `read-state` walk on `s` left `s`'s wave plane exactly where it found it |
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 | emission-count | `{type: emission-count, cell: r2, since: 7, exactly: 0}` | `r2`'s outlet emitted exactly N times from just before script step `since` to check time (window must be `quiesce`-barriered) |
@@ -1171,32 +1169,6 @@ or a budget refusal. Reusing the delivery count would conflate two different
 quantities and reporting channels. This check reads one ascending per-family
 run total; an unobserved family fails loudly rather than answering the
 plausibly-passing value `0`.
-
-### `composite-whole-waves`: one common prefix across members
-
-(`computenet-5ubdv`, spec 22 `[22-OBS-01]`/`[22-OBS-02]`.) An `aligned-view`
-observation is a composite `{name → member value}`. `observations-whole-waves`
-cannot assert its wave-completeness: it reads one set stream against one source
-and accepts any prefix, while a composite's property is the members' **joint**
-prefix — `{items: [1, 2], evens: []}` has each member at a valid prefix on its
-own and is still torn.
-
-The check passes iff every observation is a map in which, for one prefix length
-`p` of `source`'s accepted `add`/`remove` script (the same enumeration
-`observations-whole-waves` performs), every checked member equals that member's
-expected fold of prefix `p`, compared as a set. `members` defaults to every name
-of the view's `views:`. A member's expected fold is the prefix set passed
-through its **arm** — the cells from `source` to the link `{to: c, inlet:
-<member>}` — where each arm cell is `map` (`fn` absent or `identity`, a no-op)
-or `filter` (a catalog predicate), each with exactly one inbound link, applied
-in chain order.
-
-Anything the evaluator cannot model fails **loudly**, naming the member and the
-offending cell or id, and never passes: a member whose id is not `set-view`, an
-arm through any other cell type (`group-by`, `union`, …), a fan-in on the arm,
-an inlet with zero or several inbound links, an arm not ending at `source`, a
-`members:` name not in `views:`, or a source op other than `add`/`remove`. An
-empty observation stream fails as for the other `observations-*` checks.
 
 ### What a conforming driver must observe (the six checks that need one)
 

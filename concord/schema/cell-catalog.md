@@ -62,7 +62,7 @@ quantifies over".
 | `semi-join` | `fn` (`key-of`), `lateness?` | Emits left elements whose key is present on the right. With `lateness`, see note 3. |
 | `lookup-join` | `fn` (`key-of`) | Enriches a stream with values looked up from a keyed side. |
 | `group-by` | `fn` (`key-of`), `agg` | Partitions elements by key and folds each group with an aggregator (`agg` = `count`\|`sum`\|`min`\|`max`, default `count`; non-count aggregators fold the elements' value components). Observed through a `count-view`/`map-view`. |
-| `combine-latest` | `fn`, `glitch-free?` | Combines the latest value of each inlet with a pure function. **Only `fn: sum` is bound**, in two forms: plain — independent inlets, order-independent at quiescence but not wave-aligned; `glitch-free: true` — a wave-coalescing fork-join combine emitting one delta per completed wave. See note 1. |
+| `combine-latest` | `fn` | Combines the latest value of each inlet with a pure function. **Only `fn: sum` is bound**: independent inlets, order-independent at quiescence but not wave-aligned. See note 1. |
 | `count` | — | Distinct-element count of a set stream; emits a counter delta. |
 | `presence-count` | — | Count of currently-present elements (presence, not distinct history). |
 | `quorum-set` | `k` | **Fan-in operator** over set streams (kernel `QuorumSetCell`): one link per source; an element is emitted once `k` of the `n` live source links assert it. `k` optional, default `n` (all sources ⇒ an intersection). k-of-n admission observable (24-OP-QUORUM-01). |
@@ -80,7 +80,6 @@ quantifies over".
 | `value-view` | Folds a scalar stream (`counter-source`/`combine-latest`/`pn-counter`/`feedback` output) into a single value; over a `waterline` outlet, the max-merged floor (`0` before the first floor). |
 | `list-view` | Folds a positional list-delta stream (`list-source`) into an ordered list (W3-0). |
 | `tagged-map-view` | Folds a **tagged** map-delta stream (an `ormap-source` outlet) into the current `{key → exposed value}` map: a key is present while it holds at least one uncovered dot, and its exposed value is the one that dot order selects. Rendered like a `map-view`. |
-| `aligned-view` | The wave-aligned multi-view sink (`[22-OBS-01]`/`[22-OBS-02]`): several named member folds (`views: {name: set-view\|map-view\|count-view\|value-view, …}`), one per inlet named by the member, assembled into one composite only when every member has settled the wave; `readView` → `{name → member value}` (computenet-5ubdv). |
 
 ## Nature / ownership sinks (W4-A followup, `12-NEGOTIATE-01`/`23-SPSC-01`)
 
@@ -139,7 +138,7 @@ source's replayed re-emission reaches it as a baseline, which a waterline
 ignores, so across a crash it is the evicting cell's restored floor that keeps
 late-dropping (`24-WL-REC-01`). That is how per-cell durability is expressed
 (`24-DUR-01`/`24-DUR-03`), and the volatile fan-in is what a journaled arm
-replays *into* (`24-REPLAY-01`; with `glitch-free: true`, `DUR-GF-01`).
+replays *into* (`24-REPLAY-01`).
 
 `replica-of` is legal on a `host: dur` `set-source` or
 `journal-set-source`. The replica joins the logical group exactly as on a dist
@@ -179,9 +178,7 @@ computenet-t4od7).
 (pass-through, works for set *and* scalar arms); `map fn:<other>`/`flatmap`→
 `FlatMapSetCell` (singleton / general); `join`/`lookup-join`→`JoinSetCell` (over set
 streams of pairs, with different `combine`); `semi-join`→`SemiJoinCell`;
-plain `combine-latest fn:sum`→`ScalarSumCombineCell` (the wave-aligned form,
-`combine-latest fn:sum, glitch-free:true`, binds **directly** to the kernel's
-`CoalescingCombineCell` — see note 1); `value-view`→a scalar `View` folding
+`combine-latest fn:sum`→`ScalarSumCombineCell`; `value-view`→a scalar `View` folding
 `CounterDelta`, `PnCounterDelta` and `WaterlineDelta`; `list-view`→a list `View`; `feedback`/
 `feedback-undamped`→`FeedbackCell` (a `CycleHead`); `nature-gate`→
 `NatureGatedSinkCell` (a hand-registered `ContractRegistry` descriptor projects a
@@ -202,10 +199,6 @@ tagged source over the kernel's public `FanOutlet.originate`/`waveState`/
 `TaggedProducerCell`; the recovery itself is run by `ManagedHost`'s own
 supervision path, see note 2).
 
-**`aligned-view`** (computenet-5ubdv) binds to the kernel's `AlignedCompositeCell`
-with one per-name `FanInlet` per `views:` member; each member folds with the
-same `View` its standalone id binds.
-
 The `join` family binds over **set streams of pairs `[k, v]`** (matching the batch
 oracle), not the kernel's map-stream `JoinCell`/`LookupJoinCell` — those are keyed
 map joins with a different element shape, and the corpus's join operators consume
@@ -213,26 +206,11 @@ set sources.
 
 ### Binding notes (no gap remains here)
 
-1. **The scalar `combine-latest` has two bound forms**, selected by the existing
-   `glitch-free` descriptor param — the driver binds both, and the catalog id and
-   its params are unchanged.
-   - **Plain** (`glitch-free` absent/false) → `ScalarSumCombineCell`: it folds each
-     arm's arrival straight into the running sum, so it is order-independent at
-     quiescence (`final-view` holds) but deliberately **not** wave-aligned —
-     `observations-all-satisfy(even)` is not guaranteed across a fork, which is what
-     the `CTL-GF-01` control pins. This is the form that combines two *independent*
-     inlets (`24-OP-COMBINE-01`).
-   - **`glitch-free: true`** → the kernel's `CoalescingCombineCell` (D-COMBINE):
-     version-buffered, emitting exactly one delta per **completed** input wave, so
-     no torn intermediate sum is observable. `24-OP-COMBINE-02` asserts that
-     positively (`observations-all-satisfy(even)` over a real fork-join diamond,
-     `[22-GF-01]`). Like every wave-aligned fan-in its completeness set is its open
-     inlinks, so it belongs on the arms of one forked source, not on independent
-     ones. Both neutral arms resolve onto its single unrestricted `inlet` (as
-     `union`/`quorum-set` arms do), each still its own link and its own expected
-     edge.
-
-   `combine-latest` with any `fn` other than `sum` throws
+1. **The scalar `combine-latest` has one bound form**: `fn: sum` binds to
+   `ScalarSumCombineCell`. It folds each arm's arrival straight into the running
+   sum, so it is order-independent at quiescence (`final-view` holds) but not
+   wave-aligned. It combines two independent inlets (`24-OP-COMBINE-01`). Any
+   other `fn` throws
    `UnsupportedCatalogBinding`.
 
 2. **`rebaseline-source` exists because `set-source` cannot witness a restart**
@@ -249,11 +227,6 @@ set sources.
    half of the property is the existing `union` id, which folds an inbound
    re-baseline through its tag algebra rather than as an ordinary delta; a plain
    view behind the source alone would see the announcement but not act on it.
-
-   *Resolved (D-CONCORD, wave B2): this entry used to read "No wave-aligned scalar
-   `combine-latest`" — the one remaining glitch-free `kernel-gap`. The kernel
-   capability landed (D-COMBINE), the driver binds it, and the positive assertion
-   is authored; see `concord/corpus/DISPUTES.md`.*
 
 3. **`lateness` on the join family and `intersect`** (computenet-t4od7, spec 24
    §Lateness and waterlines). One integer `lateness: L` declares the same

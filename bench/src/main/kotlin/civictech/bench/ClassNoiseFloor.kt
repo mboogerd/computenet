@@ -1044,8 +1044,8 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      * against the retired class floor of 0.103 — a small move, as expected for a class
      * whose every row is measured under ONE annotation configuration. Note that the
      * class's largest single observation, 0.07199549750373181 (`real`, `RETRACT`,
-     * `COALESCING_COMBINE`), belongs to this method and does NOT set its floor: that
-     * row's other two repeats are 0.0153 and 0.0075, so its median is 0.0153. Under the
+     * the retired coalescing-combine row), belongs to this method and does NOT set its floor:
+     * that row's other two repeats are 0.0153 and 0.0075, so its median is 0.0153. Under the
      * maximum-over-every-observation estimator `computenet-3sua` replaced it would have
      * set the floor at 0.144 single-handedly.
      */

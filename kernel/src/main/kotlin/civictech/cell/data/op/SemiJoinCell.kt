@@ -1,10 +1,7 @@
 package civictech.cell.data.op
 
 import civictech.cell.BoundedStateful
-import civictech.cell.CellContext
 import civictech.cell.CellRef
-import civictech.cell.CurrentContext
-import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -12,8 +9,6 @@ import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
-import civictech.cell.link.LinkPolicy
-import civictech.cell.link.LinkResult
 import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
@@ -48,53 +43,11 @@ interface SemiJoinApi<A, B> {
  * glitch-free — opposing in-flight updates may flicker transiently (22's
  * wrapper is the remedy).
  *
- * ### `emitOnFrontier` — the opt-in flicker gate (`[24-OP-SEMIJOIN-04]`, 96 §E2.4)
- *
- * Antijoin membership flips are **absence assertions** — emitting or retracting
- * a row because the *other* side does or doesn't hold a matching key needs
- * knowing non-membership, non-monotone in the CALM sense — so a row can enter
- * and exit within one wave as the two sides' opposing updates arrive on separate
- * invocations. A downstream glitch-free wrapper cannot rescue that: the
- * per-arrival emissions are two *complete* one-edge waves, which the wrapper
- * faithfully replays, flicker and all (the D-COMBINE lesson). Remediation has to
- * happen here, before emission.
- *
- * Constructed with `emitOnFrontier = true`, this cell buffers each wave's input
- * deltas across both inlets ([WaveGate]), applies them together at wave
- * completeness, and reconciles each touched row **once** against both sides'
- * settled membership — so a transient enter-then-exit cancels *before* any tag
- * is minted on the outlet, and the wave emits only its net enter/exit set. That
- * ordering is also the `MintedTags` hygiene contract (`[24-OP-SEMIJOIN-02]`):
- * reconciliation is on membership first, minting second, so no tag that never
- * reached the wire is ever tombstoned and a re-entry stays live under
- * tombstone-folding consumers.
- *
- * The gate is **opt-in**; the default stays ungated and byte-identical, because
- * this is deliberately *not* a smarter convergent cell — absence-based emission
- * is non-monotone and some sealing is unavoidable; per-wave sealing over the
- * completeness frontier is the cheapest ComputeNet has. Read [WaveGate]'s
- * phantom-expected-edge caveat before enabling it: the gate suits the
- * shared-source diamond (both inlets descending from one root, the only topology
- * in which the within-wave flicker exists at all), not two independent roots.
- * **One root is necessary and not sufficient** — each arm must also *carry* the
- * root's waves onto the gated edge. Where it structurally cannot, its
- * absorb-ack rescues the wave when the absorbing operator links directly into
- * this cell's inlet or when the ack crosses the single-input, transparent
- * relay-enabled hops added by computenet-6ovpx. A hop with multiple open
- * `LinkRole.Consume` inputs must itself opt into output settlement: a gated
- * instance constructed with `requireSettledFanIn = true` rejects a known
- * ungated [QuorumSetCell] or [UnionSetCell] outlet at link time, naming the
- * operator. Their opt-in fan-in gate supplies the per-edge settlement needed
- * before this cell may treat their one output edge as a complete frontier edge.
- * [WaveGate]'s "One root is NOT sufficient" section has the mechanism and the
- * measurements (computenet-23bf and computenet-6ovpx).
- *
  * ### Lateness: the `waterline` inlet and the `lateLeft`/`lateRight` outlets (KE4.5)
  *
  * Constructed with a [Windows.Lateness] on either or both sides, the cell
  * tracks one event-time floor delivered on [waterline] and guards each
- * declaring inlet at **arrival**, before the [WaveGate] offer on the gated
- * path as on the ungated one: an add whose `timeFn(row)` is strictly below the
+ * declaring inlet at **arrival**, before folding: an add whose `timeFn(row)` is strictly below the
  * floor is excluded from the fold and leaves verbatim — tags preserved — on
  * that side's late outlet ([lateLeft]/[lateRight]), counted in
  * [droppedBelowFloorLeft]/[droppedBelowFloorRight] whether or not the outlet is
@@ -142,25 +95,10 @@ interface SemiJoinApi<A, B> {
  * **Per-row exclusive refusal (`[24-WL-17]`).** A passed row that is itself
  * `Owned`/`Leased` is left live, untouched and undischarged, recorded as an
  * [ExclusiveEvictionRefused] (unit `"row"`) in [refusedRows] (replaced on every
- * rise, and appended to by a gated flush that keeps one — see [sinceArrival])
+ * rise)
  * and counted in [refusedEvictions]; every other passed row still
  * evicts in the same delta, and every later rise re-evaluates it. Only a
  * top-level exclusive row is detected (computenet-woto).
- *
- * **The waterline is not gated (3vd7k-D9).** With `emitOnFrontier = true` the
- * eviction is still applied and emitted on the `WaterlineDelta`'s own
- * delivery, while buffered data waves stay buffered. A buffered wave's adds
- * were late-split against the floor they *arrived* under; any a later rise
- * has passed by flush are evicted before they land
- * ([WaterlineEviction.dropPassedAdds]) — admitted, so not forwarded late —
- * which is the ungated cell's admit-then-evict under the same arrival order.
- * An exclusive row kept at flush because it cannot be evicted is recorded as
- * an [ExclusiveEvictionRefused] immediately, in the same flush, rather than
- * waiting for the next rise (`[24-WL-17]`, computenet-7y4sm) — the gated cell
- * and the ungated one agree on `refusedRows()` at quiescence with no further
- * floor rise, matching `[24-WL-10]`. `refusedEvictions` agrees when one rise
- * passed the buffered add; when several did, the ungated cell counts one per
- * rise and the gated cell one at flush.
  *
  * **Single-instance only (`[24-WL-18]`)**, checked in [WaterlineEviction.evict].
  */
@@ -169,40 +107,15 @@ class SemiJoinCell<A, B, K>(
     private val leftKey: (A) -> K,
     private val rightKey: (B) -> K,
     private val negated: Boolean = false,
-    /**
-     * Opt-in frontier-gated emission (`[24-OP-SEMIJOIN-04]`, 96 §E2.4) — see the
-     * class KDoc. `false` (the default) is the shipped, ungated behavior,
-     * unchanged.
-     */
-    emitOnFrontier: Boolean = false,
-    /**
-     * When true, link-time admission refuses a known ungated Quorum/Union
-     * fan-in outlet. Kept separate from [emitOnFrontier] for compatibility:
-     * existing gated joins that deliberately accept an eager upstream keep
-     * their wiring, while a topology relying on transitive settlement can
-     * require the stronger edge explicitly.
-     */
-    requireSettledFanIn: Boolean = false,
     /** The left inlet's lateness declaration (`[24-WL-01]`); `null` = never guarded, never evicted (`[24-WL-16]`). */
     private val leftLateness: Windows.Lateness<A>? = null,
     /** The right inlet's lateness declaration; `null` = never guarded, never evicted. */
     private val rightLateness: Windows.Lateness<B>? = null,
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-) : SemiJoinCellBase<A, B>(ref), Stateful, BoundedStateful, FrontierGateable {
+) : SemiJoinCellBase<A, B>(ref), Stateful, BoundedStateful {
     private val join = KeyedBinarySetJoin<A, B, K>()
     private val ledger: JoinLedger<A> = MintedLedger(ref, "semijoin")
-
-    /** [FrontierGateable]: `true` iff constructed with `emitOnFrontier = true`. */
-    override val frontierGated: Boolean = emitOnFrontier
-
-    /** The `emitOnFrontier` fold, or null when the cell runs the ungated default. */
-    private val gate: WaveGate<A>? =
-        if (!emitOnFrontier) null
-        else WaveGate(left, right) { timestamp, context, folds -> flush(timestamp, context, folds) }
-
-    /** Waves currently held by the gate; always 0 when ungated. Diagnostic only. */
-    val bufferedWaves: Int get() = gate?.bufferedWaves ?: 0
 
     /** The event-time floor (`[24-WL-02]`); `null` is the identity — nothing is below it. */
     private var floor: Long? = null
@@ -220,10 +133,10 @@ class SemiJoinCell<A, B, K>(
 
     private var refused: List<ExclusiveEvictionRefused> = emptyList()
 
-    /** The passed rows refused eviction on the latest rise, plus any a gated flush kept since, because they are exclusive (`[24-WL-17]`). Not snapshotted. */
+    /** The passed rows refused eviction on the latest rise because they are exclusive (`[24-WL-17]`). Not snapshotted. */
     fun refusedRows(): List<ExclusiveEvictionRefused> = refused
 
-    /** Cumulative count of per-row eviction refusals, one per refused row per rise and one per exclusive row a gated flush keeps. A counter, not state. */
+    /** Cumulative count of per-row eviction refusals, one per refused row per rise. A counter, not state. */
     var refusedEvictions: Long = 0
         private set
 
@@ -237,23 +150,6 @@ class SemiJoinCell<A, B, K>(
     val lateRight = registerPort("lateRight", FanOutlet.create<Propagate<SetDelta<B>>>())
 
     init {
-        require(!requireSettledFanIn || emitOnFrontier) {
-            "requireSettledFanIn needs emitOnFrontier = true"
-        }
-        if (requireSettledFanIn) {
-            listOf(left, right).forEach { inlet ->
-                inlet.linking.policies += LinkPolicy { request ->
-                    FanInSettlementCapabilities[request.from]
-                        ?.takeUnless { it.frontierGated }
-                        ?.let { capability ->
-                            LinkResult.Rejected(
-                                "frontier-gated SemiJoinCell rejects ungated ${capability.operator} " +
-                                    "outlet ${request.from}; construct the fan-in with emitOnFrontier = true",
-                            )
-                        }
-                }
-            }
-        }
         // late-join catch-up (G-22): the advertised output as a delta-from-empty
         outlet.catchUpOnLinked { if (ledger.isEmpty) null else ledger.asDelta() }
         waterline.serve(object : Propagate<WaterlineDelta> {
@@ -262,15 +158,9 @@ class SemiJoinCell<A, B, K>(
     }
 
     override fun onLeft(value: SetDelta<A>) {
-        // [24-WL-07] guard at arrival, before the gate offer (3vd7k-D4)
+        // [24-WL-07] guard at arrival (3vd7k-D4)
         val admitted = guardLeft(value)
         lateRight.absorbAck() // every delivery acks both late outlets, so a linked consumer's frontier advances
-        if (gate?.offerLeft(GatedFold { applyLeft(sinceArrival(admitted, leftLateness)) }) == true) return
-        // The ungated path below is the shipped handler verbatim — including its
-        // per-row interleaving of index-then-reconcile — so `emitOnFrontier =
-        // false` stays byte-identical. A gated cell also lands here for a delta
-        // the gate admits to no completeness set (catch-up, straggler, unmatched
-        // edge): applying and reconciling it immediately is exactly right.
         val adds = mutableMapOf<A, Set<Timestamp>>()
         val dels = mutableMapOf<A, Set<Timestamp>>()
         foldLeft(join.leftState.apply(admitted), adds, dels)
@@ -278,8 +168,6 @@ class SemiJoinCell<A, B, K>(
             adds,
             dels,
             propagate = { outlet.call.propagate(it) },
-            // frontier-gated antijoin/semijoin emission (CP-A3): a wave that flips
-            // no membership still advances the downstream frontier by an absorb-ack.
             absorbAck = { outlet.absorbAck() },
         )
     }
@@ -287,8 +175,6 @@ class SemiJoinCell<A, B, K>(
     override fun onRight(value: SetDelta<B>) {
         val admitted = guardRight(value)
         lateLeft.absorbAck()
-        if (gate?.offerRight(GatedFold { applyRight(sinceArrival(admitted, rightLateness)) }) == true) return
-        // ungated (or gate-exempt) — the shipped handler verbatim; see [onLeft].
         val adds = mutableMapOf<A, Set<Timestamp>>()
         val dels = mutableMapOf<A, Set<Timestamp>>()
         foldRight(join.rightState.apply(admitted), adds, dels)
@@ -376,29 +262,6 @@ class SemiJoinCell<A, B, K>(
         return admitted
     }
 
-    /**
-     * Gated flush only: evict the adds of a buffered, arrival-admitted delta
-     * that a floor rise has passed since it arrived (see
-     * [WaterlineEviction.dropPassedAdds]). An exclusive row kept despite
-     * having passed is recorded as an immediate `[24-WL-17]` refusal — appended
-     * to [refused] and counted in [refusedEvictions] right here at flush,
-     * rather than left to the next floor rise's [onFloorRaised] to discover
-     * (computenet-7y4sm: the gated cell must agree with the ungated one at
-     * quiescence, per `[24-WL-10]`). The identity without a floor or without
-     * this side's declaration.
-     */
-    private fun <E> sinceArrival(value: SetDelta<E>, lateness: Windows.Lateness<E>?): SetDelta<E> {
-        val current = floor
-        if (lateness == null || current == null) return value
-        val (kept, refusedRows) = WaterlineEviction.dropPassedAdds(lateness, current, value)
-        if (refusedRows.isNotEmpty()) {
-            val newlyRefused = refusedRows.map { ExclusiveEvictionRefused(ref, it, 1, unit = "row") }
-            refused = refused + newlyRefused
-            refusedEvictions += newlyRefused.size
-        }
-        return kept
-    }
-
     private fun onWaterline(delta: WaterlineDelta) {
         checkNotNull(leftLateness ?: rightLateness) {
             "SemiJoinCell $ref: waterline linked on a cell constructed without lateness"
@@ -450,79 +313,6 @@ class SemiJoinCell<A, B, K>(
         )
         lateLeft.absorbAck()
         lateRight.absorbAck()
-    }
-
-    // ---- the emitOnFrontier path: apply now, reconcile at completeness ----
-
-    /**
-     * Fold a left delta into membership and the key index **without**
-     * reconciling; returns the rows the completed wave must reconcile.
-     */
-    private fun applyLeft(value: SetDelta<A>): Set<A> {
-        val effective = join.leftState.apply(value)
-        val rows = LinkedHashSet<A>()
-        (effective.adds.keys + effective.dels.keys).forEach { a ->
-            join.index(join.leftIndex, leftKey(a), a, live = a in join.leftState)
-            rows += a
-        }
-        return rows
-    }
-
-    /**
-     * Fold a right delta into membership and the key index **without**
-     * reconciling; returns the left rows the completed wave must reconcile.
-     *
-     * The rows are read off [KeyedBinarySetJoin.leftIndex] as it stands *now*,
-     * so a left fold of the same wave applied afterwards would see a different
-     * index — but the union over the wave's folds is unaffected: any row whose
-     * membership in `leftIndex[k]` differs between the two application orders is
-     * precisely a row the left fold itself touched, and so is in the union
-     * either way ([GatedFold]).
-     */
-    private fun applyRight(value: SetDelta<B>): Set<A> {
-        val effective = join.rightState.apply(value)
-        val rows = LinkedHashSet<A>()
-        (effective.adds.keys + effective.dels.keys).forEach { b ->
-            val k = rightKey(b)
-            join.index(join.rightIndex, k, b, live = b in join.rightState)
-            join.leftIndex[k]?.let { rows += it }
-        }
-        return rows
-    }
-
-    /**
-     * One completed wave (gated only): apply **both** sides' buffered deltas,
-     * then reconcile the union of their touched rows once, against settled
-     * membership — the point at which a transient enter-then-exit cancels before
-     * a tag is minted. The emission runs inside the buffered context so the
-     * outlet's reactive stamping keys it to the completed input wave, however
-     * completeness was reached; a wave known only from acks carries no context of
-     * its own, so its ack is minted from the wave position directly
-     * ([CoalescingCombineCell]'s pattern).
-     */
-    private fun flush(timestamp: Timestamp, context: MessageContext?, folds: List<GatedFold<A>>) {
-        val rows = LinkedHashSet<A>()
-        folds.forEach { rows += it.applyAndTouch() }
-        val adds = mutableMapOf<A, Set<Timestamp>>()
-        val dels = mutableMapOf<A, Set<Timestamp>>()
-        rows.forEach { reconcile(it, adds, dels) }
-        CurrentContext.with(context ?: MessageContext(timestamp, outlet.ref)) {
-            join.emitOrAbsorb(
-                adds,
-                dels,
-                propagate = { outlet.call.propagate(it) },
-                absorbAck = { outlet.absorbAck() },
-            )
-        }
-    }
-
-    /**
-     * RESTART re-enters by catch-up, not restore (93 I-18): the gate's transient
-     * wave buffer is dropped — its deltas were never applied to either side's
-     * membership and never observed downstream.
-     */
-    override fun onDeactivate(ctx: CellContext) {
-        gate?.clear()
     }
 
     private fun reconcile(a: A, adds: MutableMap<A, Set<Timestamp>>, dels: MutableMap<A, Set<Timestamp>>) {
@@ -602,14 +392,13 @@ class SemiJoinCell<A, B, K>(
 
 /**
  * Set difference `A ⊖ B` (SQL EXCEPT DISTINCT): antijoin on identity keys.
- * [emitOnFrontier] forwards the opt-in gate, and [leftLateness]/[rightLateness]
- * forward the opt-in waterline eviction — see [SemiJoinCell]'s KDoc, including
+ * [leftLateness]/[rightLateness] forward the opt-in waterline eviction — see
+ * [SemiJoinCell]'s KDoc, including
  * the antijoin transient-admit cost that applies here whenever a lateness is
  * declared.
  */
 fun <E> differenceSet(
     ref: CellRef = CellRef(UUID.randomUUID()),
-    emitOnFrontier: Boolean = false,
     leftLateness: Windows.Lateness<E>? = null,
     rightLateness: Windows.Lateness<E>? = null,
 ): SemiJoinCell<E, E, E> =
@@ -618,7 +407,6 @@ fun <E> differenceSet(
         leftKey = { it },
         rightKey = { it },
         negated = true,
-        emitOnFrontier = emitOnFrontier,
         leftLateness = leftLateness,
         rightLateness = rightLateness,
     )

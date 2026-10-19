@@ -99,8 +99,9 @@ class CounterexampleRenderTest {
         val rendered = counterexample.renderKotlin()
 
         withClue(rendered) {
-            rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
-                "wavePrefix = civictech.oracle.run.WavePrefixOption.OFF)"
+            rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case)"
+            rendered.lineSequence().single { it.startsWith("val outcome =") } shouldBe
+                "val outcome = civictech.oracle.run.DifferentialRunner.run(case)"
             rendered shouldContain "check(outcome is"
             rendered shouldNotContain "io.kotest"
             rendered shouldNotContain "org.junit"
@@ -142,45 +143,13 @@ class CounterexampleRenderTest {
         //     oracle/src/main/kotlin/civictech/oracle/gen/*.kt)
         //   civictech.oracle.model.SourceId / WriterId / ScriptEvent           (all public,
         //     oracle/src/main/kotlin/civictech/oracle/model/*.kt)
-        //   civictech.oracle.run.DifferentialRunner.run / RunOutcome / WavePrefixOption (all
+        //   civictech.oracle.run.DifferentialRunner.run / RunOutcome                  (both
         //     public, oracle/src/main/kotlin/civictech/oracle/run/*.kt)
         // What this test actually asserts, mechanically: the one symbol the bead measured as
         // failing to compile outside :oracle (Shrinker.auditFor) is gone from the output, for
-        // both a Mismatch and a WavePrefixViolation counterexample.
+        // a Mismatch counterexample.
         val mismatch = shrunkCounterexample(seed = 105L)
         mismatch.renderKotlin() shouldNotContain "civictech.oracle.shrink.Shrinker"
-
-        val violation = Counterexample(
-            case = mismatch.case,
-            outcome = wavePrefixViolation(mismatch.case.topology.terminals.single().name),
-            originalSize = mismatch.originalSize,
-            truncated = false,
-        )
-        violation.renderKotlin() shouldNotContain "civictech.oracle.shrink.Shrinker"
-    }
-
-    @Test
-    fun `renderKotlin renders wavePrefix = ALWAYS for a WavePrefixViolation outcome and OFF for every other outcome (computenet-kgsd)`() {
-        val mismatch = shrunkCounterexample(seed = 106L)
-        withClue(mismatch.renderKotlin()) {
-            mismatch.renderKotlin() shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
-                "wavePrefix = civictech.oracle.run.WavePrefixOption.OFF)"
-        }
-
-        val terminal = mismatch.case.topology.terminals.single().name
-        val violation = Counterexample(
-            case = mismatch.case,
-            outcome = wavePrefixViolation(terminal),
-            originalSize = mismatch.originalSize,
-            truncated = false,
-        )
-        val rendered = violation.renderKotlin()
-        withClue(rendered) {
-            rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
-                "wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS)"
-            rendered shouldContain "RunOutcome.WavePrefixViolation"
-            rendered shouldContain "\"$terminal\""
-        }
     }
 
     @Test
@@ -324,25 +293,6 @@ class CounterexampleRenderTest {
         }
         return Shrinker.run(case, reference = reference)
     }
-
-    /**
-     * A minimal, syntactically valid [RunOutcome.WavePrefixViolation] naming [terminal] — for
-     * the rendering-shape tests above, which check what `renderKotlin` emits for this OUTCOME
-     * KIND, not the wave-prefix oracle's own behavior (that is `WavePrefixTest`'s and
-     * `ShrinkerBs14Test`'s, the latter exercising a real glitch end to end).
-     */
-    private fun wavePrefixViolation(terminal: String) = RunOutcome.WavePrefixViolation(
-        seed = 1L,
-        terminal = terminal,
-        kind = RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX,
-        renderedGraphSpec = "render-test-marker",
-        script = Script(emptyList()),
-        observed = SENTINEL,
-        observationIndex = 1,
-        matchedFloor = 0,
-        regressedTo = null,
-        nearestPrefixes = emptyMap(),
-    )
 
     private fun adds(script: Script): List<ScriptEvent.Add> =
         script.slices.flatMap { it.events }.filterIsInstance<ScriptEvent.Add>()

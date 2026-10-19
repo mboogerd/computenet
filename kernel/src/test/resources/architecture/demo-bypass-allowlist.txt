@@ -1,6 +1,6 @@
 # Demo main-source files that still call raw subscribe/streamTo/routeTo,
 # skipping LinkAdmission (cycle admission, TopologyIndex, EdgeClose) and the
-# glitch-free wave frontier (LinkRole.Observe). Enforced by
+# routed observation link (LinkRole.Observe). Enforced by
 # kernel/src/test/kotlin/civictech/cell/architecture/DemoBypassRatchetTest.kt
 # (computenet-837mi.1), from doc/integration/2026-09-29/01-programming-model.md
 # findings F1-F4 and REPLAN.md Phase 0.

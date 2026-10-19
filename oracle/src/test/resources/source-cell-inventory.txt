@@ -11,7 +11,7 @@
 # function vocabulary in Aggregator.kt, the replication interfaces Gossiping/Replicable, window
 # helpers in Windows.kt, and BoundedWalk.kt's internal KeyWalk/EntryOrder/PageBudget) — the same
 # mix of "cell" and "not a cell but genuinely on this classpath" the operator inventory already
-# has (FrontierBuilder, GatedFold, OperatorEntry, and friends there are not operators either).
+# has (FrontierBuilder, OperatorEntry, and friends there are not operators either).
 # civictech.oracle.bind.OperatorInventoryTest (oracle/src/test/kotlin/civictech/oracle/bind/
 # OperatorInventoryTest.kt) diffs the package's ACTUAL, facade-filtered classes against this list
 # on every :oracle:test run and fails naming what was added and what was removed.

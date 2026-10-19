@@ -619,8 +619,7 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
 - **The G-59 / C-9 gap rows themselves are not closed by this.** What is retired is the
   slice this entry recorded — a spontaneously-emitting *journaled* source double-firing an
   `Effectful` sink. G-59's row (`91-gap-analysis.md`) also spans non-deterministic
-  (wall-clock/random) cell logic, glitch-free partial-wave buffers (research-gated; named
-  under "Not covered" below) and cross-host recovery-frontier drift (also below, out of
+  (wall-clock/random) cell logic and cross-host recovery-frontier drift (also below, out of
   scope for the single-host `dur` driver); `34892d9` touched none of those. C-9's "effects
   re-fire on replay" statement kept a live residual too — the second boundary immediately
   below, where a frame carrying no `MessageContext` had no frontier position at all and
@@ -1157,10 +1156,10 @@ claiming coverage for this unresolved case.
     unit test — the tag plane itself is not boundary-observable per P1.
 - `24-REPLAY-01` — **RESOLVED (B2 / D-CONCORD, `kernel-gap`; kernel fix by
   D-REPLAY)**. *As filed (R3, empirically confirmed):* the PN-2 baseline path
-  worked for the *generic* glitch-free join — `HostDurability.recoverFrom` stamps
-  replayed frames as `MessageContext.baseline` and `WaveFrontier.offer()` releases
-  a baseline delivery immediately, bypassing wave-completeness
-  (`DurableGlitchFreeReplayTest`, 100 seeds) — **but `QuorumSetCell`/
+  worked for the *generic* glitch-free join (the pre-GFR mechanism, retired by GFR.3) —
+  `HostDurability.recoverFrom` stamped replayed frames as `MessageContext.baseline` and
+  `WaveFrontier.offer()` released a baseline delivery immediately, bypassing wave-completeness
+  (`DurableGlitchFreeReplayTest`, 100 seeds, since retired) — **but `QuorumSetCell`/
   `PresenceLanes` never consulted `MessageContext.baseline`** (grep: zero
   references). They are a lane-counting fan-in, an architecturally different
   mechanism, and PN-2 patched only the former: one journaled arm + one volatile
@@ -1170,7 +1169,7 @@ claiming coverage for this unresolved case.
     `CurrentContext.get()?.baseline`; when set (a PN-2 replay) the elements the
     replayed frame *added* to its lane are passed to `evaluate` as `recovered` and
     admitted regardless of `threshold(liveSources)` — the SET-fan-in analogue of
-    `WaveFrontier.offer()`'s baseline branch. What a baseline *removes* stays on
+    the since-retired `WaveFrontier.offer()` baseline branch. What a baseline *removes* stays on
     the live rule. Installed elements are **not** remembered: the next live delta
     touching one, or an `EdgeOpen`/`EdgeClose` shifting `n`, re-evaluates it under
     the ordinary threshold. `PresenceCountCell` needed **no** change and got none
@@ -1674,7 +1673,8 @@ not coverable.
 task): the new frame is ambient for *everything* an inbound protocol frame
 synchronously causes. That is a unicast pull reply (`pullServe` -> `baselineTo`),
 plainly remote-triggered — but also a **fan-out the frame merely unblocks**: a
-`Protocols.Progress` ack completing a wave in `CoalescingCombineCell`/`WaveGate`
+  `Protocols.Progress` ack completing a wave in the since-retired
+  `CoalescingCombineCell`/`WaveGate` (GFR.3)
 calls `flushReady()` -> `outlet.call.propagate(...)` on the same thread, so a
 mediated outlet's `disclosureFilter` there evaluated under the *acking* peer for
 a delta addressed to every attached observer. The identity was never fabricated
@@ -1714,8 +1714,9 @@ used as one. Nothing here mints a `[43-*]` id or authors a scenario.
 The entry below cites `ORA1 §DIFF-09` and its neighbours. Read that citation form correctly,
 because a reviewer already read it wrongly once and it cost a verdict. (Two entries stood here
 until `computenet-0zbq`; the ORA2 one, BS-9 / `ORA2 §DIFF-07`'s wave-prefix diamond, was deleted
-when the diamond was built — see `civictech.oracle.tagged.TaggedWavePrefixTest` and the closure
-recorded in `civictech.oracle.run.OracleSweep`'s ledger KDoc.)
+when the diamond was built. The since-retired `civictech.oracle.tagged.TaggedWavePrefixTest`
+(GFR.3; see git history before this change) and `civictech.oracle.run.OracleSweep`'s historical
+ledger KDoc record that closure.)
 
 `ORA1 §…` and `ORA2 §…` are **acceptance clauses of the beads items that built the `:oracle`
 harness** — ORA1's in epic `computenet-4ru` §4, ORA2's in feature `computenet-4ru.1` §4. They are
@@ -1799,24 +1800,28 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
     `ScriptEvent.Observe` injects nothing — so a generated script's "concurrent writers" are in
     fact sequential against one replica. Real concurrency in this kernel is across *replicas*
     (`SetCell.deltaInlet`/`applyRemote`, spec 40/42), and a generated case builds one. The full
-    reasoning is recorded in `civictech.oracle.run.WavePrefixOracle`'s KDoc, next to the numbers.
+    reasoning remains in git history in the since-retired
+    `civictech.oracle.run.WavePrefixOracle` KDoc (GFR.3), next to the numbers.
 
-- **What was measured** (Darwin arm64, 2026-08-20). The first two bullets rest on **tests** in
-  `WavePrefixTest`, not on a session transcript — with one qualification: those tests assert the
+- **What was measured** (Darwin arm64, 2026-08-20). The first two bullets rested on **tests** in
+  the since-retired `WavePrefixTest` (GFR.3; see git history), not on a session transcript — with
+  one qualification: those tests asserted the
   *shape* (the three-event case diverges with a single-writer control that does not; some
   two-writer seed carries a kernel-effective, model-inert remove and no single-writer seed
   does), while the exact counts below are recorded in KDoc rather than asserted, deliberately,
   so that a generator change moves the numbers without reddening a test. The third — the
   `Membership.observes`
-  mutation — is a **one-off run recorded in `civictech.oracle.run.WavePrefixOracle`'s KDoc**
-  next to the numbers, reverted and never committed, as an exhaustiveness mutation necessarily
-  is: it is evidence a reader has to take from that record, not a test that re-runs.
+  mutation — is a **one-off run recorded in the since-retired
+  `civictech.oracle.run.WavePrefixOracle` KDoc** (GFR.3; see git history) next to the numbers,
+  reverted and never committed, as an exhaustiveness mutation necessarily is: it is evidence a
+  reader has to take from that historical record, not a test that re-runs.
   - The disagreement reproduces in **three events, with no generator and no seed**: `w0` adds
     `ab`, `w1` adds `ab`, `w0` removes `ab`. At the probe diamond's terminal the model answers
-    `{ab, a, b}` and the kernel the empty set (`WavePrefixTest`, "a remove of an element another
-    writer added is applied by the kernel and ignored by the model", with a single-writer control
-    that succeeds).
-  - Over `WavePrefixTest.generatedSweepConfig`, seeds `0..59`: **22 of 60** two-writer scripts
+    `{ab, a, b}` and the kernel the empty set (the since-retired `WavePrefixTest`, GFR.3, "a remove
+    of an element another writer added is applied by the kernel and ignored by the model", with a
+    single-writer control that succeeds; see git history).
+  - Over the since-retired `WavePrefixTest.generatedSweepConfig` (GFR.3), seeds `0..59`: **22 of
+    60** two-writer scripts
     carry such a step and 9 surface as a failure (the other 13 are masked downstream by a
     `filter`, `quorumSet` or `count`); **0 of 60** single-writer scripts carry one.
   - Mutating `Membership.observes` to `return true` — i.e. adopting `SetCell`'s reading — clears
@@ -2239,7 +2244,8 @@ property is statable at the driver and not in the corpus.
      id. The forward is a downstream courtesy, not a mesh-wide fence.
   3. **The watermark plane has no supersession vocabulary at all.**
      `WatermarkCell` rows (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`)
-     and `ReplicaQuorum` never read `deadSources` or `supersedes`; rows are
+     and `CausalStability`, the surviving reader after `ReplicaQuorum` was retired by GFR.3,
+     never read `deadSources` or `supersedes`; rows are
      grow-only in every lane and no column is ever removed. There is no
      place in the shipped code where the exclusion could even be expressed.
 - **Missing capability** — two, and either alone is insufficient:

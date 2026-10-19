@@ -136,8 +136,6 @@ data class CellSpec(
      * intersection), so a quorum-set with no `k` is a well-defined intersection.
      */
     val k: Int? = null,
-    /** Request wave-aligned (glitch-free) semantics on a fan-in cell. */
-    @SerialName("glitch-free") val glitchFree: Boolean? = null,
     /** Inlet admission policy, e.g. `single-writer`, `fan-in`. */
     @SerialName("inlet-mode") val inletMode: String? = null,
     /** Host placement (dist profile). */
@@ -185,18 +183,6 @@ data class CellSpec(
      * 24), not durations.
      */
     val window: WindowSpec? = null,
-    /**
-     * The member map of an `aligned-view` cell (cell-catalog.md §Views,
-     * `[22-OBS-01]`/`[22-OBS-02]`, computenet-5ubdv 5ubdv-D5): member name →
-     * catalog view id (`set-view` | `map-view` | `count-view` | `value-view`).
-     * Each name is also an inlet port name on the cell, so a link into an
-     * `aligned-view` names one of these as its `inlet:`. Present only on an
-     * `aligned-view` cell; optional and additive — every existing scenario
-     * carries no `views:` and still parses. Typed (rather than left to the
-     * lenient parser, which would silently drop it) so the runner can lower it
-     * into the driver's params.
-     */
-    val views: Map<String, String>? = null,
     /**
      * The event-time lateness `L` (spec 24 §Lateness and waterlines,
      * `[24-WL-01]`) — a non-negative integer in the same units as the

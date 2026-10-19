@@ -23,8 +23,8 @@ import java.util.*
  * quiesces exactly its exclusive cone — parked, zero loss on re-attention —
  * while the shared cell and the hot cone keep flowing. The control run
  * proves the harness detects the starvation the floor prevents. The
- * glitch-freedom interaction (WAIT/DEGRADE) is verified deterministically in
- * GlitchFreeSuspensionTest.
+ * suspension interaction is verified deterministically by the focused
+ * attention tests.
  */
 class AttentionGenerativeTest {
 

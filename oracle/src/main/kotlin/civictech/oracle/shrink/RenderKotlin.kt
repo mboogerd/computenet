@@ -35,7 +35,7 @@ import civictech.oracle.run.RunOutcome
  * `civictech.oracle.run.Reference` (the seam a test uses to manufacture a failure without
  * touching the kernel) is exactly such runtime state — it is arbitrary Kotlin the shrink was
  * merely handed, not data [GeneratedCase] carries — so the rendered replay always asserts
- * against the catalog-resolved reference (`DifferentialRunner.run(case, ...)`, no `reference`
+ * against the catalog-resolved reference (`DifferentialRunner.run(case)`, no `reference`
  * argument), which is also the shape a *real* kernel-vs-model disagreement takes.
  *
  * ## `removeAudit` is rendered as literals, never re-derived (computenet-p5qy defect 1)
@@ -54,52 +54,6 @@ import civictech.oracle.run.RunOutcome
  * API surface unchanged, and a snippet with no call back into the shrinker at all is closer to
  * "pasteable standalone test" than one that depends on a shrinker-internal helper, even a public
  * one.
- *
- * ## The wave-prefix option is rendered for a [RunOutcome.WavePrefixViolation] (defect 2)
- *
- * A [RunOutcome.WavePrefixViolation] is only detectable while `civictech.oracle.run.WavePrefixOracle`
- * is actively checking, and whether it checks a given case is a `civictech.oracle.run.WavePrefixOption`
- * decision the caller makes per run — it is not carried by [GeneratedCase] or by the outcome
- * itself. Rendering the replay with no `wavePrefix` argument leaves it at
- * `civictech.oracle.run.WavePrefixOption.DEFAULT` (a 0.25 selection fraction), so whether the
- * violation reproduces depends on whether `DEFAULT.selects(case.seed)` happens to be `true` —
- * measured over the four seeds `ShrinkerBs14Test.SEEDS` pins (30, 40, 50, 58 — `WavePrefixTest`'s
- * former `SEAM_SEEDS` literal, kept there for exactly this split after computenet-i3vo emptied
- * that ledger), exactly half do and half report a plain `Mismatch` instead.
- *
- * The fix does not require knowing which [civictech.oracle.run.WavePrefixOption] the shrink was
- * actually given — `civictech.oracle.run.WavePrefixOption.selects` is a pure predicate over the
- * seed that decides only *whether* the check runs; the violation it finds once running is
- * unaffected by which fraction triggered it. `civictech.oracle.run.WavePrefixOption.ALWAYS`
- * (fraction `1.0`) selects every seed unconditionally, so re-running with `ALWAYS` reproduces
- * whatever violation any option that selected this case's seed found. So a
- * [RunOutcome.WavePrefixViolation] counterexample always renders
- * `DifferentialRunner.run(case, wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS)`.
- *
- * ## Every other outcome renders `wavePrefix = OFF` (computenet-kgsd, mirror of defect 2)
- *
- * The bare `DifferentialRunner.run(case)` resolves to `civictech.oracle.run.WavePrefixOption.DEFAULT`
- * — a nonzero selection fraction, D5's floor against a default that checks nothing — not to
- * `OFF`. So a counterexample shrunk with prefix checking *off* (or under an option whose
- * `selects(seed)` was `false`) could be replayed with it *on*, and a prefix-dirty case would then
- * report a [RunOutcome.WavePrefixViolation] where the counterexample names, say, a
- * [RunOutcome.Mismatch]: the emitted `check()` would fail, naming a different kind than the
- * counterexample it was rendered from. Measured over the same four seeds (`ShrinkerBs14Test.SEEDS`),
- * each shrunk with `WavePrefixOption.OFF` (a `Mismatch` counterexample for all four) and replayed
- * with no `wavePrefix` argument: seeds 50 and 58 (`DEFAULT.selects(seed) == true`) replayed as
- * `WavePrefixViolation`, seeds 30 and 40 replayed faithfully.
- *
- * The fix renders `wavePrefix = civictech.oracle.run.WavePrefixOption.OFF` explicitly for every
- * non-[RunOutcome.WavePrefixViolation] outcome, rather than carrying the [WavePrefixOption] the
- * shrink was actually given: sound, because prefix checking can only *pre-empt* a run with a
- * violation, so a run that produced a non-violation outcome with checking on produces the same
- * outcome with it off, and `civictech.oracle.run.WavePrefixOracle`'s own KDoc names `OFF` at an
- * explicit call site — never a silent default — as exactly what D5 permits. Carrying the actual
- * option would also be sound and would remove the `ALWAYS` approximation the violation branch
- * above relies on, but it requires threading the option [Shrinker.run] was given through onto
- * [Counterexample] and changing `Shrinker.run`'s result construction — `Shrinker.kt` is not this
- * item's file claim, so that alternative is left as a possible future refinement rather than
- * implemented here.
  *
  * ## `check`, not a test-framework assertion
  *
@@ -121,7 +75,7 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
         appendLine("// Rebuilt from CaseTopology + CaseScript via catalog ids; the lowered GraphSpec is")
         appendLine("// re-derived by GraphGenerator.lower, never printed — see RenderKotlin.kt's KDoc.")
         appendLine("// NOTE: the check() below asserts against the catalog-resolved reference")
-        appendLine("// (DifferentialRunner.run(case, ...), no `reference` argument). If the counterexample")
+        appendLine("// (DifferentialRunner.run(case), no `reference` argument). If the counterexample")
         appendLine("// this was rendered from was found under a CALLER-SUBSTITUTED reference (e.g. a")
         appendLine("// test injecting a mutant model via DifferentialRunner.run's `reference` seam,")
         appendLine("// rather than an actual kernel bug), this replay will NOT reproduce that failure —")
@@ -165,12 +119,7 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
         appendLine("    ),")
         appendLine(")")
         appendLine()
-        val wavePrefixArg = if (counterexample.outcome is RunOutcome.WavePrefixViolation) {
-            ", wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS"
-        } else {
-            ", wavePrefix = civictech.oracle.run.WavePrefixOption.OFF"
-        }
-        appendLine("val outcome = civictech.oracle.run.DifferentialRunner.run(case$wavePrefixArg)")
+        appendLine("val outcome = civictech.oracle.run.DifferentialRunner.run(case)")
         val terminalCheck = if (terminal == null) "" else " && outcome.terminal == ${literal(terminal)}"
         appendLine("check(outcome is civictech.oracle.run.RunOutcome.$kind$terminalCheck) {")
         val terminalDescription = if (terminal == null) "" else " on '$terminal'"
@@ -182,7 +131,6 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
 /** The terminal [outcome] was reported on, or `null` for a variant that names none. */
 private fun failureTerminal(outcome: RunOutcome): String? = when (outcome) {
     is RunOutcome.Mismatch -> outcome.terminal
-    is RunOutcome.WavePrefixViolation -> outcome.terminal
     else -> null
 }
 

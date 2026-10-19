@@ -35,8 +35,7 @@ sealed class PlanNode : Serializable {
 
     /**
      * The EDB relation names ([civictech.query.schema.Catalog] keys) this node's rows
-     * descend from (`[QRY1-PLAN-05]`) — the provenance slot [QRY1-LOWER-08]/[QRY1-LOWER-09]'s
-     * `emitOnFrontier` gating decision reads later. A [Scan] is `{relation}`; every other
+     * descend from (`[QRY1-PLAN-05]`). A [Scan] is `{relation}`; every other
      * node is the union over all of its inputs, witness sides and union branches included.
      * The propagation rule and its reasoning live in [PlanAnalyses.provenanceOf], which
      * [Planner] calls at every construction site; this file only gives the value a place to

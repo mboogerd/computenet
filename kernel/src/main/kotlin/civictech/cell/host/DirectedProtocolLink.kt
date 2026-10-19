@@ -6,7 +6,7 @@ import civictech.cell.port.Port
 /**
  * Overlays a delivery's real local [Port] onto a wire-reconstructed [base]
  * link (spec 41 point 4, G-35 phase B) so identity-gated protocol handlers
- * (`Attention.wire()`, `GlitchFreeCell`) treat it exactly like an in-process
+ * (for example, `Attention.wire()`) treat it exactly like an in-process
  * link. Everything else — [protocolBridge]/[protocolCapabilities] for the
  * next hop — still comes from [base].
  *

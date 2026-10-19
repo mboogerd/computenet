@@ -202,12 +202,11 @@ class MutationCheckTest {
      * ## The outcome KIND is asserted, not just "not Success"
      *
      * `[RunOutcome]`'s precedence is `NonQuiescence > DeadLetterFailure >
-     * ModelEvaluationFailure > WavePrefixViolation > Mismatch` (`FailureTaxonomyTest`), and
+     * ModelEvaluationFailure > Mismatch` (`FailureTaxonomyTest`), and
      * `Mismatch` is the LOWEST. If any other condition were simultaneously in force this run
      * would report that kind instead, and a mutant that fired would be indistinguishable from
      * one that did not. Asserting `Mismatch` by kind is therefore also the assertion that
-     * nothing else went wrong. (`check` never prefix-checks — it passes `checker = null` — so
-     * `WavePrefixViolation` is unreachable on this path by construction.)
+     * nothing else went wrong.
      */
     @Test
     fun `the mutant group-by model is caught and named at the group-by terminal`() {
@@ -293,26 +292,6 @@ class MutationCheckTest {
      * `case.topology.nodes` is the actual assertion, and the control below is what rules out
      * "red for some other reason".
      *
-     * ## Why wave-prefix checking is explicitly OFF
-     *
-     * `DifferentialRunner.run` defaults `wavePrefix` to a nonzero fraction **for the
-     * catalog-resolved reference** — and here the catalog-resolved reference IS the mutant, so
-     * every prefix answer is wrong and the first intermediate observation would be reported as
-     * a `WavePrefixViolation`. That kind outranks `Mismatch`, so the run would come back
-     * attributed to a glitch rather than to a value disagreement, and the assertions below would
-     * fail while the mutant had in fact fired. `WavePrefixOption.OFF` is the same reasoning
-     * `run`'s own KDoc applies when a reference is substituted through its `reference`
-     * parameter; substituting through the catalog instead bypasses that default, so it is
-     * restored by hand.
-     *
-     * **The paragraph above is a hazard this argument forecloses, not one that was observed —
-     * the argument is inert on today's config.** Measured at review (2026-08-20, Darwin arm64):
-     * [sweepConfig] draws `sourceCount = 4`, every seed of [MUTATION_SEEDS] generates a
-     * four-source case, and `WavePrefixOracle.appliesTo` admits only a SINGLE-source case — so
-     * `onWavePrefixChecker` reports `null` on all thirty seeds and the per-seed outcomes are
-     * identical with this argument and with the default. Nothing is being silenced here today;
-     * the `OFF` is what keeps the hazard foreclosed if this config's source count, or that
-     * eligibility rule, later changes. Do not read it as evidence a violation was seen.
      */
     @Test
     fun `a mutant model on a generator-reachable operator fails the generated sweep`() {
@@ -321,7 +300,7 @@ class MutationCheckTest {
 
         val outcomes = MUTATION_SEEDS.map { seed ->
             val case = CaseGenerator.generate(seed, config)
-            case to DifferentialRunner.run(case = case, wavePrefix = WavePrefixOption.OFF)
+            case to DifferentialRunner.run(case = case)
         }
 
         // A non-Mismatch failure kind means some OTHER condition was in force and outranked the
@@ -387,7 +366,7 @@ class MutationCheckTest {
 
         val outcomes = MUTATION_SEEDS.associate { seed ->
             val case = CaseGenerator.generate(seed, config)
-            seed to DifferentialRunner.run(case = case, wavePrefix = WavePrefixOption.OFF)
+            seed to DifferentialRunner.run(case = case)
         }
 
         withClue("Failing seeds: ${outcomes.filterValues { it != RunOutcome.Success }.mapValues { OracleSweep.describe(it.value) }}") {

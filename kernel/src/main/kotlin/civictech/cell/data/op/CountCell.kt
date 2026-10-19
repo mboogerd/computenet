@@ -34,9 +34,8 @@ interface CountSetApi<E> {
  * condition (`diff != 0L`) and output type (`CounterDelta`, not `SetDelta`)
  * genuinely differ from Filter/Union/FlatMap. T05 finding 2 (closed): a
  * delta that produces no size change now absorb-acks via the shared
- * [emitOrAbsorb] free function instead of silently dropping the wave — a
- * `GlitchFreeCell` downstream would otherwise stall forever on a
- * membership-neutral final wave. Behavior change: this operator now acks.
+ * [emitOrAbsorb] free function instead of silently dropping the wave. Behavior
+ * change: this operator now acks.
  */
 class CountCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is

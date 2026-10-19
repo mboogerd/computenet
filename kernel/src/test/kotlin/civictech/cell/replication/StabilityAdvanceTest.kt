@@ -312,7 +312,7 @@ class StabilityAdvanceTest {
         rig.replication.stableFrontier(unknown) shouldBe TagFrontier(emptyMap())
         rig.replication.localDeliveredFrontier(unknown) shouldBe TagFrontier(emptyMap())
 
-        // Mirrors onWatermarkAdvance: returns silently rather than throwing, and
+        // Unknown logical ids return silently rather than throwing, and
         // registers nothing that a later delta on the known id could fire.
         val calls = mutableListOf<TagFrontier>()
         rig.replication.onStabilityAdvance(unknown) { calls += it }

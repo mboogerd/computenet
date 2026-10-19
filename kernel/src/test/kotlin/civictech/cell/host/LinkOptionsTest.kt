@@ -3,12 +3,7 @@ package civictech.cell.host
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
-import civictech.cell.CurrentContext
-import civictech.cell.MessageContext
 import civictech.cell.Propagate
-import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.WaveFrontier
 import civictech.cell.link.LinkOptions
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
@@ -24,7 +19,6 @@ import civictech.cell.port.registerPort
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeEvent
 import civictech.cell.protocol.EdgeOpen
-import civictech.cell.proxy.InvocationSink
 import civictech.testkit.SimWorld
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -56,9 +50,8 @@ class LinkOptionsTest {
         }
     }
 
-    private class GlitchConsumerSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    private class EventConsumerSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val received = mutableListOf<Int>()
-        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
         val events = mutableListOf<Pair<LinkRole, EdgeEvent>>()
         val inlet by input<Consumer<Int>>()
 
@@ -68,7 +61,6 @@ class LinkOptionsTest {
                     received += input
                 }
             })
-            inlet.install(frontier)
             inlet.onEdgeEvent { link, event -> events += link.role to event }
         }
     }
@@ -79,14 +71,12 @@ class LinkOptionsTest {
         fun emit(value: Int) = outlet.call.propagate(value)
     }
 
-    private class GlitchPropagateSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    private class PropagateSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val received = mutableListOf<Int>()
-        val frontier = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
         val inlet by input<Propagate<Int>>()
 
         init {
             inlet.serve(Propagate { received += it })
-            inlet.install(frontier)
         }
     }
 
@@ -189,52 +179,10 @@ class LinkOptionsTest {
     }
 
     @Test
-    fun `a staged glitch-free edge is opened before queued waves arrive`() {
-        val world = SimWorld()
-        val source = PropagateSource()
-        val sink = GlitchPropagateSink()
-        world.host.managementInlet.call.spawn(source)
-        world.host.managementInlet.call.spawn(sink)
-        world.host.managementInlet.call.connect(
-            source.ref, "outlet", sink.ref, "inlet", LinkOptions(staged = true),
-        ).shouldBeInstanceOf<LinkResult.Connected>()
-
-        (1..3).forEach(source::emit)
-        sink.received.shouldBeEmpty()
-        world.runToIdle()
-
-        sink.received shouldBe listOf(1, 2, 3)
-        sink.frontier.unmatchedDrops shouldBe 0L
-
-        val control = SimWorld()
-        val routedSource = PropagateSource()
-        val routedSink = GlitchPropagateSink()
-        control.host.managementInlet.call.spawn(routedSource)
-        control.host.managementInlet.call.spawn(routedSink)
-        val routed = RoutedPropagate<Int>(
-            routedSink.ref,
-            "inlet",
-            InvocationSink(control.registry::deliver),
-        )
-        val sourceId = UUID.randomUUID()
-        (1..3).forEach { value ->
-            CurrentContext.with(
-                MessageContext(Timestamp(sourceId, value.toLong()), routedSource.outlet.ref),
-            ) {
-                routed.propagate(value)
-            }
-        }
-        control.runToIdle()
-
-        routedSink.received.shouldBeEmpty()
-        routedSink.frontier.unmatchedDrops shouldBe 3L
-    }
-
-    @Test
     fun `catch-up is staged from the first installed delivery`() {
         val world = SimWorld()
         val source = PropagateSource()
-        val sink = GlitchPropagateSink()
+        val sink = PropagateSink()
         source.outlet.catchUpOnLinked { 42 }
         world.host.managementInlet.call.spawn(source)
         world.host.managementInlet.call.spawn(sink)
@@ -274,11 +222,11 @@ class LinkOptionsTest {
     }
 
     @Test
-    fun `an Observe option is negotiated recorded and excluded from the frontier`() {
+    fun `an Observe option is negotiated and recorded`() {
         val world = SimWorld()
         val consumer = ConsumerSource()
         val observer = ConsumerSource()
-        val sink = GlitchConsumerSink()
+        val sink = EventConsumerSink()
         world.host.managementInlet.call.spawn(consumer)
         world.host.managementInlet.call.spawn(observer)
         world.host.managementInlet.call.spawn(sink)

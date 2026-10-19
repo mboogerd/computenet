@@ -6,31 +6,23 @@ import civictech.cell.Consumer
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
-import civictech.cell.consistency.GlitchFreeCell
-import civictech.cell.consistency.WaveFrontier
 import civictech.cell.proxy.Invocation
-import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.*
 
 /**
- * PN-9: the inlet policy chain. Fixed tiers ADMIT → ALIGN → ACTIVATE run
- * in tier order regardless of install order; at most one ALIGN; a dropping ADMIT
- * that does not mint a Progress absorb-ack (the CP-A3 law) stalls a downstream
- * ALIGN frontier.
+ * PN-9: the inlet policy chain. Fixed tiers ADMIT → ACTIVATE run in tier
+ * order regardless of install order.
  *
  * The harness is a two-arm diamond feeding one policy-gated inlet: a shared
- * source (srcId, n) fans through relay A and relay B, each re-stamping its own
- * outlet as `sourcePort` while keeping the wave timestamp — so the frontier sees
- * two edges of the same wave, exactly as a real fan-in join does.
+ * source fans through relay A and relay B into the same policy-gated inlet.
  *
  * [HoldingProbe] is a local, test-only ADMIT-tier double (the production
  * GATE tier of `PolicyTier` this stress-test originally exercised via `Gate`
  * had zero production installs and was deleted, T03) that holds invocations
  * FIFO and releases them on demand — kept here only to exercise
- * multi-ADMIT-tier chain composition (two ADMIT-tier stages plus one ALIGN)
+ * multi-ADMIT-tier chain composition (two ADMIT-tier stages)
  * and to confirm install-order independence still holds with more than one
  * ADMIT policy.
  */
@@ -121,7 +113,6 @@ class InletPolicyStackTest {
         val policies: Map<String, InletPolicy> = mapOf(
             "admit" to admit(mintsProgressAck, dropB),
             "hold" to hold,
-            "align" to WaveFrontier(GlitchFreeCell.WaveMode.WAIT),
         )
         order.forEach { inlet.install(policies.getValue(it)) }
 
@@ -144,7 +135,7 @@ class InletPolicyStackTest {
         return out
     }
 
-    /** The glitch-free reference: per wave, the admitted arm-label set, waves in counter order. */
+    /** Per input, the admitted arm-label set. */
     private fun reference(waves: Int, dropB: (Int) -> Boolean): Map<Long, Set<String>> =
         (1..waves).associate { n ->
             n.toLong() to (if (dropB(n)) setOf("A") else setOf("A", "B"))
@@ -154,15 +145,12 @@ class InletPolicyStackTest {
         obs.groupBy { it.counter }.mapValues { (_, v) -> v.map { it.label }.toSet() }
 
     @Test
-    fun `ADMIT (plus a holding ADMIT double) + ALIGN stack equals the tiers applied in series`() {
+    fun `ADMIT plus a holding ADMIT double equals the policies applied in series`() {
         val waves = 40
         val dropB = { n: Int -> n % 5 == 0 }
         for (seed in 0L until 100L) {
-            val obs = run(seed, waves, listOf("admit", "hold", "align"), dropB = dropB)
+            val obs = run(seed, waves, listOf("admit", "hold"), dropB = dropB)
             byWave(obs) shouldBe reference(waves, dropB)
-            // glitch-free ordering: waves surface in non-decreasing counter order
-            val counters = obs.map { it.counter }
-            counters shouldBe counters.sorted()
         }
     }
 
@@ -171,12 +159,8 @@ class InletPolicyStackTest {
         val waves = 40
         val dropB = { n: Int -> n % 7 == 0 }
         val perms = listOf(
-            listOf("admit", "hold", "align"),
-            listOf("align", "hold", "admit"),
-            listOf("hold", "admit", "align"),
-            listOf("align", "admit", "hold"),
-            listOf("admit", "align", "hold"),
-            listOf("hold", "align", "admit"),
+            listOf("admit", "hold"),
+            listOf("hold", "admit"),
         )
         for (seed in 0L until 100L) {
             val outputs = perms.map { byWave(run(seed, waves, it, dropB = dropB)) }
@@ -184,72 +168,4 @@ class InletPolicyStackTest {
         }
     }
 
-    @Test
-    fun `installing a second ALIGN policy throws`() {
-        val inlet = FanInlet(consumerPair)
-        inlet.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
-        shouldThrow<IllegalArgumentException> {
-            inlet.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
-        }
-    }
-
-    @Test
-    fun `computenet-sdqq7 - a throwing attach during install leaves the inlet unchanged, so a later ALIGN install still succeeds`() {
-        val inletA = FanInlet(consumerPair)
-        val inletB = FanInlet(consumerPair)
-        val bare = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
-        inletA.install(bare)
-
-        // The bare frontier cannot silently span a second inlet (WaveFrontier.attach,
-        // mirrored by WaveFrontierMultiInletTest case 4) — this is the reachable
-        // attach-throw that the pre-fix install() ordering mishandled.
-        val error = shouldThrow<IllegalStateException> { inletB.install(bare) }
-        error.message!! shouldContain "arm()"
-
-        // Red under the old stages += stage / policy.attach / rewire() ordering:
-        // the rejected stage stayed in inletB's stage list even though attach
-        // threw, so this install used to fail "at most one ALIGN policy per
-        // inlet" instead of succeeding.
-        val fresh = WaveFrontier(GlitchFreeCell.WaveMode.WAIT)
-        inletB.install(fresh)
-        inletB.hasPolicy(PolicyTier.ALIGN) shouldBe true
-
-        // fresh genuinely occupies inletB's one ALIGN slot — not a leftover of
-        // the rejected bare frontier — so a further ALIGN install is rejected
-        // for the ordinary "at most one" reason, not the bug's leftover.
-        shouldThrow<IllegalArgumentException> {
-            inletB.install(WaveFrontier(GlitchFreeCell.WaveMode.WAIT))
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Control (b): the CP-A3 law. A dropping ADMIT above an ALIGN must mint a
-    // Progress absorb-ack, or the dropped edge never settles and its wave stalls.
-    // ------------------------------------------------------------------
-
-    @Test
-    fun `a dropping ADMIT that mints a progress ack releases every wave`() {
-        val waves = 30
-        val dropB = { n: Int -> n % 4 == 0 }
-        for (seed in 0L until 50L) {
-            val obs = run(seed, waves, listOf("admit", "align"), mintsProgressAck = true, dropB = dropB)
-            byWave(obs) shouldBe reference(waves, dropB)
-        }
-    }
-
-    @Test
-    fun `control - a dropping ADMIT without a progress ack stalls the downstream ALIGN`() {
-        val waves = 20
-        // Drop only the FINAL wave's B arm: nothing arrives on that edge after it,
-        // so the "later wave / monotone max" watermark advance can never rescue it.
-        // The ONLY thing that can settle the dropped edge is the CP-A3 Progress ack.
-        val dropLast = { n: Int -> n == waves }
-        val healthy = run(3L, waves, listOf("admit", "align"), mintsProgressAck = true, dropB = dropLast)
-        val stalled = run(3L, waves, listOf("admit", "align"), mintsProgressAck = false, dropB = dropLast)
-        // with the ack, the final (dropped-B) wave still releases — arm A only
-        byWave(healthy).keys.contains(waves.toLong()) shouldBe true
-        // without it, the dropped edge never settles and no later wave rescues it: stall
-        byWave(stalled).keys.contains(waves.toLong()) shouldBe false
-        byWave(stalled).size shouldBe (byWave(healthy).size - 1)
-    }
 }

@@ -82,8 +82,8 @@ data class WireFrame(
      * version bump, the encoding stays backward-compatible. [protocolId]
      * names the well-known protocol (`ProtocolRegistry`); [edge] identifies
      * the logical link on each side's own bookkeeping (the id need not
-     * match cross-host — every consumer keys off its own copy,
-     * `Attention.linkLevels`/`GlitchFreeCell.edges`) and carries both
+     * match cross-host — every consumer keys off its own copy, for example
+     * `Attention.linkLevels`) and carries both
      * endpoints' addressable (cell, port name) so a reply can route back
      * over the reverse bridge path (`PortRef` alone has no port name).
      */
