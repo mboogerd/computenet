@@ -63,12 +63,11 @@ class DenialDischargeReproTest {
     /**
      * `kernel/src/test/kotlin/civictech/cell/port/AdmitDischargeTest.kt`
      * already pins that a dropped `Owned` is discharged
-     * (`a dropped Owned-carrying invocation is discharged, not leaked`) and
-     * that `unackedDrops` counts a *missing-ack* edge case. What it does
-     * **not** cover, and what this test adds rather than duplicates:
+     * (`a dropped Owned-carrying invocation is discharged, not leaked`). What
+     * it does **not** cover, and what this test adds rather than duplicates:
      * `Leased` release in the same invocation, and — the literal wording of
      * BS-11 — that "the drop is counted in the tier's own accounting", i.e.
-     * `Admit`'s `onDrop` hook (`InletPolicy.kt:73`, `:111`), which
+     * `Admit`'s `onDrop` hook, which
      * `AdmitDischargeTest` never installs.
      */
     @Test

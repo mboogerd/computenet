@@ -24,7 +24,6 @@ import civictech.cell.port.PortRef
 import civictech.cell.protocol.ProtocolId
 import civictech.cell.control.Attention
 import civictech.cell.control.StallNotice
-import civictech.cell.control.Progress
 import civictech.cell.host.SaturationSignal
 import civictech.cell.host.TopologyLink
 import civictech.cell.proxy.HostedPortInvocation
@@ -248,7 +247,6 @@ object WireCodec {
                 subclass(Attention::class)
                 subclass(StallNotice.Stall::class)
                 subclass(StallNotice.Resume::class)
-                subclass(Progress::class)
                 subclass(SaturationSignal::class)
                 subclass(civictech.cell.protocol.EdgeOpen::class)
                 subclass(civictech.cell.protocol.EdgeClose::class)

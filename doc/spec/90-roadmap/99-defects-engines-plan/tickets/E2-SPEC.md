@@ -39,8 +39,8 @@ landed** via the archived composition run (tickets CP-A3/CP-A4,
 `doc/archive/runs/COMPOSITION-TICKETS.md`):
 
 - `kernel/src/main/kotlin/civictech/cell/control/AbsorbAck.kt:7-31` — a
-  `fun absorbAck()` on `FanOutlet` that sends `cell.control.Progress`
-  `(sourceId, thru)` down the outlet's links when a reactive wave is absorbed;
+  `fun absorbAck()` on `FanOutlet` that sends `Progress` (deleted by GFR.4,
+  computenet-ecd3i) `(sourceId, thru)` down the outlet's links when a reactive wave is absorbed;
   adopted across the operator suite (`FilterCell`, `SemiJoinCell`,
   `IntersectSetCell`, `GroupByCell`, `CombineLatestCell`, …, all under
   `kernel/src/main/kotlin/civictech/cell/data/op/`), tested by
