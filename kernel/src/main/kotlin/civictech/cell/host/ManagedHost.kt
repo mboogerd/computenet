@@ -2060,33 +2060,19 @@ open class ManagedHost(
                     // reason: it is a `PORT_API` emission in the *emitting* cell's
                     // own dispatch, and that branch installs nothing.
                     //
-                    // What this DOES newly cover is any emission a remote protocol
-                    // frame synchronously causes *inside* this frame, and there are
-                    // two shapes of that, not one:
+                    // What this DOES newly cover is an emission a remote protocol
+                    // frame synchronously causes *inside* this frame:
                     //  - a unicast reply to the asking peer — `pullServe`'s
                     //    `StateRequest` -> `baselineTo` (`CatchUp.kt`). Remote-
                     //    *triggered* by definition, and `Peer` is the honest
                     //    principal there: the identical reading the `onLinked`
                     //    catch-up already has one branch down (`PORT_MANAGEMENT`).
-                    //  - a *fan-out* the frame merely unblocks. A
-                    //    `Protocols.Progress` ack completing a wave in
-                    //    `CoalescingCombineCell`/`WaveGate` runs `flushReady()` ->
-                    //    `outlet.call.propagate(...)` on this thread, so a mediated
-                    //    outlet's `disclosureFilter` would evaluate under the
-                    //    *acking* peer, for a delta addressed to every attached
-                    //    observer rather than to that peer.
-                    // The second shape is DECIDED (`computenet-usd.8`, 2026-08-16):
-                    // a fan-out carries `Principal.LocalTrusted`. The acking peer is
-                    // one arm's upstream producer — neither requester nor recipient
-                    // — and the emission has no single rightful principal at all,
-                    // since each attachment that is itself remote is stamped at its
-                    // own ingress a hop further down. The reset lives at the
-                    // fan-out (`FanOutlet.call` runs its broadcast loops under
-                    // `CurrentPeer.with(null)`), NOT here: narrowing this frame
-                    // would also take the unicast reply above, which is genuinely
-                    // addressed to the asking peer and must keep `Peer`. Both
-                    // halves are pinned by
-                    // `civictech.cell.membrane.PeerUnblockedFanOutPrincipalTest`.
+                    // A former second shape — a protocol frame synchronously
+                    // unblocking a gated fan-out — was retired with the wave gates.
+                    // `FanOutlet.call` still resets broadcasts to
+                    // `Principal.LocalTrusted`; GFR.4 owns whether absorb-ack
+                    // cleanup removes more of that protocol surface, and no
+                    // surviving fixture pins the removed trigger.
                     // What stays open is per-*recipient* disclosure — 93 I-28 §8
                     // cross-hop composition, outside SEC1, incompatible with
                     // `[SEC1-19]`'s single shared verdict as landed

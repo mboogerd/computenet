@@ -71,23 +71,18 @@ import java.io.Serializable
  * **The outcome that holds is: not fixed, and deliberately so** — computenet-gff7's first
  * acceptance clause offered "register a `Scalar`-consuming operator, or record the decision not
  * to", and this is that record. A scalar edge in this catalog carries
- * `Propagate<CounterDelta>`, and exactly ONE cell in the kernel serves that type on an inlet:
- * `CoalescingCombineCell` (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
- * `inlet: Serve<Propagate<CounterDelta>>`). Every other operator inlet under
- * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`; `CounterCell.inlet` is
- * `Use<CounterOps>` and `PnCounterCell.deltaInlet` is the replication seam, not an operator
- * input. And that one cell is **excluded by this very ledger**, in its own entry below, for a
- * reason that has not weakened: its observable is a wave-completion fold the script vocabulary
- * cannot name.
+ * `Propagate<CounterDelta>`. Since GFR.3 retired the former scalar-combining operator, **no
+ * kernel cell serves `Propagate<CounterDelta>` on an inlet** (observed:
+ * `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main` is empty).
+ * `CounterCell.inlet` is `Use<CounterOps>` and `PnCounterCell.deltaInlet` is the replication
+ * seam, not an operator input.
  *
  * That is why this note belongs here rather than under "unreachable by shape-typed generation"
  * above. That class is a generator-coverage defect repaired by changing the generator; this one
  * cannot be repaired that way at all. The generator is behaving correctly — there is genuinely
- * nothing to link a counter into — and the only in-catalog repairs are to register the cell
- * this ledger excludes (writing the batch model the exclusion exists to forbid) or to add a new
- * kernel cell to `civictech.cell.data.op` existing solely so the oracle has a scalar consumer.
- * It is an exclusion's consequence, not an independent oversight, which makes it this ledger's
- * subject by transitivity. Contrast the pair-shaped hole, which *was* repairable in-catalog:
+ * nothing to link a counter into — and the only in-catalog repair is to add a new kernel cell to
+ * `civictech.cell.data.op` existing solely so the oracle has a scalar consumer. Contrast the
+ * pair-shaped hole, which *was* repairable in-catalog:
  * `keyBy` reuses an already-registered cell (`FlatMapSetCell`) and an already-registered model,
  * adding only a function. No such reuse exists for `Scalar`.
  *
@@ -212,27 +207,6 @@ import java.io.Serializable
  *   `WaterlineChurnTest` pins).
  *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
  *   not touch lateness.
- *
- * - **`CoalescingCombineCell`.** Named in epic §3.1's inventory but not in `ORA1 §MODEL-02`'s
- *   minimum list; **excluded**, per the bead's default direction. Verified against its own
- *   KDoc (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`): the cell's
- *   whole reason to exist is a **wave-completion fold** — buffering each in-flight wave's
- *   per-arm contributions against a completeness condition computed from open/closed
- *   `Consume` edges, per-edge per-source watermarks, and per-source flushed high-water marks —
- *   none of which the reference model's script vocabulary ([Script], [ScriptEvent]) can even
- *   *name*: there is no edge, no wave, no link-open/close event a script can carry. That is
- *   not merely "the model ignores WHEN" (the reasoning for ordinary incremental operators,
- *   where WHEN and WHAT are genuinely independent): here WHETHER a contribution is ever counted
- *   depends on completion
- *   the model has no way to verify, and the cell's own KDoc documents a case where completion
- *   never happens for a given contribution — `onDeactivate` "drops" the transient version
- *   buffer on restart, so *"a partially collected wave was never observed downstream"*. A
- *   script-only reference has no restart, no edge, and no wave-completion event to decide
- *   whether a given contribution's wave ever completes, so it cannot honestly certify what
- *   this cell's quiescent total is — approximating it as a plain sum-of-contributions would be
- *   silently assuming the very completeness condition the model cannot check.
- *   *DISPUTES audit: no filing.* What is absent here is a *batch* check of this retired-by-GFR.3
- *   wave-completion behavior, which is this ledger's subject rather than an open runtime gap.
  *
  * - **`WatermarkCell`.** (computenet-fx5b, resolving the pointer this bullet used to be.)
  *   Verified against its own KDoc

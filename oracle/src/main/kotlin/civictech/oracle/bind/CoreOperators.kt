@@ -247,23 +247,17 @@ object CoreOperators {
          * acceptance clause offers exactly this fork). Closing it needs a registered operator
          * consuming `Scalar`, and a scalar edge in this catalog carries
          * `Propagate<CounterDelta>` — the type `CounterCell.outlet`, `PnCounterCell.outlet`
-         * (as `PnCounterDelta`) and `CountCell.outlet` emit. Exactly ONE cell in the whole
-         * kernel serves that type on an inlet: `CoalescingCombineCell`
-         * (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
-         * `inlet: Serve<Propagate<CounterDelta>>`); every other operator inlet under
-         * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`. And that one cell is
-         * already **excluded by name** from the vocabulary by the `ORA1 §HONEST-02` ledger in
-         * `civictech.oracle.model.MapCellModel`'s file KDoc, because its observable is a
-         * wave-completion fold the script vocabulary cannot name — a batch model of it would
-         * silently assume the completeness condition it cannot check.
+         * (as `PnCounterDelta`) and `CountCell.outlet` emit. Since GFR.3 retired the former
+         * scalar-combining operator, no kernel cell serves `Propagate<CounterDelta>` on an
+         * inlet (observed: `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main`
+         * is empty).
          *
          * So the scalar hole is not the pair-shaped hole computenet-4ru.16 closed. That one was
          * repairable inside the catalog: `keyBy` reuses an already-registered kernel cell
          * (`FlatMapSetCell`) and an already-registered model, adding only a function. There is
          * no such reuse here — a scalar consumer would have to be a NEW kernel cell in
-         * `civictech.cell.data.op`, written for the oracle's benefit and used by nothing else,
-         * or the one existing cell whose exclusion is already reasoned and pinned. Registering
-         * either would trade a *visible* coverage gap for a dishonest green.
+         * `civictech.cell.data.op`, written for the oracle's benefit and used by nothing else.
+         * Registering it would trade a *visible* coverage gap for a dishonest green.
          *
          * `counter`/`pnCounter` therefore stay registered — the pairing is real and
          * `CounterSourceModel`/`PnCounterSourceModel` remain the reference a future consumer
@@ -307,8 +301,8 @@ object CoreOperators {
          * `MapCellSourceModel.MultiWriterMapSliceException` for an out-of-band multi-writer
          * slice rather than returning a guessed winner. See `MapCellModel.kt`'s KDoc for the
          * full reasoning and for the honesty-ledger exclusions this task also closes out
-         * (`ListCell`, `OrMapCell`, `MergeableGroupByCell`, window close/eviction,
-         * `CoalescingCombineCell`; `ORA1 §HONEST-02`). */
+         * (`ListCell`, `OrMapCell`, `MergeableGroupByCell`, window close/eviction;
+         * `ORA1 §HONEST-02`). */
         OperatorCatalog.register(
             id = Ids.MAP,
             shape = ShapeRule.source(SCALAR_MAP),

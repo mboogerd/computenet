@@ -1,10 +1,7 @@
 package civictech.cell.data.op
 
 import civictech.cell.BoundedStateful
-import civictech.cell.CellContext
 import civictech.cell.CellRef
-import civictech.cell.CurrentContext
-import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -89,27 +86,12 @@ interface IntersectSetApi<E> {
  * no use for. It shares both [JoinLedger] and, since computenet-vvre, its
  * [MintedLedger] policy.
  *
- * ### `emitOnFrontier` — the opt-in flicker gate (KE2 §5.2, `computenet-0favn`)
- *
- * Intersection membership flips ON when the *other* side adds and OFF when
- * either side deletes, so in a shared-source diamond one arm's add and the
- * other arm's opposing del of the same element within one wave make it enter
- * and exit on two separate invocations. With `emitOnFrontier = true` the cell
- * buffers each wave's input deltas across both inlets ([WaveGate]), folds them
- * into both [TagState]s at wave completeness, and reconciles every touched
- * element **once** against both settled sides — the `[24-OP-SEMIJOIN-04]`
- * shape, extended to this cell. A transient entry is never minted, so no tag
- * that never reached the wire is tombstoned, and a wave whose net effect is
- * empty absorb-acks. Read [SemiJoinCell]'s `emitOnFrontier` section and
- * [WaveGate]'s phantom-expected-edge and "One root is NOT sufficient" caveats
- * before enabling it; the default stays ungated and byte-identical.
- *
  * ### Lateness: the `waterline` inlet and the `lateLeft`/`lateRight` outlets (KE4.5)
  *
  * Constructed with a [Windows.Lateness] on either or both sides, the cell
  * tracks one event-time floor delivered on [waterline] and guards each
- * declaring inlet at **arrival**, before the [WaveGate] offer on the gated
- * path as on the ungated one: an add whose `timeFn(element)` is strictly below
+ * declaring inlet at **arrival**, before folding: an add whose
+ * `timeFn(element)` is strictly below
  * the floor is excluded from the fold and leaves verbatim — tags preserved —
  * on that side's late outlet ([lateLeft]/[lateRight]), counted in
  * [droppedBelowFloorLeft]/[droppedBelowFloorRight] whether or not the outlet
@@ -149,36 +131,14 @@ interface IntersectSetApi<E> {
  * **Per-element exclusive refusal (`[24-WL-17]`).** A passed element that is
  * itself `Owned`/`Leased` is left live, untouched and undischarged, recorded
  * as an [ExclusiveEvictionRefused] (unit `"row"`) in [refusedRows] (replaced
- * on every rise, and appended to by a gated flush that keeps one — see
- * [sinceArrival]) and counted in [refusedEvictions]; every other passed
+ * on every rise) and counted in [refusedEvictions]; every other passed
  * element still evicts in the same delta, and every later rise re-evaluates
  * it. Only a top-level exclusive element is detected (computenet-woto).
- *
- * **The waterline is not gated (3vd7k-D9).** With `emitOnFrontier = true` the
- * eviction is still applied and emitted on the `WaterlineDelta`'s own
- * delivery, while buffered data waves stay buffered. A buffered wave's adds
- * were late-split against the floor they *arrived* under; any a later rise
- * has passed by flush are evicted before they land
- * ([WaterlineEviction.dropPassedAdds]) — admitted, so not forwarded late —
- * which is the ungated cell's admit-then-evict under the same arrival order.
- * An exclusive element kept at flush because it cannot be evicted is recorded
- * as an [ExclusiveEvictionRefused] immediately, in the same flush, rather than
- * waiting for the next rise (`[24-WL-17]`, computenet-7y4sm) — the gated cell
- * and the ungated one agree on `refusedRows()` at quiescence with no further
- * floor rise, matching `[24-WL-10]`. `refusedEvictions` agrees when one rise
- * passed the buffered add; when several did, the ungated cell counts one per
- * rise and the gated cell one at flush.
  *
  * **Single-instance only (`[24-WL-18]`)**, checked in [WaterlineEviction.evict].
  */
 class IntersectSetCell<E>(
     ref: CellRef = CellRef(UUID.randomUUID()),
-    /**
-     * Opt-in frontier-gated emission (`[24-OP-SEMIJOIN-04]`'s shape, KE2 §5.2) —
-     * see the class KDoc. `false` (the default) is the shipped, ungated
-     * behavior, unchanged.
-     */
-    emitOnFrontier: Boolean = false,
     /** The left inlet's lateness declaration (`[24-WL-01]`); `null` = never guarded, never evicted (`[24-WL-16]`). */
     private val leftLateness: Windows.Lateness<E>? = null,
     /** The right inlet's lateness declaration; `null` = never guarded, never evicted. */
@@ -186,21 +146,11 @@ class IntersectSetCell<E>(
 ) :
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
     // added beside the drain/migration/promotion/durability seam, untouched.
-    IntersectSetCellBase<E>(ref), Stateful, BoundedStateful, FrontierGateable {
+    IntersectSetCellBase<E>(ref), Stateful, BoundedStateful {
     private val leftState = TagState<E>()
     private val rightState = TagState<E>()
     // minted, not advertised — see the tag-policy section on this class's KDoc
     private val ledger: JoinLedger<E> = MintedLedger(ref, "intersect")
-
-    override val frontierGated: Boolean = emitOnFrontier
-
-    /** The `emitOnFrontier` fold, or null when the cell runs the ungated default. */
-    private val gate: WaveGate<E>? =
-        if (!emitOnFrontier) null
-        else WaveGate(left, right) { timestamp, context, folds -> flush(timestamp, context, folds) }
-
-    /** Waves currently held by the gate; always 0 when ungated. Diagnostic only. */
-    val bufferedWaves: Int get() = gate?.bufferedWaves ?: 0
 
     /** The event-time floor (`[24-WL-02]`); `null` is the identity — nothing is below it. */
     private var floor: Long? = null
@@ -218,10 +168,10 @@ class IntersectSetCell<E>(
 
     private var refused: List<ExclusiveEvictionRefused> = emptyList()
 
-    /** The passed elements refused eviction on the latest rise, plus any a gated flush kept since, because they are exclusive (`[24-WL-17]`). Not snapshotted. */
+    /** The passed elements refused eviction on the latest rise because they are exclusive (`[24-WL-17]`). Not snapshotted. */
     fun refusedRows(): List<ExclusiveEvictionRefused> = refused
 
-    /** Cumulative count of per-element eviction refusals, one per refused element per rise and one per exclusive element a gated flush keeps. A counter, not state. */
+    /** Cumulative count of per-element eviction refusals, one per refused element per rise. A counter, not state. */
     var refusedEvictions: Long = 0
         private set
 
@@ -243,14 +193,9 @@ class IntersectSetCell<E>(
     }
 
     override fun onLeft(value: SetDelta<E>) {
-        // [24-WL-07] guard at arrival, before the gate offer (3vd7k-D4)
+        // [24-WL-07] guard at arrival (3vd7k-D4)
         val admitted = guardLeft(value)
         lateRight.absorbAck() // every delivery acks both late outlets, so a linked consumer's frontier advances
-        if (gate?.offerLeft(GatedFold { applySide(leftState, sinceArrival(admitted, leftLateness)) }) == true) return
-        // The ungated path below is the shipped handler verbatim, so `emitOnFrontier =
-        // false` stays byte-identical. A gated cell also lands here for a delta
-        // the gate admits to no completeness set (catch-up, straggler, unmatched
-        // edge): applying and reconciling it immediately is exactly right.
         val adds = mutableMapOf<E, Set<Timestamp>>()
         val dels = mutableMapOf<E, Set<Timestamp>>()
         foldEffective(leftState.apply(admitted), adds, dels)
@@ -264,8 +209,6 @@ class IntersectSetCell<E>(
     override fun onRight(value: SetDelta<E>) {
         val admitted = guardRight(value)
         lateLeft.absorbAck()
-        if (gate?.offerRight(GatedFold { applySide(rightState, sinceArrival(admitted, rightLateness)) }) == true) return
-        // ungated (or gate-exempt) — the shipped handler verbatim; see [onLeft].
         val adds = mutableMapOf<E, Set<Timestamp>>()
         val dels = mutableMapOf<E, Set<Timestamp>>()
         foldEffective(rightState.apply(admitted), adds, dels)
@@ -345,29 +288,6 @@ class IntersectSetCell<E>(
         return admitted
     }
 
-    /**
-     * Gated flush only: evict the adds of a buffered, arrival-admitted delta
-     * that a floor rise has passed since it arrived (see
-     * [WaterlineEviction.dropPassedAdds]). An exclusive element kept despite
-     * having passed is recorded as an immediate `[24-WL-17]` refusal — appended
-     * to [refused] and counted in [refusedEvictions] right here at flush,
-     * rather than left to the next floor rise's [onFloorRaised] to discover
-     * (computenet-7y4sm: the gated cell must agree with the ungated one at
-     * quiescence, per `[24-WL-10]`). The identity without a floor or without
-     * this side's declaration.
-     */
-    private fun sinceArrival(value: SetDelta<E>, lateness: Windows.Lateness<E>?): SetDelta<E> {
-        val current = floor
-        if (lateness == null || current == null) return value
-        val (kept, refusedElements) = WaterlineEviction.dropPassedAdds(lateness, current, value)
-        if (refusedElements.isNotEmpty()) {
-            val newlyRefused = refusedElements.map { ExclusiveEvictionRefused(ref, it, 1, unit = "row") }
-            refused = refused + newlyRefused
-            refusedEvictions += newlyRefused.size
-        }
-        return kept
-    }
-
     private fun onWaterline(delta: WaterlineDelta) {
         checkNotNull(leftLateness ?: rightLateness) {
             "IntersectSetCell $ref: waterline linked on a cell constructed without lateness"
@@ -416,50 +336,6 @@ class IntersectSetCell<E>(
         )
         lateLeft.absorbAck()
         lateRight.absorbAck()
-    }
-
-    // ---- the emitOnFrontier path: apply now, reconcile at completeness ----
-
-    /**
-     * Fold one side's delta into its [TagState] **without** reconciling; returns
-     * the elements the completed wave must reconcile. Identity matching means
-     * the touched set is just the effective delta's elements, whichever order
-     * the wave's folds apply in.
-     */
-    private fun applySide(side: TagState<E>, value: SetDelta<E>): Set<E> {
-        val effective = side.apply(value)
-        return effective.adds.keys + effective.dels.keys
-    }
-
-    /**
-     * One completed wave (gated only): apply both sides' buffered deltas, then
-     * reconcile each touched element once against both settled sides — so a
-     * transient enter-then-exit cancels before a tag is minted. Emitted inside
-     * the buffered context (or, for a wave known only from acks, one minted
-     * from the wave position), as [SemiJoinCell]'s flush.
-     */
-    private fun flush(timestamp: Timestamp, context: MessageContext?, folds: List<GatedFold<E>>) {
-        val touched = LinkedHashSet<E>()
-        folds.forEach { touched += it.applyAndTouch() }
-        val adds = mutableMapOf<E, Set<Timestamp>>()
-        val dels = mutableMapOf<E, Set<Timestamp>>()
-        touched.forEach { element -> reconcile(element, adds, dels) }
-        CurrentContext.with(context ?: MessageContext(timestamp, outlet.ref)) {
-            emitOrAbsorb(
-                adds.isEmpty() && dels.isEmpty(),
-                emit = { outlet.call.propagate(SetDelta(adds, dels)) },
-                absorbAck = { outlet.absorbAck() },
-            )
-        }
-    }
-
-    /**
-     * RESTART re-enters by catch-up, not restore (93 I-18): the gate's transient
-     * wave buffer is dropped — its deltas were never applied to either side's
-     * membership and never observed downstream.
-     */
-    override fun onDeactivate(ctx: CellContext) {
-        gate?.clear()
     }
 
     // A lateness-declaring cell appends its floor as a fourth element (3vd7k-D7,
