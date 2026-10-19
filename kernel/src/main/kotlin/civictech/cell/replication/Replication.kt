@@ -1061,8 +1061,8 @@ class Replication(
      * candidate that REUSES the incumbent's ref makes the swap indistinguishable
      * from **crash-recovery**, and that is the mechanism: peers' inbound gossip
      * links keep resolving to the ref (now the candidate) with no re-link, this
-     * peer's delivered-watermark companion (and its row) is retained so a
-     * downstream replica-frontier read never sees the member vanish, and the
+     * peer's delivered-watermark companion (and its row) is retained so the
+     * causal-stability read never sees the member vanish, and the
      * candidate re-syncs by the same anti-entropy catch-up a recovered replica
      * uses. The surviving replicas on other peers play the retained incumbent —
      * the state source — so no cross-peer coordination is needed. Set-atomic

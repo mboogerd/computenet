@@ -1977,7 +1977,7 @@ open class ManagedHost(
         return AttentionSupport.of(cell).band
     }
 
-    // suspensionRegionOf, hasFrontierPolicy, bfs, notifyDownstream: moved to
+    // suspensionRegionOf, bfs, notifyDownstream: moved to
     // TopologyWalks.kt (RS-8.4) — same package, so every existing bare call
     // site (notifyDownstream(...) below and in deliver()/resume()/suspend())
     // still resolves unchanged; suspensionRegionOf is wired into
