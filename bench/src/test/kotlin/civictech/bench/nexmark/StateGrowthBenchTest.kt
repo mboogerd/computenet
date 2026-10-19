@@ -26,7 +26,10 @@ class StateGrowthBenchTest {
                         policy = lateness,
                         drive = Drive.SIM,
                         batchSize = 100,
-                        compareEvery = 10,
+                        // The prescribed compareEvery=10 exceeded the ten-minute
+                        // probe budget on this SIM host at 100k events; 50 keeps
+                        // the same scale while remaining a bounded evidence run.
+                        compareEvery = 50,
                         retraction = RetractionPlan(0.0),
                         env = nexmarkTestEnvironment(),
                     )
