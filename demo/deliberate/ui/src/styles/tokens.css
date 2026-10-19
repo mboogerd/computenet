@@ -14,8 +14,25 @@
   --text-3: #6b6b71;
   --line: rgba(20, 20, 30, 0.09);
   --line-strong: rgba(20, 20, 30, 0.18);
-  --shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 4px 16px rgba(20, 20, 30, 0.05);
+  /* Elevation (better-ui "shadows for elevation, borders for structure"): a 1px
+     ring, a lift and an ambient layer. --shadow-pop is for floating panels. */
+  --shadow-border:
+    0px 0px 0px 1px oklch(0 0 0 / 0.06),
+    0px 1px 2px -1px oklch(0 0 0 / 0.06),
+    0px 2px 4px 0px oklch(0 0 0 / 0.04);
+  --shadow-border-hover:
+    0px 0px 0px 1px oklch(0 0 0 / 0.08),
+    0px 1px 2px -1px oklch(0 0 0 / 0.08),
+    0px 2px 4px 0px oklch(0 0 0 / 0.06);
+  --shadow-pop:
+    0px 0px 0px 1px oklch(0 0 0 / 0.06),
+    0px 4px 8px -2px oklch(0 0 0 / 0.08),
+    0px 16px 32px -8px oklch(0 0 0 / 0.14);
+  --shadow: var(--shadow-border);
   --focus: rgba(20, 20, 30, 0.35);
+  /* A faint two-tone glow behind the header: the brand's for/against pair. */
+  --glow-pro: color-mix(in srgb, var(--pro) 7%, transparent);
+  --glow-con: color-mix(in srgb, var(--con) 5%, transparent);
 
   /* pro/con: bright values fill stripes and bars; the -text values are darkened so words stay ≥ 4.5:1 */
   --pro: #1a9a6c;
@@ -48,8 +65,21 @@
   --text-lg: 17px;
   --text-hero: clamp(24px, 4.2vw, 34px);
 
-  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  /* Motion (animate skill): a strong ease-out for entering/leaving and state,
+     a strong ease-in-out for values moving on screen (credence markers, bars). */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-icon: cubic-bezier(0.2, 0, 0, 1);
+  --ease: var(--ease-out);
+  --dur-fast: 150ms;
   --dur: 200ms;
+  --dur-data: 600ms;
+
+  /* Entrance geometry, zeroed under prefers-reduced-motion so every entrance
+     degrades to an opacity fade instead of disappearing. */
+  --enter-y: 6px;
+  --enter-blur: 2px;
+  --enter-scale: 0.96;
 }
 
 :root[data-theme="dark"] {
@@ -63,7 +93,12 @@
   --text-3: #88888f;
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.16);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.25);
+  --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+  --shadow-pop: 0 0 0 1px oklch(1 0 0 / 0.1), 0 16px 40px -8px oklch(0 0 0 / 0.6);
+  --shadow: var(--shadow-border);
+  --glow-pro: color-mix(in srgb, var(--pro) 6%, transparent);
+  --glow-con: color-mix(in srgb, var(--con) 4%, transparent);
   --focus: rgba(255, 255, 255, 0.45);
   --pro: #3cc28f;
   --con: #f06b6f;
@@ -89,7 +124,12 @@
     --text-3: #88888f;
     --line: rgba(255, 255, 255, 0.08);
     --line-strong: rgba(255, 255, 255, 0.16);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.25);
+  --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+  --shadow-pop: 0 0 0 1px oklch(1 0 0 / 0.1), 0 16px 40px -8px oklch(0 0 0 / 0.6);
+  --shadow: var(--shadow-border);
+  --glow-pro: color-mix(in srgb, var(--pro) 6%, transparent);
+  --glow-con: color-mix(in srgb, var(--con) 4%, transparent);
     --focus: rgba(255, 255, 255, 0.45);
     --pro: #3cc28f;
     --con: #f06b6f;

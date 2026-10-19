@@ -20,6 +20,17 @@ import StatusPip from './components/StatusPip';
 import Toasts from './components/Toasts';
 import EmptyState from './components/EmptyState';
 import Legend from './components/Legend';
+import LoadingState from './components/LoadingState';
+import {
+  AgoraMark,
+  AlertIcon,
+  DebateIcon,
+  MapIcon,
+  MoonIcon,
+  MotionOffIcon,
+  MotionOnIcon,
+  SunIcon,
+} from './components/Icons';
 import { theme, motion, toggleTheme, toggleMotion, initPrefs } from './solid/prefs';
 import './app.css';
 
@@ -53,35 +64,70 @@ export default function App() {
   return (
     <div class="app">
       <header class="app-header">
-        <h1>agora</h1>
+        <div class="app-brand">
+          <AgoraMark />
+          <h1>agora</h1>
+        </div>
         <span class="app-tagline">argue, attack the argument, or attack the attack</span>
         <StatusPip />
         <div class="app-header__spacer" />
         <ActivityTicker />
-        <div class="mode-toggle" role="tablist">
-          <button classList={{ active: mode() === 'debate' }} onClick={() => setMode('debate')}>
+        <div class="mode-toggle segmented" role="tablist" aria-label="View">
+          <button
+            role="tab"
+            aria-selected={mode() === 'debate'}
+            classList={{ active: mode() === 'debate' }}
+            onClick={() => setMode('debate')}
+          >
+            <DebateIcon size={14} />
             Debate
           </button>
-          <button classList={{ active: mode() === 'map' }} onClick={() => setMode('map')}>
+          <button
+            role="tab"
+            aria-selected={mode() === 'map'}
+            classList={{ active: mode() === 'map' }}
+            onClick={() => setMode('map')}
+          >
+            <MapIcon size={14} />
             Map
           </button>
         </div>
-        <button class="icon-btn" title="Toggle light / dark" onClick={toggleTheme}>
-          {theme() === 'dark' ? '☀ Light' : '☾ Dark'}
+        <button
+          class="icon-btn pressable"
+          title={theme() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          aria-label={theme() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          onClick={toggleTheme}
+        >
+          <span class="icon-swap" data-on={theme() === 'dark' ? 'a' : 'b'}>
+            <span class="icon-swap__a"><SunIcon /></span>
+            <span class="icon-swap__b"><MoonIcon /></span>
+          </span>
         </button>
-        <button class="icon-btn" title="Toggle animations" onClick={toggleMotion}>
-          {motion() ? 'Motion on' : 'Motion off'}
+        <button
+          class="icon-btn pressable"
+          title={motion() ? 'Animations on — click to turn off' : 'Animations off — click to turn on'}
+          aria-label="Animations"
+          aria-pressed={motion()}
+          onClick={toggleMotion}
+        >
+          <span class="icon-swap" data-on={motion() ? 'a' : 'b'}>
+            <span class="icon-swap__a"><MotionOnIcon /></span>
+            <span class="icon-swap__b"><MotionOffIcon /></span>
+          </span>
         </button>
         <AddClaim />
       </header>
 
       <Show when={conn() === 'reconnecting'}>
-        <div class="conn-banner">Connection lost — reconnecting…</div>
+        <div class="conn-banner" role="status">
+          <AlertIcon size={14} />
+          Connection lost — reconnecting…
+        </div>
       </Show>
 
       <div class="app-body">
         <main class="app-content">
-          <Show when={ready()} fallback={<p class="app-placeholder">Connecting…</p>}>
+          <Show when={ready()} fallback={<LoadingState />}>
             <Show when={!isEmpty()} fallback={<EmptyState />}>
               <Show when={mode() === 'map'} fallback={<DebateView />}>
                 <GraphCanvas />

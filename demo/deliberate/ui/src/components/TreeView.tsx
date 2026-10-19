@@ -76,7 +76,21 @@ export function TreeView(props: { graph: GraphDto; root: string; research?: bool
   });
 
   return (
-    <Show when={tree()} fallback={<p class="empty">Waiting for the question to appear…</p>}>
+    <Show
+      when={tree()}
+      fallback={
+        <div class="loading" aria-busy="true">
+          <p class="empty">Waiting for the question to appear…</p>
+          <div class="skel" aria-hidden="true">
+            <span class="skel__line skel__line--title" />
+            <span class="skel__line skel__line--gauge" />
+            <span class="skel__line skel__line--row" />
+            <span class="skel__line skel__line--row" />
+            <span class="skel__line skel__line--row" />
+          </div>
+        </div>
+      }
+    >
       <Show when={props.root} keyed>
         {(root) => <Question root={root} index={index} tree={tree} graph={() => props.graph} sel={sel} />}
       </Show>

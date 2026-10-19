@@ -47,7 +47,7 @@ export default function ColdScreen() {
             <p class="cold-banner__error">Wake failed — the graph is still parked.</p>
           </Show>
         </div>
-        <button class="cold-banner__wake" disabled={waking()} onClick={askToWake}>
+        <button class="cold-banner__wake pressable" disabled={waking()} onClick={askToWake}>
           {waking() ? 'Waking…' : 'Wake to inspect'}
         </button>
       </div>
@@ -87,10 +87,10 @@ function WakeDialog() {
           Resuming a drained host reactivates every cell it holds, including cells of other graphs.
         </p>
         <div class="cold-dialog__actions">
-          <button class="cold-dialog__cancel" onClick={cancelWake} autofocus>
+          <button class="cold-dialog__cancel pressable" onClick={cancelWake} autofocus>
             Cancel
           </button>
-          <button class="cold-dialog__confirm" onClick={wakeGraph}>
+          <button class="cold-dialog__confirm pressable" onClick={wakeGraph}>
             Wake
           </button>
         </div>

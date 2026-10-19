@@ -1,35 +1,73 @@
 .arg-row-wrap {
-  margin: 0.4rem 0;
+  margin: 0.45rem 0;
 }
 
 .arg-row {
   display: flex;
   align-items: stretch;
-  gap: 0.5rem;
+  gap: 0.45rem;
 }
 
 .arg-row__more {
-  margin: 0.2rem 0 0 0.2rem;
-  padding: 0.1rem 0.3rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.3rem 0 0 0.35rem;
+  padding: 0.15rem 0.45rem 0.15rem 0.3rem;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font: inherit;
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition-property: background-color, color;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.arg-row__more:hover {
-  color: var(--text);
+@media (hover: hover) {
+  .arg-row__more:hover {
+    color: var(--text);
+    background: var(--surface);
+  }
+}
+
+/* Chevron turns to point down when open; the label also changes, so the
+   rotation is never the only cue. Instant under reduced motion. */
+.arg-row__chev {
+  transition: transform var(--dur-fast) ease-out;
+}
+.arg-row__more.is-open .arg-row__chev {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .arg-row__chev {
+    transition: none;
+  }
 }
 
 .arg-row__children {
-  margin-left: 1rem;
-  padding-left: 0.6rem;
+  margin: 0.15rem 0 0 0.9rem;
+  padding-left: 0.7rem;
   border-left: 2px solid var(--hairline);
+  animation: agora-enter-up var(--dur-enter) var(--ease-out) both;
+  --enter-y: -4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .arg-row__children {
+    --enter-y: 0px;
+  }
+}
+:root[data-motion="off"] .arg-row__children {
+  --enter-y: 0px;
 }
 
+/* Claim card: raised surface (shadow ring, no border), with a 3px rule in
+   the source claim's credence band on its leading edge. */
 .arg-row__claim {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -37,17 +75,35 @@
   justify-content: space-between;
   gap: 0.75rem;
   text-align: left;
-  padding: 0.55rem 0.7rem;
+  padding: 0.6rem 0.75rem 0.6rem 0.95rem;
   background: var(--surface);
-  border: 1px solid var(--hairline);
+  border: 1px solid transparent;
   border-radius: var(--radius);
+  box-shadow: var(--shadow-border);
   color: var(--text);
   font: inherit;
+  line-height: 1.4;
   cursor: pointer;
+  overflow: hidden;
+  transition-property: box-shadow;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.arg-row__claim:hover {
-  border-color: color-mix(in srgb, var(--text) 25%, var(--hairline));
+.arg-row__claim::before {
+  content: '';
+  position: absolute;
+  inset: 6px auto 6px 5px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--row-band, var(--edge-muted));
+  transition: background-color 200ms ease-out;
+}
+
+@media (hover: hover) {
+  .arg-row__claim:hover {
+    box-shadow: var(--shadow-border-hover);
+  }
 }
 
 .arg-row__text {
@@ -56,56 +112,77 @@
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  text-wrap: pretty;
 }
 
-/* the edge chip — the "edges are arguable" affordance, must read as clickable */
+/* the edge chip — the "edges are arguable" affordance, must read as
+   clickable. Dashed = attack, solid = support (matches the map's lines);
+   this border is a semantic encoding, so it stays a border. */
 .arg-row__chip {
   flex: none;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0 0.55rem;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 58px;
+  padding: 0.2rem 0.55rem;
   border-radius: var(--radius);
-  border: 1px dashed var(--edge-muted);
+  border: 1.5px dashed var(--edge-muted);
   background: var(--surface);
   color: var(--text-secondary);
   cursor: pointer;
   font: inherit;
+  transition-property: border-color, background-color;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
 .arg-row__chip.is-support {
   border-style: solid;
 }
 
-.arg-row__chip:hover {
-  border-color: var(--text-secondary);
+@media (hover: hover) {
+  .arg-row__chip:hover {
+    border-color: var(--text-secondary);
+  }
+  .arg-row__chip.is-attack:hover {
+    border-color: var(--reject-strong);
+    background: color-mix(in srgb, var(--reject-strong) 6%, var(--surface));
+  }
+  .arg-row__chip.is-support:hover {
+    border-color: var(--accept-strong);
+    background: color-mix(in srgb, var(--accept-strong) 6%, var(--surface));
+  }
 }
 
-.arg-row__chip.is-attack:hover,
 .arg-row__chip.is-attack.is-selected {
   border-color: var(--reject-strong);
 }
 
-.arg-row__chip.is-support:hover,
 .arg-row__chip.is-support.is-selected {
   border-color: var(--accept-strong);
 }
 
 .arg-row__claim.is-selected,
 .arg-row__chip.is-selected {
-  outline: 2px solid color-mix(in srgb, var(--accept-strong) 60%, transparent);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .arg-row__challenges {
   font-size: 10px;
+  font-weight: 500;
   white-space: nowrap;
+  color: var(--text-muted);
 }
 
 .arg-row__pull {
   flex: none;
   align-self: center;
-  font-size: 10px;
+  min-width: 52px;
+  text-align: right;
+  font-size: 10.5px;
   font-family: var(--font-tabular);
   font-variant-numeric: tabular-nums;
   color: var(--text-secondary);

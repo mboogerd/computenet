@@ -1,5 +1,5 @@
 import { createSignal, onCleanup, onMount } from 'solid-js';
-import { applyTheme, loadTheme, nextTheme, resolvedTheme, type ThemePref } from '../util/theme';
+import { applyTheme, loadTheme, nextTheme, resolvedTheme, withoutTransitions, type ThemePref } from '../util/theme';
 
 export function ThemeToggle() {
   const [pref, setPref] = createSignal<ThemePref>('system');
@@ -8,7 +8,8 @@ export function ThemeToggle() {
   onMount(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     setSystemDark(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    // The OS flipping light/dark re-themes the page too: same suppression as the toggle.
+    const onChange = (e: MediaQueryListEvent) => withoutTransitions(() => setSystemDark(e.matches));
     mq.addEventListener('change', onChange);
     onCleanup(() => mq.removeEventListener('change', onChange));
     const saved = loadTheme();

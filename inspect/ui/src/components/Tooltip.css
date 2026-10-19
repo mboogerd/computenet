@@ -12,12 +12,12 @@
   padding: 0.45rem 0.65rem;
   border-radius: var(--radius);
   background: var(--surface-raised);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid transparent;
   color: var(--text);
   font-size: 0.72rem;
   line-height: 1.45;
   pointer-events: none;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--shadow-overlay);
   /* No `transition` on `left`/`top` — a cursor-follow edge tooltip repositions
      every animation frame, and a transition there would make it visibly lag
      the pointer. Only the one-time appear animation below moves anything. */
