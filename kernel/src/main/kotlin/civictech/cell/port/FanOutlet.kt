@@ -294,10 +294,8 @@ class FanOutlet<Api : Any>(
             // §8's fan-out corner as `LocalTrusted`). `CurrentPeer` is a bare
             // ThreadLocal, so everything a remote delivery synchronously causes
             // inherits it — and since `computenet-usd.4.3` a `PORT_PROTOCOL`
-            // frame installs one. A `Protocols.Progress` ack that completes a
-            // wave in a gated organelle (`CoalescingCombineCell`, `WaveGate`)
-            // runs `flushReady()` -> `propagate(...)` right here, on the acking
-            // peer's thread, for a delta addressed to every attachment rather
+            // frame installs one. A broadcast invoked synchronously while that
+            // peer is installed is still addressed to every attachment rather
             // than to that peer: the disclosure verdict and the
             // `BoundaryDenialSink` record would name a peer who is neither the
             // requester nor a recipient of this emission. The peer is not
@@ -309,8 +307,9 @@ class FanOutlet<Api : Any>(
             // The reset is HERE, at the fan-out, and deliberately not at
             // `ManagedHost`'s delivery frame: the other shape a remote frame
             // causes — a pull/catch-up reply through [at] — IS addressed to the
-            // asking peer and must keep `Peer`. Narrowing the frame would take
-            // both (`PeerUnblockedFanOutPrincipalTest` pins the pair).
+            // asking peer and must keep `Peer`. The former protocol-unblocked
+            // fan-out fixture was retired with the wave gates; GFR.4 owns
+            // whether absorb-ack cleanup removes more of this protocol surface.
             //
             // Scope only: `[SEC1-19]`'s single shared verdict and `[SEC1-20]`'s
             // exactly-once discharge are untouched — the gate above is still

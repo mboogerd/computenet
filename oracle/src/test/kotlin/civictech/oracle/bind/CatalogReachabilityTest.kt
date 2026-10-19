@@ -151,15 +151,11 @@ class CatalogReachabilityTest {
      *
      * computenet-gff7 offered the fork "register a `Scalar`-consuming operator, or record the
      * decision not to". The decision is **not to**, and the reason is structural rather than
-     * one of effort. A scalar edge in this catalog carries `Propagate<CounterDelta>`, and
-     * exactly one cell in the whole kernel serves that type on an inlet:
-     * `CoalescingCombineCell` (`kernel/src/main/kotlin/civictech/cell/data/op/`,
-     * `inlet: Serve<Propagate<CounterDelta>>`) — every other operator inlet under
-     * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`. That one cell is excluded by
-     * name from the vocabulary by the `ORA1 §HONEST-02` ledger in
-     * `civictech.oracle.model.MapCellModel`'s file KDoc: its observable is a wave-completion
-     * fold the script vocabulary cannot name, so a batch model of it would assume the very
-     * completeness condition it cannot check.
+     * one of effort. A scalar edge in this catalog carries `Propagate<CounterDelta>`. Since
+     * GFR.3 retired the former scalar-combining operator, no kernel cell serves that type on
+     * an inlet (observed:
+     * `git grep -n 'Serve<Propagate<CounterDelta>>' -- kernel/src/main` returns only
+     * `host/TypedLink.kt`'s generic-invariance KDoc, not a `Serve` declaration).
      *
      * Unlike the pair-shaped hole — repairable inside the catalog, because `keyBy` reuses an
      * already-registered cell and model and adds only a function — this one has no in-catalog
@@ -278,9 +274,8 @@ class CatalogReachabilityTest {
             "counter/pnCounter emit bare Scalar, which no registered operator consumes, so " +
                 "Builder.chooseRootShape can never root a case at them. This is a second, " +
                 "independent coverage hole from the SetOf(Tuple(2)) one computenet-4ru.16 " +
-                "closed. computenet-gff7 DECIDED not to close it: the only kernel cell that " +
-                "serves Propagate<CounterDelta> on an inlet is CoalescingCombineCell, which " +
-                "the ORA1 §HONEST-02 ledger excludes by name. A change here is a change to " +
+                "closed. computenet-gff7 DECIDED not to close it: no kernel cell serves " +
+                "Propagate<CounterDelta> on an inlet since GFR.3. A change here is a change to " +
                 "that decision — read this file's KDoc before moving the pin.",
         ) {
             unconsumableSources shouldBe sourcesNoOperatorConsumes
@@ -296,7 +291,7 @@ class CatalogReachabilityTest {
         // nothing else, removes the symptom.
         OperatorCatalog.register(
             id = SYNTHETIC_SCALAR_FAN_IN,
-            shape = COALESCING_COMBINE_SHAPE,
+            shape = SYNTHETIC_SCALAR_FAN_IN_SHAPE,
             kernel = CellFactory { _ -> error("never spawned: this entry exists only to test the counterfactual") },
             model = NeverRunOperator,
         )
@@ -328,14 +323,13 @@ class CatalogReachabilityTest {
         // the same instrument `PairShapeBootstrapTest` uses for the pair-shaped family, and the
         // evidence for the "if registered" half of computenet-gff7's fork.
         //
-        // The synthetic entry's shape is `CoalescingCombineCell`'s own: a two-arm fan-in over
-        // Scalar producing Scalar, on one dynamic `inlet`, exactly as the registered fan-in
-        // family advertises. So what this measures is what registering THAT cell would buy —
-        // which is what makes the decision not to register it a decision about honesty rather
-        // than about reachability.
+        // The synthetic entry is a two-arm fan-in over Scalar producing Scalar, on one dynamic
+        // `inlet`, exactly as the registered fan-in family advertises. It measures what adding
+        // the missing shape would buy without requiring a production cell written for the
+        // oracle's benefit.
         OperatorCatalog.register(
             id = SYNTHETIC_SCALAR_FAN_IN,
-            shape = COALESCING_COMBINE_SHAPE,
+            shape = SYNTHETIC_SCALAR_FAN_IN_SHAPE,
             kernel = CellFactory { _ -> error("never spawned: only the topology is read here") },
             model = NeverRunOperator,
         )
@@ -432,13 +426,11 @@ class CatalogReachabilityTest {
         const val SYNTHETIC_SCALAR_FAN_IN = "syntheticScalarFanIn"
 
         /**
-         * `CoalescingCombineCell`'s advertised shape: a two-arm fan-in over bare `Scalar`
-         * producing `Scalar`, on the one dynamic `inlet` the kernel's fan-in cells expose —
-         * the same construction `CoreOperators` uses for `union`/`presenceCount`/`quorumSet`.
-         * Written here rather than imported because the point is what registering that cell
-         * WOULD do; the cell itself stays excluded.
+         * A synthetic two-arm fan-in over bare `Scalar` producing `Scalar`, on the one dynamic
+         * `inlet` the kernel's fan-in cells expose — the same construction `CoreOperators`
+         * uses for `union`/`presenceCount`/`quorumSet`.
          */
-        val COALESCING_COMBINE_SHAPE = ShapeRule(
+        val SYNTHETIC_SCALAR_FAN_IN_SHAPE = ShapeRule(
             inputs = List(2) { ElementShape.Scalar },
             output = ElementShape.Scalar,
             inputPorts = List(2) { "inlet" },
