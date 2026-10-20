@@ -125,7 +125,7 @@ internal class ProcessFence(private val observed: (List<RecordedProcess>) -> Uni
         check(!cancelled) { "run fenced" }
         return builder.start().also { process = it }
     }
-    fun observe(process: Process) { observed(recordedTree(process)) }
+    fun trackTree(process: Process) { observed(recordedTree(process)) }
     @Synchronized fun cancel() { cancelled = true; process?.let(::destroyTree) }
 }
 
@@ -165,7 +165,7 @@ internal open class StudioProcesses : AutoCloseable {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSec)
             p = fence.start(builder)
             active += p
-            fence.observe(p)
+            fence.trackTree(p)
             if (closed) { destroyTree(p); error = "studio closed" }
             else {
                 while (p.isAlive) {
@@ -176,7 +176,7 @@ internal open class StudioProcesses : AutoCloseable {
                         break
                     }
                     if (p.waitFor(minOf(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS)) break
-                    fence.observe(p)
+                    fence.trackTree(p)
                 }
             }
             exit = if (p.isAlive || error != null) -1 else p.exitValue()
