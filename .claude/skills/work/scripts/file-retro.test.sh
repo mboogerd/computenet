@@ -11,7 +11,12 @@ echo "$*" >> "$BD_LOG"
 case "$1 $2" in
   "config get") cat "$ROOT/types" 2>/dev/null || echo "types.custom (not set)" ;;
   "config set") echo "$4" > "$ROOT/types" ;;
-  create*) echo "computenet-r3tro"; [ -n "${BD_WARN:-}" ] && echo "Warning: export skipped" >&2; true ;;
+  create*) case ${BD_CREATE:-} in
+             blank) echo "computenet-r3tro"; echo ;;
+             mute) ;;
+             *) echo "computenet-r3tro" ;;
+           esac; [ -n "${BD_WARN:-}" ] && echo "Warning: export skipped" >&2; true ;;
+  "list --type") if [ -x "$ROOT/bin/bd-list" ]; then "$ROOT/bin/bd-list"; else echo '[]'; fi ;;
 esac
 STUB
 chmod +x "$ROOT/bin/bd"; export PATH="$ROOT/bin:$PATH" ROOT BD_LOG="$ROOT/bd.log"
@@ -52,5 +57,23 @@ good '- flaky thing without a tag'
 printf '## Summary\n- s\n' > "$ROOT/r.md"; : > "$BD_LOG"
 "$SCRIPT" --skill work --file "$ROOT/r.md" >/dev/null 2>&1; st=$?
 [ $st -eq 2 ] && ! grep -q create "$BD_LOG" && ok "missing heading refused before any create" || bad "missing heading: $st"
+
+# computenet-lohv9: the record was created but the last stdout line held no id.
+good '- [none] none'
+out=$(BD_CREATE=blank "$SCRIPT" --skill work --file "$ROOT/r.md" 2>&1); st=$?
+[ $st -eq 0 ] && [ "$out" = computenet-r3tro ] && ok "an id followed by a blank line is found" || bad "blank after id: $st $out"
+: > "$BD_LOG"
+out=$(BD_CREATE=mute "$SCRIPT" --skill work --file "$ROOT/r.md" 2>&1); st=$?
+[ $st -eq 1 ] && grep -q 'list --type retro' "$BD_LOG" && ok "no id and no record found is a failure" || bad "mute, nothing listed: $st $out"
+# A record whose metadata.ended is this run's is the one just created; fake it with a
+# stub list that echoes the ended stamp the script wrote into its create call.
+cat > "$ROOT/bin/bd-list" <<'L'
+#!/usr/bin/env bash
+e=$(grep -o '"ended":"[^"]*"' "$BD_LOG" | tail -1 | cut -d'"' -f4)
+printf '[{"id":"computenet-other","metadata":{"ended":"1999-01-01T00:00:00Z"}},{"id":"computenet-f0und","metadata":{"ended":"%s","retro_machine":"%s"}}]\n' "$e" "${BEADS_ACTOR:-$(hostname -s)}"
+L
+chmod +x "$ROOT/bin/bd-list"
+out=$(BD_CREATE=mute "$SCRIPT" --skill work --file "$ROOT/r.md" 2>/dev/null); st=$?
+[ $st -eq 0 ] && [ "$out" = computenet-f0und ] && ok "a created record with no printed id is found, not refiled" || bad "mute, record exists: $st $out"
 
 echo "$pass passed, $fail failed"; [ $fail -eq 0 ]

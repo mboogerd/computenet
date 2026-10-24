@@ -50,8 +50,16 @@ meta=$(jq -nc --arg s "$skill" --arg m "$machine" --arg v "$ver" --arg st "$star
   '{retro_skill:$s, retro_machine:$m, skill_version:$v, started:$st, ended:$e, model:$mo, recurs_of:$r} | with_entries(select(.value != ""))')
 # stderr stays out of the id: a warning printed after a successful create
 # would otherwise read as failure, and a retry would file the record twice.
+# For the same reason the id is taken from ANY stdout line, and an empty
+# result is checked against the store by this run's unique `ended` stamp
+# before it is called a failure: twice on MacBoo `--silent` printed no id for
+# a record it had created (computenet-lohv9).
 err=$(mktemp "${TMPDIR:-/tmp}/file-retro.XXXXXX")
-id=$(bd create "retro: $skill on $machine $(date -u +%F)" --type=retro --priority=4 --labels=retro \
-       --body-file "$file" --metadata "$meta" --silent 2>"$err" | tail -1)
+out=$(bd create "retro: $skill on $machine $(date -u +%F)" --type=retro --priority=4 --labels=retro \
+       --body-file "$file" --metadata "$meta" --silent 2>"$err")
+id=$(printf '%s\n' "$out" | grep -oE '^computenet-[a-z0-9.]+$' | head -1)
+[ -n "$id" ] || id=$(bd list --type retro --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+  | jq -r --arg e "$now" --arg m "$machine" '(if type=="array" then . else (.issues // []) end)[]
+      | select(.metadata.ended == $e and .metadata.retro_machine == $m) | .id' 2>/dev/null | head -1)
 case $id in computenet-*) rm -f "$err"; echo "$id" ;;
-  *) echo "file-retro: bd create failed: $id $(tail -3 "$err")" >&2; rm -f "$err"; exit 1 ;; esac
+  *) echo "file-retro: bd create failed and no record with ended=$now exists; stdout: $out; stderr: $(tail -3 "$err")" >&2; rm -f "$err"; exit 1 ;; esac
