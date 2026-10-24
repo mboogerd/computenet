@@ -70,7 +70,7 @@ out=$(BD_CREATE=mute "$SCRIPT" --skill work --file "$ROOT/r.md" 2>&1); st=$?
 cat > "$ROOT/bin/bd-list" <<'L'
 #!/usr/bin/env bash
 e=$(grep -o '"ended":"[^"]*"' "$BD_LOG" | tail -1 | cut -d'"' -f4)
-printf '[{"id":"computenet-other","metadata":{"ended":"1999-01-01T00:00:00Z"}},{"id":"computenet-f0und","metadata":{"ended":"%s","retro_machine":"%s"}}]\n' "$e" "${BEADS_ACTOR:-$(hostname -s)}"
+printf '[{"id":"computenet-other","metadata":{"ended":"1999-01-01T00:00:00Z"}},{"id":"computenet-f0und","metadata":{"ended":"%s","retro_machine":"%s","retro_skill":"work"}}]\n' "$e" "${BEADS_ACTOR:-$(hostname -s)}"
 L
 chmod +x "$ROOT/bin/bd-list"
 out=$(BD_CREATE=mute "$SCRIPT" --skill work --file "$ROOT/r.md" 2>/dev/null); st=$?

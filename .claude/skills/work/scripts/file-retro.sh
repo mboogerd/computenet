@@ -59,7 +59,7 @@ out=$(bd create "retro: $skill on $machine $(date -u +%F)" --type=retro --priori
        --body-file "$file" --metadata "$meta" --silent 2>"$err")
 id=$(printf '%s\n' "$out" | grep -oE '^computenet-[a-z0-9.]+$' | head -1)
 [ -n "$id" ] || id=$(bd list --type retro --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,$p' \
-  | jq -r --arg e "$now" --arg m "$machine" '(if type=="array" then . else (.issues // []) end)[]
-      | select(.metadata.ended == $e and .metadata.retro_machine == $m) | .id' 2>/dev/null | head -1)
+  | jq -r --arg e "$now" --arg m "$machine" --arg s "$skill" '(if type=="array" then . else (.issues // []) end)[]
+      | select(.metadata.ended == $e and .metadata.retro_machine == $m and .metadata.retro_skill == $s) | .id' 2>/dev/null | head -1)
 case $id in computenet-*) rm -f "$err"; echo "$id" ;;
   *) echo "file-retro: bd create failed and no record with ended=$now exists; stdout: $out; stderr: $(tail -3 "$err")" >&2; rm -f "$err"; exit 1 ;; esac
