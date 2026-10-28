@@ -154,6 +154,9 @@ says "$d" "100m of 300m elapsed" "an unreadable dispatch file does not suppress 
 says "$d" "agent bad: dispatch time unreadable" "an unreadable dispatch file is reported"
 d=$(slot 100 300); echo "$(( $(date -u +%s) - 10 * 60 )) 30" > "$d/dispatched-a"; echo 1 > "$d/dispatched-b"; chmod 000 "$d/dispatched-b"
 says "$d" "agent b: dispatch time unreadable" "a mode-000 dispatch file does not inherit the previous agent's time"
+d=$(slot 100 300); echo done > "$d/dispatched-fin"
+out=$("$SCRIPT" "$d" 2>&1)
+case "$out" in *"agent fin"*) bad "a done dispatch file is still reported — got: $out" ;; *) ok "a done dispatch file is skipped (computenet-iu18k)" ;; esac
 d=$(slot 305 300)
 out=$("$SCRIPT" "$d" 2>&1)
 case "$out" in *wake:*) bad "EXPIRED has no wake — got: $out" ;; *) ok "EXPIRED prints no wake" ;; esac

@@ -17,7 +17,7 @@ is finished: confirm it and send it to 5c, not to a second implementer. With
 **Capacity.** Before every `Agent` dispatch in this skill, breakdowns and reviewers
 included, read `next-batch.py --capacity --siblings <N>` and follow its advice. Then
 bound the agent with `echo "$(date -u +%s) <minutes>" > <scratch>/dispatched-<id>`,
-deleted on its notification: 30 for a one-file fix or a task review, 20 for a probe,
+overwritten with `echo done >` on its notification, never `rm`'d (guard-rm drops the whole call): 30 for a one-file fix or a task review, 20 for a probe,
 else 60. At most one live agent runs the repo-wide `./gradlew test`; the others scope
 their gate to touched modules. Go under the cap when results depend on wall-clock
 waits. Agents `slot-elapsed.sh` flags OVER, or dying with no side effects →
