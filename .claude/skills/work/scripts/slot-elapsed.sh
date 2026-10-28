@@ -141,6 +141,7 @@ for f in "$SCRATCH"/dispatched-*; do
   [ -f "$f" ] || continue
   id=${f##*/dispatched-}
   at=; bound=; { read -r at bound _ < "$f"; } 2>/dev/null || true
+  [ "$at" = done ] && continue   # finished: overwritten, not rm'd (guard-rm refuses $S/... paths; computenet-iu18k)
   case "${at:-}" in (*[!0-9]*|"") echo "agent $id: dispatch time unreadable — read its signals"; continue ;; esac
   case "${bound:-}" in (*[!0-9]*|"") bound=60 ;; esac
   aged=$(( (now - at) / 60 ))
