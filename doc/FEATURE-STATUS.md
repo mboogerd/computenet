@@ -16,41 +16,40 @@
 
 ### Headline features
 
-| Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | tiering | demos |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Typed ports / explicit links | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | 13 |
-| Deltas & data-cell operators | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | 13 |
-| Glitch-free observation | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | USED | USED | 11 |
-| Interest-driven execution | - | - | - | - | - | - | - | - | - | - | - | USED | - | 1 |
-| Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Partitioning | - | - | - | - | - | - | - | USED | - | - | - | - | - | 1 |
-| Durability / recovery | USED | USED | USED | USED | USED | USED | USED | USED | - | - | - | USED | USED | 10 |
-| Replication | - | - | - | - | USED | - | - | USED | USED | - | - | - | USED | 4 |
-| Wire transport (ws / iroh) | - | - | - | - | USED | - | - | USED | USED | - | - | - | USED | 4 |
-| Identity / authority | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Invariants / verify | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Evolution / promotion | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | USED | 10 |
-| Demograph | - | - | - | USED | - | - | - | - | - | - | - | - | - | 1 |
-| **headline count** | 5 | 5 | 3 | 6 | 5 | 5 | 5 | 8 | 6 | 4 | 4 | 5 | 7 |  |
+| Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | studio | tiering | demos |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Typed ports / explicit links | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | 14 |
+| Deltas & data-cell operators | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | USED | - | USED | 13 |
+| Glitch-free observation | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | USED | - | USED | 11 |
+| Interest-driven execution | - | - | - | - | - | - | - | - | - | - | - | USED | - | - | 1 |
+| Owned / Leased payloads | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Partitioning | - | - | - | - | - | - | - | USED | - | - | - | - | - | - | 1 |
+| Durability / recovery | USED | USED | USED | USED | USED | USED | USED | USED | - | - | - | USED | USED | USED | 11 |
+| Replication | - | - | - | - | USED | - | - | USED | USED | - | - | - | - | USED | 4 |
+| Wire transport (ws / iroh) | - | - | - | - | USED | - | - | USED | USED | - | - | - | - | USED | 4 |
+| Identity / authority | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Invariants / verify | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Evolution / promotion | - | - | - | - | - | - | - | - | - | - | - | - | USED | - | 1 |
+| Budgets | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Inspector | USED | USED | - | USED | - | USED | USED | USED | USED | USED | USED | - | - | USED | 10 |
+| Demograph | - | - | - | USED | - | - | - | - | - | - | - | - | - | - | 1 |
+| **headline count** | 5 | 5 | 3 | 6 | 5 | 5 | 5 | 8 | 6 | 4 | 4 | 5 | 3 | 7 |  |
 
 ### Additional features (not part of the umbrella epic's acceptance)
 
-| Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | tiering | demos |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Generated @Contract/@CellBase cells | - | USED | - | - | - | - | - | - | - | - | - | - | - | 1 |
-| Hosted execution (ManagedHost) | USED | USED | USED | USED | USED | USED | USED | USED | - | USED | USED | USED | USED | 12 |
-| Colors (Blocking/Suspending) | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Time-travel | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
-| Query / Datalog | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Feature | agora | alignment | allocator-observe | backlog-triage | beadsmirror | deliberate | dialogue | exchange | shopping | skillmatch | slotfinder | social | studio | tiering | demos |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Generated @Contract/@CellBase cells | - | USED | - | - | - | - | - | - | - | - | - | - | USED | - | 2 |
+| Hosted execution (ManagedHost) | USED | USED | USED | USED | USED | USED | USED | USED | - | USED | USED | USED | USED | USED | 13 |
+| Colors (Blocking/Suspending) | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Time-travel | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
+| Query / Datalog | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 0 |
 
 ## Headline features used by no demo
 
 - Owned / Leased payloads (`owned-leased`)
 - Identity / authority (`identity`)
 - Invariants / verify (`invariants`)
-- Evolution / promotion (`evolution`)
 - Budgets (`budgets`)
 
 ## Evidence
@@ -67,6 +66,7 @@
 - typed-links / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
 - typed-links / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
 - typed-links / social: demo/social/src/main/kotlin/civictech/demo/social/Feed.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt, demo/social/src/main/kotlin/civictech/demo/social/ViewerInterest.kt
+- typed-links / studio: demo/studio/src/main/kotlin/civictech/demo/studio/StudioCell.kt, demo/studio/src/main/kotlin/civictech/demo/studio/StudioRuntime.kt
 - typed-links / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - delta-operators / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
 - delta-operators / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
@@ -103,6 +103,7 @@
 - durability / dialogue: demo/dialogue/src/main/kotlin/civictech/dialogue/DialogueRuntime.kt
 - durability / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - durability / social: demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
+- durability / studio: demo/studio/src/main/kotlin/civictech/demo/studio/StudioRuntime.kt
 - durability / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - replication / beadsmirror: demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorGraph.kt, demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
 - replication / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
@@ -112,6 +113,7 @@
 - wire / exchange: demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
 - wire / shopping: demo/shopping/src/main/kotlin/civictech/demo/Main.kt
 - wire / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
+- evolution / studio: demo/studio/src/main/kotlin/civictech/demo/studio/StudioCell.kt
 - inspector / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt
 - inspector / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt
 - inspector / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
@@ -124,6 +126,7 @@
 - inspector / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
 - demograph / backlog-triage: demo/backlog-triage/src/main/kotlin/civictech/demo/backlogtriage/TriageApp.kt
 - gen-cells / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
+- gen-cells / studio: demo/studio/src/main/kotlin/civictech/demo/studio/StudioCell.kt
 - hosts / agora: demo/agora/src/main/kotlin/civictech/agora/AgoraApp.kt, demo/agora/src/main/kotlin/civictech/agora/AgoraService.kt
 - hosts / alignment: demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentApp.kt, demo/alignment/src/main/kotlin/civictech/demo/alignment/AlignmentCells.kt
 - hosts / allocator-observe: demo/allocator-observe/src/main/kotlin/civictech/demo/allocatorobserve/AllocatorObserveApp.kt
@@ -135,4 +138,5 @@
 - hosts / skillmatch: demo/skillmatch/src/main/kotlin/civictech/demo/skillmatch/SkillMatchApp.kt
 - hosts / slotfinder: demo/slotfinder/src/main/kotlin/civictech/demo/slotfinder/SlotFinderApp.kt
 - hosts / social: demo/social/src/main/kotlin/civictech/demo/social/BoundedReader.kt, demo/social/src/main/kotlin/civictech/demo/social/SnbPipeline.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialApp.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialGraph.kt, demo/social/src/main/kotlin/civictech/demo/social/SocialRecovery.kt
+- hosts / studio: demo/studio/src/main/kotlin/civictech/demo/studio/StudioRuntime.kt
 - hosts / tiering: demo/tiering/src/main/kotlin/civictech/demo/tiering/TieringApp.kt
