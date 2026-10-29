@@ -5,8 +5,6 @@ import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
-import civictech.cell.control.absorbAck
-import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
 import civictech.cell.link.catchUpOnLinked
@@ -32,8 +30,7 @@ import java.util.*
  *   the identity, reported as `null`, and nothing is emitted.
  * - **Monotone, effective-only** (`[24-WL-03]`): the floor never falls — a new
  *   source joining with a low maximum leaves it where it is — and a delta that
- *   does not strictly raise it emits nothing and absorb-acks instead (22
- *   §Interaction "Waterline floor (24)", CP-A3). No wall clock is read.
+ *   does not strictly raise it emits nothing. No wall clock is read.
  * - **A value, never a wave** (`[24-WL-04]`): a raising delta emits one
  *   [WaterlineDelta] through the ordinary transparent flow, so it rides the
  *   wave whose data advanced the floor (the outlet preserves the incoming
@@ -110,9 +107,6 @@ class WaterlineCell<E> internal constructor(
     fun maxima(): Map<UUID, Long> = maxima.toMap()
 
     init {
-        // WaterlineCell is a unary transparent hop for waves it does not see as
-        // data. Preserve an upstream absorb-ack for the downstream waterline arm.
-        inlet.relayAbsorbAcks()
         inlet.serve(object : Propagate<SetDelta<E>> {
             override fun propagate(value: SetDelta<E>) = onDelta(value)
         })
@@ -142,7 +136,7 @@ class WaterlineCell<E> internal constructor(
             if (prev == null || t > prev) maxima[src] = t
         }
         if (src in maxima) sourcesByPort.getOrPut(ctx.sourcePort) { mutableSetOf() } += src
-        if (!raiseTo(candidate())) outlet.absorbAck()
+        raiseTo(candidate())
     }
 
     /** Drop [sourceId]'s maximum and its link bookkeeping; true iff it was contributing. */
