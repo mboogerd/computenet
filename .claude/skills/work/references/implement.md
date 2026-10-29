@@ -16,9 +16,9 @@ owns your scope, running and waiting on commands, and your final message.
 
 If your worktree already has commits, you are resumed: continue from what the
 bead's comments say is done and left. A `.mutation-in-progress` file there is
-someone's interrupted mutation: `git checkout -- .`, delete the file, and say so
-before anything else. Read skill files from your own worktree,
-not the main checkout. Read the bead through `bead.sh` and its comments into a
+someone's interrupted mutation: `git checkout -- .`, `rm` the file by its literal
+absolute path, and say so before anything else. Read skill files from your own
+worktree, not the main checkout. Read the bead through `bead.sh` and its comments into a
 file ([traps.md](traps.md#bd) says why a plain read misleads):
 
 ```bash
