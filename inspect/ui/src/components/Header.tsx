@@ -5,6 +5,7 @@ import { goHome, screen } from '../solid/route';
 import { conn, nodes } from '../solid/state';
 import { theme, toggleTheme } from '../solid/theme';
 import { showErrors, setShowErrors } from '../solid/toggles';
+import { ChevronLeftIcon, LogoIcon, MoonIcon, SunIcon } from './icons';
 import './Header.css';
 
 /** The snapshot only carries `host` per-node (multi-host grouping is M4's
@@ -31,23 +32,38 @@ export default function Header() {
   const host = createMemo(hostLabel);
   return (
     <header class="app-header">
-      <h1>Inspector</h1>
+      <h1 class="app-header__brand">
+        <LogoIcon class="app-header__logo" />
+        Inspector
+      </h1>
       {/* M4-FE ticket Implement §1: "Back returns to Home" — only shown on
           the Graph screen; Home has nothing to go "back" from. */}
       <Show when={screen() === 'graph'}>
-        <button class="icon-btn" title="Back to graphs" onClick={goHome}>
-          ‹ Graphs
+        <button class="icon-btn icon-btn--lead pressable" title="Back to graphs" onClick={goHome}>
+          <ChevronLeftIcon /> Graphs
         </button>
       </Show>
       <span class="app-header__host">{host()}</span>
-      <span class="conn-pip" classList={{ 'is-live': conn() === 'live' }} data-state={conn()}>
+      <span class="conn-pip" classList={{ 'is-live': conn() === 'live' }} data-state={conn()} role="status">
         <span class="conn-pip__dot" /> {CONN_LABEL[conn()] ?? conn()}
       </span>
       <ErrorCounters />
       <ObservedCounter />
       <div class="app-header__spacer" />
-      <button class="icon-btn" title="Toggle light / dark" onClick={toggleTheme}>
-        {theme() === 'dark' ? '☀ Light' : '☾ Dark'}
+      {/* better-ui "Cross-fade contextual icons": both glyphs stay in the DOM
+          and cross-fade on `data-theme`; the label still names the action, so
+          the swap is never carried by motion alone. */}
+      <button
+        class="icon-btn icon-btn--lead theme-toggle pressable"
+        data-theme-current={theme()}
+        title="Toggle light / dark"
+        onClick={toggleTheme}
+      >
+        <span class="theme-toggle__icons">
+          <SunIcon class="theme-toggle__icon theme-toggle__icon--sun" />
+          <MoonIcon class="theme-toggle__icon theme-toggle__icon--moon" />
+        </span>
+        {theme() === 'dark' ? 'Light' : 'Dark'}
       </button>
     </header>
   );
@@ -79,7 +95,7 @@ function ErrorCounters() {
   });
   return (
     <button
-      class="error-counters"
+      class="error-counters pressable"
       classList={{ 'is-active': showErrors() }}
       title="Errors: dead letters (faults) / denied (BoundaryPolicy refusals — not a fault, SEC1-29) / parked / restarts / wave-health (heuristic, informational — not a defect count) — click to toggle the Errors overlay"
       onClick={() => setShowErrors((v) => !v)}
@@ -114,7 +130,7 @@ function ObservedCounter() {
   });
   return (
     <button
-      class="observed-counter"
+      class="observed-counter pressable"
       title="Cells currently observed (live state subscriptions) — click to unpin all"
       onClick={unpinAll}
     >

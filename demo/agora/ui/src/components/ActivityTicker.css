@@ -6,40 +6,50 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.35rem 0.7rem;
+  height: 28px;
+  padding: 0 0.75rem 0 0.6rem;
   background: color-mix(in srgb, var(--status-amber) 14%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--status-amber) 45%, var(--hairline));
   border-radius: 999px;
   color: var(--text);
   font: inherit;
   font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
   white-space: nowrap;
+  animation: agora-enter-pop var(--dur-enter) var(--ease-out) both;
 }
 
 .ticker__dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--status-amber);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-amber) 25%, transparent);
   flex: none;
 }
 
+/* Popover: scales from its trigger corner (top-right), 0.97 → 1 over 200ms.
+   Outer radius 12 = row radius 8 + padding 4. */
 .ticker__list {
   position: absolute;
-  top: calc(100% + 0.35rem);
+  top: calc(100% + 0.4rem);
   right: 0;
-  z-index: 10;
-  width: 260px;
-  max-height: 300px;
+  z-index: 30;
+  width: 280px;
+  max-height: 320px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
   margin: 0;
-  padding: 0.3rem;
+  padding: 4px;
   background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  transform-origin: top right;
+  animation: agora-enter-pop 200ms var(--ease-out) both;
 }
 
 .ticker__row {
@@ -48,7 +58,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.35rem 0.45rem;
+  padding: 0.45rem 0.55rem;
   background: none;
   border: none;
   border-radius: var(--radius);
@@ -56,22 +66,28 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background-color var(--dur-fast) ease-out;
 }
 
-.ticker__row:hover {
-  background: var(--page);
+@media (hover: hover) {
+  .ticker__row:hover {
+    background: var(--surface-sunken);
+  }
 }
 
 .ticker__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
+/* Text stays in text ink; the amber stays on the dot (dataviz: text wears
+   text tokens, never the signal color). */
 .ticker__drift {
   flex: none;
   font-family: var(--font-tabular);
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
-  color: var(--status-amber);
+  color: var(--text-secondary);
 }

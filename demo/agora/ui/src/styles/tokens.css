@@ -2,21 +2,36 @@
    Light values in :root; dark values applied both by an explicit
    [data-theme="dark"] toggle and by the OS preference (unless overridden).
    The two "leaning" credence bands are the strong pole at 45% over the
-   surface (color-mix), so they follow their pole automatically per theme. */
+   surface (color-mix), so they follow their pole automatically per theme.
+   The credence poles (#e34948 / #2a78d6, dark #e66767 / #3987e5) pass the
+   dataviz palette validator in both modes (CVD ΔE ≥ 19); don't retune them
+   without re-running it. */
 
 :root {
   color-scheme: light dark;
 
   /* chrome */
-  --page: #f9f9f7;
-  --surface: #fcfcfb;
+  --page: #f6f5f2;
+  --page-grad: #efeee9;
+  --surface: #fdfdfc;
+  --surface-sunken: #f1f0ec;
+  --surface-glass: color-mix(in srgb, var(--surface) 78%, transparent);
   --text: #0b0b0b;
   --text-secondary: #52514e;
+  --text-muted: #77756f;
   --hairline: rgba(11, 11, 11, 0.1);
+  --hairline-strong: rgba(11, 11, 11, 0.18);
 
   /* semantic accents */
   --edge-muted: #898781;
+  /* relation lines: muted gray nudged toward their pole — a secondary cue
+     beside the dash pattern (dashed = attack), never the only one. */
+  --edge-support: color-mix(in srgb, var(--accept-strong) 45%, var(--edge-muted));
+  --edge-attack: color-mix(in srgb, var(--reject-strong) 45%, var(--edge-muted));
   --status-amber: #fab219;
+  --status-live: #2f9e55;
+  --focus: color-mix(in srgb, var(--accept-strong) 70%, transparent);
+  --on-accent: #ffffff;
 
   /* credence poles */
   --reject-strong: #e34948;
@@ -35,37 +50,131 @@
     45deg,
     transparent 0,
     transparent 3px,
-    var(--hairline) 3px,
-    var(--hairline) 4px
+    var(--hairline-strong) 3px,
+    var(--hairline-strong) 4px
   );
 
+  /* elevation — better-ui "shadows for elevation, borders for structure".
+     Ring + lift + ambient; dark mode keeps only a white ring (below). */
+  --shadow-border:
+    0px 0px 0px 1px oklch(0 0 0 / 0.06),
+    0px 1px 2px -1px oklch(0 0 0 / 0.06),
+    0px 2px 4px 0px oklch(0 0 0 / 0.04);
+  --shadow-border-hover:
+    0px 0px 0px 1px oklch(0 0 0 / 0.08),
+    0px 1px 2px -1px oklch(0 0 0 / 0.08),
+    0px 2px 4px 0px oklch(0 0 0 / 0.06);
+  --shadow-raised:
+    0px 0px 0px 1px oklch(0 0 0 / 0.06),
+    0px 4px 8px -2px oklch(0 0 0 / 0.08),
+    0px 12px 28px -6px oklch(0 0 0 / 0.14);
+
+  /* geometry — concentric: outer = inner + padding */
+  --radius-sm: 6px;
   --radius: 8px;
-  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* type */
+  --font: "Inter var", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-tabular: ui-monospace, "SF Mono", "Segoe UI Mono", monospace;
+
+  /* motion — animate skill curves; distances collapse to 0 under reduced
+     motion so every enter degrades to a pure opacity cross-fade. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-icon: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 150ms;
+  --dur-enter: 300ms;
+  --enter-y: 12px;
+  --enter-x: 16px;
+  --enter-blur: 4px;
+  --enter-scale: 0.97;
+  --press-scale: 0.96;
 }
 
 /* Dark tokens — explicit toggle wins over the OS preference below. */
 :root[data-theme="dark"] {
   --page: #0d0d0d;
+  --page-grad: #121211;
   --surface: #1a1a19;
+  --surface-sunken: #141413;
   --text: #ffffff;
   --text-secondary: #c3c2b7;
+  --text-muted: #96958c;
   --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-strong: rgba(255, 255, 255, 0.18);
   --reject-strong: #e66767;
   --accept-strong: #3987e5;
   --contested: #383835;
+  --status-live: #4cc274;
+  --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+  --shadow-raised: 0 0 0 1px oklch(1 0 0 / 0.1), 0 16px 40px -8px oklch(0 0 0 / 0.6);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --page: #0d0d0d;
+    --page-grad: #121211;
     --surface: #1a1a19;
+    --surface-sunken: #141413;
     --text: #ffffff;
     --text-secondary: #c3c2b7;
+    --text-muted: #96958c;
     --hairline: rgba(255, 255, 255, 0.1);
+    --hairline-strong: rgba(255, 255, 255, 0.18);
     --reject-strong: #e66767;
     --accept-strong: #3987e5;
     --contested: #383835;
+    --status-live: #4cc274;
+    --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
+    --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+    --shadow-raised: 0 0 0 1px oklch(1 0 0 / 0.1), 0 16px 40px -8px oklch(0 0 0 / 0.6);
+  }
+}
+
+/* Reduced motion (OS) or the in-app Motion-off toggle: movement, scale and
+   blur collapse to zero, leaving only the opacity fades (better-ui "gate
+   motion behind the reduced-motion preference"). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --enter-y: 0px;
+    --enter-x: 0px;
+    --enter-blur: 0px;
+    --enter-scale: 1;
+    --press-scale: 1;
+  }
+}
+:root[data-motion="off"] {
+  --enter-y: 0px;
+  --enter-x: 0px;
+  --enter-blur: 0px;
+  --enter-scale: 1;
+  --press-scale: 1;
+}
+
+/* Shared enter keyframes. The hidden state lives only in `from`, so an
+   element whose animation never runs stays visible. */
+@keyframes agora-enter-up {
+  from {
+    opacity: 0;
+    transform: translateY(var(--enter-y));
+    filter: blur(var(--enter-blur));
+  }
+}
+
+@keyframes agora-enter-left {
+  from {
+    opacity: 0;
+    transform: translateX(var(--enter-x));
+    filter: blur(var(--enter-blur));
+  }
+}
+
+@keyframes agora-enter-pop {
+  from {
+    opacity: 0;
+    transform: scale(var(--enter-scale));
   }
 }
 
@@ -87,35 +196,68 @@
   }
 }
 
+@keyframes agora-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
 
 html,
-body {
+body,
+#root {
   margin: 0;
   height: 100%;
 }
 
 body {
-  background: var(--page);
+  background:
+    radial-gradient(1200px 600px at 100% -10%, color-mix(in srgb, var(--accept-strong) 6%, transparent), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, color-mix(in srgb, var(--reject-strong) 4%, transparent), transparent 60%),
+    linear-gradient(var(--page), var(--page-grad));
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.5;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Honor the reduce-motion toggle (a [data-motion="off"] on :root, WP5) and
-   the OS preference. */
-:root[data-motion="off"] *,
-:root[data-motion="off"] *::before,
-:root[data-motion="off"] *::after {
-  animation: none !important;
-  transition: none !important;
+::selection {
+  background: color-mix(in srgb, var(--accept-strong) 28%, transparent);
 }
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation: none !important;
-    transition: none !important;
-  }
+
+/* One consistent keyboard focus ring for every control. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Press feedback — better-ui "press scales to 0.96", never when disabled.
+   --press-scale is 1 under reduced motion. */
+.pressable {
+  transition-property: scale, background-color, box-shadow, border-color, color;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
+}
+.pressable:not(:disabled):active {
+  scale: var(--press-scale);
+}
+
+/* Explicit Motion-off toggle keeps the old hard stop for loops and pulses;
+   the enter fades above already degrade through the tokens. */
+:root[data-motion="off"] .is-pulsing,
+:root[data-motion="off"] .junction-pulse,
+:root[data-motion="off"] .status-pip__dot {
+  animation: none !important;
 }
