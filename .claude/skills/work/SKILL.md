@@ -329,9 +329,9 @@ recorded in `metadata.branch`, or delete the dead remote ref, and say which;
 `STOP-UNMERGED` → stop; `STOP-UNREACHABLE` → nothing was checked.
 
 Any inherited worktree — feature or task — holding a `.mutation-in-progress`
-file is an interrupted mutation check: `git -C <worktree> checkout -- .`, delete
-the file, say so. A dirty worktree without it: read the diff; coherent → keep it
-and report it; unclear → leave it and park.
+file is an interrupted mutation check: `git -C <worktree> checkout -- .`, `rm`
+the file by its literal absolute path, say so. A dirty worktree without it: read
+the diff; coherent → keep it and report it; unclear → leave it and park.
 
 Bring the branch current and push it even with no commits (`merge-task.sh`
 needs the ref on origin). A conflict you resolve here is reviewed by the feature
