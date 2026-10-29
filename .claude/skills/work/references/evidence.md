@@ -135,8 +135,8 @@ edit when the Edit tool refuses, never for one you may not.
    prints nothing and exits 0 (for an untracked file it always does; step 5 is
    that file's only proof). If the mutation created the file, `rm` it.
    `cp "<scratch>/pre-mutation-<basename>" <file> && git diff --exit-code HEAD -- <file>`
-9. Remove the marker; `ls <your-worktree>/.mutation-in-progress` must say no
-   such file (`git status` cannot: it is gitignored).
+9. Remove the marker: `rm` its literal absolute path, alone in its call (guard-rm
+   drops a call with a variable target); `ls` it: no such file (it is gitignored).
 10. Run the confirming test green against the restored file.
 
 Report the file and call site, the test, the assertion and its message. If the
