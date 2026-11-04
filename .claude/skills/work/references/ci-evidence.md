@@ -12,7 +12,7 @@ Wait for checks with `.claude/skills/work/scripts/wait-checks.sh <pr-url>`.
 | last line | means |
 |---|---|
 | `SETTLED` | every required check finished; read the rows above for red |
-| `TIMEOUT-PENDING`, or the call never returns | no verdict; a reviewer's one invocation for this head is spent ([review.md](review.md#feature-review)) |
+| `TIMEOUT-PENDING`, or the call never returns | no verdict; the orchestrator waits again (reviewers make no call: [review.md](review.md#ci-is-the-orchestrators)) |
 | `NO-RUN` | GitHub never built this head; never wait it out |
 | `UNBOUND` | the rows settled over a transport that names no commit: not evidence for this diff |
 | `QUERY-FAILED` | nothing was read |

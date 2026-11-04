@@ -146,7 +146,7 @@ The second fetch fails harmlessly while the feature branch exists only locally. 
 
 - Mutations are your step. Your dispatch extends your scope to the production files the task's tests constrain, for a temporary mutation that you revert ([evidence.md § Mutation checks](evidence.md#mutation-checks)).
 - Commit your repairs, don't push them. The dispatch prompt's "commit on your branch" is your explicit grant. The orchestrator merges the local `task/<id>` ref, repair commits included, and pushes the feature branch.
-- You don't read CI. State that Linux is unverified, so the feature reviewer and the orchestrator don't skip that gate on your word.
+- You don't read CI. State that Linux is unverified, so the orchestrator doesn't skip that gate at Ship on your word.
 - On FAIL, leave the branch and worktree in place. A later batch resumes the task there.
 
 ## Feature review
@@ -161,7 +161,7 @@ If `bd list --parent=<id> --all --json` returns no tasks, the item was worked fl
 
 For each child your prompt lists as a human park, confirm it is a real park (a `QUESTION:` comment awaiting a person) and not a dependency-blocked child that inherited the `human` label; a real block means work remains and the verdict is DRAFT.
 
-If `metadata.pr` is empty and `gh pr list --head <branch>` returns nothing, say so right after the verdict line. Then mark every CI-dependent clause NOT VERIFIED.
+If `metadata.pr` is empty and `gh pr list --head <branch>` returns nothing, say so right after the verdict line.
 
 ```bash
 git -C <feature-worktree> fetch origin main && git -C <feature-worktree> diff origin/main...HEAD
@@ -171,22 +171,11 @@ With `metadata.base_branch` set, diff against `origin/<that branch>` instead —
 
 The feature worktree is yours alone until you report. Run the affected module suites, plus the repo-wide gate if the feature touches anything cross-cutting, and only one repo-wide `./gradlew test` may run at a time ([agent.md § Running commands](agent.md#running-commands)). Choose suites by what reads the changed files, not only by what imports them ([evidence.md § What your change reaches](evidence.md#what-your-change-reaches)).
 
-### Read CI once per head
+### CI is the orchestrator's
 
-```bash
-.claude/skills/work/scripts/wait-checks.sh <pr-url>
-```
+Make no `wait-checks.sh` call and do not wait for CI: the slowest required check outlasts your time bound, and the orchestrator settles every check before it ships (SKILL.md 5e, Ship). Under NOT VERIFIED write "CI not read; settled at Ship", and mark CI-dependent clauses the same way. A repair you push needs no wait either.
 
-Its header documents the outputs. The final line is the reading, and the sha it prints is the head that reading is about. You get one call per head, and the result is final. Never poll by hand, and never branch on `gh pr checks`'s exit status.
-
-| Reading | Do |
-|---|---|
-| SETTLED, all green | Quote every row, non-required ones included. Say which checks actually executed the changed modules, because skipped suites and lane filters hide behind green ([evidence.md § CI evidence](evidence.md#ci-evidence)). |
-| SETTLED with a red required check | Attribute it per [recovery.md § A red required check](recovery.md#a-red-required-check), quoting the query and its result. If the red is attributed to a named flake bead and is the only blocker, the verdict is READY naming the pending re-run: "the substantive review is complete and passes; sole blocker is `<check>`, attributed to `<bead>`; ship after one green re-run." Set `review=passed`. Otherwise the verdict is DRAFT. Re-runs are the orchestrator's. |
-| TIMEOUT-PENDING | Return READY or DRAFT on everything else and stop, even though the script says to re-run (that advice is the orchestrator's). Name each pending check in NOT VERIFIED; the orchestrator settles checks before it ships. |
-| QUERY-FAILED, NO-RUN, UNBOUND, or the call never returned | Nothing you can use was read — UNBOUND means the rows named no commit, so they are not about your head. Mark CI NOT VERIFIED and stop. |
-
-A repair you push creates a new head, and that is the only thing that earns a second call. A pushed repair costs a full required-check cycle. If the repair and its cycle will not fit in your time bound, return DRAFT instead of starting it.
+When the orchestrator dispatches you on a red required check, that check is your task. Attribute it per [recovery.md § A red required check](recovery.md#a-red-required-check), quoting the run id, each query and its result. When artifact 2 holds (the diff cannot have caused it) and the red is the only blocker, return READY naming the flake bead, or the bug bead you filed for a first sighting, and the pending re-run ("sole blocker is `<check>`, attributed to `<bead>`; ship after one green re-run"), with `review=passed`. A red the diff can cause is the feature's own: repair it and return READY, or return DRAFT naming the red check. Re-runs are the orchestrator's.
 
 ### Re-fetch last
 
@@ -210,7 +199,7 @@ Always certify against a named head: "verdict against `<HEAD sha>`, origin/main 
 
 ### Feature: READY or DRAFT
 
-- READY. Every criterion is met or filed as a residual, no seam is unowned, required checks are green or pending as described above, and your repairs were trivial. Criteria waiting on an out-of-band measurement, such as a soak or an overnight job, or a re-run of a check attributed to a flake bead, also allow READY. Name the pending run's id and the criterion it settles, and the orchestrator holds the ship until it reports.
+- READY. Every criterion is met or filed as a residual, no seam is unowned, and your repairs were trivial. Criteria waiting on an out-of-band measurement, such as a soak or an overnight job, or a re-run of a check attributed to a flake bead, also allow READY. Name the pending run's id and the criterion it settles, and the orchestrator holds the ship until it reports.
 - DRAFT. Name one of four things: the gap tasks you filed, your repair shas, the red check, or that no standard exists. A DRAFT that names none of these is a dead end for the orchestrator. A DRAFT is a legitimate outcome: half a feature merged is worse than half a feature parked on a branch.
 
 `review=passed` means this review finished with a pass. It does not mean "ship it". The verdict token is what the orchestrator routes on.
@@ -234,7 +223,7 @@ Follow [agent.md § Your final message](agent.md#your-final-message). It contain
 
 - the verdict token on the first line, then the bead id, and why;
 - the baseline and the review-base and HEAD shas;
-- the evidence as artifacts: test counts with their proof of execution, `uname -sm`, check conclusions (feature), and the re-fetch line (feature);
+- the evidence as artifacts: test counts with their proof of execution, `uname -sm`, check conclusions (red-check dispatch only), and the re-fetch line (feature);
 - your commits with `--stat`, marked trivial or substantive;
 - files touched outside the claim;
 - beads you created, and how each is attached;

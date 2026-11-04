@@ -69,7 +69,7 @@
 #
 # TWO CALLS IS THE NORMAL COLD START, NOT A FAULT. The window is ~8m10s and
 # build-test-fast has measured 8m56s-13m25s across a dozen PRs, so a caller
-# that starts waiting when the run starts — every feature reviewer — times out
+# that starts waiting when the run starts — the orchestrator at Ship — times out
 # on a perfectly healthy PR as a matter of course (computenet-ymv4 fixed the
 # opposite complaint; the two constraints cannot both be met inside one 600s
 # foreground call). Reported four times before anyone wrote it down
@@ -81,7 +81,7 @@
 # so no caller's `tail -1` classification breaks.
 # Stdout: one progress line per round, the head sha being judged, then the last
 #   rows, then the verdict as the FINAL line — exactly one of SETTLED /
-#   UNBOUND / TIMEOUT-PENDING / QUERY-FAILED — so `tail -1` is the reading. SETTLED means present-and-not-pending, which
+#   UNBOUND / TIMEOUT-PENDING / NO-RUN / QUERY-FAILED — so `tail -1` is the reading. SETTLED means present-and-not-pending, which
 #   includes failed checks: read the rows above it for red.
 # Exit: 0 = SETTLED; 6 = UNBOUND (rows settled, but over a transport that
 #   names no commit — never evidence for a diff); 4 = TIMEOUT-PENDING (rounds exhausted, checks exist but
@@ -508,7 +508,7 @@ if [ -n "$ages" ]; then
   if [ "$oldest" -lt "$STUCK_AFTER_MIN" ]; then
     echo "wait-checks: ORDINARY — every pending required check is under ${STUCK_AFTER_MIN}m." \
          "A cold-start settle normally takes TWO invocations; re-run this exact command" \
-         "(a feature reviewer does not: review.md gives it one call per head)."
+         "(reviewers make no call: review.md)."
   else
     echo "wait-checks: STUCK — a required check has run for ${oldest}m (>= ${STUCK_AFTER_MIN}m)." \
          "Investigate rather than re-running."

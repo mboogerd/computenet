@@ -119,7 +119,7 @@ CONTINUE means treat 5f's chosen route as OPEN and proceed, whatever rung
 
 ## A red required check
 
-This section covers a required check that is red in a module the diff does not touch, or red after you marked the PR ready. A red check on touched code is the feature's own work (SKILL.md "5e. Feature review and ship"). A red required check is this feature's defect until evidence shows the diff cannot have caused it, because from outside a flake looks exactly like a regression. Have all four artifacts first — use the ones a reviewer's report already quotes, and produce the rest. Whatever you write onward carries the run id, the job and the verbatim `FAILED` line, and marks any untested mechanism `unverified:`.
+This section covers a required check that is red in a module the diff does not touch, or red after you marked the PR ready. A red check on touched code is the feature's own work (SKILL.md "5e. Feature review and ship"). A red required check is this feature's defect until evidence shows the diff cannot have caused it, because from outside a flake looks exactly like a regression. If the PR is already ready, run `gh pr ready --undo <pr-url>` first, before any re-run. The four artifacts come from a reviewer you dispatch on the check (review.md, "CI is the orchestrator's"); never attribute alone. Whatever you write onward carries the run id, the job and the verbatim `FAILED` line, and marks any untested mechanism `unverified:`.
 
 1. The failing test, its assertion and its frame, read from the log. `gh pr checks <pr-url>` names the failing check and its run. Logs exist only after the whole run finishes. `-R` is needed because `gh` resolves the repo from the working directory.
 
@@ -177,7 +177,7 @@ gh run rerun <run-id> --failed -R mboogerd/computenet
 
 **Never ship on a red required check**, whatever the attribution says.
 
-If a red check lands after the PR is ready, run `gh pr ready --undo <pr-url>`. Wait for the feature reviewer's notification before dispatching the fix into that worktree. **Never put a second agent into a live agent's worktree or onto its branch**: the worktrees share one branch ref, so the stale one's next commit silently reverts the fix. Do not mark the PR ready again until every agent on it has reported.
+Wait for the attribution reviewer's notification before dispatching a fix into that worktree. **Never put a second agent into a live agent's worktree or onto its branch**: the worktrees share one branch ref, so the stale one's next commit silently reverts the fix. Do not mark the PR ready again until every agent on it has reported.
 
 ## Dolt pull conflicts
 

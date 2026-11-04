@@ -429,7 +429,7 @@ Agent({
 Read <feature-worktree>/.claude/skills/work/references/agent.md, then <feature-worktree>/.claude/skills/work/references/review.md.
 origin/main at dispatch: <sha>. Landed on main since this branch forked: <log output, or "none">.
 Open PRs that may merge meanwhile: <list>. Children left open as human parks (confirm each is one): <list or "none">.
-Your verdict comment and review/residual metadata on this feature are yours to write. Cross-bead writes authorized: <cross_bead or "none">. <Merge shas you resolved; gate scope if an implementer is live.>
+Your verdict comment and review/residual metadata on this feature are yours to write. Cross-bead writes authorized: <cross_bead or "none">. <Merge shas you resolved; gate scope if an implementer is live; on a red check: "Your whole task is attributing <check>, run <run-id> (review.md, CI is the orchestrator's).">
 You may commit and push repairs to the feature branch. Never run gh pr ready.`
 })
 ```
@@ -455,8 +455,10 @@ You may commit and push repairs to the feature branch. Never run gh pr ready.`
    up-to-date branch — and chasing a busy `main` never ends): ship the green head.
 2. Local HEAD must equal `gh pr view <pr> --json headRefOid`, and `gh pr list
    --head <branch>` must show only your PR.
-3. `wait-checks.sh <pr-url>`, again after TIMEOUT-PENDING; every required row must
-   pass. NO-RUN → empty commit, wait again. UNBOUND → not evidence (traps.md); re-run.
+3. `wait-checks.sh <pr-url>` until SETTLED with every required row passing:
+   TIMEOUT-PENDING, QUERY-FAILED or UNBOUND → again; NO-RUN → empty commit (it keeps
+   the READY), again; `CANCELLED` → `gh run rerun <id> --failed`, again. A red row:
+   no ship, re-run or override until a reviewer dispatched on it returns (recovery.md).
 4. Confirm the checks ran this diff's tests ([evidence.md](references/evidence.md), "CI evidence").
 5. `gh pr ready <pr>`, then `gh pr merge <pr> --auto --squash`. Ready PRs one at a
    time: a burst makes their merges race.
