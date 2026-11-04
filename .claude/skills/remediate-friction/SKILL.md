@@ -70,7 +70,7 @@ Before closing or queueing, record the class from
 `bd update <id> --set-metadata friction_class=E<n>`. Make one `bd` write per
 call.
 
-- **Queue:** `bd update <id> --add-label revise --set-metadata 'section=<file>#<heading>'`.
+- **Queue:** `bd update <id> --add-label revise --set-metadata 'section=.claude/skills/<path>#<heading>'`.
 - **Park:** comment exactly what a future instance must capture (the command,
   its verbatim output, what it cost), then
   `bd update <id> --add-label needs-evidence`.
