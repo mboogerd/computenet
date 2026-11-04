@@ -6,14 +6,17 @@ import civictech.agora.AgoraService
 import civictech.cell.control.AttentionPolicy
 import civictech.cell.durability.FileJournal
 import civictech.cell.graph.ApplyContext
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.testkit.awaitUntil
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -103,7 +106,7 @@ class CostTest {
 
     // ------------------------------------------------------------ engine
 
-    private val schedulers = mutableListOf<VirtualThreadScheduler>()
+    private val schedulers = mutableListOf<HostScheduler>()
     private val engines = mutableListOf<DeliberationEngine>()
 
     @AfterTest
@@ -112,9 +115,13 @@ class CostTest {
         schedulers.forEach { it.shutdown() }
     }
 
-    private fun graph(journalFile: java.io.File? = null): CredenceGraph {
+    private fun graph(
+        journalFile: java.io.File? = null,
+        scheduler: HostScheduler? = null,
+    ): CredenceGraph {
         val recover = journalFile?.let { it.exists() && it.length() > 0L } == true
-        val s = VirtualThreadScheduler("deliberate-cost-${schedulers.size}").also { schedulers += it }
+        val s = (scheduler ?: VirtualThreadScheduler("deliberate-cost-${schedulers.size}"))
+            .also { schedulers += it }
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = s, registry = registry, attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS))
         val journal = journalFile?.let(::FileJournal)
@@ -124,6 +131,23 @@ class CostTest {
                 context.recover(journal).awaitApplied(60_000)
                 graph.rebuildIndex()
             }
+        }
+    }
+
+    /** Signals the first armed synchronous host wait while retaining the production scheduler path. */
+    private class AwaitProbeScheduler(
+        private val delegate: VirtualThreadScheduler,
+    ) : HostScheduler by delegate {
+        private val armed = AtomicBoolean()
+        val awaitEntered = CountDownLatch(1)
+
+        fun arm() {
+            armed.set(true)
+        }
+
+        override fun <T> await(future: CompletableFuture<T>): T {
+            if (armed.compareAndSet(true, false)) awaitEntered.countDown()
+            return delegate.await(future)
         }
     }
 
@@ -205,19 +229,57 @@ class CostTest {
 
     @Test
     fun `link rounds are attributed to their question and counted as rounds`() {
+        val scheduler = AwaitProbeScheduler(VirtualThreadScheduler("deliberate-cost-link-load"))
+        val firstLinkProposal = AtomicBoolean()
+        val linkProposalEntered = CountDownLatch(1)
+        val releaseLinkProposal = CountDownLatch(1)
         val linkCalls = ConcurrentHashMap<String, AtomicInteger>()
         val proposer = PricedProposer({ if (it == "One?") 0.01 else 0.02 }) { ctx ->
-            if (ctx.link != null) linkCalls.computeIfAbsent(ctx.question) { AtomicInteger() }.incrementAndGet()
+            if (ctx.link != null) {
+                linkCalls.computeIfAbsent(ctx.question) { AtomicInteger() }.incrementAndGet()
+                if (firstLinkProposal.compareAndSet(false, true)) {
+                    linkProposalEntered.countDown()
+                    assertTrue(releaseLinkProposal.await(20, TimeUnit.SECONDS), "the loaded link proposal was never released")
+                }
+            }
         }
         val judge = PricedJudge()
         // maxDepth 1: the depth-1 arguments and their links (at the same depth) explore; their arguments do not.
         val e = DeliberationEngine(
-            graph(), judge, listOf(proposer),
-            DeliberationEngine.Config(argsPerCall = 1, maxRounds = 1, maxDepth = 1, maxArgsPerSide = 10, voiEpsilon = 0.0),
+            graph(scheduler = scheduler), judge, listOf(proposer),
+            DeliberationEngine.Config(
+                argsPerCall = 1,
+                maxRounds = 1,
+                maxDepth = 1,
+                maxArgsPerSide = 10,
+                workers = 1,
+                voiEpsilon = 0.0,
+            ),
         ).also { engines += it }
         e.ask("One?")
         e.ask("Two?")
-        e.idle()
+        assertTrue(linkProposalEntered.await(20, TimeUnit.SECONDS), "a link proposal never started")
+
+        // Put six seconds of deterministic backpressure ahead of the link's next graph mutation.
+        // The await probe proves the mutation was actually queued behind this task before the clock
+        // starts; the load therefore discriminates the old five-second scheduler deadline without
+        // relying on ambient machine load or a race between the proposer and the host queue.
+        val hostBlocked = CountDownLatch(1)
+        val releaseHost = CountDownLatch(1)
+        scheduler.submit(0) {
+            hostBlocked.countDown()
+            check(releaseHost.await(20, TimeUnit.SECONDS)) { "the deliberate cost-test host load was never released" }
+        }
+        assertTrue(hostBlocked.await(20, TimeUnit.SECONDS), "the deliberate cost-test host load never started")
+        scheduler.arm()
+        releaseLinkProposal.countDown()
+        assertTrue(scheduler.awaitEntered.await(20, TimeUnit.SECONDS), "the link mutation never waited on the loaded host")
+        try {
+            Thread.sleep(6_000)
+        } finally {
+            releaseHost.countDown()
+        }
+        assertTrue(e.awaitIdle(60.seconds), "engine did not go idle after the loaded link round")
         val g = e.snapshot()
         for ((text, usd) in listOf("One?" to 0.01, "Two?" to 0.02)) {
             val q = g.questions.single { it.text == text }
