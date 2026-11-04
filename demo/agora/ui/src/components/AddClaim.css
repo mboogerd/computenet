@@ -3,27 +3,57 @@
   gap: 0.4rem;
 }
 
+/* Inputs keep a real border (3:1 non-text contrast); the focus ring is the
+   shared :focus-visible outline plus a soft accent halo. */
 .add-claim__input {
-  width: 22ch;
-  padding: 0.35rem 0.5rem;
+  width: 24ch;
+  height: 32px;
+  padding: 0 0.65rem;
   background: var(--surface);
   color: var(--text);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--hairline-strong);
   border-radius: var(--radius);
   font: inherit;
+  transition-property: border-color, box-shadow;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
+.add-claim__input::placeholder {
+  color: var(--text-muted);
+}
+
+.add-claim__input:focus {
+  outline: none;
+  border-color: var(--accept-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accept-strong) 22%, transparent);
+}
+
+/* Icon side gets 2px less padding (optical alignment). */
 .add-claim__btn {
-  padding: 0.35rem 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 32px;
+  padding: 0 0.85rem 0 0.7rem;
   background: var(--accept-strong);
-  color: #fff;
-  border: none;
+  color: var(--on-accent);
+  border: 1px solid transparent;
   border-radius: var(--radius);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12), inset 0 1px 0 oklch(1 0 0 / 0.15);
   font: inherit;
+  font-weight: 550;
   cursor: pointer;
+}
+
+@media (hover: hover) {
+  .add-claim__btn:not(:disabled):hover {
+    background: color-mix(in srgb, var(--accept-strong) 88%, var(--text));
+  }
 }
 
 .add-claim__btn:disabled {
   opacity: 0.45;
   cursor: default;
+  box-shadow: none;
 }

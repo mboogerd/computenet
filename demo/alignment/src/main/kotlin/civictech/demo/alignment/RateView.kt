@@ -30,7 +30,19 @@ internal const val RATE_VIEW = """
 <style>
   #rate { --rate-cols: 9rem minmax(0,1fr) 5rem 3.8rem; }
   #rate .row { display: grid; grid-template-columns: var(--rate-cols); gap: .6rem; align-items: center; padding: .25rem 0; font-size: var(--fs-2); }
-  #rate .row label { color: var(--ink); }
+  #rate .row label { color: var(--ink); display: flex; align-items: center; gap: .45rem; min-width: 0; }
+  /* the dimension's colour as a small swatch beside its name: the slider fill is no longer its only carrier */
+  #rate .row label::before { content: ""; flex: 0 0 auto; width: .55rem; height: .55rem; border-radius: 3px; background: var(--c, var(--unrated)); }
+  #rate .row.unrated label::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c, var(--unrated)); }
+  #rate .card { transition: box-shadow var(--dur) ease-out; }
+  #rate .card h3 .count { display: inline-flex; align-items: center; gap: .3rem; padding: .05rem .5rem; border-radius: 999px;
+                          background: var(--surface-2); }
+  /* a fully rated card: the count turns into a check chip — a static cue, no motion needed */
+  #rate .card.done h3 .count { background: color-mix(in oklab, var(--ok) 14%, transparent); color: var(--ok); font-weight: 600; }
+  #rate .card.done h3 .count::before { content: "✓"; }
+  #ideaForm { padding: .5rem .5rem .5rem .8rem; border-radius: var(--radius-lg); background: var(--surface-2); color: var(--muted); }
+  #ideaForm input { flex: 1 1 10rem; min-width: 0; }
+  #ideaForm button { font-weight: 600; }
   #rate .row .v { text-align: right; font-size: var(--fs-1); color: var(--muted); white-space: nowrap; }
   #rate .row button { padding: .15rem .5rem; font-size: var(--fs-1); width: 100%; }
   #rate .anchors { display: grid; grid-template-columns: var(--rate-cols); column-gap: .6rem; margin: -.2rem 0 .5rem; font-size: var(--fs-1); color: var(--muted); }
@@ -46,10 +58,24 @@ internal const val RATE_VIEW = """
     background: linear-gradient(to right, var(--c) 0 var(--p), var(--track) var(--p) 100%); }
   #rate input[type=range]::-moz-range-track { box-sizing: border-box; height: 6px; border-radius: 999px; background: var(--track); }
   #rate input[type=range]::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--c); }
-  #rate input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -5px;
-    border-radius: 50%; background: var(--c); border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--c); }
-  #rate input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--c);
-    border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--c); }
+  /* the thumb: a surface-ringed dot in the dimension's colour; a soft halo while grabbed or focused
+     (box-shadow only, 150ms — a slider is touched dozens of times a session) */
+  #rate input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; margin-top: -6px;
+    border-radius: 50%; background: var(--c); border: 2px solid var(--surface);
+    box-shadow: 0 0 0 1px var(--c), 0 1px 3px color-mix(in oklab, var(--ink) 20%, transparent);
+    transition-property: box-shadow, opacity; transition-duration: var(--dur-fast); transition-timing-function: ease-out; }
+  #rate input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--c);
+    border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--c);
+    transition-property: box-shadow, opacity; transition-duration: var(--dur-fast); transition-timing-function: ease-out; }
+  #rate input[type=range]:active::-webkit-slider-thumb,
+  #rate input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 1px var(--c), 0 0 0 6px color-mix(in oklab, var(--c) 22%, transparent); }
+  #rate input[type=range]:active::-moz-range-thumb,
+  #rate input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 1px var(--c), 0 0 0 6px color-mix(in oklab, var(--c) 22%, transparent); }
+  @media (hover: hover) {
+    #rate input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 1px var(--c), 0 0 0 4px color-mix(in oklab, var(--c) 16%, transparent); }
+    #rate input[type=range]:hover::-moz-range-thumb { box-shadow: 0 0 0 1px var(--c), 0 0 0 4px color-mix(in oklab, var(--c) 16%, transparent); }
+    #rate .card:hover { box-shadow: var(--shadow-border-hover); }
+  }
   #rate .row.unrated input[type=range]::-webkit-slider-runnable-track { background: transparent; border: 1px dashed var(--unrated); }
   #rate .row.unrated input[type=range]::-moz-range-track { background: transparent; border: 1px dashed var(--unrated); }
   #rate .row.unrated input[type=range]::-moz-range-progress { background: transparent; }
@@ -58,6 +84,7 @@ internal const val RATE_VIEW = """
 
   /* paged mode (10mvq-D1/D8) */
   #pager { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .8rem; font-size: var(--fs-2); }
+  #pager button { font-weight: 600; }
   #pager #pagePos { font-variant-numeric: tabular-nums; color: var(--ink); min-width: 4.5rem; text-align: center; }
   #pager #pageProg { margin-left: auto; font-size: var(--fs-1); color: var(--muted); font-variant-numeric: tabular-nums; }
 
@@ -87,6 +114,10 @@ internal const val RATE_VIEW = """
     <span id="pageProg"></span>
   </div>
   <div id="ideas"></div>
+  <div id="rateEmpty" class="empty" hidden>
+    <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z"/></svg></span>
+    <strong>No ideas yet</strong><span id="rateEmptyHint"></span>
+  </div>
   <template id="sliderRow"><div class="row unrated"><label></label><input type="range" min="1" max="9" step="any"><span class="v"></span><button type="button">clear</button></div></template>
 </section>
 <script>
@@ -144,7 +175,7 @@ document.addEventListener('keydown', e => {
 
 function rateCard(idea, t, dims, tid) {
   const card = document.createElement('div');
-  card.className = 'card';
+  card.className = idea.total > 0 && idea.rated === idea.total ? 'card done' : 'card';
   const h = document.createElement('h3');
   const title = document.createElement('span');
   title.textContent = idea.title;
@@ -178,6 +209,7 @@ function rateCard(idea, t, dims, tid) {
     const input = row.querySelector('input');
     const shown = row.querySelector('span');
     const clearBtn = row.querySelector('button');
+    row.style.setProperty('--c', dimColour(t, dim)); // label swatch and slider share the dimension's colour
     input.style.setProperty('--c', dimColour(t, dim));
     const fill = () => input.style.setProperty('--p', (100 * (Number(input.value) - 1) / 8) + '%');
     // rated: thumb at the value, empty value column; unrated: no thumb, "not rated", parked at 5
@@ -226,7 +258,7 @@ function renderRate() {
   const box = document.getElementById('ideas');
   const pager = document.getElementById('pager');
   if (document.getElementById('rate').hidden) return;
-  if (!topicId() || !me()) { box.innerHTML = ''; pager.hidden = true; return; }
+  if (!topicId() || !me()) { box.innerHTML = ''; pager.hidden = true; document.getElementById('rateEmpty').hidden = true; return; }
   if (document.activeElement && document.activeElement.type === 'range') return; // don't yank a slider mid-drag
   const seq = ++rateSeq;
   const tid = topicId();
@@ -250,6 +282,10 @@ function renderRate() {
       m = rateModes[tid] = { mode: mode, key: key, narrow: narrow };
     }
     box.innerHTML = '';
+    document.getElementById('rateEmpty').hidden = n > 0;
+    document.getElementById('rateEmptyHint').textContent = allowed
+      ? 'Add the first one above — a short title is enough; the team rates it on each dimension.'
+      : 'The facilitator has not added any ideas yet. They will appear here as soon as they do.';
     if (m.mode === 'list' || n === 0) {
       pager.hidden = true;
       for (const idea of ideas) box.appendChild(rateCard(idea, t, dims, tid));

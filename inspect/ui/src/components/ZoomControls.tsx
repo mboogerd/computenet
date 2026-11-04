@@ -21,7 +21,7 @@ export default function ZoomControls() {
     <div class="zoom-controls" role="group" aria-label="Canvas zoom controls">
       <button
         type="button"
-        class="zoom-controls__btn"
+        class="zoom-controls__btn pressable"
         aria-label="Zoom out"
         title="Zoom out"
         onClick={() => zoomBy(1 / ZOOM_STEP)}
@@ -30,19 +30,19 @@ export default function ZoomControls() {
       </button>
       <button
         type="button"
-        class="zoom-controls__readout"
+        class="zoom-controls__readout pressable"
         aria-label="Reset zoom to 100%"
         title="Reset zoom to 100%"
         onClick={() => resetZoom()}
       >
         {percent()}%
       </button>
-      <button type="button" class="zoom-controls__btn" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(ZOOM_STEP)}>
+      <button type="button" class="zoom-controls__btn pressable" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(ZOOM_STEP)}>
         +
       </button>
       <button
         type="button"
-        class="zoom-controls__btn zoom-controls__fit"
+        class="zoom-controls__btn zoom-controls__fit pressable"
         aria-label="Fit graph to screen"
         title="Fit graph to screen"
         onClick={() => fitToScreen()}

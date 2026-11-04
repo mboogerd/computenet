@@ -11,6 +11,7 @@
   background: var(--surface);
   padding: 1rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -19,6 +20,7 @@
 .navigator__main {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 1rem;
 }
 
@@ -37,12 +39,21 @@
 }
 
 .search-panel__input {
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--hairline-strong);
   background: var(--surface-raised);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 0.4rem 0.6rem;
+  padding: 0.45rem 0.65rem;
   font: inherit;
+  transition-property: border-color, box-shadow;
+  transition-duration: var(--dur-hover);
+  transition-timing-function: ease-out;
+}
+
+.search-panel__input:focus {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .search-panel__input:disabled {
@@ -66,12 +77,16 @@
   cursor: pointer;
 }
 
-.search-chip:hover:not(:disabled) {
-  border-color: var(--hairline-strong);
+@media (hover: hover) {
+  .search-chip:hover:not(:disabled) {
+    border-color: var(--hairline-strong);
+    color: var(--text);
+  }
 }
 
 .search-chip.is-active {
   border-color: var(--focus-ring);
+  background: color-mix(in oklab, var(--focus-ring) 10%, var(--surface));
   color: var(--text);
   font-weight: 600;
 }
@@ -105,8 +120,11 @@
   gap: 0.1rem;
 }
 
-.search-hit:hover {
-  border-color: var(--hairline-strong);
+@media (hover: hover) {
+  .search-hit:hover {
+    border-color: var(--hairline-strong);
+    background: var(--surface);
+  }
 }
 
 .search-hit__label {
@@ -162,7 +180,11 @@
 .graph-card {
   width: 100%;
   text-align: left;
-  border: 1px solid var(--hairline);
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-border);
+  transition-property: box-shadow, background-color, opacity;
+  transition-duration: var(--dur-hover);
+  transition-timing-function: ease-out;
   background: var(--surface-raised);
   color: var(--text);
   border-radius: var(--radius);
@@ -174,14 +196,19 @@
   gap: 0.3rem;
 }
 
-.graph-card:hover {
-  border-color: var(--hairline-strong);
+@media (hover: hover) {
+  .graph-card:hover {
+    box-shadow: var(--shadow-border-hover);
+    background: var(--surface);
+  }
 }
 
 /* M4-FE ticket Implement §2: "the g-… id styled as 'unnamed', dashed
-   border per the v2 mockup". */
+   border per the v2 mockup". The dashed border is structure (it carries
+   meaning), so it stays a real border rather than a shadow ring. */
 .graph-card--unnamed {
-  border-style: dashed;
+  border: 1px dashed var(--hairline-strong);
+  box-shadow: none;
 }
 
 /* M5-COLD ticket Implement §2: "cold cards/thumbnails dimmed with a ❄ tag"
@@ -191,8 +218,10 @@
   opacity: 0.62;
 }
 
-.graph-card--cold:hover {
-  opacity: 1;
+@media (hover: hover) {
+  .graph-card--cold:hover {
+    opacity: 1;
+  }
 }
 
 .cold-tag {
@@ -260,7 +289,11 @@
 }
 
 .constellation-card {
-  border: 1px solid var(--hairline);
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-border);
+  transition-property: box-shadow, background-color;
+  transition-duration: var(--dur-hover);
+  transition-timing-function: ease-out;
   background: var(--surface-raised);
   color: var(--text);
   border-radius: var(--radius);
@@ -273,8 +306,11 @@
   font: inherit;
 }
 
-.constellation-card:hover {
-  border-color: var(--hairline-strong);
+@media (hover: hover) {
+  .constellation-card:hover {
+    box-shadow: var(--shadow-border-hover);
+    background: var(--surface);
+  }
 }
 
 /* 10-target-v3.md Navigator: "cold ones dimmed". */
@@ -284,6 +320,7 @@
 
 .constellation-card--erring {
   border-color: var(--error);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--error) 30%, transparent);
 }
 
 .constellation-card__header {

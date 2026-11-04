@@ -4,6 +4,7 @@ import { pulsing } from '../solid/hot';
 import { layoutMap, type Vertex, type MapLayout } from '../layout/map';
 import { bandFor, bandVar } from '../styles/bands';
 import { labelOf } from '../util/label';
+import { FitIcon, ZoomInIcon, ZoomOutIcon } from './Icons';
 import './GraphCanvas.css';
 
 const cx = (v: Vertex) => v.x + v.w / 2;
@@ -73,6 +74,39 @@ export default function GraphCanvas() {
     });
   };
 
+  /** Zoom about the viewport center (toolbar buttons). */
+  const zoomBy = (factor: number) => {
+    if (!mapEl) return;
+    const rect = mapEl.getBoundingClientRect();
+    const mx = rect.width / 2;
+    const my = rect.height / 2;
+    setView((v) => {
+      const k = Math.min(3, Math.max(0.2, v.k * factor));
+      const scale = k / v.k;
+      return { k, x: mx - (mx - v.x) * scale, y: my - (my - v.y) * scale };
+    });
+  };
+
+  /** Edges touching the selection — highlighted, everything else recedes.
+   *  A selected EDGE highlights itself; a selected CLAIM highlights every
+   *  edge it sources or receives (both halves through the junction). */
+  const lit = createMemo<Set<string> | null>(() => {
+    const sel = selection();
+    const l = layout();
+    if (!sel || !l || !l.vertices.has(sel)) return null;
+    const s = new Set<string>([sel]);
+    for (const seg of l.segments) if (seg.from === sel || seg.to === sel) s.add(seg.edgeRef);
+    return s;
+  });
+
+  const isLit = (ref: string): boolean => {
+    const s = lit();
+    if (!s) return false;
+    if (s.has(ref)) return true;
+    const l = layout();
+    return !!l && l.segments.some((seg) => s.has(seg.edgeRef) && (seg.from === ref || seg.to === ref));
+  };
+
   const fit = () => {
     const l = layout();
     if (!l || !mapEl || !l.width) return;
@@ -102,7 +136,13 @@ export default function GraphCanvas() {
   return (
     <div
       class="map"
+      classList={{ 'map--has-focus': lit() !== null }}
       ref={mapEl}
+      style={{
+        // the dot grid pans and zooms with the scene
+        'background-size': `${22 * view().k}px ${22 * view().k}px`,
+        'background-position': `${view().x}px ${view().y}px`,
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endPan}
@@ -134,7 +174,7 @@ export default function GraphCanvas() {
                     orient="auto"
                     markerUnits="userSpaceOnUse"
                   >
-                    <path d="M1,1 L9,5 L1,9 Z" fill="var(--edge-muted)" />
+                    <path d="M1,1 L9,5 L1,9 Z" fill="var(--edge-support)" />
                   </marker>
                   <marker
                     id="m-attack"
@@ -145,7 +185,7 @@ export default function GraphCanvas() {
                     orient="auto"
                     markerUnits="userSpaceOnUse"
                   >
-                    <path d="M6,1 L6,11" stroke="var(--edge-muted)" stroke-width="2" />
+                    <path d="M6,1 L6,11" stroke="var(--edge-attack)" stroke-width="2.5" stroke-linecap="round" />
                   </marker>
                 </defs>
 
@@ -165,8 +205,11 @@ export default function GraphCanvas() {
                     const a = anchor(f, cx(t), cy(t));
                     const b = anchor(t, cx(f), cy(f));
                     const sel = () => selection() === seg.edgeRef;
+                    const on = () => lit()?.has(seg.edgeRef) ?? false;
                     return (
                       <line
+                        class="map-seg"
+                        classList={{ 'is-lit': on() }}
                         x1={a.x}
                         y1={a.y}
                         x2={b.x}
@@ -176,9 +219,12 @@ export default function GraphCanvas() {
                             ? seg.polarity === 'ATTACK'
                               ? 'var(--reject-strong)'
                               : 'var(--accept-strong)'
-                            : 'var(--edge-muted)'
+                            : seg.polarity === 'ATTACK'
+                              ? 'var(--edge-attack)'
+                              : 'var(--edge-support)'
                         }
-                        stroke-width={sel() ? 2 : 1.5}
+                        stroke-width={sel() ? 2.5 : on() ? 2 : 1.5}
+                        stroke-linecap="round"
                         stroke-dasharray={seg.polarity === 'ATTACK' ? '5 3' : undefined}
                         marker-end={
                           seg.part === 'out'
@@ -203,6 +249,7 @@ export default function GraphCanvas() {
                     return (
                       <g
                         class="map-junction"
+                        classList={{ 'is-lit': lit()?.has(v.ref) ?? false }}
                         transform={`translate(${cx(v)}, ${cy(v)})`}
                         onClick={() => setSelection(v.ref)}
                       >
@@ -247,28 +294,49 @@ export default function GraphCanvas() {
                   return (
                     <div
                       class="map-card"
-                      classList={{ 'is-selected': selection() === v.ref, 'is-pulsing': pulse() }}
+                      classList={{
+                        'is-selected': selection() === v.ref,
+                        'is-pulsing': pulse(),
+                        'is-focal': v.depth === 0,
+                        'is-lit': isLit(v.ref),
+                      }}
                       style={{
                         left: `${v.x}px`,
                         top: `${v.y}px`,
                         width: `${v.w}px`,
                         height: `${v.h}px`,
-                        'border-left-color': bandVar(band()),
+                        '--card-band': bandVar(band()),
                       }}
                       onClick={() => setSelection(v.ref)}
                     >
                       <span class="map-card__text">{rec() ? labelOf(rec()!) : v.ref.slice(0, 8)}</span>
-                      <span class="map-card__cred">{rec()?.credence.toFixed(2)}</span>
+                      <span class="map-card__cred">
+                        <span
+                          class="map-card__swatch"
+                          classList={{ 'map-card__swatch--contested': band() === 'contested' }}
+                        />
+                        {rec()?.credence.toFixed(2)}
+                      </span>
                     </div>
                   );
                 }}
               </For>
             </div>
 
-            <button class="map__fit" onClick={fit} title="Fit to view (or double-click)">
-              Fit
-            </button>
-            <Show when={l().unreachable.length}>
+            <div class="map__tools" onPointerDown={(e) => e.stopPropagation()}>
+              <button class="map__tool pressable" onClick={() => zoomBy(1.25)} title="Zoom in" aria-label="Zoom in">
+                <ZoomInIcon size={16} />
+              </button>
+              <span class="map__zoom">{Math.round(view().k * 100)}%</span>
+              <button class="map__tool pressable" onClick={() => zoomBy(0.8)} title="Zoom out" aria-label="Zoom out">
+                <ZoomOutIcon size={16} />
+              </button>
+              <span class="map__tools-sep" />
+              <button class="map__tool pressable" onClick={fit} title="Fit to view (or double-click)" aria-label="Fit to view">
+                <FitIcon size={16} />
+              </button>
+            </div>
+            <Show when={l().unreachable.filter((r) => graph.get(r)?.kind === 'CLAIM').length}>
               <div class="map__hint">
                 {l().unreachable.filter((r) => graph.get(r)?.kind === 'CLAIM').length} claim(s) not
                 connected to this focal — pick another above.

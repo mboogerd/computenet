@@ -38,6 +38,7 @@ import type { ChangeLogEntry } from '../sync/changeLog';
 import { diffRows, type RowFlash } from '../sync/valueDiff';
 import { REMOTE_NOTICE, isRemotePlacement } from '../util/placement';
 import ValueView from './ValueView';
+import { CloseIcon, PinIcon, SelectIcon } from './icons';
 import './DetailPanel.css';
 
 /** M5-NET Exclusions: a peer-hosted cell shows descriptor + placement, and
@@ -54,7 +55,16 @@ const remoteSelected = () => isRemotePlacement(cellDetail());
 export default function DetailPanel() {
   return (
     <aside class="detail-panel">
-      <Show when={selection()} fallback={<p class="detail-panel__empty">Select a node to inspect it.</p>}>
+      <Show
+        when={selection()}
+        fallback={
+          <div class="detail-panel__empty">
+            <SelectIcon class="detail-panel__empty-icon" />
+            <p>Select a node to inspect it.</p>
+            <p class="detail-panel__empty-hint">Descriptor, state, flow and errors for one cell, all at once.</p>
+          </div>
+        }
+      >
         {(ref) => (
           <>
             <div class="detail-panel__head">
@@ -67,7 +77,7 @@ export default function DetailPanel() {
                     while its graph is parked. */}
                 <button
                   type="button"
-                  class="icon-btn detail-panel__pin"
+                  class="icon-btn detail-panel__pin pressable"
                   classList={{ 'is-pinned': isPinned(ref()) }}
                   disabled={currentGraphCold()}
                   title={
@@ -78,15 +88,18 @@ export default function DetailPanel() {
                         : 'Pin (keep observing alongside the selection)'
                   }
                   onClick={() => (isPinned(ref()) ? unpin(ref()) : pin(ref()))}
+                  aria-label="Pin cell"
+                  aria-pressed={isPinned(ref())}
                 >
-                  📌
+                  <PinIcon filled={isPinned(ref())} />
                 </button>
                 <button
-                  class="icon-btn detail-panel__close"
+                  class="icon-btn detail-panel__close pressable"
                   title="Close (deselect)"
+                  aria-label="Close (deselect)"
                   onClick={() => setSelection(null)}
                 >
-                  ×
+                  <CloseIcon />
                 </button>
               </div>
             </div>

@@ -5,25 +5,30 @@
   font-variant-numeric: tabular-nums;
   font-family: var(--font-tabular);
   font-size: 12px;
+  font-weight: 500;
   color: var(--text-secondary);
 }
 
 .credence-badge--sm {
   font-size: 11px;
-  gap: 0.25rem;
+  gap: 0.3rem;
 }
 
+/* Swatch edge is an inset ring so it never changes the swatch size, and
+   the fill change on a live vote cross-fades in 200ms. */
 .credence-badge__swatch {
   width: 14px;
   height: 14px;
-  border-radius: 3px;
-  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
   flex: none;
+  transition: background-color 200ms ease-out;
 }
 
 .credence-badge--sm .credence-badge__swatch {
-  width: 11px;
-  height: 11px;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
 }
 
 .credence-badge__swatch--contested {

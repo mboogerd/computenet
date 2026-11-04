@@ -5,11 +5,38 @@
   background: var(--surface);
   padding: 1rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
+/* No-selection state: centred icon + the instruction + one line on what
+   selecting gives you. */
 .detail-panel__empty {
-  color: var(--text-muted);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  text-align: center;
+  color: var(--text-secondary);
   font-size: 0.85rem;
+}
+
+.detail-panel__empty p {
+  margin: 0;
+}
+
+.detail-panel__empty-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-bottom: 0.35rem;
+  color: var(--text-muted);
+}
+
+.detail-panel__empty-hint {
+  max-width: 16rem;
+  font-size: 0.76rem;
+  color: var(--text-muted);
 }
 
 .detail-panel__head {
@@ -36,7 +63,7 @@
 .detail-panel__close {
   flex: 0 0 auto;
   line-height: 1;
-  padding: 0.15rem 0.5rem;
+  padding: 0.3rem;
 }
 
 /* V1B-FE ticket Solution direction §4: same pin toggle as the node card's
@@ -45,16 +72,19 @@
    selection. */
 .detail-panel__pin {
   line-height: 1;
-  padding: 0.15rem 0.5rem;
+  padding: 0.3rem;
   opacity: 0.5;
 }
 
-.detail-panel__pin:hover {
-  opacity: 0.85;
+@media (hover: hover) {
+  .detail-panel__pin:hover:not(:disabled) {
+    opacity: 0.85;
+  }
 }
 
 .detail-panel__pin.is-pinned {
   opacity: 1;
+  color: var(--focus-ring);
   border-color: var(--focus-ring);
 }
 
@@ -306,6 +336,7 @@
   font-size: 0.72rem;
   max-height: 8rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .state-changelog__list li {

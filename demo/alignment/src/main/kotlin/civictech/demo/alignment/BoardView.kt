@@ -93,13 +93,21 @@ internal const val BOARD_MAIN = """
   #weights .wdir { color: var(--muted); font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .03em; }
   #weights .wv { font-variant-numeric: tabular-nums; color: var(--muted); }
   #weights .wformula { color: var(--muted); font-size: var(--fs-1); margin-left: auto; }
-  #gate .gate-card { text-align: center; padding: 2rem 1.5rem; }
-  #gate .gate-card h3 { margin: 0 0 .4rem; }
-  #gate .gate-card p { margin: 0; }
-  #boardMode { display: flex; gap: .35rem; margin-bottom: .6rem; }
+  #gate .gate-card { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.2rem 1.5rem; gap: .35rem;
+                     background: var(--surface-2); box-shadow: none; border: 1.5px dashed var(--line); border-radius: var(--radius-lg); }
+  #gate .gate-card h3 { margin: 0; display: block; }
+  #gate .gate-card p { margin: 0; font-variant-numeric: tabular-nums; }
+  #gate .gate-icon { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; margin-bottom: .35rem; border-radius: 50%;
+                     background: var(--accent-soft); color: var(--accent); }
+  #gate .gate-icon svg { width: 1.3rem; height: 1.3rem; }
+  #gate .gate-meter { width: min(16rem, 80%); height: .4rem; margin-top: .5rem; border-radius: 999px; background: var(--track); overflow: hidden; }
+  #gate .gate-meter span { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  #gate .gate-go { margin-top: .7rem; }
+  #ranking:not(:empty) + #boardEmpty, #ranking[hidden] + #boardEmpty { display: none; }
+  #boardMode { display: flex; gap: .35rem; margin-bottom: .6rem; align-items: center; }
   #boardMode[hidden] { display: none; }
   #boardMode button { font-size: .75rem; padding: .25rem .7rem; border-radius: 999px; border: 1px solid var(--line);
-                       background: var(--surface); color: var(--muted); cursor: pointer; }
+                       background: var(--surface); color: var(--muted); cursor: pointer; font-weight: 600; }
   #boardMode button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
   #boardMode #boardAiRate { margin-left: auto; color: var(--accent); border-color: var(--accent); }
   #boardMode #boardAiRate[hidden] { display: none; }
@@ -109,7 +117,7 @@ internal const val BOARD_MAIN = """
              box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
              gap: .15rem; padding: .3rem .3rem; font-size: var(--fs-2);
              border-bottom: 1px solid var(--line); will-change: transform;
-             transition: transform .55s cubic-bezier(.22,1,.36,1), opacity .3s; }
+             transition: transform .55s var(--ease-out), opacity .3s ease-out, background-color 100ms ease-out; }
   .rankrow.moving { z-index: 2; }
   .rankrow.enter, .rankrow.leave { opacity: 0; }
   .rankrow .main { display: grid; grid-template-columns: 1.6rem minmax(0,1fr) minmax(6rem,38%) 4.6rem 3.4rem;
@@ -139,16 +147,21 @@ internal const val BOARD_MAIN = """
   .rankrow .axisband.lo { opacity: .45; }
   .rankrow .axisband.hi { opacity: 1; }
   .rankrow .axistick { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--ink); }
+  /* the AI raters' mean on the same 1-9 axis: a hollow ring — shape, not colour, tells it from the
+     people's tick, and the 2px surface ring keeps it legible where it overlaps the band */
+  .rankrow .aimark { position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+                     background: var(--surface); border: 2px solid var(--ink); box-shadow: 0 0 0 1.5px var(--surface); z-index: 1; }
+  .rankrow .aimark[hidden] { display: none; }
   .rankrow .score { display: flex; align-items: center; justify-content: flex-end; gap: .25rem;
                     text-align: right; font-variant-numeric: tabular-nums; }
   .rankrow .score[role="button"] { cursor: pointer; border-radius: 4px; }
-  .rankrow .score[role="button"]:hover { background: var(--accent-soft); }
+  .rankrow .score { font-weight: 700; font-size: var(--fs-3); letter-spacing: -.01em; }
   .rankrow .score[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .rankrow .ovbadge { font-size: .6rem; padding: .05rem .3rem; border-radius: 6px;
                        background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
   .rankrow .ovclear { border: none; background: none; color: var(--muted); cursor: pointer;
                        padding: 0; font-size: .85rem; line-height: 1; }
-  .rankrow .ovclear:hover { color: var(--accent); }
+
   .rankrow .ovinput { width: 100%; padding: .1rem .2rem; font-size: var(--fs-2); text-align: right; }
   .rankrow .pill { justify-self: start; font-size: .7rem; padding: .1rem .5rem; border-radius: 8px; white-space: nowrap; }
   .rankrow .pill.split { background: var(--warn-soft); color: var(--warn); }
@@ -159,7 +172,11 @@ internal const val BOARD_MAIN = """
                   font-size: .72rem; color: var(--muted); }
   .rankrow .sub div[hidden] { display: none; }
   .rankrow .sub .line1 { display: flex; gap: .5rem; align-items: baseline; }
-  .rankrow .sub .ai.diverges { color: var(--warn); }
+  .rankrow .sub .ai { display: inline-flex; align-items: center; gap: .3rem; }
+  /* the same hollow ring as the spread view's AI mark: one glyph links the text to the mark */
+  .rankrow .sub .ai.has-score::before { content: ""; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+                                        border: 1.5px solid currentColor; }
+  .rankrow .sub .ai.diverges { color: var(--warn); font-weight: 600; }
   .rankrow.unranked { opacity: .5; }
   .rankrow.unranked .stack { visibility: hidden; } /* an unscored idea has no bar, not an empty one */
   .rankrow.unranked.enter, .rankrow.unranked.leave { opacity: 0; }
@@ -171,7 +188,7 @@ internal const val BOARD_MAIN = """
   #discuss .drow .dttl { font-weight: 600; }
   #discuss .drow .dsplit { color: var(--muted); font-size: var(--fs-1); margin-top: .15rem; }
   #discuss .drow { cursor: pointer; border-radius: 4px; }
-  #discuss .drow:hover .dttl { color: var(--accent); }
+
   #discuss .drow:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   #discuss .drow .dnote { font-size: var(--fs-1); margin-top: .15rem; color: var(--ink);
                           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -179,9 +196,15 @@ internal const val BOARD_MAIN = """
   .rankrow .pill.split { cursor: pointer; }
   .rankrow .pill.split:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   #board .note { color: var(--muted); font-size: var(--fs-1); margin-top: .6rem; }
+  @media (hover: hover) {
+    .rankrow .score[role="button"]:hover { background: var(--accent-soft); }
+    .rankrow .ovclear:hover { color: var(--accent); }
+    #discuss .drow:hover .dttl { color: var(--accent); }
+    .rankrow:hover { background: color-mix(in oklab, var(--surface-2) 55%, var(--surface)); }
+  }
+  /* reduced motion: rows stop sliding, but their fade (opacity only) still bridges the change */
   @media (prefers-reduced-motion: reduce) {
-    #weights { transition: none; }
-    .rankrow { transition: none; }
+    .rankrow { transition: opacity .2s ease-out; }
   }
 </style>
 <section id="board" class="pane view" hidden>
@@ -193,9 +216,13 @@ internal const val BOARD_MAIN = """
     <button type="button" id="boardAiRate" hidden>Get AI ratings</button>
   </div>
   <div id="ranking"></div>
+  <div id="boardEmpty" class="empty">
+    <span class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
+    <strong>Nothing to rank yet</strong><span>Ideas appear here, ranked by the team's score, once someone adds one in Rate.</span>
+  </div>
   <div id="discuss" hidden><h3>Discuss</h3></div>
   <div id="scatter" hidden></div>
-  <p class="note">Bar segments show each dimension's weighted contribution to the score; a × badge shows the factor multiplier and a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range. "AI" is the AI raters' score, kept apart from the people's and never ranked on; "≠ AI" marks a dimension where the two disagree by 2 or more.</p>
+  <p class="note">Bar segments show each dimension's weighted contribution to the score; a × badge shows the factor multiplier and a ÷ badge shows the cost divisor. A marked score is the facilitator's override; the computed score stays alongside it. The indicator marks how split the team is on an idea; Discuss lists the split ideas — open a split marker or a Discuss row to see every rating and record what the team decided. Switch to spread to see each dimension's rated range; a hollow ring there marks the AI raters' mean beside the people's tick. "AI" is the AI raters' score, kept apart from the people's and never ranked on; "≠ AI" marks a dimension where the two disagree by 2 or more.</p>
 </section>
 <script>
 // ── Board: the aggregate view ──────────────────────────────────────────────
@@ -373,6 +400,13 @@ function renderGate(box, g) {
   box.innerHTML = '';
   const card = document.createElement('div');
   card.className = 'card gate-card';
+  const icon = document.createElement('span');
+  icon.className = 'gate-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  // reveal: an hourglass (someone else's move); rate: a lock that your own ratings open
+  icon.innerHTML = g.reason === 'reveal'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9s10 4 10 9"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   const h = document.createElement('h3');
   const p = document.createElement('p');
   p.className = 'muted';
@@ -383,7 +417,27 @@ function renderGate(box, g) {
     h.textContent = 'rate everything to see the board';
     p.textContent = g.rated + ' of ' + g.total + ' rated';
   }
-  card.appendChild(h); card.appendChild(p);
+  card.appendChild(icon); card.appendChild(h); card.appendChild(p);
+  if (g.total > 0) {
+    const meter = document.createElement('div');
+    meter.className = 'gate-meter';
+    meter.setAttribute('role', 'progressbar');
+    meter.setAttribute('aria-valuemin', '0');
+    meter.setAttribute('aria-valuemax', String(g.total));
+    meter.setAttribute('aria-valuenow', String(g.rated));
+    const fill = document.createElement('span');
+    fill.style.scale = (g.rated / g.total) + ' 1';
+    meter.appendChild(fill);
+    card.appendChild(meter);
+  }
+  if (g.reason === 'rate' && g.rated < g.total) {
+    const goRate = document.createElement('button');
+    goRate.type = 'button';
+    goRate.className = 'primary gate-go';
+    goRate.textContent = 'Continue rating';
+    goRate.onclick = () => showTab('rate');
+    card.appendChild(goRate);
+  }
   box.appendChild(card);
 }
 
@@ -685,7 +739,8 @@ function renderRanking(t, ideas, participants, stagger) {
         const lo = document.createElement('div'); lo.className = 'axisband lo';
         const hi = document.createElement('div'); hi.className = 'axisband hi';
         const tick = document.createElement('div'); tick.className = 'axistick';
-        axisrow.appendChild(guide); axisrow.appendChild(lo); axisrow.appendChild(hi); axisrow.appendChild(tick);
+        const aim = document.createElement('div'); aim.className = 'aimark'; aim.hidden = true;
+        axisrow.appendChild(guide); axisrow.appendChild(lo); axisrow.appendChild(hi); axisrow.appendChild(tick); axisrow.appendChild(aim);
         spread.appendChild(axisrow);
       });
     }
@@ -705,10 +760,18 @@ function renderRanking(t, ideas, participants, stagger) {
       const lo = axisrow.querySelector('.axisband.lo');
       const hi = axisrow.querySelector('.axisband.hi');
       const tick = axisrow.querySelector('.axistick');
+      const aim = axisrow.querySelector('.aimark');
       const st = f.byDim[d.id];
+      // the AI raters' mean for this dimension, on the people's 1-9 axis (the API's value, not recomputed)
+      const aiSt = f.ai && f.ai.byDim ? f.ai.byDim[d.id] : undefined;
+      if (aim) {
+        aim.hidden = !aiSt;
+        if (aiSt) aim.style.left = pct(aiSt.mean) + '%';
+      }
       if (!st) {
         lo.style.width = '0'; hi.style.width = '0'; tick.style.left = '-999px';
-        axisrow.removeAttribute('title');
+        if (aiSt) axisrow.title = d.name + ': AI mean ' + aiSt.mean.toFixed(1);
+        else axisrow.removeAttribute('title');
         return;
       }
       const colour = dimColour(t, d);
@@ -720,7 +783,8 @@ function renderRanking(t, ideas, participants, stagger) {
       lo.style.left = aFrom + '%'; lo.style.width = Math.max(0, aTo - aFrom) + '%'; lo.style.background = colour;
       hi.style.left = bFrom + '%'; hi.style.width = Math.max(0, bTo - bFrom) + '%'; hi.style.background = colour;
       tick.style.left = meanP + '%'; tick.style.background = colour;
-      axisrow.title = d.name + ': mean ' + st.mean.toFixed(1) + ' ± ' + st.stdev.toFixed(2) + ' (' + st.n + ')';
+      axisrow.title = d.name + ': mean ' + st.mean.toFixed(1) + ' ± ' + st.stdev.toFixed(2) + ' (' + st.n + ')' +
+        (aiSt ? ' · AI mean ' + aiSt.mean.toFixed(1) : '');
     });
 
     // score family (D3/D11) vs spread family (D10): only one shown at a time; score cell,
@@ -852,6 +916,7 @@ function renderRanking(t, ideas, participants, stagger) {
       }
       aiEl.textContent = parts.join(' · ');
       aiEl.classList.toggle('diverges', apart.length > 0);
+      aiEl.classList.toggle('has-score', !!f.ai);
       aiEl.title = (f.ai ? 'AI score from ' + (f.ai.models || []).join(', ') + ', aggregated apart from the people\'s score. ' : '') +
         (declined.length ? 'A decline means the model judged the idea outside its knowledge: give it more description, then ask again.' : '');
     } else {

@@ -23,10 +23,31 @@ export function loadTheme(): ThemePref {
   }
 }
 
+/**
+ * Runs `swap` with every CSS transition switched off, so a theme change lands
+ * in one frame instead of every colour transition firing at once (better-ui:
+ * suppress transitions on theme switch). The override is removed only after
+ * the next paint, once the new colours have committed.
+ */
+export function withoutTransitions(swap: () => void): void {
+  if (typeof document === 'undefined' || typeof requestAnimationFrame === 'undefined') {
+    swap();
+    return;
+  }
+  const style = document.createElement('style');
+  style.append(document.createTextNode('*,*::before,*::after{transition:none !important}'));
+  document.head.append(style);
+  swap();
+  void document.body.offsetHeight; // force a synchronous style flush
+  requestAnimationFrame(() => requestAnimationFrame(() => style.remove()));
+}
+
 export function applyTheme(pref: ThemePref): void {
   const root = document.documentElement;
-  if (pref === 'system') delete root.dataset.theme;
-  else root.dataset.theme = pref;
+  withoutTransitions(() => {
+    if (pref === 'system') delete root.dataset.theme;
+    else root.dataset.theme = pref;
+  });
   try {
     if (pref === 'system') window.localStorage.removeItem(KEY);
     else window.localStorage.setItem(KEY, pref);

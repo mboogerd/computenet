@@ -201,11 +201,17 @@ function installFetch(): void {
 
 // --- EventSource stub ----------------------------------------------------
 
+/** The most recently constructed stub, so a suite can drive the client's
+ *  `onopen`/`onerror` (connection-state UI) without a real stream. */
+export let latestEventSource: InertEventSource | null = null;
+
 class InertEventSource {
   onopen: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
-  constructor(public readonly url: string) {}
+  constructor(public readonly url: string) {
+    latestEventSource = this;
+  }
   close(): void {
     // inert: nothing was ever really open
   }

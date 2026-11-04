@@ -1,9 +1,11 @@
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import CredenceBadge from './CredenceBadge';
+import { bandFor, bandVar } from '../styles/bands';
 import { graph, nodes, structuralVersion, selection, setSelection, debateSort } from '../solid/graph';
 import { pulsing } from '../solid/hot';
 import { debateRows, effectivePull, type ArgRow } from '../layout/debate';
 import { labelOf } from '../util/label';
+import { ChevronIcon } from './Icons';
 import './ArgumentRow.css';
 
 const MAX_DEPTH = 2; // NN/g two-level cap (spec §3/§4)
@@ -39,6 +41,7 @@ export default function ArgumentRow(props: { row: ArgRow; depth?: number }) {
         <button
           class="arg-row__claim"
           classList={{ 'is-selected': selection() === source().ref, 'is-pulsing': pulse() }}
+          style={{ '--row-band': bandVar(bandFor(source().credence)) }}
           onClick={() => setSelection(source().ref)}
         >
           <span class="arg-row__text">{labelOf(source())}</span>
@@ -72,8 +75,14 @@ export default function ArgumentRow(props: { row: ArgRow; depth?: number }) {
       </div>
 
       <Show when={depth() < MAX_DEPTH && replyCount() > 0}>
-        <button class="arg-row__more" onClick={() => setExpanded((v) => !v)}>
-          {expanded() ? '▾ hide replies' : `▸ ${replyCount()} ${replyCount() === 1 ? 'reply' : 'replies'}`}
+        <button
+          class="arg-row__more"
+          classList={{ 'is-open': expanded() }}
+          aria-expanded={expanded()}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          <ChevronIcon size={12} stroke={2} class="arg-row__chev" />
+          {expanded() ? 'hide replies' : `${replyCount()} ${replyCount() === 1 ? 'reply' : 'replies'}`}
         </button>
       </Show>
       <Show when={expanded()}>

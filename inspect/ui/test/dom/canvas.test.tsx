@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import Canvas from '../../src/components/Canvas';
 import { selection } from '../../src/solid/state';
 import { setShowErrors } from '../../src/solid/toggles';
-import { CAND_SKILLS_REF, resetAppState, startApp } from './harness';
+import { CAND_SKILLS_REF, latestEventSource, resetAppState, startApp } from './harness';
 
 /** Canvas.tsx, seeded from the real `fixtures/topology.json` (16 cells, 18
  *  edges — `test/fixture.test.ts` pins those counts against the real
@@ -124,6 +124,24 @@ describe('Canvas', () => {
       await waitFor(() => {
         expect(pan.style.transform).toContain('scale(1.2)');
       });
+    });
+  });
+
+  describe('connection state', () => {
+    it('keeps the last-known graph but marks it stale with a banner while reconnecting', async () => {
+      const { container } = await renderReady();
+      expect(container.querySelector('.canvas__banner')).toBeNull();
+
+      latestEventSource!.onerror!(new Event('error'));
+      await waitFor(() => expect(container.querySelector('.canvas__banner')).toBeTruthy());
+      expect(container.querySelector('.canvas')!.classList.contains('is-stale')).toBe(true);
+      expect(container.querySelector('.canvas__banner')!.textContent).toContain('Connection lost');
+      // the graph is still there — stale, not cleared
+      expect(container.querySelectorAll('.node-card').length).toBe(16);
+
+      latestEventSource!.onopen!(new Event('open'));
+      await waitFor(() => expect(container.querySelector('.canvas__banner')).toBeNull());
+      expect(container.querySelector('.canvas')!.classList.contains('is-stale')).toBe(false);
     });
   });
 });

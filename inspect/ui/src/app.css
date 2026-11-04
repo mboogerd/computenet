@@ -42,6 +42,8 @@
   cursor: pointer;
 }
 
-.canvas__gone-action:hover {
-  border-color: var(--focus-ring);
+@media (hover: hover) {
+  .canvas__gone-action:hover {
+    border-color: var(--focus-ring);
+  }
 }

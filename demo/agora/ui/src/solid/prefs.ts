@@ -16,11 +16,19 @@ const [motion, setMotionSig] = createSignal(localStorage.getItem('agora.motion')
 
 export { theme, motion };
 
+/** Flip the theme with every transition suppressed for one frame, so the
+ *  color transitions on buttons/cards don't all fire at once and smear the
+ *  switch (better-ui "suppress transitions on theme switch"). */
 export function toggleTheme(): void {
   const t = theme() === 'dark' ? 'light' : 'dark';
+  const style = document.createElement('style');
+  style.append(document.createTextNode('*,*::before,*::after{transition:none !important}'));
+  document.head.append(style);
   setThemeSig(t);
   localStorage.setItem('agora.theme', t);
   document.documentElement.setAttribute('data-theme', t);
+  void document.body.offsetHeight; // force a synchronous style flush
+  requestAnimationFrame(() => requestAnimationFrame(() => style.remove()));
 }
 
 export function toggleMotion(): void {

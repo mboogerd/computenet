@@ -16,8 +16,9 @@ import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
 import { prefersReducedMotion } from '../solid/motion';
 import { currentGraphId } from '../solid/route';
-import { edges, nodes, selection, setSelection, store, structuralVersion } from '../solid/state';
+import { conn, edges, nodes, ready, selection, setSelection, store, structuralVersion } from '../solid/state';
 import { showErrors, showFlow, showHosts, showNet, showState } from '../solid/toggles';
+import { OfflineIcon, PinIcon, SelectIcon } from './icons';
 import {
   activeKey,
   cursorAnchorRect,
@@ -419,6 +420,22 @@ export default function Canvas() {
   // threshold: a real drag (`dragMoved`) must never also deselect (Solution
   // direction §4). The flag is consumed (reset) here rather than on
   // `pointerup`, since the browser's own `click` fires after `pointerup`.
+  /** Dot-grid backdrop that tracks the viewport, so the canvas reads as one
+   *  surface that pans and zooms (not a static texture under moving cards).
+   *  The step doubles whenever it would get denser than 12px on screen, so
+   *  zooming far out never turns the grid into noise. Background paint only
+   *  — no layout, and no extra transform on `.canvas__pan`. */
+  const gridStyle = () => {
+    const v = viewport();
+    let step = 24 * v.scale;
+    while (step < 12) step *= 2;
+    return {
+      '--grid-step': `${step}px`,
+      '--grid-x': `${v.x}px`,
+      '--grid-y': `${v.y}px`,
+    };
+  };
+
   function onSceneClick(e: MouseEvent) {
     if (dragMoved) {
       dragMoved = false;
@@ -428,8 +445,50 @@ export default function Canvas() {
   }
 
   return (
-    <div class="canvas" ref={canvasEl}>
-      <Show when={nodeRefs().length > 0} fallback={<p class="canvas__empty">No cells reported yet.</p>}>
+    <div
+      class="canvas"
+      classList={{ 'is-stale': ready() && conn() === 'reconnecting' }}
+      ref={canvasEl}
+      style={gridStyle()}
+    >
+      {/* Disconnected state: the last-known graph stays on screen (dimmed via
+          `.is-stale`) under a banner that says so — the canvas never silently
+          pretends a frozen snapshot is live. Only once a stream that was up
+          has errored (`reconnecting`) and only after a first snapshot
+          (`ready()`); before that the empty state below says "connecting". */}
+      <Show when={ready() && conn() === 'reconnecting'}>
+        <div class="canvas__banner" role="status">
+          <OfflineIcon />
+          <span>
+            <strong>Connection lost</strong> — reconnecting. Showing the last known graph.
+          </span>
+        </div>
+      </Show>
+      <Show
+        when={nodeRefs().length > 0}
+        fallback={
+          <Show
+            when={ready()}
+            fallback={
+              <div class="canvas__empty canvas__empty--loading" aria-busy="true">
+                <div class="canvas__skeleton" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <p class="canvas__empty-title">Connecting to the inspector…</p>
+                <p class="canvas__empty-body">Waiting for the first topology snapshot.</p>
+              </div>
+            }
+          >
+            <div class="canvas__empty">
+              <SelectIcon class="canvas__empty-icon" />
+              <p class="canvas__empty-title">No cells reported yet.</p>
+              <p class="canvas__empty-body">Cells appear here as soon as the host publishes them.</p>
+            </div>
+          </Show>
+        }
+      >
         <div
           class="canvas__pan"
           style={{ transform: `translate(${viewport().x}px, ${viewport().y}px) scale(${viewport().scale})` }}
@@ -589,6 +648,7 @@ export default function Canvas() {
                     <div
                       class="node-card"
                       ref={cardEl}
+                      data-color={rec()!.color ?? 'unknown'}
                       classList={{
                         'is-selected': selection() === ref,
                         'is-suspended': rec()!.lifecycle === 'SUSPENDED',
@@ -658,7 +718,7 @@ export default function Canvas() {
                             woken by pinning it either). */}
                         <button
                           type="button"
-                          class="node-card__pin"
+                          class="node-card__pin pressable"
                           classList={{ 'is-pinned': isPinned(ref) }}
                           disabled={currentGraphCold()}
                           title={
@@ -673,8 +733,10 @@ export default function Canvas() {
                             if (isPinned(ref)) unpin(ref);
                             else pin(ref);
                           }}
+                          aria-label="Pin cell"
+                          aria-pressed={isPinned(ref)}
                         >
-                          📌
+                          <PinIcon filled={isPinned(ref)} />
                         </button>
                       </div>
                       <div class="node-card__type">{shortType(rec()!.typeFqn)}</div>
@@ -1058,7 +1120,7 @@ function EdgeLine(props: {
       <Show when={pulseCount() > 0}>
         <For each={Array.from({ length: pulseCount() }, (_, i) => i)}>
           {(i) => (
-            <circle class="flow-pulse" r="3">
+            <circle class="flow-pulse" r="2.5">
               <animateMotion
                 path={pathD()}
                 dur={`${pulseDurationMs()}ms`}

@@ -7,13 +7,28 @@
 html,
 body {
   margin: 0;
-  background: var(--page);
+  background-color: var(--page);
   color: var(--text);
   font-family: var(--font);
   font-size: var(--text-md);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* A faint for/against glow at the top of the page; fixed so it never scrolls into the tree. */
+body {
+  min-height: 100vh;
+  background-image:
+    radial-gradient(640px 280px at 30% -120px, var(--glow-pro), transparent 70%),
+    radial-gradient(640px 280px at 70% -120px, var(--glow-con), transparent 70%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--pro) 24%, transparent);
 }
 
 button,
@@ -58,14 +73,43 @@ button {
 .app {
   max-width: 760px;
   margin: 0 auto;
-  padding: 22px 24px 96px;
+  padding: 8px 24px 96px;
 }
 
+/* The header stays in reach while the tree scrolls: translucent, blurred, and
+   a hairline only once content passes under it (scroll-driven where supported). */
 .top {
+  position: sticky;
+  z-index: 30;
+  top: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 22px;
+  margin: 0 -24px 14px;
+  padding: 12px 24px;
+  background: color-mix(in srgb, var(--page) 82%, transparent);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  backdrop-filter: saturate(1.6) blur(14px);
+}
+
+@supports (animation-timeline: scroll()) {
+  .top {
+    animation: header-edge linear both;
+    animation-timeline: scroll();
+    animation-range: 0 48px;
+  }
+}
+
+/* At the top of the page the header is invisible chrome; it gains its tint and
+   hairline only as content scrolls under it. */
+@keyframes header-edge {
+  from {
+    background-color: transparent;
+    box-shadow: 0 1px 0 transparent;
+  }
+  to {
+    box-shadow: 0 1px 0 var(--line);
+  }
 }
 
 .brand {
@@ -76,21 +120,56 @@ button {
 
 .brand h1 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
 }
 
+/* Two overlapping discs, for and against: where they meet is the deliberation. */
 .brand__mark {
-  width: 12px;
-  height: 12px;
+  position: relative;
+  width: 20px;
+  height: 14px;
+}
+
+.brand__mark::before,
+.brand__mark::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  background: linear-gradient(90deg, var(--pro) 50%, var(--con) 50%);
+}
+
+.brand__mark::before {
+  left: 0;
+  background: var(--pro);
+}
+
+.brand__mark::after {
+  right: 0;
+  background: var(--con);
+  mix-blend-mode: multiply;
+  opacity: 0.9;
+}
+
+:root[data-theme="dark"] .brand__mark::after {
+  mix-blend-mode: screen;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand__mark::after {
+    mix-blend-mode: screen;
+  }
 }
 
 .conn {
   margin-left: auto;
   margin-right: 4px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-sunk);
   font-size: var(--text-xs);
   color: var(--text-3);
   display: inline-flex;
@@ -106,8 +185,10 @@ button {
   background: var(--text-3);
 }
 
+/* Live: a steady halo, not a pulse — a connection that is fine should not move. */
 .conn--live::before {
   background: var(--pro);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pro) 22%, transparent);
 }
 
 .conn--reconnecting::before {
@@ -127,16 +208,21 @@ button {
   font-weight: 600;
   cursor: pointer;
   list-style: none;
-  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition-property: border-color, color, background-color, scale;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
 .iconbtn::-webkit-details-marker {
   display: none;
 }
 
-.iconbtn:hover {
-  color: var(--text);
-  border-color: var(--line-strong);
+@media (hover: hover) {
+  .iconbtn:hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+    background-color: var(--surface);
+  }
 }
 
 .theme__glyph {
@@ -145,7 +231,7 @@ button {
   border-radius: 50%;
   border: 1.5px solid currentColor;
   background: linear-gradient(90deg, currentColor 50%, transparent 50%);
-  transition: transform 400ms var(--ease);
+  transition: transform 300ms var(--ease-in-out);
 }
 
 .theme.is-dark .theme__glyph {
@@ -185,15 +271,17 @@ button {
   top: 40px;
   width: min(360px, calc(100vw - 32px));
   padding: 16px 18px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-pop);
   max-height: 70vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   font-size: var(--text-sm);
   color: var(--text-2);
-  animation: enter 220ms var(--ease) both;
+  transform-origin: top right;
+  animation: pop 200ms var(--ease-out) both;
 }
 
 .legend__panel dl {
@@ -301,8 +389,10 @@ button {
   border-radius: 999px;
   background: var(--surface);
   font-size: var(--text-lg);
-  box-shadow: var(--shadow);
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  box-shadow: var(--shadow-border);
+  transition-property: border-color, box-shadow;
+  transition-duration: var(--dur);
+  transition-timing-function: var(--ease-out);
 }
 
 .ask__input::placeholder {
@@ -312,7 +402,7 @@ button {
 .ask__input:focus {
   outline: none;
   border-color: var(--line-strong);
-  box-shadow: var(--shadow), 0 0 0 4px var(--hover);
+  box-shadow: var(--shadow-border-hover), 0 0 0 4px color-mix(in srgb, var(--focus) 30%, transparent);
 }
 
 .ask__submit {
@@ -331,7 +421,9 @@ button {
   font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
-  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+  transition-property: opacity, scale;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
 .ask__submit:disabled {
@@ -339,12 +431,14 @@ button {
   cursor: default;
 }
 
-.ask__submit:not(:disabled):hover .ask__arrow {
-  transform: translateX(2px);
+@media (hover: hover) {
+  .ask__submit:not(:disabled):hover .ask__arrow {
+    transform: translateX(2px);
+  }
 }
 
 .ask__arrow {
-  transition: transform var(--dur) var(--ease);
+  transition: transform var(--dur) var(--ease-out);
 }
 
 .ask__error {
@@ -359,7 +453,10 @@ button {
   display: flex;
   gap: 4px;
   margin-top: 12px;
+  /* Room for the selected pill's shadow ring, which overflow-x would clip. */
+  padding: 2px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
 
@@ -376,15 +473,22 @@ button {
   color: var(--text-3);
   font-size: var(--text-sm);
   cursor: pointer;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  /* A tab switch: instant-feeling feedback, colour only, at most 150ms. */
+  transition-property: background-color, color, box-shadow;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.qlist__item:hover {
-  color: var(--text-2);
+@media (hover: hover) {
+  .qlist__item:hover {
+    color: var(--text-2);
+    background-color: var(--hover);
+  }
 }
 
 .qlist__item.is-selected {
-  background: var(--surface-sunk);
+  background-color: var(--surface);
+  box-shadow: var(--shadow-border);
   color: var(--text);
 }
 
@@ -418,7 +522,7 @@ button {
   /* Its enter animation makes it a stacking context: lift it above the tree so the cost popover is not painted under the cards. */
   position: relative;
   z-index: 2;
-  animation: enter 480ms var(--ease) both;
+  animation: enter 300ms var(--ease-out) both;
 }
 
 .hero__q {
@@ -444,16 +548,18 @@ button {
   height: 8px;
   border-radius: 4px;
   background: var(--track);
+  box-shadow: inset 0 1px 1px oklch(0 0 0 / 0.06);
   overflow: hidden;
 }
 
-/* Soft fill up to the consensus; the band and the marker sit above it. */
+/* Soft fill up to the consensus; the band and the marker sit above it.
+   Value changes move on screen: ease-in-out (animate skill), long enough to follow. */
 .gauge__fill {
   position: absolute;
   inset: 0;
   background: var(--fill-soft);
   transform-origin: left;
-  transition: transform 700ms var(--ease);
+  transition: transform var(--dur-data) var(--ease-in-out);
 }
 
 .gauge__band {
@@ -463,9 +569,13 @@ button {
   bottom: 0;
   background: var(--band);
   border-radius: 2px;
-  transition: left 700ms var(--ease), width 700ms var(--ease);
+  transition-property: left, width;
+  transition-duration: var(--dur-data);
+  transition-timing-function: var(--ease-in-out);
 }
 
+/* The consensus marker wears a 2px surface ring (dataviz: overlapping marks), so it
+   stays legible where it sits on the band. */
 .gauge__mark {
   position: absolute;
   z-index: 2;
@@ -475,7 +585,8 @@ button {
   margin-left: -1.5px;
   border-radius: 1.5px;
   background: var(--credence);
-  transition: left 700ms var(--ease);
+  box-shadow: 0 0 0 1.5px var(--page);
+  transition: left var(--dur-data) var(--ease-in-out);
 }
 
 .gauge__caption {
@@ -512,7 +623,7 @@ button {
 
 .verdict__label {
   font-weight: 600;
-  transition: color 400ms var(--ease);
+  transition: color 300ms var(--ease-out);
 }
 
 .verdict--1 .verdict__label,
@@ -545,9 +656,14 @@ button {
   cursor: pointer;
 }
 
-.more:hover,
 .more[aria-expanded="true"] {
   color: var(--text);
+}
+
+@media (hover: hover) {
+  .more:hover {
+    color: var(--text);
+  }
 }
 
 /* thin per-question progress line: settled claims / all claims */
@@ -565,7 +681,7 @@ button {
   inset: 0;
   background: var(--text-3);
   transform-origin: left;
-  transition: transform 700ms var(--ease);
+  transition: transform var(--dur-data) var(--ease-in-out);
 }
 
 .activity.is-busy::after {
@@ -574,7 +690,7 @@ button {
   inset: 0;
   width: 30%;
   background: linear-gradient(90deg, transparent, var(--text-2), transparent);
-  animation: sweep 1.8s var(--ease) infinite;
+  animation: sweep 1.8s var(--ease-in-out) infinite;
 }
 
 .hero__meta {
@@ -590,18 +706,25 @@ button {
 
 /* Model C: "what would change the answer" — the question's top cruxes, below its tree. */
 .cruxes {
+  position: relative;
   margin: 28px 0 0;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
+  padding: 14px 16px 16px;
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--surface);
+  box-shadow: var(--shadow-border);
 }
 
 .cruxes__title {
-  margin: 0 0 8px;
-  font-size: var(--text-sm);
-  font-weight: 620;
-  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
 }
 
 .cruxes__list {
@@ -629,8 +752,19 @@ button {
   cursor: pointer;
 }
 
-.crux__btn:hover .crux__text {
-  text-decoration: underline;
+@media (hover: hover) {
+  .crux__btn:hover .crux__text {
+    text-decoration: underline;
+    text-decoration-color: var(--line-strong);
+    text-underline-offset: 3px;
+  }
+}
+
+.cruxes__list ::marker,
+.disagreement__list ::marker {
+  color: var(--text-3);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .crux__text {
@@ -654,34 +788,121 @@ button {
   cursor: help;
 }
 
-/* Session sparkline of the selected question's root credence, above its tree. */
+/* Session sparkline of the selected question's root credence, above its tree:
+   a small stat tile — label, current value and change, then the line. */
 .qheader {
   display: flex;
   justify-content: flex-end;
   margin: 8px 0 0;
 }
 
-.spark {
-  display: block;
-  background: var(--surface);
-  border: 1px solid var(--line);
+.sparktile {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 2px 14px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid transparent;
   border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-border);
+  animation: enter 300ms var(--ease-out) both;
+}
+
+.sparktile__label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.sparktile__value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--text-lg);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.sparktile__delta {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.sparktile__delta.is-up {
+  color: var(--pro-text);
+}
+
+.sparktile__delta.is-down {
+  color: var(--con-text);
+}
+
+.spark {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: block;
+  overflow: visible;
+}
+
+.spark__mid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.spark__area {
+  fill: var(--credence);
+  opacity: 0.08;
+}
+
+.spark__line {
+  fill: none;
+  stroke: var(--credence);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.spark__end {
+  fill: var(--credence);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.spark__hit {
+  fill: transparent;
+}
+
+@media (hover: hover) {
+  .spark__hit:hover {
+    fill: color-mix(in srgb, var(--credence) 14%, transparent);
+  }
 }
 
 /* "Where the rules disagree" — the question's widest-spread claims, below its cruxes. */
 .disagreement {
+  position: relative;
   margin: 20px 0 0;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
+  padding: 14px 16px 16px;
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--surface);
+  box-shadow: var(--shadow-border);
 }
 
 .disagreement__title {
-  margin: 0 0 8px;
-  font-size: var(--text-sm);
-  font-weight: 620;
-  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
 }
 
 .disagreement__list {
@@ -708,8 +929,12 @@ button {
   cursor: pointer;
 }
 
-.disagree__btn:hover .disagree__text {
-  text-decoration: underline;
+@media (hover: hover) {
+  .disagree__btn:hover .disagree__text {
+    text-decoration: underline;
+    text-decoration-color: var(--line-strong);
+    text-underline-offset: 3px;
+  }
 }
 
 .disagree__text {
@@ -780,7 +1005,7 @@ button {
   inset: 0;
   background: var(--text-3);
   transform-origin: left;
-  transition: transform 700ms var(--ease);
+  transition: transform var(--dur-data) var(--ease-in-out);
 }
 
 .framing__pct {
@@ -811,7 +1036,9 @@ button {
   bottom: 0;
   border-radius: 4px;
   background: var(--band);
-  transition: left 700ms var(--ease), width 700ms var(--ease);
+  transition-property: left, width;
+  transition-duration: var(--dur-data);
+  transition-timing-function: var(--ease-in-out);
 }
 
 .spread__mark {
@@ -829,7 +1056,8 @@ button {
   line-height: 15px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  transition: left 700ms var(--ease);
+  box-shadow: 0 0 0 2px var(--page);
+  transition: left var(--dur-data) var(--ease-in-out);
 }
 
 .spread__legend {
@@ -950,13 +1178,22 @@ button {
   color: var(--text-3);
   font: inherit;
   cursor: pointer;
-  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition-property: color, border-color, background-color, scale;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.pause:hover,
 .pause.is-on {
   color: var(--text);
   border-color: var(--line-strong);
+}
+
+@media (hover: hover) {
+  .pause:hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+    background-color: var(--surface);
+  }
 }
 
 /* ---------- cost (SPEC §12) ---------- */
@@ -974,13 +1211,21 @@ button {
   font: inherit;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
-  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition-property: color, border-color;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.cost__btn:hover,
 .cost__btn[aria-expanded="true"] {
   color: var(--text);
   border-color: var(--line-strong);
+}
+
+@media (hover: hover) {
+  .cost__btn:hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+  }
 }
 
 .cost__panel {
@@ -992,16 +1237,18 @@ button {
   top: calc(100% + 6px);
   width: min(340px, calc(100vw - 32px));
   padding: 14px 16px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-pop);
+  overscroll-behavior: contain;
   font-size: var(--text-sm);
   font-style: normal;
   color: var(--text-2);
   text-align: left;
   cursor: auto;
-  animation: enter 220ms var(--ease) both;
+  transform-origin: top right;
+  animation: pop 200ms var(--ease-out) both;
 }
 
 .cost__panel p {
@@ -1059,9 +1306,14 @@ button {
   cursor: pointer;
 }
 
-.cost__details > summary:hover,
 .cost__details[open] > summary {
   color: var(--text);
+}
+
+@media (hover: hover) {
+  .cost__details > summary:hover {
+    color: var(--text);
+  }
 }
 
 .cost__details .cost__list {
@@ -1138,31 +1390,58 @@ button {
 }
 
 .branch {
+  position: relative;
   padding-top: var(--gap);
-  animation: enter 520ms var(--ease) both;
+  animation: enter 300ms var(--ease-out) both;
+}
+
+/* The elbow from the parent's rail to this argument's polarity stripe, tinted by
+   side, so the tree reads as one connected graph rather than an indented list. */
+.children:not(.children--link) > .branch::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: calc(var(--gap) + 20px);
+  width: 12px;
+  height: 1px;
+  background: var(--line-strong);
+}
+
+.children:not(.children--link) > .branch--pro::before,
+.children:not(.children--link) > .branch--holds::before {
+  background: color-mix(in srgb, var(--pro) 55%, var(--line-strong));
+}
+
+.children:not(.children--link) > .branch--con::before,
+.children:not(.children--link) > .branch--undercut::before {
+  background: color-mix(in srgb, var(--con) 55%, var(--line-strong));
 }
 
 /* ---------- claim card: a quiet row until hovered or selected ---------- */
 
 .card {
   position: relative;
-  padding: 9px 12px 8px 18px;
+  /* 1px transparent border: forced-colors mode draws it once the shadow ring is dropped. */
+  padding: 8px 11px 7px 17px;
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  transition-property: background-color, box-shadow;
+  transition-duration: var(--dur-fast), var(--dur);
+  transition-timing-function: ease-out;
 }
 
 /* polarity stripe: colour = side, opacity = relation strength */
 .card::before {
   content: "";
   position: absolute;
-  left: 7px;
-  top: 12px;
-  bottom: 12px;
+  left: 6px;
+  top: 11px;
+  bottom: 11px;
   width: 3px;
   border-radius: 2px;
   background: var(--text-3);
   opacity: calc(0.25 + 0.75 * var(--s, 0));
-  transition: opacity 500ms var(--ease);
+  transition: opacity 300ms var(--ease-out);
 }
 
 .branch--pro > .card::before {
@@ -1173,13 +1452,15 @@ button {
   background: var(--con);
 }
 
-.card:hover {
-  background: var(--hover);
+@media (hover: hover) {
+  .card:hover {
+    background-color: var(--hover);
+  }
 }
 
 .card.is-open {
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  background-color: var(--surface);
+  box-shadow: var(--shadow-border-hover);
 }
 
 .card.is-busy::before {
@@ -1201,7 +1482,7 @@ button {
 /* Low reach recedes by colour (never below --text-2, ≥ 4.5:1) and size, not by opacity. */
 .card__text {
   text-wrap: pretty;
-  transition: color 500ms var(--ease);
+  transition: color var(--dur) var(--ease-out);
 }
 
 .reach--low > .card .card__text {
@@ -1216,10 +1497,15 @@ button {
   font-size: 14px;
 }
 
-.card:hover .card__text,
 .card.is-open .card__text,
 .card:focus-within .card__text {
   color: var(--text);
+}
+
+@media (hover: hover) {
+  .card:hover .card__text {
+    color: var(--text);
+  }
 }
 
 .card__cred {
@@ -1255,7 +1541,7 @@ button {
   border-radius: 2px;
   background: var(--fill-soft);
   transform-origin: left;
-  transition: transform 700ms var(--ease);
+  transition: transform var(--dur-data) var(--ease-in-out);
 }
 
 /* Where the credence rules disagree: drawn above the fill, so all of it shows. */
@@ -1266,7 +1552,9 @@ button {
   z-index: 1;
   border-radius: 1px;
   background: var(--band);
-  transition: left 700ms var(--ease), width 700ms var(--ease);
+  transition-property: left, width;
+  transition-duration: var(--dur-data);
+  transition-timing-function: var(--ease-in-out);
 }
 
 .facts__layers {
@@ -1346,14 +1634,22 @@ button {
   color: inherit;
   font: inherit;
   cursor: pointer;
-  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition-property: background-color, border-color;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.linkchip:hover,
 .linkchip:focus-visible,
 .linkchip.is-open {
-  background: var(--surface-sunk);
+  background-color: var(--surface-sunk);
   border-color: var(--line);
+}
+
+@media (hover: hover) {
+  .linkchip:hover {
+    background-color: var(--surface-sunk);
+    border-color: var(--line);
+  }
 }
 
 .linkchip.is-open {
@@ -1379,7 +1675,7 @@ button {
   background: var(--text-3);
   transform: scaleX(var(--h, 0));
   transform-origin: left;
-  transition: transform 500ms var(--ease);
+  transition: transform var(--dur-data) var(--ease-in-out);
 }
 
 .branch--pro > .card .linkchip__knot::after,
@@ -1415,12 +1711,13 @@ button {
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-pop);
   color: var(--text-2);
   font-size: var(--text-xs);
   line-height: 1.45;
   pointer-events: none;
-  animation: enter var(--dur) var(--ease) 250ms both;
+  transform-origin: bottom left;
+  animation: pop 180ms var(--ease-out) 250ms both;
 }
 
 .linkchip__peek-tag,
@@ -1462,7 +1759,7 @@ button {
   margin: 2px 0 4px calc(var(--indent) - 2px);
   padding: 4px 0 2px 12px;
   border-left: 1.5px dashed var(--line-strong);
-  animation: enter 260ms var(--ease) both;
+  animation: enter var(--dur) var(--ease-out) both;
 }
 
 .linkpanel.is-open {
@@ -1568,7 +1865,7 @@ button {
   z-index: 2;
   border-radius: 1px;
   background: var(--credence);
-  transition: left 700ms var(--ease);
+  transition: left var(--dur-data) var(--ease-in-out);
 }
 
 .bar--leaf .bar__tick {
@@ -1611,7 +1908,7 @@ button {
   gap: 5px;
   min-width: 0;
   overflow: hidden;
-  animation: enter 300ms var(--ease) both;
+  animation: enter var(--dur) var(--ease-out) both;
 }
 
 .now__item .tag--link {
@@ -1675,8 +1972,10 @@ button {
   cursor: pointer;
 }
 
-.linkish:hover {
-  color: var(--text);
+@media (hover: hover) {
+  .linkish:hover {
+    color: var(--text);
+  }
 }
 
 .chevron {
@@ -1685,7 +1984,7 @@ button {
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   transform: translateY(-1px) rotate(45deg);
-  transition: transform var(--dur) var(--ease);
+  transition: transform var(--dur) var(--ease-out);
 }
 
 .chevron.is-collapsed {
@@ -1698,17 +1997,23 @@ button {
   align-items: center;
   gap: 10px;
   opacity: 0;
-  transition: opacity var(--dur) var(--ease);
+  /* Revealed on row hover: high-frequency, so opacity only, at most 150ms. */
+  transition: opacity var(--dur-fast) ease-out;
 }
 
-.card:hover .reveal,
 .card:focus-within .reveal,
-.hero:hover .reveal,
 .hero:focus-within .reveal,
 .card.is-open .reveal,
 .hero.is-open .reveal,
 .reveal.is-pinned {
   opacity: 1;
+}
+
+@media (hover: hover) {
+  .card:hover .reveal,
+  .hero:hover .reveal {
+    opacity: 1;
+  }
 }
 
 .proposer {
@@ -1732,17 +2037,21 @@ button {
   color: var(--text-3);
   font-size: var(--text-xs);
   cursor: pointer;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition-property: background-color, color, box-shadow;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
 }
 
-.seg__btn:hover {
-  color: var(--text);
+@media (hover: hover) {
+  .seg__btn:hover {
+    color: var(--text);
+  }
 }
 
 .seg__btn.is-on {
-  background: var(--seg-on);
+  background-color: var(--seg-on);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-border);
 }
 
 /* Jev's numbers, for the selected claim */
@@ -1754,7 +2063,7 @@ button {
   padding-top: 10px;
   border-top: 1px solid var(--line);
   font-size: var(--text-xs);
-  animation: enter 260ms var(--ease) both;
+  animation: enter var(--dur) var(--ease-out) both;
 }
 
 .facts dt {
@@ -1798,9 +2107,11 @@ button {
   background: var(--toast);
   color: var(--toast-text);
   font-size: var(--text-sm);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-pop);
   pointer-events: auto;
-  animation: enter 220ms var(--ease) both;
+  /* Enters from the edge it lives on. */
+  --enter-y: 12px;
+  animation: enter 250ms var(--ease-out) both;
 }
 
 .toast__close {
@@ -1810,7 +2121,16 @@ button {
   color: inherit;
   font-size: 16px;
   line-height: 1;
+  border-radius: 4px;
+  opacity: 0.7;
   cursor: pointer;
+  transition: opacity var(--dur-fast) ease-out;
+}
+
+@media (hover: hover) {
+  .toast__close:hover {
+    opacity: 1;
+  }
 }
 
 /* ---------- empty states ---------- */
@@ -1821,28 +2141,115 @@ button {
   padding: 40px 0;
 }
 
+/* Loading the question: a skeleton of what is coming (question, gauge, three
+   arguments) instead of a lone sentence. The caption stays for screen readers. */
+.loading {
+  padding-top: 8px;
+  animation: enter 300ms var(--ease-out) both;
+}
+
+.loading .empty {
+  padding: 0;
+  margin: 0 0 22px;
+  text-align: left;
+  font-size: var(--text-sm);
+}
+
+.skel {
+  display: grid;
+  gap: 12px;
+}
+
+.skel__line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--track) 30%, var(--surface-sunk) 50%, var(--track) 70%);
+  background-size: 250% 100%;
+  animation: shimmer 1.8s linear infinite;
+}
+
+.skel__line--title {
+  width: 72%;
+  height: 26px;
+  border-radius: 8px;
+}
+
+.skel__line--gauge {
+  height: 8px;
+  margin: 6px 0 18px;
+}
+
+.skel__line--row {
+  width: 86%;
+  margin-left: 18px;
+}
+
+.skel__line--row:nth-child(4) {
+  width: 64%;
+}
+
+.skel__line--row:nth-child(5) {
+  width: 78%;
+}
+
+/* Waiting for the first arguments: three dots that breathe in turn. */
 .empty--quiet {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   text-align: left;
   padding: 28px 0;
   font-size: var(--text-sm);
 }
 
+.empty--quiet::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 9px 0 0 currentColor, 18px 0 0 currentColor;
+  margin-right: 18px;
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
 .welcome {
   max-width: 560px;
-  animation: enter 480ms var(--ease) both;
+}
+
+/* First visit is the one rare moment that earns a staged entrance (better-ui:
+   title, then prompt, then actions, 100ms apart; 12px rise and 4px blur). */
+.welcome > * {
+  --enter-y: 12px;
+  --enter-blur: 4px;
+  animation: enter 300ms ease-out both;
+}
+
+.welcome > :nth-child(2) {
+  animation-delay: 100ms;
+}
+
+.welcome > :nth-child(3) {
+  animation-delay: 200ms;
 }
 
 .welcome__lede {
   margin: 0;
-  font-size: 20px;
+  font-size: 21px;
   line-height: 1.45;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--text-2);
   text-wrap: pretty;
 }
 
+.welcome__lede strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .welcome__try {
-  margin: 36px 0 6px;
+  margin: 36px 0 10px;
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1855,19 +2262,35 @@ button {
   padding: 0;
 }
 
+.welcome__examples {
+  display: grid;
+  gap: 8px;
+}
+
+/* Each example is a raised row: elevation from the shadow ring, not a divider. */
 .example {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   width: 100%;
-  padding: 13px 2px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  background: none;
+  padding: 13px 14px 13px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-border);
   text-align: left;
   color: var(--text);
   cursor: pointer;
+  transition-property: box-shadow, scale;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: ease-out;
+}
+
+@media (hover: hover) {
+  .example:not(:disabled):hover {
+    box-shadow: var(--shadow-border-hover);
+  }
 }
 
 .example:disabled {
@@ -1877,28 +2300,47 @@ button {
 
 .example__arrow {
   color: var(--text-3);
-  transition: transform var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition-property: transform, color;
+  transition-duration: var(--dur);
+  transition-timing-function: var(--ease-out);
 }
 
-.example:not(:disabled):hover .example__arrow {
-  color: var(--text);
-  transform: translateX(3px);
+@media (hover: hover) {
+  .example:not(:disabled):hover .example__arrow {
+    color: var(--text);
+    transform: translateX(3px);
+  }
+}
+
+/* Press feedback (better-ui): 0.96 over 150ms ease-out, never while disabled.
+   Cards, chips and the tree's rows opt out — scaling a row of text distracts. */
+.iconbtn:active,
+.ask__submit:not(:disabled):active,
+.pause:not(:disabled):active,
+.example:not(:disabled):active {
+  scale: 0.96;
 }
 
 /* ---------- motion ---------- */
 
+/* Hidden state lives only in `from`, so an element whose animation never runs
+   stays visible. Geometry comes from --enter-* (zeroed under reduced motion). */
 @keyframes enter {
   from {
     opacity: 0;
-    transform: translateY(5px);
-    filter: blur(2px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-    filter: none;
+    transform: translateY(var(--enter-y));
+    filter: blur(var(--enter-blur));
   }
 }
+
+/* Popovers grow from their trigger: never from scale(0). */
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--enter-y) * -0.5)) scale(var(--enter-scale));
+  }
+}
+
 
 @keyframes breathe {
   0%,
@@ -1932,7 +2374,7 @@ button {
    panel (computenet-lmfg8, ClaimCard.focusInTree): a ring that fades over
    the same span the JS timer holds the `.is-focused` class for. */
 .is-focused {
-  animation: focus-ring 1.6s var(--ease);
+  animation: focus-ring 1.6s var(--ease-out);
 }
 
 @keyframes focus-ring {
@@ -1945,14 +2387,25 @@ button {
   }
 }
 
+/* Reduced motion: fewer and gentler, not nothing. Entrances keep their opacity
+   fade (their geometry is zeroed), state changes keep colour/opacity transitions,
+   and movement — value tweens, sweeps, shimmer, press scale — is dropped. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
+    --enter-y: 0px !important;
+    --enter-blur: 0px !important;
+    --enter-scale: 1 !important;
+    transition-property: opacity, color, background-color, border-color, box-shadow !important;
+    scale: none !important;
+  }
+  .activity.is-busy::after,
+  .skel__line {
     animation: none !important;
-    transition: none !important;
   }
   .status--active {
+    animation: none;
     color: var(--text-2);
     background: none;
   }
@@ -1973,7 +2426,11 @@ button {
 
 @media (max-width: 560px) {
   .app {
-    padding: 16px 16px 72px;
+    padding: 4px 16px 72px;
+  }
+  .top {
+    margin: 0 -16px 12px;
+    padding: 10px 16px;
   }
   :root {
     --indent: 6px;
@@ -1999,10 +2456,13 @@ button {
     display: inline-flex;
   }
   .card {
-    padding: 8px 8px 6px 15px;
+    padding: 7px 7px 5px 14px;
   }
   .card::before {
-    left: 5px;
+    left: 4px;
+  }
+  .children:not(.children--link) > .branch::before {
+    width: 8px;
   }
   .card__main {
     gap: 12px;

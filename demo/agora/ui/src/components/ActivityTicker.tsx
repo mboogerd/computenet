@@ -21,6 +21,23 @@ export default function ActivityTicker() {
   });
   const [open, setOpen] = createSignal(false);
 
+  // Close the list on an outside click or Escape, like any other popover.
+  let root: HTMLDivElement | undefined;
+  const onDocDown = (e: PointerEvent) => {
+    if (open() && root && !root.contains(e.target as Node)) setOpen(false);
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') setOpen(false);
+  };
+  onMount(() => {
+    document.addEventListener('pointerdown', onDocDown);
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', onDocDown);
+      document.removeEventListener('keydown', onKey);
+    });
+  });
+
   const jump = (ref: string) => {
     setFocal(ref);
     setSelection(ref);
@@ -29,8 +46,13 @@ export default function ActivityTicker() {
 
   return (
     <Show when={recent().length}>
-      <div class="ticker">
-        <button class="ticker__pill" onClick={() => setOpen((v) => !v)}>
+      <div class="ticker" ref={root}>
+        <button
+          class="ticker__pill pressable"
+          aria-expanded={open()}
+          title="Claims whose credence moved a lot in the last minute"
+          onClick={() => setOpen((v) => !v)}
+        >
           <span class="ticker__dot" />
           {recent().length} changed
         </button>

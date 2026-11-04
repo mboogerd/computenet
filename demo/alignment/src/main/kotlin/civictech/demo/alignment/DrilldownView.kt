@@ -34,7 +34,7 @@ package civictech.demo.alignment
  *
  * Dialog mechanics (w0i5h-D13): `showModal()`; Escape, `#drillClose` or a backdrop click close it;
  * the `close` event resets the drill state and returns focus to the opening marker when it still
- * exists. Motion is a short fade, off under `prefers-reduced-motion: reduce`. No `$` anywhere, no
+ * exists. Motion is a 200ms fade-and-scale entrance, an opacity fade only under `prefers-reduced-motion: reduce`. No `$` anywhere, no
  * literal colour. Shared helper contract: the comment block at the top of the shell's script in
  * [AlignmentPage.kt].
  *
@@ -44,10 +44,14 @@ package civictech.demo.alignment
  */
 internal const val DRILLDOWN_VIEW = """
 <style>
-  #drill { padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface);
-           color: var(--ink); box-shadow: var(--shadow); width: min(38rem, calc(100vw - 32px)); max-width: none; }
-  #drill[open] { animation: drillFade .18s ease-out; }
+  #drill { padding: 0; border: 1px solid transparent; border-radius: var(--radius-lg); background: var(--surface);
+           color: var(--ink); box-shadow: var(--shadow-pop); width: min(38rem, calc(100vw - 32px)); max-width: none;
+           max-height: calc(100vh - 32px); overflow: auto; overscroll-behavior: contain; }
+  /* a modal opens occasionally: 200ms, strong ease-out, from 0.96 (never from nothing); it stays
+     centred, since a modal is not anchored to its trigger */
+  #drill[open] { animation: drillFade 200ms var(--ease-out) both; }
   #drill::backdrop { background: var(--ink); opacity: .35; }
+  #drill[open]::backdrop { animation: drillShade 200ms ease-out both; }
   #drill .drill-body { padding: 1rem 1.2rem 1.1rem; }
   #drill .drill-head { display: flex; align-items: baseline; justify-content: space-between; gap: .8rem; margin-bottom: .6rem; }
   #drillTitle { margin: 0; font-size: var(--fs-3); min-width: 0; overflow-wrap: anywhere; }
@@ -87,9 +91,10 @@ internal const val DRILLDOWN_VIEW = """
   #drillNote[readonly] { background: var(--surface-2); color: var(--muted); }
   #drill .drill-noterow { display: flex; justify-content: space-between; align-items: center; gap: .8rem; margin-top: .45rem; }
   #drillNoteBy { font-size: var(--fs-1); color: var(--muted); }
-  @keyframes drillFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  @media (prefers-reduced-motion: reduce) {
-    #drill[open] { animation: none; }
+  @keyframes drillFade { from { opacity: 0; } }
+  @keyframes drillShade { from { opacity: 0; } }
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes drillFade { from { opacity: 0; scale: .96; translate: 0 6px; } }
   }
 </style>
 <dialog id="drill" aria-labelledby="drillTitle">

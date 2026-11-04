@@ -1,17 +1,93 @@
 .stance {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.3rem;
 }
 
+/* Track carries the diverging scale (reject → neutral → accept) so the
+   slider explains itself; the thumb is a raised disc. */
 .stance__range {
   width: 100%;
-  accent-color: var(--accept-strong);
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
 }
 
-.stance__range--unset {
-  accent-color: var(--text-secondary);
-  opacity: 0.7;
+.stance__range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--reject-strong), var(--contested) 50%, var(--accept-strong));
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.stance__range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--reject-strong), var(--contested) 50%, var(--accept-strong));
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.stance__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--text);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.3);
+  transition: scale var(--dur-fast) ease-out;
+}
+
+.stance__range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--text);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.3);
+}
+
+.stance__range:active::-webkit-slider-thumb {
+  scale: 1.12;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stance__range:active::-webkit-slider-thumb {
+    scale: 1;
+  }
+}
+
+/* Unset: desaturated track + hollow dashed thumb, label says so too. */
+.stance__range--unset::-webkit-slider-runnable-track {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+.stance__range--unset::-moz-range-track {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+.stance__range--unset::-webkit-slider-thumb {
+  border-style: dashed;
+  border-color: var(--text-secondary);
+}
+
+.stance__range:focus-visible {
+  outline: none;
+}
+.stance__range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--focus);
+}
+
+.stance__scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .stance__row {
@@ -19,21 +95,28 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  min-height: 24px;
   font-size: 12px;
   color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .stance__clear {
-  background: none;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-border);
   color: var(--text-secondary);
-  padding: 0.1rem 0.5rem;
+  padding: 0.12rem 0.55rem;
   cursor: pointer;
   font: inherit;
   font-size: 11px;
+  font-weight: 500;
 }
 
-.stance__clear:hover {
-  border-color: var(--text-secondary);
+@media (hover: hover) {
+  .stance__clear:hover {
+    color: var(--text);
+    box-shadow: var(--shadow-border-hover);
+  }
 }

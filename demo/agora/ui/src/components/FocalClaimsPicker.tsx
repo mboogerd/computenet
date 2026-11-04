@@ -12,6 +12,7 @@ export default function FocalClaimsPicker() {
   };
   return (
     <select
+      id="focal-picker"
       class="focal-picker"
       value={focal() ?? ''}
       onChange={(e) => setFocal(e.currentTarget.value || null)}

@@ -1,0 +1,72 @@
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.loading__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.loading__cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.loading__col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-border);
+}
+
+/* Opacity-only breathing: no movement, so it is reduced-motion safe. */
+.skel {
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  animation: agora-breathe 1.6s ease-in-out infinite;
+}
+
+.skel--bar {
+  height: 34px;
+  width: min(420px, 70%);
+}
+
+.skel--focal {
+  height: 88px;
+  border-radius: var(--radius-lg);
+  animation-delay: 100ms;
+}
+
+.skel--title {
+  height: 14px;
+  width: 30%;
+}
+
+.skel--row {
+  height: 44px;
+  animation-delay: 200ms;
+}
+
+.skel--short {
+  width: 70%;
+}
+
+:root[data-motion="off"] .skel {
+  animation: none;
+}
+
+@media (max-width: 720px) {
+  .loading__cols {
+    grid-template-columns: 1fr;
+  }
+}

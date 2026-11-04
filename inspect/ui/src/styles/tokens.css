@@ -55,9 +55,50 @@
   --font-mono: ui-monospace, "SF Mono", "Segoe UI Mono", monospace;
 
   --ghost-opacity: 0.5;
+
+  /* canvas backdrop: a dot grid that pans/zooms with the viewport
+     (Canvas.tsx sets --grid-step / --grid-x / --grid-y on `.canvas`). */
+  --canvas-bg: #f4f4f1;
+  --canvas-dot: rgba(16, 17, 19, 0.11);
+  --accent-soft: color-mix(in oklab, var(--focus-ring) 22%, transparent);
+
+  /* Elevation (better-ui surfaces.md "Shadow recipes", exact values): the
+     first layer is a 1px ring, then lift, then ambient depth. Surfaces that
+     use these keep `border: 1px solid transparent` underneath so
+     forced-colors mode (which drops box-shadow) still draws an edge. */
+  --shadow-border:
+    0px 0px 0px 1px oklch(0 0 0 / 0.06),
+    0px 1px 2px -1px oklch(0 0 0 / 0.06),
+    0px 2px 4px 0px oklch(0 0 0 / 0.04);
+  --shadow-border-hover:
+    0px 0px 0px 1px oklch(0 0 0 / 0.08),
+    0px 1px 2px -1px oklch(0 0 0 / 0.08),
+    0px 2px 4px 0px oklch(0 0 0 / 0.06);
+  /* floating layers (tooltip, zoom controls, dialogs, the activity strip) */
+  --shadow-overlay:
+    0px 0px 0px 1px oklch(0 0 0 / 0.06),
+    0px 4px 8px -2px oklch(0 0 0 / 0.08),
+    0px 12px 32px -6px oklch(0 0 0 / 0.14);
+
+  /* Motion (animate skill §5 easing table; better-ui cross-fade curve). */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-swap: cubic-bezier(0.2, 0, 0, 1);
+  --dur-press: 150ms;
+  --dur-hover: 150ms;
+  --dur-enter: 200ms;
+  --dur-swap: 300ms;
+}
+
+/* Native controls (checkboxes, scrollbars) follow the *app* theme, not the
+   OS one, once the manual override is set — otherwise a light app on a dark
+   OS draws dark checkboxes. */
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --page: #101113;
   --surface: #17181b;
   --surface-raised: #1e1f23;
@@ -80,6 +121,13 @@
   --parked: #fbbf24;
   --wave-health: #eab86c;
   --flow-pulse: #facc15;
+  --canvas-bg: #0c0d0f;
+  --canvas-dot: rgba(255, 255, 255, 0.075);
+  --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+  --shadow-overlay:
+    0 0 0 1px oklch(1 0 0 / 0.1),
+    0px 12px 32px -6px oklch(0 0 0 / 0.6);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -106,6 +154,13 @@
     --parked: #fbbf24;
     --wave-health: #eab86c;
     --flow-pulse: #facc15;
+    --canvas-bg: #0c0d0f;
+    --canvas-dot: rgba(255, 255, 255, 0.075);
+    --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
+    --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
+    --shadow-overlay:
+      0 0 0 1px oklch(1 0 0 / 0.1),
+      0px 12px 32px -6px oklch(0 0 0 / 0.6);
   }
 }
 
@@ -127,9 +182,70 @@ body {
   line-height: 1.5;
 }
 
+/* Reduced motion (better-ui "Gate motion behind the reduced-motion
+   preference"): keyframe animations stay off entirely, as before. Transitions
+   are no longer blanket-disabled — every movement/scale/blur transition in
+   this app is declared inside `@media (prefers-reduced-motion:
+   no-preference)`, so what remains under `reduce` is colour/opacity
+   cross-fades only, which is the recommended fallback rather than an
+   instant swap. */
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
-    transition: none !important;
   }
+}
+
+/* Shared press feedback (better-ui "Press scales to 0.96": 150ms ease-out,
+   never on a disabled control). Opt-in by class so canvas-scale targets
+   (node cards) are not included. Colour changes fade under either
+   preference; only the scale is gated. */
+.pressable {
+  transition-property: background-color, border-color, box-shadow, color, opacity;
+  transition-duration: var(--dur-press);
+  transition-timing-function: ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pressable {
+    transition-property: scale, background-color, border-color, box-shadow, color, opacity;
+  }
+  .pressable:not(:disabled):active {
+    scale: 0.96;
+  }
+}
+
+/* Inline SVG icons (components/icons.tsx): one asset, recoloured via
+   currentColor; 1.5px stroke tracks 400-weight text (better-ui icons.md). */
+.icon {
+  flex: 0 0 auto;
+  width: 1em;
+  height: 1em;
+  display: inline-block;
+  vertical-align: -0.125em;
+}
+
+/* Shared one-shot entrance keyframes (used across components). */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* better-ui enter recipe: opacity + 4px blur + 12px translateY, ease-out.
+   One-shot entrances only (the banner drops in from above); never on a
+   toggled class. */
+@keyframes surface-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(-12px);
+  }
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: var(--accent-soft);
 }

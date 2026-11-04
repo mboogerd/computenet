@@ -64,9 +64,11 @@
   cursor: pointer;
 }
 
-.cold-banner__wake:hover:not(:disabled) {
-  background: var(--focus-ring);
-  color: var(--surface);
+@media (hover: hover) {
+  .cold-banner__wake:hover:not(:disabled) {
+    background: var(--focus-ring);
+    color: var(--surface);
+  }
 }
 
 .cold-banner__wake:disabled {
@@ -99,14 +101,14 @@
 
 .cold-dialog {
   max-width: 26rem;
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid transparent;
   background: var(--surface);
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) + 4px);
   padding: 1.1rem 1.2rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-overlay);
 }
 
 .cold-dialog__title {
@@ -153,7 +155,25 @@
   font-weight: 600;
 }
 
-.cold-dialog__confirm:hover {
-  background: var(--focus-ring);
-  color: var(--surface);
+@media (hover: hover) {
+  .cold-dialog__confirm:hover {
+    background: var(--focus-ring);
+    color: var(--surface);
+  }
+}
+
+/* Dialog entrance: scrim fades, the dialog rises in (better-ui enter recipe;
+   movement/blur only without reduced motion). */
+.cold-dialog__scrim {
+  animation: fade-in var(--dur-enter) ease-out both;
+}
+
+.cold-dialog {
+  animation: fade-in var(--dur-enter) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cold-dialog {
+    animation-name: surface-in;
+  }
 }
