@@ -1,8 +1,6 @@
 package civictech.cell.port
 
-import civictech.cell.control.Progress
 import civictech.cell.protocol.EdgeOpen
-import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.StateRequest
 import civictech.cell.proxy.Invocation
@@ -15,9 +13,8 @@ import civictech.nature.PullService
  * runs ADMIT → ACTIVATE regardless of the order policies were
  * installed in.
  *
- *  - **ADMIT** — may drop an invocation, never holds one. A dropping ADMIT may
- *    mint a metadata-plane [Progress] absorb-ack for every waved invocation it
- *    drops ([InletPolicy.mintsProgressAck], the CP-A3 law).
+ *  - **ADMIT** — may drop an invocation, never holds one. A dropping ADMIT
+ *    discharges exclusive payloads and reports the drop to its accounting hook.
  *  - **ACTIVATE** — cold-park until a handler is installed. This tier is
  *    intrinsic to [FanInlet] (its [civictech.cell.proxy.Buffering] parked tail);
  *    it is the terminal of every chain, not an installable policy.
@@ -37,14 +34,6 @@ enum class PolicyTier { ADMIT, ACTIVATE }
 interface InletPolicy {
     val tier: PolicyTier
 
-    /**
-     * CP-A3 law: whether this policy mints a [Progress] absorb-ack for a waved
-     * invocation it drops, so a downstream settlement fold can retire the wave
-     * on the dropped edge. Only meaningful for [PolicyTier.ADMIT]
-     * (the only tier that drops); non-dropping tiers never exercise it.
-     */
-    val mintsProgressAck: Boolean get() = true
-
     /** Wire this stage onto [inlet], forwarding admitted invocations through [release]. */
     fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit)
 
@@ -57,34 +46,18 @@ interface InletPolicy {
 
 /**
  * ADMIT tier (spec 12 §Policies): filters inbound invocations by [admits]. A
- * rejected invocation is dropped (never held) and reported to [onDrop]; when
- * [mintsProgressAck] is set, a dropped *waved* invocation also mints a
- * downstream [Progress] absorb-ack on its own edge.
+ * rejected invocation is discharged, dropped (never held), and reported to
+ * [onDrop].
  */
 class Admit(
-    override val mintsProgressAck: Boolean = true,
     private val admits: (Invocation) -> Boolean,
     private val onDrop: (Invocation) -> Unit = {},
 ) : InletPolicy {
     override val tier get() = PolicyTier.ADMIT
 
-    private var inlet: FanInlet<*>? = null
     private lateinit var release: (Invocation) -> Unit
 
-    /**
-     * T05 finding 3: a counted tripwire for [mintAck]'s silent `?: return`
-     * exits (no context,
-     * no attached inlet, or — the one that matters in practice — no open link
-     * matching [civictech.cell.MessageContext.sourcePort], e.g. a
-     * wire-reconstructed edge, a `Use.fixed` producer, or a replayed journal
-     * frame). Each such exit means the ack was never minted; this makes the gap
-     * observable instead of silent.
-     */
-    var unackedDrops: Long = 0
-        private set
-
     override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
-        this.inlet = inlet
         this.release = release
     }
 
@@ -124,24 +97,6 @@ class Admit(
         // discharging proxy).
         dischargeDropped(invocation)
         onDrop(invocation)
-        if (mintsProgressAck) mintAck(invocation)
-    }
-
-    /**
-     * CP-A3: advance the downstream frontier's per-edge watermark past the
-     * dropped wave by delivering a [Progress] on the very edge the invocation
-     * arrived on (matched by [civictech.cell.MessageContext.sourcePort]). Reuses
-     * the ordinary absorb-ack path — the frontier's own [Progress] handler — so a
-     * dropped edge contribution is indistinguishable from one silently absorbed
-     * upstream. Each early exit counts against [unackedDrops] (T05 finding 3).
-     */
-    private fun mintAck(invocation: Invocation) {
-        val ctx = invocation.context ?: run { unackedDrops++; return }
-        val inlet = inlet ?: run { unackedDrops++; return }
-        val link = inlet.linking.links.firstOrNull { it.from == ctx.sourcePort } ?: run { unackedDrops++; return }
-        ProtocolSupport.of(inlet).deliver(
-            Protocols.Progress, link, Progress(ctx.timestamp.sourceId, ctx.timestamp.counter)
-        )
     }
 }
 

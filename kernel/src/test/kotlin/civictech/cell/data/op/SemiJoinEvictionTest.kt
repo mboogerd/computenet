@@ -7,8 +7,6 @@ import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
-import civictech.cell.control.Progress
-import civictech.cell.control.absorbAck
 import civictech.cell.data.Windows
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.WaterlineDelta
@@ -20,8 +18,6 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.protocol.ProtocolSupport
-import civictech.cell.protocol.Protocols
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -111,20 +107,17 @@ class SemiJoinEvictionTest {
         return seen
     }
 
-    /** A linked recording inlet: data deltas and metadata-plane [Progress] absorb-acks. */
+    /** A linked recording inlet for data deltas. */
     private class AckProbe<D>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         @Suppress("UNCHECKED_CAST")
         val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<D>>))
         val deltas = mutableListOf<D>()
-        val acks = mutableListOf<Progress>()
-
         init {
             inlet.serve(object : Propagate<D> {
                 override fun propagate(value: D) {
                     deltas += value
                 }
             })
-            ProtocolSupport.of(inlet).handle(Protocols.Progress) { _, message -> acks += message as Progress }
         }
     }
 
@@ -353,14 +346,10 @@ class SemiJoinEvictionTest {
         underWave(src, 1) { cell.left.call.propagate(dels(Row("a", 5) to tag(1))) }
         seen.size shouldBe emitted
         outProbe.deltas.shouldBeEmpty()
-        outProbe.acks shouldBe listOf(Progress(src, 1))
-        lateProbe.acks shouldBe listOf(Progress(src, 1))
         leftRows(cell).shouldBeEmpty()
 
         underWave(src, 2) { cell.right.call.propagate(dels(Row("a", 6) to tag(2))) }
         seen.size shouldBe emitted
-        outProbe.acks shouldBe listOf(Progress(src, 1), Progress(src, 2))
-
         // a re-add of the evicted row is late-dropped ([24-WL-07]), so it cannot resurrect it
         val fresh = tag(9)
         underWave(src, 3) { cell.left.call.propagate(adds(Row("a", 5) to fresh)) }
@@ -384,7 +373,6 @@ class SemiJoinEvictionTest {
         underWave(src, 1) { cell.left.call.propagate(adds(Row("a", 3) to t3)) }
         lateL.deltas shouldBe listOf(adds(Row("a", 3) to t3))
         lateR.deltas.shouldBeEmpty()
-        lateR.acks shouldBe listOf(Progress(src, 1))
         cell.droppedBelowFloorLeft shouldBe 1L
         cell.droppedBelowFloorRight shouldBe 0L
         leftRows(cell).shouldBeEmpty()
@@ -393,7 +381,6 @@ class SemiJoinEvictionTest {
         underWave(src, 2) { cell.left.call.propagate(adds(Row("a", 10) to tag(4))) }
         leftRows(cell) shouldBe setOf(Row("a", 10))
         lateL.deltas.size shouldBe 1
-        lateL.acks shouldBe listOf(Progress(src, 2))
         out.shouldBeEmpty()
     }
 
@@ -419,8 +406,6 @@ class SemiJoinEvictionTest {
         rightRows(cell) shouldBe setOf(Row("b", 3))
         cell.droppedBelowFloorRight shouldBe 0L
         lateR.deltas.shouldBeEmpty()
-        lateR.acks shouldBe listOf(Progress(src, 1)) // still acked so a linked consumer's frontier advances
-
         cell.left.call.propagate(adds(Row("b", 4) to tag(2)))
         cell.droppedBelowFloorLeft shouldBe 1L
         leftRows(cell).shouldBeEmpty()
@@ -433,7 +418,7 @@ class SemiJoinEvictionTest {
     // ------------------------------------------------- [24-WL-03] fixpoint
 
     @Test
-    fun `a redelivered or lower waterline after an eviction evicts nothing and acks all three outlets`() {
+    fun `a redelivered or lower waterline after an eviction evicts nothing and emits on none of the three outlets`() {
         val cell = semiJoined()
         val seen = recordWaves(cell.outlet)
         cell.left.call.propagate(adds(Row("a", 5) to tag(1)))
@@ -453,15 +438,13 @@ class SemiJoinEvictionTest {
         cell.floor() shouldBe 10L
         seen.size shouldBe emitted
         parts(cell) shouldBe before
-        val expected = listOf(Progress(src, 2), Progress(src, 3))
         for (p in listOf(outProbe, lateL, lateR)) {
             p.deltas.shouldBeEmpty()
-            p.acks shouldBe expected
         }
     }
 
     @Test
-    fun `a raising waterline that evicts no row acks the outlet and both late outlets`() {
+    fun `a raising waterline that evicts no row emits nothing on the outlet or either late outlet`() {
         val cell = semiJoined()
         val outProbe = probe(cell.outlet)
         val lateL = probe(cell.lateLeft)
@@ -472,7 +455,6 @@ class SemiJoinEvictionTest {
         rightRows(cell).shouldBeEmpty()
         for (p in listOf(outProbe, lateL, lateR)) {
             p.deltas.shouldBeEmpty()
-            p.acks shouldBe listOf(Progress(src, 1))
         }
     }
 

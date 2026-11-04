@@ -427,12 +427,6 @@
       "file": "frames/port-protocol/WV-PORT-PROTOCOL-ATTENTION-01.json"
     },
     {
-      "id": "WV-PORT-PROTOCOL-PROGRESS-01",
-      "category": "frames/port-protocol",
-      "kind": "frame",
-      "file": "frames/port-protocol/WV-PORT-PROTOCOL-PROGRESS-01.json"
-    },
-    {
       "id": "WV-PORT-PROTOCOL-SATURATION-01",
       "category": "frames/port-protocol",
       "kind": "frame",

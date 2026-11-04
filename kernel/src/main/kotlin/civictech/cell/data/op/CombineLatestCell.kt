@@ -12,7 +12,6 @@ import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
-import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.view.MapDiffPublisher
 
@@ -38,12 +37,8 @@ interface CombineLatestApi<K, V, W, R> {
  * touched by one input delta emit as one [MapDelta] under that input's wave (22).
  * The diff/emit fold is [MapDiffPublisher] (RS-5.4: adopted here since it was a
  * byte-for-byte copy of that helper's `publish`/`catchUpDelta`). A wave whose
- * recompute leaves **every** touched key unchanged emits nothing at all, and
- * therefore **absorb-acks** it (`cell.control.absorbAck`, CP-A3, via
- * [emitOrAbsorb]) so a downstream glitch-free join's per-source watermark still
- * advances past the wave this cell silently swallowed — spec 20/22
- * §Completeness over silent or stuck edges, whose MUST this cell used to be the
- * one flagged divergence from (96 §E2.2 residual, closed).
+ * recompute leaves **every** touched key unchanged emits nothing at all; this is
+ * the effective-only behavior of the operator.
  *
  * Single writer of its output stream — so not `Replicable`, like [GroupByCell]:
  * the combined map is a deterministic function of the two convergent inputs, so
@@ -106,21 +101,12 @@ class CombineLatestCell<K, V, W, R>(
         if (k in leftMap || k in rightMap) combine(k, leftMap[k], rightMap[k]) else null
 
     /**
-     * Effective-only emit, or absorb-ack the wave this cell swallowed (CP-A3,
-     * spec 20/22 §Completeness over silent or stuck edges): a value-equal
-     * recompute leaves the publisher with nothing to emit, and without the ack a
-     * downstream glitch-free join could only settle this arm from a *later* real
-     * change. [civictech.cell.control.absorbAck] itself skips baseline and
-     * spontaneous (context-free) emissions, so the `onLinked` catch-up path
-     * above needs no special-casing.
+     * Effective-only emit: a value-equal recompute leaves the publisher with
+     * nothing to emit. The `onLinked` catch-up path above remains separate.
      */
     private fun emitChanges(touched: Set<K>) {
         val delta = publisher.publish(touched, ::recompute)
-        emitOrAbsorb(
-            delta == null,
-            emit = { outlet.call.propagate(delta!!) },
-            absorbAck = { outlet.absorbAck() },
-        )
+        delta?.let { outlet.call.propagate(it) }
     }
 
     override fun snapshot(): Serializable = arrayListOf(HashMap(leftMap), HashMap(rightMap))

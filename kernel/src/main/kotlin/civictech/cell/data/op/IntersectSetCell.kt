@@ -10,7 +10,6 @@ import civictech.cell.Timestamp
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
-import civictech.cell.control.absorbAck
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -97,10 +96,7 @@ interface IntersectSetApi<E> {
  * [droppedBelowFloorLeft]/[droppedBelowFloorRight] whether or not the outlet
  * is linked (`[24-WL-07]`). Dels are never filtered by time: the tag fold's
  * liveness check is the guard (`[24-WL-08]`). A side declaring no lateness is
- * never guarded and never evicted. Every delivery on either inlet (and on
- * [waterline]) emits on or absorb-acks **both** late outlets, so a consumer
- * linked to one of them sees every wave the cell sees and its frontier
- * advances.
+ * never guarded and never evicted.
  *
  * The three ports are registered on this class, always present and unlinked
  * by default, and deliberately **not** on [IntersectSetApi] (as
@@ -195,28 +191,18 @@ class IntersectSetCell<E>(
     override fun onLeft(value: SetDelta<E>) {
         // [24-WL-07] guard at arrival (3vd7k-D4)
         val admitted = guardLeft(value)
-        lateRight.absorbAck() // every delivery acks both late outlets, so a linked consumer's frontier advances
         val adds = mutableMapOf<E, Set<Timestamp>>()
         val dels = mutableMapOf<E, Set<Timestamp>>()
         foldEffective(leftState.apply(admitted), adds, dels)
-        emitOrAbsorb(
-            adds.isEmpty() && dels.isEmpty(),
-            emit = { outlet.call.propagate(SetDelta(adds, dels)) },
-            absorbAck = { outlet.absorbAck() },
-        )
+        if (adds.isNotEmpty() || dels.isNotEmpty()) outlet.call.propagate(SetDelta(adds, dels))
     }
 
     override fun onRight(value: SetDelta<E>) {
         val admitted = guardRight(value)
-        lateLeft.absorbAck()
         val adds = mutableMapOf<E, Set<Timestamp>>()
         val dels = mutableMapOf<E, Set<Timestamp>>()
         foldEffective(rightState.apply(admitted), adds, dels)
-        emitOrAbsorb(
-            adds.isEmpty() && dels.isEmpty(),
-            emit = { outlet.call.propagate(SetDelta(adds, dels)) },
-            absorbAck = { outlet.absorbAck() },
-        )
+        if (adds.isNotEmpty() || dels.isNotEmpty()) outlet.call.propagate(SetDelta(adds, dels))
     }
 
     /**
@@ -250,22 +236,17 @@ class IntersectSetCell<E>(
 
     /**
      * `[24-WL-07]` on the left inlet: forward the sub-floor adds on [lateLeft]
-     * (else absorb-ack it) and return the admitted remainder. Without a left
-     * declaration or a floor this is the identity and [lateLeft] just acks.
+     * and return the admitted remainder. Without a left
+     * declaration or a floor this is the identity.
      */
     private fun guardLeft(value: SetDelta<E>): SetDelta<E> {
         val lateness = leftLateness
         val current = floor
-        if (lateness == null || current == null) {
-            lateLeft.absorbAck()
-            return value
-        }
+        if (lateness == null || current == null) return value
         val (admitted, dropped) = WaterlineEviction.lateSplit(lateness, current, value)
         if (dropped.isNotEmpty()) {
             droppedBelowFloorLeft += dropped.size
             lateLeft.call.propagate(SetDelta(adds = dropped))
-        } else {
-            lateLeft.absorbAck()
         }
         return admitted
     }
@@ -274,16 +255,11 @@ class IntersectSetCell<E>(
     private fun guardRight(value: SetDelta<E>): SetDelta<E> {
         val lateness = rightLateness
         val current = floor
-        if (lateness == null || current == null) {
-            lateRight.absorbAck()
-            return value
-        }
+        if (lateness == null || current == null) return value
         val (admitted, dropped) = WaterlineEviction.lateSplit(lateness, current, value)
         if (dropped.isNotEmpty()) {
             droppedBelowFloorRight += dropped.size
             lateRight.call.propagate(SetDelta(adds = dropped))
-        } else {
-            lateRight.absorbAck()
         }
         return admitted
     }
@@ -294,10 +270,7 @@ class IntersectSetCell<E>(
         }
         val current = floor
         if (current != null && delta.floor <= current) {
-            // [24-WL-03] fixpoint: a non-raising floor changes nothing — ack the wave on all three outlets
-            outlet.absorbAck()
-            lateLeft.absorbAck()
-            lateRight.absorbAck()
+            // [24-WL-03] fixpoint: a non-raising floor changes nothing
             return
         }
         floor = delta.floor
@@ -329,13 +302,7 @@ class IntersectSetCell<E>(
         }
         refusedEvictions += refusedNow.size
         refused = refusedNow
-        emitOrAbsorb(
-            adds.isEmpty() && dels.isEmpty(),
-            emit = { outlet.call.propagate(SetDelta(adds, dels)) },
-            absorbAck = { outlet.absorbAck() }, // nothing passed, or every passed element refused / support-only
-        )
-        lateLeft.absorbAck()
-        lateRight.absorbAck()
+        if (adds.isNotEmpty() || dels.isNotEmpty()) outlet.call.propagate(SetDelta(adds, dels))
     }
 
     // A lateness-declaring cell appends its floor as a fourth element (3vd7k-D7,
@@ -393,8 +360,7 @@ class IntersectSetCell<E>(
      * lower it.)
      *
      * `[24-OP-INTERSECT-01]` is untouched: this method only reads, emits
-     * nothing, and — unlike every fold path in this cell — reaches no
-     * `absorbAck`.
+     * nothing, and reaches no output path.
      */
     override fun readBounded(request: StateRead): StatePage = pageOver(
         request,

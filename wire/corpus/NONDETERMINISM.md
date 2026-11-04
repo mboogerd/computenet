@@ -168,3 +168,7 @@ nothing to tolerate yet), and the bead or disposition that owns resolving it.
   (`-Dwire.vectors.strict=false` opts out). The Nondeterminism table remains
   `_(none yet)_`: `Attention` joined `EncodingDeterminismTest`'s selected
   types and `WV-PORT-PROTOCOL-ATTENTION-01` showed no byte variation.
+
+- **2026-10-19 — GFR.4 close-out.** The `Progress` registration and
+  `WV-PORT-PROTOCOL-PROGRESS-01` were retired; the Nondeterminism table is
+  unchanged.

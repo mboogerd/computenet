@@ -9,7 +9,7 @@ import java.io.Serializable
 /**
  * Shared skeleton for a unary tagged-set operator (spec 24 §Established
  * pattern): the live [TagState] ledger, the copy-pasted apply → effective →
- * absorbAck-or-propagate inlet shape ([emitOrAbsorb], CP-A3), and
+ * emit-if-non-empty inlet shape, and
  * snapshot/restore delegation — the boilerplate common to [FilterCell],
  * [UnionSetCell], and [FlatMapSetCell].
  *
@@ -18,7 +18,7 @@ import java.io.Serializable
  * contract) for port registration and inlet dispatch — Kotlin's single class
  * inheritance leaves no slot for a shared `Cell`-extending ancestor across
  * cells whose generated base classes are otherwise unrelated. This class
- * instead holds the ledger and the duplicated emit-or-ack check; each
+ * instead holds the ledger and the duplicated empty-delta check; each
  * concrete cell wires its own `onInlet`/`catchUpOnLinked` around it and
  * supplies only its own transform — the practical reading of "each operator
  * becomes just its transform expression" under that constraint.
@@ -63,12 +63,12 @@ class TaggedSetOperator<E>(
     }
 
     /**
-     * The copy-pasted apply/effective/ack shape (CP-A3), byte-identical across
+     * The copy-pasted effective-delta shape, byte-identical across
      * [FilterCell], [UnionSetCell], and [FlatMapSetCell]: [propagate] a
-     * non-empty [out], else [absorbAck] the swallowed wave. Preserves the
-     * exact current condition — nothing added, nothing removed. T05 finding
-     * 2: delegates to the shared [emitOrAbsorb] free function.
+     * non-empty [out] and otherwise do nothing. The exact condition is
+     * preserved — nothing added and nothing removed.
      */
-    fun <X> emitOrAbsorb(out: SetDelta<X>, propagate: (SetDelta<X>) -> Unit, absorbAck: () -> Unit) =
-        emitOrAbsorb(out.adds.isEmpty() && out.dels.isEmpty(), { propagate(out) }, absorbAck)
+    fun <X> emitIfNonEmpty(out: SetDelta<X>, propagate: (SetDelta<X>) -> Unit) {
+        if (out.adds.isNotEmpty() || out.dels.isNotEmpty()) propagate(out)
+    }
 }

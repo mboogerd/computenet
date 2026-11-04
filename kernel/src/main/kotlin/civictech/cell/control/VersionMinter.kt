@@ -1,28 +1,5 @@
 package civictech.cell.control
 
-import civictech.gen.wire.Contract
-import civictech.gen.wire.Protocol
-import civictech.nature.ProtocolDirection
-import java.util.UUID
-
-/**
- * Metadata-plane absorb-ack (spec 20/22): an upstream emits [Progress] at its
- * own quiescence boundary to advance a downstream join's per-source
- * watermark past waves it silently absorbed without a real delta — the
- * second of the three watermark-advance mechanisms (delta, Progress, later
- * wave / monotone max).
- */
-@kotlinx.serialization.Serializable
-@kotlinx.serialization.SerialName("Progress")
-data class Progress(
-    @kotlinx.serialization.Serializable(with = civictech.cell.UuidSerializer::class) val sourceId: UUID,
-    val thru: Long,
-)
-
-@Contract(management = true)
-@Protocol("progress", ProtocolDirection.DOWNSTREAM, band = 0)
-fun interface ProgressProtocol { fun progress(message: Progress) }
-
 /**
  * Per-emitter monotonic version minter (93 I-4 rule 2, G-58 core): every
  * outgoing [Attention] update from one aggregating cell is stamped with a

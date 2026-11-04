@@ -13,7 +13,6 @@ import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
-import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.SetDelta
 
 /**
@@ -110,10 +109,9 @@ class UnionSetCell<E>(
     ): SetDelta<E> = if (notice != null) op.state.applyReBaseline(value, notice) else op.state.apply(value)
 
     private fun emit(effective: SetDelta<E>) {
-        op.emitOrAbsorb(
+        op.emitIfNonEmpty(
             effective,
             propagate = { outlet.call.propagate(it) },
-            absorbAck = { outlet.absorbAck() }, // diamond-fan-in duplicate deduped — ack the swallowed wave (CP-A3)
         )
     }
 

@@ -164,11 +164,11 @@ enum class Subject(val sources: Int, val readout: Readout, val family: Family) {
      * The shared unary skeleton, `civictech.cell.data.op.TaggedSetOperator`.
      *
      * **Measured through `FilterCell { true }`, and the limitation is real.**
-     * `TaggedSetOperator` is not a `Cell`: it is the composed ledger + emit-or-absorb
+     * `TaggedSetOperator` is not a `Cell`: it is the composed ledger + emit-if-non-empty
      * skeleton that `FilterCell`, `UnionSetCell`, `FlatMapSetCell` and `CountCell` each
      * hold as a field, and its `state` is `internal` to `:kernel`, so `:bench` cannot
      * drive one directly at all. An always-true filter is the thinnest kernel cell whose
-     * entire body *is* the skeleton — `TagState.apply` plus `emitOrAbsorb`, with an
+     * entire body *is* the skeleton — `TagState.apply` plus `emitIfNonEmpty`, with an
      * identity transform in front. So this subject measures the skeleton **plus one
      * always-true predicate call per element**, not the skeleton alone, and the honest
      * use of its number is as the identity baseline that [FILTER]'s own predicate cost is

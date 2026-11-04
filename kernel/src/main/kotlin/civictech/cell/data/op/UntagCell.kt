@@ -3,7 +3,6 @@ package civictech.cell.data.op
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Stateful
-import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.link.catchUpOnLinked
@@ -53,10 +52,8 @@ interface UntagApi<K, V> {
  *   value instead, never a removal (`[KE1-19]`, reset-remove's read side);
  * - a delta that leaves every touched key's presence **and** exposed value
  *   unchanged — a gossip echo, a re-delivered put, a tombstone for a dot
- *   already covered — emits nothing at all, and absorb-acks the swallowed
- *   wave (`[KE1-20]`, CP-A3, via [emitOrAbsorb]) so a downstream glitch-free
- *   join's per-source watermark still advances. This is [FilterCell]'s
- *   discipline verbatim.
+ *   already covered — emits nothing at all. This is [FilterCell]'s
+ *   effective-only discipline verbatim.
  *
  * Presence and value are compared **separately**, never value alone:
  * [TaggedMapDelta.value] answers `null` both for an absent key and for a
@@ -160,14 +157,11 @@ class UntagCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             }
         }
 
-        emitOrAbsorb(
-            puts.isEmpty() && removals.isEmpty(),
+        if (puts.isNotEmpty() || removals.isNotEmpty()) {
             // ONE MapDelta for the whole input delta (`[KE1-21]`), inside the
             // arriving context (`[KE1-22]`).
-            emit = { outlet.call.propagate(MapDelta(puts, removals)) },
-            // nothing effective changed — ack the swallowed wave (CP-A3)
-            absorbAck = { outlet.absorbAck() },
-        )
+            outlet.call.propagate(MapDelta(puts, removals))
+        }
     }
 
     /** The exposed map this cell has published — the read side of its diff state. */

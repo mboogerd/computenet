@@ -17,8 +17,6 @@ import java.util.*
 import civictech.cell.data.Aggregator
 import civictech.cell.data.Gossiping
 import civictech.cell.data.Windows
-import civictech.cell.control.absorbAck
-import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
@@ -224,10 +222,6 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         require((lateness == null) == (keyTime == null)) {
             "GroupByCell needs both lateness and keyTime, or neither (lateness=$lateness, keyTime=$keyTime)"
         }
-        // Data and waterline share one per-edge settlement fold. Progress on
-        // either input waits for every open sibling edge; a real emission on
-        // `outlet` or `late` suppresses that output's ack for the wave.
-        inlet.relayAbsorbAcks(listOf(outlet, late), waterline)
         // late-join catch-up (G-22): current aggregates as a delta-from-empty
         outlet.catchUpOnLinked {
             if (groups.isEmpty()) null
@@ -246,9 +240,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         }
         val current = floor
         if (current != null && delta.floor <= current) {
-            // [24-WL-03] fixpoint: a non-raising floor changes nothing — ack the wave on both outlets
-            outlet.absorbAck()
-            late.absorbAck()
+            // [24-WL-03] fixpoint: a non-raising floor changes nothing
             return
         }
         floor = delta.floor
@@ -278,10 +270,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         val delta = foldMembership(killed.dels.keys, evictees)
         if (delta != null) {
             outlet.call.propagate(delta)
-        } else {
-            outlet.absorbAck() // nothing passed, or every passed window refused
         }
-        late.absorbAck()
     }
 
     override fun onInlet(value: SetDelta<E>) {
@@ -306,19 +295,13 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         val delta = foldMembership(touched, liveBefore)
         if (delta != null) {
             outlet.call.propagate(delta)
-        } else {
-            outlet.absorbAck() // tag churn / value-equal fold — ack the swallowed wave (CP-A3)
         }
         if (dropped.isNotEmpty()) {
             droppedBelowFloor += dropped.size
             late.call.propagate(SetDelta(adds = dropped))
-        } else {
-            late.absorbAck()
         }
         if (gossipDelta.adds.isNotEmpty() || gossipDelta.dels.isNotEmpty()) {
             membership.call.propagate(gossipDelta)
-        } else {
-            membership.absorbAck()
         }
     }
 

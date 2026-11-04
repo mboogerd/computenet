@@ -23,8 +23,8 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
- * Shared rig for V1C-OPS's bounded-read suites — the harness style of
- * [OperatorAbsorbAckTest] (raw sources, real links, a [SimulationController] so
+ * Shared rig for V1C-OPS's bounded-read suites — the harness style of the
+ * operator suites in this package (raw sources, real links, a [SimulationController] so
  * a page is an observable event) crossed with
  * `civictech.cell.host.BoundedStateReadTest`'s page/walk driver.
  *
@@ -84,7 +84,7 @@ internal class OpRig {
 /**
  * A hand-fed tagged-set producer with full control over tags. Typed `Any` so one
  * source drives every element type under test (including `Owned` payloads);
- * links are cast at the seam, as [OperatorAbsorbAckTest] does, because
+ * links are cast at the seam, as the operator suites do, because
  * `Propagate` erases identically either way.
  */
 internal class SetSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {

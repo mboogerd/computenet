@@ -152,14 +152,12 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackPort<*>): Boolean {
  *
  * The corpses are not inert. `Protocols.relay` de-duplicates a traversal by
  * `link.id`, so two records for one endpoint pair relay the same protocol
- * message twice; `FanOutlet.absorbAck` sends one `Progress` per record, so
- * progress accounting double-counts; `Attention`, `IntakeControl`'s saturation
- * notices, `TopologyWalks` and `CompositeCell`'s stall notices all fan over
+ * message twice; `Attention`, `IntakeControl`'s saturation notices,
+ * `TopologyWalks` and `CompositeCell`'s stall notices all fan over
  * `linking.links` and pay per corpse. Nothing found reading `linking.links`
  * wants the history: `LinkSupport.identityFor` already answers with the most
  * recent record (unchanged — of one record it IS the last), `Evolution.rebind`
- * already filters by `to` and detaches every match, and
- * `InletPolicy`'s ack routing takes the first match by `from`.
+ * already filters by `to` and detaches every match.
  *
  * **The key is the whole triple `(from, to, role)`, deliberately, not `to`
  * alone as `streamTo` uses.** `streamTo` evicts on the SOURCE side only, where
@@ -453,7 +451,7 @@ internal fun <Api> handshake(
  * - Because each record carries its own surrogate endpoint and its own `sink`,
  *   N records relay to N genuinely distinct destinations rather than N times to
  *   one. computenet-lioe's consequences — double protocol relay, double
- *   `Progress`, per-corpse walks — do not arise here; the multiplicity is
+ *   protocol relay and per-corpse walks — do not arise here; the multiplicity is
  *   fan-out, and `ProtocolBridgeTest` pins it deliberately (one outlet bridged
  *   to two remote consumers, both live). Evicting on the triple's *address*
  *   analogue would silently kill one of those live links.

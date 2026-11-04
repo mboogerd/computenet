@@ -13,8 +13,6 @@ import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
-import civictech.cell.control.absorbAck
-import civictech.cell.control.relayAbsorbAcks
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -119,7 +117,6 @@ class QuorumSetCell<E>(
                 else -> {}
             }
         }
-        inlet.relayAbsorbAcks(listOf(outlet))
         // late-join catch-up (G-22): the advertised quorum as a delta-from-empty
         outlet.catchUpOnLinked { if (ledger.isEmpty) null else ledger.asDelta() }
     }
@@ -148,10 +145,7 @@ class QuorumSetCell<E>(
      * elements are NOT remembered: the next live delta touching one, or an
      * `EdgeOpen`/`EdgeClose` shifting `n`, re-evaluates it under the ordinary
      * threshold, so the view converges back to live semantics after recovery.
-     * Nothing is dropped silently — a baseline either enters/leaves the view
-     * here or funnels through [emitOrAbsorb] below (whose absorb-ack half is a
-     * documented no-op for a baseline: it holds no wave position, so no
-     * downstream completeness set is waiting on it).
+     * A baseline either enters/leaves the view here or produces no output.
      */
     private fun evaluate(candidates: Collection<E>, recovered: Set<E> = emptySet()) {
         val target = threshold(lanes.liveSources)
@@ -171,19 +165,9 @@ class QuorumSetCell<E>(
                 ledger.exit(element)?.let { dels[element] = it }
             }
         }
-        // T05 finding 2: a re-evaluation that changes no membership (tag
-        // churn, or a link open/close that doesn't tip any element's count
-        // across the threshold) now absorb-acks the reactive wave instead of
-        // silently dropping it — a downstream settlement consumer would
-        // otherwise stall forever on such a wave. Behavior change: this operator now
-        // acks. (No-op via absorbAck's own CurrentContext guard when
-        // `evaluate` runs from the EdgeOpen/EdgeClose protocol path, which
-        // carries no reactive wave context.)
-        emitOrAbsorb(
-            adds.isEmpty() && dels.isEmpty(),
-            emit = { outlet.call.propagate(SetDelta(adds, dels)) },
-            absorbAck = { outlet.absorbAck() },
-        )
+        if (adds.isNotEmpty() || dels.isNotEmpty()) {
+            outlet.call.propagate(SetDelta(adds, dels))
+        }
     }
 
     override fun snapshot(): Serializable = arrayListOf(lanes.snapshot(), ledger.snapshot())
@@ -241,8 +225,7 @@ class QuorumSetCell<E>(
      * method preserves is therefore its own KDoc — the advertise-on-entry /
      * delete-exactly-those-tags-on-exit discipline and `[24-REPLAY-01]`'s
      * baseline disposition — and this method only reads: it evaluates no
-     * threshold, opens and closes no lane, and reaches neither `propagate` nor
-     * `absorbAck`.
+     * threshold, opens and closes no lane, and reaches no output path.
      */
     override fun readBounded(request: StateRead): StatePage = pageOver(
         request,

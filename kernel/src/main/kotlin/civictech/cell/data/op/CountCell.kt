@@ -9,7 +9,6 @@ import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
-import civictech.cell.control.absorbAck
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -30,12 +29,10 @@ interface CountSetApi<E> {
  *
  * RS-5.2 note: this operator only reuses [TaggedSetOperator] for its
  * [TagState][civictech.cell.data.delta.TagState] ledger and snapshot/restore
- * — it does NOT go through [TaggedSetOperator.emitOrAbsorb]. Its emission
+ * — it does not go through [TaggedSetOperator.emitIfNonEmpty]. Its emission
  * condition (`diff != 0L`) and output type (`CounterDelta`, not `SetDelta`)
- * genuinely differ from Filter/Union/FlatMap. T05 finding 2 (closed): a
- * delta that produces no size change now absorb-acks via the shared
- * [emitOrAbsorb] free function instead of silently dropping the wave. Behavior
- * change: this operator now acks.
+ * genuinely differ from Filter/Union/FlatMap. A delta that produces no size
+ * change emits nothing.
  */
 class CountCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
@@ -52,11 +49,7 @@ class CountCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         val before = op.state.size
         op.state.apply(value)
         val diff = (op.state.size - before).toLong()
-        emitOrAbsorb(
-            diff == 0L,
-            emit = { outlet.call.propagate(CounterDelta(diff)) },
-            absorbAck = { outlet.absorbAck() }, // T05 finding 2: no net size change — ack the swallowed wave
-        )
+        if (diff != 0L) outlet.call.propagate(CounterDelta(diff))
     }
 
     override fun snapshot(): Serializable = op.snapshot()

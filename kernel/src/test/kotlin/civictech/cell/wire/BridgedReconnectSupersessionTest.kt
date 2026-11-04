@@ -4,7 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.control.Attention
-import civictech.cell.control.Progress
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -30,14 +29,10 @@ import java.util.UUID
  * (`BridgedLinkSupersessionTest`, `civictech.cell.link`). The identity that
  * IS stable across calls is the address pair itself, and this is where 1mbp
  * said the guard belongs: two live records over one address pair means
- * anything that fans a message over `linking.links` — `absorbAck`
- * (`civictech.cell.control.AbsorbAck`), `Attention.emitUpstream`
- * (`civictech.cell.control.Attention`) — relays it to the SAME destination
- * address twice. Both tests below reproduce that fan-out directly (the same
- * `linking.links.forEach { Protocols.sendX(it, ...) }` shape those two
- * production call sites use) rather than driving a full absorbing cell or
- * Attention aggregator, since the defect is in the link bookkeeping, not in
- * either caller.
+ * a link-list fan-out can relay to the SAME destination address twice. The
+ * first test pins closure and bookkeeping directly; the second reproduces the
+ * `Attention.emitUpstream` fan-out shape rather than driving a full aggregator,
+ * since the defect is in the link bookkeeping, not in that caller.
  */
 class BridgedReconnectSupersessionTest {
 
@@ -68,13 +63,8 @@ class BridgedReconnectSupersessionTest {
     }
 
     @Test
-    fun `a second bridgeTo over the same address pair supersedes the first - one Progress reaches the consumer, not two`() {
+    fun `a second bridgeTo over the same address pair supersedes the first - the first closes and only the second remains on the outlet`() {
         val rig = Rig(seed = 1)
-
-        val progressSeen = mutableListOf<Progress>()
-        ProtocolSupport.of(rig.consumer.inlet).handle(Protocols.Progress) { _, message ->
-            progressSeen += message as Progress
-        }
 
         val first = (rig.producer.outlet.bridgeTo(selfAddr = rig.fromAddr, toAddr = rig.toAddr, sink = rig.sink)
             as LinkResult.Connected).link
@@ -90,17 +80,6 @@ class BridgedReconnectSupersessionTest {
         // only the second remains.
         firstClosed shouldContainExactly listOf(first)
         rig.producer.outlet.linking.links shouldContainExactly listOf(second)
-
-        // one emission from the producer, fanned over its OWN links exactly as
-        // `absorbAck` does (`civictech.cell.control.AbsorbAck`).
-        rig.producer.outlet.linking.links.forEach { link ->
-            Protocols.sendDownstream(link, Protocols.Progress, Progress(UUID.randomUUID(), 1))
-        }
-        rig.controller.runToIdle()
-
-        // pre-fix: two live records for the same destination address deliver
-        // this fan-out twice; post-fix, exactly one record remains.
-        progressSeen.size shouldBe 1
     }
 
     @Test

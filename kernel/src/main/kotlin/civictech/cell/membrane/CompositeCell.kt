@@ -492,10 +492,7 @@ abstract class CompositeCell(
  * `SupervisionPolicy.PROPAGATE` arm already emits for a dead-lettered
  * invocation, sent by the same means (`Protocols.sendDownstream(link,
  * Protocols.Suspension, ...)`, the walk in
- * `civictech.cell.host.notifyDownstream`). The `Progress` absorb-ack route was
- * considered and rejected: an absorb-ack
- * asserts the wave's contribution *is* reflected downstream, which is false
- * for a refusal.
+ * `civictech.cell.host.notifyDownstream`).
  *
  * ## What this is not
  *
@@ -526,9 +523,8 @@ abstract class CompositeCell(
  * `BoundarySeam.ADMISSION` refuses a frame before `WireCodec.decode` runs, so
  * no wave can be named at all, and `BoundarySeam.LINK_AUTHORITY` refuses
  * before any edge opens, so nothing is waiting. `BoundarySeam.PROTOCOL_AUTHORITY`
- * is metadata-plane and is **a real residual hazard**, recorded rather than
- * silently skipped: a denied `Progress`/absorb-ack frame can starve settlement
- * downstream, and this seam does not classify it (`computenet-usd.3.1` scope).
+ * is metadata-plane. Its former settlement hazard was retired with wave
+ * completeness, so this classifier has nothing to emit for a protocol denial.
  *
  * ## Residual: emitting the notice is not the same as it being handled
  *
@@ -750,12 +746,11 @@ private fun DisclosurePolicy.asRepeatSuppressionHook(
  * "Broadcast is `LocalTrusted`" is a decided rule, not an accident of where
  * peers happen to be stamped (`computenet-usd.8`, 2026-08-16). It used to be
  * merely usually true: since `computenet-usd.4.3` a `PORT_PROTOCOL` frame runs
- * under `CurrentPeer`, so a fan-out that frame merely *unblocked* — a
- * `Protocols.Progress` ack completing a wave in a gated organelle — evaluated
- * here under the **acking** peer, who is the upstream producer of one arm and
- * neither the requester nor a recipient of the released emission. A fan-out has
- * no single rightful principal (each attachment's own crossing, if remote, is
- * stamped a hop further down), so [civictech.cell.port.FanOutlet]'s broadcast
+ * under `CurrentPeer`, so a fan-out that frame merely *unblocked* evaluated
+ * here under the asserting peer, who was neither the requester nor a recipient
+ * of the released emission. That path was retired with wave completeness. A
+ * fan-out has no single rightful principal (each attachment's own crossing, if
+ * remote, is stamped a hop further down), so [civictech.cell.port.FanOutlet]'s broadcast
  * loops now run under `CurrentPeer.with(null)` and this field reads
  * `LocalTrusted` for every one of them. `FanOutlet.at` is deliberately not
  * reset — see `PeerUnblockedFanOutPrincipalTest`.

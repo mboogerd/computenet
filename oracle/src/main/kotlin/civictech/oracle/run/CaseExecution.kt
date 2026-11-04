@@ -288,9 +288,9 @@ object CaseExecution {
      * from the [LocationRegistry], wrapped in [Use.fixed], issued on the SOURCE host — so the
      * **target inlet registered no link at all**: 1 link for a same-host connect, 0 across the
      * cut, measured on otherwise identical cells (`CaseExecutionTest`, re-deriving
-     * computenet-g25w). Link identity is what `Progress(thru)`, delivered watermarks and
-     * topology ordering key on: `EdgeOpen`/`EdgeClose` and the associated protocol frames all
-     * travel per-link. computenet-xj0v shipped a named refusal as an interim tripwire; this is
+     * computenet-g25w). Link identity is what delivered watermarks and topology ordering key
+     * on: `EdgeOpen`/`EdgeClose` and the associated protocol frames all travel per-link.
+     * computenet-xj0v shipped a named refusal as an interim tripwire; this is
      * the bridge that refusal stood in for, so the refusal is gone.
      *
      * ## Why no bridge *cells* are needed here

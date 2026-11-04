@@ -28,7 +28,7 @@ import java.util.UUID
  * [civictech.cell.link.LinkSupport] record — the negotiated `handshake` path
  * has always removed both. Every disconnect/reconnect therefore left one dead
  * link in `deltaOutlet.linking.links` for `Protocols.sendDownstream`,
- * `AbsorbAck`, `Attention` and the topology walks to keep walking, growing
+ * `Attention` and the topology walks to keep walking, growing
  * without bound. Only the link count exposes it: shipping itself stays correct.
  */
 class ShippingLinkIdempotenceTest {

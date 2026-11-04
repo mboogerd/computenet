@@ -12,8 +12,6 @@ import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
-import civictech.cell.control.absorbAck
-import civictech.cell.control.relayAbsorbAcks
 import civictech.cell.data.delta.SetDelta
 
 @CellBase
@@ -25,7 +23,7 @@ interface FilterSetApi<E> {
 /**
  * Incremental filter over a tagged set stream: deltas for elements passing
  * [predicate] flow through with their tags intact; everything else is
- * absorbed. Tracks passing live tags so late joiners get catch-up (G-22) and
+ * ignored. Tracks passing live tags so late joiners get catch-up (G-22) and
  * duplicates dedup.
  */
 class FilterCell<E>(
@@ -37,10 +35,6 @@ class FilterCell<E>(
     private val op = TaggedSetOperator<E>()
 
     init {
-        // With exactly one input edge, Progress means the upstream wave
-        // produced no input delta anywhere in this hop. A fan-in FilterCell
-        // conservatively stops the relay until it owns a per-edge fold.
-        inlet.relayAbsorbAcks()
         outlet.catchUpOnLinked { if (op.state.size > 0) op.state.asDelta() else null }
     }
 
@@ -50,10 +44,9 @@ class FilterCell<E>(
             dels = value.dels.filterKeys(predicate),
         )
         val effective = op.state.apply(passed)
-        op.emitOrAbsorb(
+        op.emitIfNonEmpty(
             effective,
             propagate = { outlet.call.propagate(it) },
-            absorbAck = { outlet.absorbAck() }, // filtered/deduped away — ack the swallowed wave (CP-A3)
         )
     }
 

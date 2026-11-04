@@ -154,9 +154,9 @@ private class BridgedMembrane(
  * organelles, whose emissions are driven by `PORT_API` arrivals) and for the
  * ordinary data path generally. It was **not** unconditional when this fixture
  * was written: a broadcast a remote `PORT_PROTOCOL` frame synchronously
- * *unblocks* — a `Protocols.Progress` ack completing a wave — runs inside the
- * frame `ManagedHost` installs, and therefore under the acking peer. That case
- * is now decided as `LocalTrusted` and pinned by
+ * unblocked ran inside the frame `ManagedHost` installs, and therefore under
+ * that peer. That path was retired with wave completeness; the scope rule is
+ * still decided as `LocalTrusted` and pinned by
  * `civictech.cell.membrane.PeerUnblockedFanOutPrincipalTest`
  * (`computenet-usd.8`), which resets the peer scope at the fan-out and leaves
  * the catch-up unicast asserted below untouched. So "a live broadcast evaluates
