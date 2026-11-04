@@ -1973,3 +1973,66 @@ floor at −14: carol, idle since, freezes eviction until her wave carries a lat
 slot. In the demo this reads as "a day closes only once everyone who has ever completed
 a common slot has moved past it" — correct per spec, and worth knowing before reading
 the `byDay` bars.
+
+## F-29 — Studio: managed ingress, dynamic wiring and shell friction
+
+**Observation and workarounds** (`:demo:studio`):
+
+- Managed ingress needs its inlet declared as `Use<Propagate<T>>`: a `Serve`
+  port exposes no `.call` through `host.lookup(TypedRef)`. The studio uses
+  `Use<Propagate<StudioMsg>>` for its managed inlet.
+- A second canvas edge between an already-linked (A, B) pair shares the one
+  kernel link, so the new port gets no link catch-up. The studio replays A's
+  latest output through A's own inlet; every other downstream ignores the
+  equal value.
+- `DemoShell.sse` has no request-guard hook. To validate `Host` on the SSE
+  stream, the studio re-implements the subscriber loop using `beginSse` and
+  `sseFrame`.
+- `demoPort` defaults to 8080, which other demos also use. The studio supplies
+  its own default, 18440.
+- The kernel correctly refuses a feedback wire with `CycleWithoutHead`. The
+  studio surfaces the kernel diagnostic verbatim apart from replacing studio
+  cell references with quoted titles, preserving its spec reference. The
+  current workaround is to leave the feedback wire disconnected.
+
+**Why it's friction**: managed ingress requires the right port declaration;
+canvas ports share pair-level links; guarded SSE and a distinct default port
+need demo-local glue. Cycle admission itself is working as specified.
+
+**Proposed shape**: a request-guard hook for shell SSE could remove the custom
+subscriber loop. A studio-level way to declare a `CycleHead` (for example, a
+"loop" cell with a damping witness) is future work; this demo adds no such
+declaration.
+
+## F-30 — Studio payload schemas need instance contracts and logical port admission
+
+**Observation** (`:demo:studio`, `demo/studio/SPIKE-TYPES.md` §1):
+`kernel/src/main/kotlin/civictech/cell/port/PortNatures.kt:24` projects natures
+by the owner's class; the stamping seam at `:15`/`:33` is internal and the public
+port natures at `:41` are read-only. `nature/src/main/kotlin/civictech/nature/ContractDescriptor.kt:52`
+defines a closed nature-axis enum, and
+`kernel/src/main/kotlin/civictech/cell/nature/NatureNegotiation.kt:45` has a fixed
+subsumption lattice. The handshake payload check compares the erased contract API
+class (`kernel/src/main/kotlin/civictech/cell/link/Handshake.kt:76`, `:97`), so two
+`Propagate<String>` instances cannot distinguish text, a Git range, or JSON schemas.
+
+**Why it's a gap**: there is no public per-instance payload/schema contract or
+extensible payload nature axis reconciled at handshake. `INSTANCE_SCOPING` is
+interest slicing, not a payload type. Per-port policies can refuse before link
+installation (`kernel/src/main/kotlin/civictech/cell/link/LinkSupport.kt:39`,
+`Handshake.kt:301`), but Studio multiplexes logical canvas input names onto one
+physical inlet/link per node pair. Its second logical edge bypasses handshake
+(spike baseline `demo/studio/src/main/kotlin/civictech/demo/studio/StudioRuntime.kt:288`,
+`:313`), so that policy alone cannot protect logical ports or downstream gate chains.
+These line citations are the spike's recorded evidence; production line numbers
+have moved during implementation.
+
+**Workaround**: Studio derives logical input/output declarations, validates every
+tentative graph edit before journal writes, validates loose producers on arrival,
+and quarantines historical incompatible wires after topology replay. All payloads
+keep the string change envelope. No fake nature axis, generated class per schema,
+or kernel policy is introduced.
+
+**Proposed shape**: a public, cold/reconstructible instance payload contract and
+logical-to-physical port mapping reconciled during admission, recovery and
+promotion. The kernel design and policy integration remain deferred.
